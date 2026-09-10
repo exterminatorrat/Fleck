@@ -43,9 +43,22 @@ We agree to restrict the following behaviors in our community. Instances, threat
 
 Tensions can occur between community members even when they are trying their best to collaborate. Not every conflict represents a code of conduct violation, and this Code of Conduct reinforces encouraged behaviors and norms that can help avoid conflicts and minimize harm.
 
-Fleck does not yet publish a verified private conduct-reporting channel or name community moderators. The source preview does not open public participation. Before participation opens, maintainers must add a private reporting method here and identify who receives reports. Do not put sensitive incident details in a GitHub issue. GitHub private vulnerability reporting is for security vulnerabilities and is not a conduct-reporting channel. Until a conduct route is configured, the project is not ready to accept public participation.
+Send private conduct reports to [Harry](mailto:harrythemen@outlook.com). This
+owner-approved address is the conduct-reporting route; GitHub private
+vulnerability reporting is for security vulnerabilities and is not a
+conduct-reporting channel. Do not put sensitive incident details in a GitHub
+issue, pull request, discussion, or other public channel.
 
-Once reporting opens, Community Moderators will take reports of violations seriously and make every effort to respond in a timely manner. They will investigate all reports of code of conduct violations, reviewing messages, logs, and recordings, or interviewing witnesses and other participants. Community Moderators will keep investigation and enforcement actions as transparent as possible while prioritizing safety and confidentiality. In order to honor these values, enforcement actions are carried out in private with the involved parties, but communicating to the whole community may be part of a mutually agreed upon resolution.
+Approval and publication of the address do not prove inbox delivery, which has
+not yet been tested, and do not establish a response or resolution timeline.
+Public participation remains closed until inbox delivery is tested, CI is green
+at the final source commit, the reviewed launch changes are merged, and issue
+and pull-request intake readiness is verified. Harry is the current recipient
+and will review reports as capacity permits, prioritizing safety and
+confidentiality. Investigations may review messages, logs, and recordings or
+interview witnesses and other participants. Enforcement actions are carried out
+privately with the involved parties, but communicating to the whole community
+may be part of a mutually agreed resolution.
 
 ## Addressing and Repairing Harm
 

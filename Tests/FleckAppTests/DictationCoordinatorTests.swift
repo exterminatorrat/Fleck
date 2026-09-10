@@ -4391,22 +4391,132 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   fixture.standard.startGate = startGate
 
   let session = try #require(fixture.coordinator.beginShortcut(editor: nil))
-  let terminal = CompletionProbe()
-  let terminalWait = Task {
-    await fixture.coordinator.waitForShortcutTerminal(session)
-    await terminal.complete()
+  var terminalObserved = false
+  fixture.coordinator.setEventObserver { event in
+    if event.terminal != nil {
+      terminalObserved = true
+    }
   }
+  defer { fixture.coordinator.setEventObserver(nil) }
   await threshold.waitUntilWaiting()
-  await threshold.openGate()
   await startGate.waitUntilWaiting()
-  await fixture.coordinator.endShortcut(session)
 
   #expect(fixture.standard.finishCount == 0)
   #expect(fixture.coordinator.phase == .arming)
-  #expect(!(await terminal.isComplete))
+  #expect(!terminalObserved)
+  var releaseReturned = false
+  let releasing = Task { @MainActor in
+    await fixture.coordinator.endShortcut(session)
+    releaseReturned = true
+  }
+  let clock = ContinuousClock()
+  let cancellationDeadline = clock.now.advanced(by: .seconds(1))
+  while fixture.coordinator.latestRuntimeMeasurements.cancellationRequestedAt == nil,
+    clock.now < cancellationDeadline
+  {
+    try? await Task.sleep(for: .milliseconds(10))
+  }
+
+  #expect(fixture.coordinator.latestRuntimeMeasurements.cancellationRequestedAt != nil)
+  #expect(!releaseReturned)
+  #expect(fixture.standard.finishCount == 0)
+  #expect(fixture.coordinator.phase == .arming)
+  #expect(!terminalObserved)
+  await threshold.openGate()
   await startGate.openGate()
-  await terminalWait.value
-  #expect(await terminal.isComplete)
+  let terminalDeadline = clock.now.advanced(by: .seconds(1))
+  while (!releaseReturned || !terminalObserved), clock.now < terminalDeadline {
+    try? await Task.sleep(for: .milliseconds(10))
+  }
+  #expect(releaseReturned)
+  #expect(terminalObserved)
+  if releaseReturned {
+    await releasing.value
+  } else {
+    releasing.cancel()
+  }
+  #expect(terminalObserved)
+  #expect(fixture.standard.finishCount == 0)
+  #expect(fixture.coordinator.phase == .idle)
+}
+
+@Test @MainActor
+func shortcutReleaseAfterAcceptedThresholdDuringSuspendedStartCancelsUntilStartReturns()
+  async throws
+{
+  let threshold = Gate()
+  let startGate = Gate()
+  var holdAccepted = false
+  let fixture = try Fixture(
+    onFocusedProvisionalUpdate: { holdAccepted = true },
+    holdSleeper: { _ in await threshold.wait() }
+  )
+  fixture.standard.startGate = startGate
+
+  let session = try #require(fixture.coordinator.beginShortcut(editor: fixture.editor))
+  var terminalObserved = false
+  fixture.coordinator.setEventObserver { event in
+    if event.terminal != nil {
+      terminalObserved = true
+    }
+  }
+  defer { fixture.coordinator.setEventObserver(nil) }
+  await threshold.waitUntilWaiting()
+  await startGate.waitUntilWaiting()
+  fixture.standard.emitProvisional("before threshold")
+
+  #expect(!holdAccepted)
+  #expect(fixture.standard.finishCount == 0)
+  #expect(fixture.coordinator.phase == .arming)
+  #expect(!terminalObserved)
+  await threshold.openGate()
+  let provisionalPump = Task { @MainActor in
+    while !Task.isCancelled {
+      fixture.standard.emitProvisional("threshold accepted")
+      await Task.yield()
+    }
+  }
+  let clock = ContinuousClock()
+  let acceptanceDeadline = clock.now.advanced(by: .seconds(1))
+  while !holdAccepted, clock.now < acceptanceDeadline {
+    try? await Task.sleep(for: .milliseconds(10))
+  }
+  provisionalPump.cancel()
+  await provisionalPump.value
+
+  #expect(holdAccepted)
+  #expect(fixture.standard.finishCount == 0)
+  #expect(fixture.coordinator.phase == .arming)
+  #expect(!terminalObserved)
+  var releaseReturned = false
+  let releasing = Task { @MainActor in
+    await fixture.coordinator.endShortcut(session)
+    releaseReturned = true
+  }
+  let cancellationDeadline = clock.now.advanced(by: .seconds(1))
+  while (!releaseReturned
+    || fixture.coordinator.latestRuntimeMeasurements.cancellationRequestedAt == nil),
+    clock.now < cancellationDeadline
+  {
+    try? await Task.sleep(for: .milliseconds(10))
+  }
+
+  #expect(releaseReturned)
+  #expect(fixture.coordinator.latestRuntimeMeasurements.cancellationRequestedAt != nil)
+  #expect(fixture.standard.finishCount == 0)
+  #expect(fixture.coordinator.phase == .arming)
+  #expect(!terminalObserved)
+  await startGate.openGate()
+  let terminalDeadline = clock.now.advanced(by: .seconds(1))
+  while !terminalObserved, clock.now < terminalDeadline {
+    try? await Task.sleep(for: .milliseconds(10))
+  }
+  #expect(terminalObserved)
+  if releaseReturned {
+    await releasing.value
+  } else {
+    releasing.cancel()
+  }
   #expect(fixture.standard.finishCount == 0)
   #expect(fixture.coordinator.phase == .idle)
 }

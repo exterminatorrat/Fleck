@@ -1,7 +1,27 @@
-# Fleck
+<p align="center">
+  <img src="website/public/fleck-mark.png" alt="Fleck mark" width="96">
+</p>
 
-Fleck is a native, local-first macOS notes workspace for quick capture, focused
-editing, on-device dictation, and explicitly granted local agent access.
+<h1 align="center">Fleck</h1>
+
+<p align="center">A native, local-first macOS notes workspace for quick capture, focused editing, on-device dictation, and explicitly granted local agent access.</p>
+
+<p align="center">
+  <a href="#requirements"><img alt="macOS 14+ deployment target" src="https://img.shields.io/badge/macOS-14%2B-111827?logo=apple&amp;logoColor=white"></a>
+  <a href="Package.swift"><img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&amp;logoColor=white"></a>
+  <a href="https://github.com/exterminatorrat/Fleck/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI status for main" src="https://github.com/exterminatorrat/Fleck/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="LICENSE"><img alt="License: MPL-2.0" src="https://img.shields.io/badge/license-MPL--2.0-6355a6"></a>
+  <a href="docs/RELEASES.md"><img alt="Status: source preview" src="https://img.shields.io/badge/status-source%20preview-4b5563"></a>
+</p>
+
+<p align="center">
+  <a href="#what-is-here">Features</a> ·
+  <a href="#build-and-test">Build &amp; test</a> ·
+  <a href="ARCHITECTURE.md">Architecture</a> ·
+  <a href="TESTING.md">Testing</a> ·
+  <a href="#contributing">Contributing</a> ·
+  <a href="SECURITY.md">Security</a>
+</p>
 
 > **Source Preview:** This repository publishes Fleck source for inspection and
 > local development. It provides no signed or notarized app, GitHub Release,
@@ -15,17 +35,14 @@ editing, on-device dictation, and explicitly granted local agent access.
 
 The ordinary build contains:
 
-- a menu-bar workspace and independently sized pinned window;
-- local notes, tabs, folders, search, backlinks, file references, import/export,
-  30-day Trash, and recovery;
-- an AppKit `NSTextView` editor with native undo, formatting, lists, and
-  checklists;
-- Apple on-device speech recognition, optional faithful local cleanup, and
-  Inbox-safe Smart Capture routing;
-- a separately packaged local Agent Connector with profile-scoped capabilities,
-  explicit note or folder grants, visible activity, revision checks, and Undo;
-- readable local storage with atomic replacement and a previous-generation
-  recovery snapshot.
+| Area | Current implementation |
+| --- | --- |
+| Native workspace | Menu-bar workspace and an independently sized pinned window. |
+| Notes and organization | Local notes, tabs, folders, search, backlinks, file references, import/export, 30-day Trash, and recovery. |
+| Native editor | An AppKit `NSTextView` editor with native undo, formatting, lists, and checklists. |
+| On-device dictation | Apple on-device speech recognition, optional faithful local cleanup, and Inbox-safe Smart Capture routing. |
+| Agent Connector | A separately packaged local helper with profile-scoped capabilities, explicit note or folder grants, visible activity, revision checks, and Undo. |
+| Local persistence | Readable local storage with atomic replacement and a previous-generation recovery snapshot. |
 
 On macOS 26, Fleck can use Apple's on-device Foundation Models when the system
 reports them available. Failure or ambiguity falls back to the original text or
@@ -41,9 +58,12 @@ roadmap and [Architecture](ARCHITECTURE.md) for the system boundaries.
 
 ## Requirements
 
-- macOS 14 as the declared minimum deployment target
-- Xcode 26 or later with the full macOS 26 SDK selected
-- Swift 6
+| Requirement | Version or scope |
+| --- | --- |
+| macOS | 14 as the declared minimum deployment target. |
+| Xcode | 26 or later, with the full macOS 26 SDK selected. |
+| Swift | 6. |
+| Node.js | 22.12 or later, for the website only. |
 
 The deployment target is not a completed compatibility matrix. Current local
 validation is on Apple silicon; native Intel compatibility and a full macOS 14
@@ -114,18 +134,18 @@ npm run build
 
 ## Repository map
 
-```text
-Sources/FleckCore/             Local models, mutations, persistence, and recovery
-Sources/FleckAgentProtocol/    Typed local IPC protocol and framing
-Sources/FleckApp/              Native macOS UI, editor, dictation, and IPC service
-Sources/FleckAgentBridge/      MCP/CLI helper and Unix-socket client
-Sources/FleckModelEvaluation/  Deterministic local-model evaluation support
-Sources/FleckCaptureLab/       Developer capture tooling
-Tests/                         Swift tests and privacy-safe fixtures
-Scripts/                       Build, validation, audit, and profiling entry points
-Packages/                      Enhanced candidate dependency package
-website/                       Vite website
-```
+| Path | Responsibility |
+| --- | --- |
+| `Sources/FleckCore/` | Local models, mutations, persistence, and recovery. |
+| `Sources/FleckAgentProtocol/` | Typed local IPC protocol and framing. |
+| `Sources/FleckApp/` | Native macOS UI, editor, dictation, and IPC service. |
+| `Sources/FleckAgentBridge/` | MCP/CLI helper and Unix-socket client. |
+| `Sources/FleckModelEvaluation/` | Deterministic local-model evaluation support. |
+| `Sources/FleckCaptureLab/` | Developer capture tooling. |
+| `Tests/` | Swift tests and privacy-safe fixtures. |
+| `Scripts/` | Build, validation, audit, and profiling entry points. |
+| `Packages/` | Enhanced candidate dependency package. |
+| `website/` | Vite website. |
 
 ## Project principles
 
@@ -138,11 +158,13 @@ Motion, contrast, and resource efficiency as features evolve.
 ## Contributing
 
 Public contribution intake is not open yet. The future workflow is documented
-in [Contributing](CONTRIBUTING.md) and [Testing](TESTING.md), but participation
-will open only after the [Code of Conduct](CODE_OF_CONDUCT.md) names a verified
-private conduct-reporting route and its recipient and the remaining readiness
-gates are complete. Security-sensitive findings have a separate launch gate
-documented in [Security](SECURITY.md).
+in [Contributing](CONTRIBUTING.md) and [Testing](TESTING.md). The owner-approved
+private conduct route is email to [Harry](mailto:harrythemen@outlook.com), but
+inbox delivery has not yet been tested. Participation remains closed until that
+delivery check, green CI at the final source commit, the reviewed launch changes
+are merged, and explicit issue and pull-request intake readiness is verified.
+Security-sensitive findings use the separate route documented in
+[Security](SECURITY.md), not the conduct address.
 
 ## License and name
 

@@ -27,6 +27,10 @@ unavailable, keep sensitive details private rather than disclosing them through
 a public channel.
 
 This vulnerability-reporting route is for security reports, not conduct
-reports. Fleck has not published a verified private conduct-reporting route or
-named its recipient, so public contribution and conduct-report intake remain
-closed as described in the [Code of Conduct](CODE_OF_CONDUCT.md).
+reports. Send private conduct reports to [Harry](mailto:harrythemen@outlook.com),
+as described in the [Code of Conduct](CODE_OF_CONDUCT.md), rather than through
+GitHub private vulnerability reporting. The owner has approved that address,
+but inbox delivery has not yet been tested and no response timeline is promised.
+Public contribution intake remains closed until inbox delivery is tested, CI is
+green at the final source commit, the reviewed launch changes are merged, and
+issue and pull-request intake readiness is verified.

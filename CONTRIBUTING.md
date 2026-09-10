@@ -1,11 +1,13 @@
 # Contributing to Fleck
 
 This document describes Fleck's future contribution workflow. Public
-contribution intake is closed until the [Code of Conduct](CODE_OF_CONDUCT.md)
-names a verified private conduct-reporting route and its recipient and the
-remaining readiness gates are complete. Until then, the source is available for
-inspection and local development, but the project is not inviting pull requests
-or public participation.
+contribution intake remains closed. The owner-approved private conduct route is
+email to [Harry](mailto:harrythemen@outlook.com), but inbox delivery has not yet
+been tested. Intake can open only after that delivery check, green CI at the
+final source commit, the reviewed launch changes are merged, and explicit issue
+and pull-request intake readiness is verified. Until then, the source is
+available for inspection and local development, but the project is not inviting
+pull requests or public participation.
 
 When participation opens, contributors will agree to follow the Code of Conduct.
 Do not put vulnerabilities or private user content in an issue; read

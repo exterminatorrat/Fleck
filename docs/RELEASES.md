@@ -58,15 +58,19 @@ or downloadable binary.
 - [ ] Submit a private test report as an outside reporter and verify the intended
       maintainer receives the notification. Configuration reads and a login
       redirect do not prove report submission or notification delivery.
-- [ ] Publish and test a private Code of Conduct reporting route, name its
-      recipient, and update [`CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md) before
-      public participation opens. GitHub private vulnerability reporting is not
-      a conduct-reporting route.
+- [x] The owner approved email to [Harry](mailto:harrythemen@outlook.com) as the
+      private Code of Conduct reporting route, and the public documents name the
+      route and recipient separately from GitHub private vulnerability
+      reporting.
+- [ ] Send a private conduct-delivery test and verify that Harry receives it.
+      Owner approval and publication of the address do not prove inbox delivery
+      or establish a response timeline.
 - [ ] Enable issue and pull-request workflows only when both their reporting
       routes and maintainer review capacity are ready; confirm the templates
       render and their links resolve.
 - [ ] Announce the source preview only after the final source identity, CI,
-      merge, reporting-delivery, and launch-document gates are complete.
+      merge, security- and conduct-report delivery, and launch-document gates
+      are complete.
 
 ### Source verification
 
