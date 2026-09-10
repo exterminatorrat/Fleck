@@ -791,7 +791,11 @@ func reorderInteractionNativeLifetimeDoesNotEndBetweenPointerEvents() throws {
   await state.waitUntilInitialLoad()
   state.workspace = Workspace(notes: notes, selectedNoteID: notes[0].id)
   let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
-  let host = NSHostingView(rootView: NotesPanel(dictationRuntime: runtime, sizing: .container).environmentObject(state))
+  let host = NSHostingView(
+    rootView: NotesPanel(dictationRuntime: runtime, sizing: .container)
+      .environmentObject(state)
+      .environment(\._accessibilityReduceMotion, false)
+  )
   let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 430),
     styleMask: [.titled], backing: .buffered, defer: false)
   window.isReleasedWhenClosed = false

@@ -221,6 +221,7 @@ func WorkspaceSearchHostingPointerDismissRestoresEditorFocus() async throws {
       searchController: searchController
     )
     .environmentObject(state)
+    .environment(\._accessibilityReduceMotion, false)
   )
   let window = NSWindow(
     contentRect: NSRect(x: 137, y: 211, width: 640, height: 430),
