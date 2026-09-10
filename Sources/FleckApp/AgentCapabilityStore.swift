@@ -231,24 +231,11 @@ actor AgentCapabilityStore {
   }
 
   private func loadPersistedState() throws -> AgentCapabilityState {
-    if FileManager.default.fileExists(atPath: capabilitiesURL.path),
-      let state = try? readState(from: capabilitiesURL)
-    {
-      return state
+    do {
+      return try readState(from: capabilitiesURL)
+    } catch {
+      throw AgentWorkspaceError(code: .internalSaveFailure)
     }
-
-    if FileManager.default.fileExists(atPath: previousCapabilitiesURL.path),
-      let state = try? readState(from: previousCapabilitiesURL)
-    {
-      do {
-        try writeCurrent(state)
-      } catch {
-        throw AgentWorkspaceError(code: .internalSaveFailure)
-      }
-      return state
-    }
-
-    throw AgentWorkspaceError(code: .internalSaveFailure)
   }
 
   private func migrate(
@@ -332,16 +319,6 @@ actor AgentCapabilityStore {
     } catch {
       throw AgentWorkspaceError(code: .internalSaveFailure)
     }
-  }
-
-  private func writeCurrent(_ state: AgentCapabilityState) throws {
-    try validateCapabilityState(state)
-    let data = try encode(state)
-    try FileManager.default.createDirectory(
-      at: capabilitiesURL.deletingLastPathComponent(),
-      withIntermediateDirectories: true
-    )
-    try data.write(to: capabilitiesURL, options: .atomic)
   }
 
   private func encode(_ state: AgentCapabilityState) throws -> Data {
