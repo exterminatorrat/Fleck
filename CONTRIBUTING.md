@@ -1,25 +1,23 @@
 # Contributing to Fleck
 
-This document describes Fleck's future contribution workflow. Public
-contribution intake remains closed. The owner-approved private conduct route is
-email to [Harry](mailto:harrythemen@outlook.com), but inbox delivery has not yet
-been tested. Intake can open only after that delivery check, green CI at the
-final source commit, the reviewed launch changes are merged, and explicit issue
-and pull-request intake readiness is verified. Until then, the source is
-available for inspection and local development, but the project is not inviting
-pull requests or public participation.
+Public issues and pull requests are open for ordinary bugs, feature proposals,
+and focused contributions. By participating, contributors agree to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
-When participation opens, contributors will agree to follow the Code of Conduct.
-Do not put vulnerabilities or private user content in an issue; read
-[Security](SECURITY.md) first.
+Do not put vulnerabilities, conduct reports, or private user content in an
+issue or pull request. Use [GitHub private vulnerability
+reporting](SECURITY.md#reporting-a-vulnerability) for security reports and
+email [Harry](mailto:harrythemen@outlook.com) for private conduct reports. The
+owner confirmed that test messages through both private routes were visible to
+their intended recipients; no response or resolution timeline is promised.
 
 ## Before you start
 
 1. Read the short [implementation status](IMPLEMENTATION_STATUS.md) and the
    relevant section of [architecture](ARCHITECTURE.md).
 2. For a contained fix, create a branch and proceed. For a larger feature or an
-   architectural change, open a short issue first once public issues are
-   available so the direction can be agreed before substantial work.
+   architectural change, open a short issue first so the direction can be
+   agreed before substantial work.
 3. Use a disposable macOS test account and synthetic fixtures for native flows.
    Never develop or report against personal notes, recordings, credentials, or
    permission databases.

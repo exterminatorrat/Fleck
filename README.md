@@ -157,14 +157,16 @@ Motion, contrast, and resource efficiency as features evolve.
 
 ## Contributing
 
-Public contribution intake is not open yet. The future workflow is documented
-in [Contributing](CONTRIBUTING.md) and [Testing](TESTING.md). The owner-approved
-private conduct route is email to [Harry](mailto:harrythemen@outlook.com), but
-inbox delivery has not yet been tested. Participation remains closed until that
-delivery check, green CI at the final source commit, the reviewed launch changes
-are merged, and explicit issue and pull-request intake readiness is verified.
-Security-sensitive findings use the separate route documented in
-[Security](SECURITY.md), not the conduct address.
+Public issues and pull requests are open for ordinary bugs, feature proposals,
+and focused contributions. Start with [Contributing](CONTRIBUTING.md),
+[Testing](TESTING.md), and the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+Keep sensitive reports out of public issues and pull requests. Security
+vulnerabilities use the private route in [Security](SECURITY.md); conduct
+reports go privately to [Harry](mailto:harrythemen@outlook.com). The owner
+confirmed that a conduct test email and a private security-report notification
+were visible to their intended recipients. Those delivery checks do not promise
+a response or resolution timeline.
 
 ## License and name
 

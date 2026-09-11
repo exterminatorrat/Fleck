@@ -49,16 +49,14 @@ vulnerability reporting is for security vulnerabilities and is not a
 conduct-reporting channel. Do not put sensitive incident details in a GitHub
 issue, pull request, discussion, or other public channel.
 
-Approval and publication of the address do not prove inbox delivery, which has
-not yet been tested, and do not establish a response or resolution timeline.
-Public participation remains closed until inbox delivery is tested, CI is green
-at the final source commit, the reviewed launch changes are merged, and issue
-and pull-request intake readiness is verified. Harry is the current recipient
-and will review reports as capacity permits, prioritizing safety and
-confidentiality. Investigations may review messages, logs, and recordings or
-interview witnesses and other participants. Enforcement actions are carried out
-privately with the involved parties, but communicating to the whole community
-may be part of a mutually agreed resolution.
+The owner confirmed that a test message to this address was visible in the
+receiving inbox. That delivery check does not establish a response or resolution
+timeline. Harry is the current recipient and will review reports as capacity
+permits, prioritizing safety and confidentiality. Investigations may review
+messages, logs, and recordings or interview witnesses and other participants.
+Enforcement actions are carried out privately with the involved parties, but
+communicating to the whole community may be part of a mutually agreed
+resolution.
 
 ## Addressing and Repairing Harm
 
