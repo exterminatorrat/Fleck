@@ -26,6 +26,8 @@ private struct FakeFixture {
   let unsafeStaging: URL
   let gemmaResourceMode: String
   let appScript: URL
+  let acceptedRoot: URL
+  let identityDatabase: URL
 }
 
 private struct RunningPackager {
@@ -49,6 +51,40 @@ private func repositoryRoot() -> URL {
 private func writeExecutable(_ source: String, to url: URL) throws {
   try Data(source.utf8).write(to: url)
   try fileManager.setAttributes([.posixPermissions: NSNumber(value: 0o755)], ofItemAtPath: url.path)
+}
+
+@discardableResult
+private func runFixtureCommand(
+  _ executable: String,
+  _ arguments: [String],
+  currentDirectory: URL? = nil
+) throws -> String {
+  let output = Pipe()
+  let error = Pipe()
+  let process = Process()
+  process.executableURL = URL(fileURLWithPath: executable)
+  process.arguments = arguments
+  process.currentDirectoryURL = currentDirectory
+  process.standardOutput = output
+  process.standardError = error
+  try process.run()
+  process.waitUntilExit()
+  let standardOutput = String(
+    data: output.fileHandleForReading.readDataToEndOfFile(),
+    encoding: .utf8
+  ) ?? ""
+  if process.terminationStatus != 0 {
+    let standardError = String(
+      data: error.fileHandleForReading.readDataToEndOfFile(),
+      encoding: .utf8
+    ) ?? ""
+    throw NSError(
+      domain: "ParakeetPackagingFixture",
+      code: Int(process.terminationStatus),
+      userInfo: [NSLocalizedDescriptionKey: standardError]
+    )
+  }
+  return standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
 private func makeFakeFixture(
@@ -88,6 +124,39 @@ private func makeFakeFixture(
     to: appScript
   )
   try fileManager.setAttributes([.posixPermissions: NSNumber(value: 0o755)], ofItemAtPath: appScript.path)
+  let identityTool = scripts.appendingPathComponent("fleck-build-identity.py")
+  try fileManager.copyItem(
+    at: sourceRoot.appendingPathComponent("Scripts/fleck-build-identity.py"),
+    to: identityTool
+  )
+  try fileManager.setAttributes(
+    [.posixPermissions: NSNumber(value: 0o755)],
+    ofItemAtPath: identityTool.path
+  )
+  try Data("1.0.0-beta.1\n".utf8).write(to: root.appendingPathComponent("VERSION"))
+  try Data("# Changelog\n\n## [1.0.0-beta.1] - 2026-09-11\n".utf8)
+    .write(to: root.appendingPathComponent("CHANGELOG.md"))
+  try Data("fleck-build-identity-test-fixture-v1\n".utf8)
+    .write(to: root.appendingPathComponent(".fleck-build-identity-test-fixture"))
+  try Data(#"""
+    .build/
+    .identity-test/
+    tmp/
+    tools/
+    toolchain/
+    hold
+    candidate.Package.resolved
+    original.Package.resolved
+    original.NativeRuntime.Package.resolved
+    xcode-*
+    helper-tool.log
+    codesign*.log
+    resolver-entered
+    entries
+    linked-sdk
+    rpath-state*
+    unsafe-*
+    """#.appending("\n").utf8).write(to: root.appendingPathComponent(".gitignore"))
   try Data("candidate lock\n".utf8).write(to: root.appendingPathComponent("candidate.Package.resolved"))
   try fileManager.copyItem(
     at: sourceRoot.appendingPathComponent("Package.resolved"),
@@ -554,6 +623,106 @@ private func makeFakeFixture(
     "$@"
     """#, to: scripts.appendingPathComponent("resolve-enhanced-candidate.sh"))
 
+  try runFixtureCommand("/usr/bin/git", ["init", "-q"], currentDirectory: root)
+  try runFixtureCommand(
+    "/usr/bin/git",
+    ["config", "user.email", "fixture@example.invalid"],
+    currentDirectory: root
+  )
+  try runFixtureCommand(
+    "/usr/bin/git",
+    ["config", "user.name", "Fleck packaging fixture"],
+    currentDirectory: root
+  )
+  try runFixtureCommand("/usr/bin/git", ["add", "."], currentDirectory: root)
+  try runFixtureCommand(
+    "/usr/bin/git",
+    ["commit", "-qm", "Create accepted Parakeet fixture base"],
+    currentDirectory: root
+  )
+  let acceptedCommit = try runFixtureCommand(
+    "/usr/bin/git", ["rev-parse", "HEAD"], currentDirectory: root
+  )
+  let acceptedTree = try runFixtureCommand(
+    "/usr/bin/git", ["rev-parse", "HEAD^{tree}"], currentDirectory: root
+  )
+  let identityRoot = root.appendingPathComponent(".identity-test", isDirectory: true)
+  let acceptedRoot = identityRoot.appendingPathComponent("accepted", isDirectory: true)
+  let identityDatabase = identityRoot.appendingPathComponent("identities.sqlite3")
+  try fileManager.createDirectory(at: acceptedRoot, withIntermediateDirectories: true)
+  let validatorURL = acceptedRoot.appendingPathComponent("check-accepted-build.py")
+  try writeExecutable(#"""
+    #!/usr/bin/env python3
+    import argparse
+    import json
+    import subprocess
+    import sys
+    parser = argparse.ArgumentParser()
+    parser.add_argument("manifest")
+    parser.add_argument("--artifact-root")
+    parser.add_argument("--repo")
+    parser.add_argument("--repo-mode")
+    arguments = parser.parse_args()
+    manifest = json.load(open(arguments.manifest, encoding="utf-8"))
+    record = next(item for item in manifest["records"] if item["id"] == manifest["latestAcceptedRecordID"])
+    subprocess.run(
+        ["git", "-C", arguments.repo, "merge-base", "--is-ancestor", record["source"]["commit"], "HEAD"],
+        check=True,
+    )
+    sys.exit(0)
+    """#, to: validatorURL)
+  let validatorData = try Data(contentsOf: validatorURL)
+  let validatorHash = try runFixtureCommand(
+    "/usr/bin/shasum", ["-a", "256", validatorURL.path]
+  ).split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
+  let manifest: [String: Any] = [
+    "schemaVersion": 1,
+    "registryStatus": "active",
+    "latestAcceptedRecordID": "fixture-accepted",
+    "records": [[
+      "id": "fixture-accepted",
+      "status": "latestAccepted",
+      "source": ["commit": acceptedCommit, "tree": acceptedTree],
+    ]],
+    "supportFiles": [[
+      "relativePath": "check-accepted-build.py",
+      "sha256": validatorHash,
+      "size": validatorData.count,
+    ]],
+  ]
+  let manifestData = try JSONSerialization.data(
+    withJSONObject: manifest,
+    options: [.prettyPrinted, .sortedKeys]
+  ) + Data("\n".utf8)
+  let manifestURL = acceptedRoot.appendingPathComponent("manifest.json")
+  try manifestData.write(to: manifestURL)
+  let manifestHash = try runFixtureCommand(
+    "/usr/bin/shasum", ["-a", "256", manifestURL.path]
+  ).split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
+  try Data("\(manifestHash)  manifest.json\n".utf8)
+    .write(to: acceptedRoot.appendingPathComponent("manifest.sha256"))
+  let baseline: [String: Any] = [
+    "schemaVersion": 1,
+    "canonicalManifestSHA256": manifestHash,
+    "selectedRecordID": "fixture-accepted",
+    "acceptedSourceCommit": acceptedCommit,
+    "acceptedSourceTree": acceptedTree,
+    "requiredRegistryStatus": "active",
+  ]
+  let baselineData = try JSONSerialization.data(
+    withJSONObject: baseline,
+    options: [.prettyPrinted, .sortedKeys]
+  ) + Data("\n".utf8)
+  try baselineData.write(to: root.appendingPathComponent("BuildBaseline.json"))
+  try runFixtureCommand(
+    "/usr/bin/git", ["add", "BuildBaseline.json"], currentDirectory: root
+  )
+  try runFixtureCommand(
+    "/usr/bin/git",
+    ["commit", "-qm", "Pin Parakeet fixture accepted baseline"],
+    currentDirectory: root
+  )
+
   return FakeFixture(
     root: root,
     build: build,
@@ -577,7 +746,9 @@ private func makeFakeFixture(
     swiftRuntimeMode: swiftRuntimeMode,
     unsafeStaging: root.appendingPathComponent("unsafe-staging"),
     gemmaResourceMode: gemmaResourceMode,
-    appScript: appScript
+    appScript: appScript,
+    acceptedRoot: acceptedRoot,
+    identityDatabase: identityDatabase
   )
 }
 
@@ -627,6 +798,9 @@ private func environment(
   environment["FAKE_REPORTED_SDK_VERSION"] = reportedSDKVersion ?? ""
   environment["FAKE_UNSAFE_STAGING"] = unsafeStaging ? "1" : "0"
   environment["FAKE_UNSAFE_STAGING_PATH"] = fixture.unsafeStaging.path
+  environment["FLECK_BUILD_IDENTITY_TEST_ACCEPTED_ROOT"] = fixture.acceptedRoot.path
+  environment["FLECK_BUILD_IDENTITY_TEST_DATABASE"] = fixture.identityDatabase.path
+  environment["FLECK_BUILD_IDENTITY_TEST_FIXTURE"] = "1"
   return environment
 }
 

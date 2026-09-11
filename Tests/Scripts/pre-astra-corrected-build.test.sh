@@ -27,11 +27,25 @@ if [[ -n "$test_only" && "$test_only" != 'first-run' ]]; then
   /bin/mkdir "$fixture_root/.build"
 fi
 /bin/cp -p "$source_packager" "$fixture_root/Scripts/build-pre-astra-corrected-build.sh"
+/bin/cp -p "$source_root/Scripts/fleck-build-identity.py" \
+  "$fixture_root/Scripts/fleck-build-identity.py"
 /bin/cat > "$fixture_root/.gitignore" <<'EOF'
 .build/
+.identity-test/
 EOF
 /bin/cat > "$fixture_root/.pre-astra-packager-test-fixture" <<'EOF'
 pre-astra-packager-fixture-v1
+EOF
+/bin/cat > "$fixture_root/.fleck-build-identity-test-fixture" <<'EOF'
+fleck-build-identity-test-fixture-v1
+EOF
+/bin/cat > "$fixture_root/VERSION" <<'EOF'
+1.0.0-beta.1
+EOF
+/bin/cat > "$fixture_root/CHANGELOG.md" <<'EOF'
+# Changelog
+
+## [1.0.0-beta.1] - 2026-09-11
 EOF
 /bin/cat > "$fixture_root/Scripts/build-parakeet-test-app.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -40,9 +54,33 @@ readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
 readonly build_root="$repo_root/.build"
 readonly app="$build_root/parakeet-test/Fleck.app"
+readonly identity_tool="$script_dir/fleck-build-identity.py"
+readonly identity_capture="$build_root/.fixture-parakeet-identity.$$.json"
 if [[ -f "$build_root/fixture-noop-build" ]]; then
   exit 0
 fi
+identity_nested_arguments=()
+if [[ -n "${FLECK_BUILD_IDENTITY_NESTED_TOKEN:-}" ]]; then
+  identity_nested_arguments+=(--nested-token "$FLECK_BUILD_IDENTITY_NESTED_TOKEN")
+fi
+cleanup_identity() {
+  exit_code=$?
+  trap - EXIT
+  if [[ -f "$identity_capture" ]]; then
+    "$identity_tool" release --capture "$identity_capture" || exit_code=1
+    /bin/rm -f "$identity_capture" || exit_code=1
+  fi
+  exit "$exit_code"
+}
+trap cleanup_identity EXIT
+"$identity_tool" begin \
+  --repo "$repo_root" \
+  --flavor parakeet \
+  --configuration Debug \
+  --capture "$identity_capture" \
+  --test-accepted-root "$FLECK_BUILD_IDENTITY_TEST_ACCEPTED_ROOT" \
+  --test-database "$FLECK_BUILD_IDENTITY_TEST_DATABASE" \
+  "${identity_nested_arguments[@]+"${identity_nested_arguments[@]}"}"
 version='fresh-checkout-build'
 if [[ -f "$build_root/fixture-build-version" ]]; then
   version="$(/bin/cat "$build_root/fixture-build-version")"
@@ -95,6 +133,7 @@ done
   <key>CFBundlePackageType</key><string>APPL</string>
 </dict></plist>
 PLIST
+"$identity_tool" stamp --capture "$identity_capture" --plist "$app/Contents/Info.plist"
 printf '%s\n' "$version" > "$app/Contents/Resources/fixture-build-version.txt"
 if [[ -f "$build_root/fixture-with-weight" ]]; then
   /usr/bin/touch "$app/Contents/Resources/forbidden.onnx"
@@ -105,8 +144,11 @@ else
   /usr/bin/codesign --force --sign - \
     -r '=designated => identifier "com.harryjin.fleck"' "$app"
 fi
+"$identity_tool" finish --capture "$identity_capture" --plist "$app/Contents/Info.plist"
 EOF
-/bin/chmod 755 "$fixture_root/Scripts/build-parakeet-test-app.sh"
+/bin/chmod 755 \
+  "$fixture_root/Scripts/build-parakeet-test-app.sh" \
+  "$fixture_root/Scripts/fleck-build-identity.py"
 
 (
   cd -- "$fixture_root"
@@ -114,8 +156,82 @@ EOF
   /usr/bin/git config user.email fixture@example.invalid
   /usr/bin/git config user.name 'Fleck packaging fixture'
   /usr/bin/git add .
-  /usr/bin/git commit -qm 'Create Fleck packaging fixture'
+  /usr/bin/git commit -qm 'Create accepted Fleck packaging fixture base'
 )
+
+readonly fixture_accepted_commit="$(/usr/bin/git -C "$fixture_root" rev-parse HEAD)"
+readonly fixture_accepted_tree="$(/usr/bin/git -C "$fixture_root" rev-parse 'HEAD^{tree}')"
+readonly fixture_accepted_root="$fixture_root/.identity-test/accepted"
+readonly fixture_identity_database="$fixture_root/.identity-test/build-metadata/identities.sqlite3"
+/bin/mkdir -p "$fixture_accepted_root"
+/bin/cat > "$fixture_accepted_root/check-accepted-build.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+sys.exit(0)
+EOF
+/bin/chmod 755 "$fixture_accepted_root/check-accepted-build.py"
+readonly fixture_validator_hash="$(
+  /usr/bin/shasum -a 256 "$fixture_accepted_root/check-accepted-build.py" \
+    | /usr/bin/awk '{print $1}'
+)"
+readonly fixture_validator_size="$(
+  /usr/bin/stat -f '%z' "$fixture_accepted_root/check-accepted-build.py"
+)"
+/usr/bin/python3 - "$fixture_accepted_root/manifest.json" \
+  "$fixture_accepted_commit" "$fixture_accepted_tree" \
+  "$fixture_validator_hash" "$fixture_validator_size" <<'PY'
+import json
+import sys
+path, commit, tree, validator_hash, validator_size = sys.argv[1:]
+manifest = {
+    "schemaVersion": 1,
+    "registryStatus": "active",
+    "latestAcceptedRecordID": "fixture-accepted",
+    "records": [{
+        "id": "fixture-accepted",
+        "status": "latestAccepted",
+        "source": {"commit": commit, "tree": tree},
+    }],
+    "supportFiles": [{
+        "relativePath": "check-accepted-build.py",
+        "sha256": validator_hash,
+        "size": int(validator_size),
+    }],
+}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(manifest, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+PY
+readonly fixture_manifest_hash="$(
+  /usr/bin/shasum -a 256 "$fixture_accepted_root/manifest.json" | /usr/bin/awk '{print $1}'
+)"
+printf '%s  manifest.json\n' "$fixture_manifest_hash" \
+  > "$fixture_accepted_root/manifest.sha256"
+/usr/bin/python3 - "$fixture_root/BuildBaseline.json" "$fixture_manifest_hash" \
+  "$fixture_accepted_commit" "$fixture_accepted_tree" <<'PY'
+import json
+import sys
+path, digest, commit, tree = sys.argv[1:]
+baseline = {
+    "schemaVersion": 1,
+    "canonicalManifestSHA256": digest,
+    "selectedRecordID": "fixture-accepted",
+    "acceptedSourceCommit": commit,
+    "acceptedSourceTree": tree,
+    "requiredRegistryStatus": "active",
+}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(baseline, handle, indent=2)
+    handle.write("\n")
+PY
+(
+  cd -- "$fixture_root"
+  /usr/bin/git add BuildBaseline.json
+  /usr/bin/git commit -qm 'Pin accepted Fleck packaging fixture baseline'
+)
+export FLECK_BUILD_IDENTITY_TEST_ACCEPTED_ROOT="$fixture_accepted_root"
+export FLECK_BUILD_IDENTITY_TEST_DATABASE="$fixture_identity_database"
+export FLECK_BUILD_IDENTITY_TEST_FIXTURE=1
 
 if [[ -z "$test_only" || "$test_only" == 'first-run' ]]; then
   /bin/mkdir "$test_root/unsafe-build-target"
@@ -529,6 +645,26 @@ test "$(/usr/bin/plutil -extract FleckSourceCommit raw -o - "$staged_app/Content
   "$source_commit"
 test "$(/usr/bin/plutil -extract FleckSourceTree raw -o - "$staged_app/Contents/Info.plist")" = \
   "$source_tree"
+test "$(/usr/bin/plutil -extract FleckVersion raw -o - "$staged_app/Contents/Info.plist")" = \
+  '1.0.0-beta.1'
+test "$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$staged_app/Contents/Info.plist")" = \
+  '1.0.0'
+readonly first_build_id="$(
+  /usr/bin/plutil -extract FleckBuildID raw -o - "$staged_app/Contents/Info.plist"
+)"
+readonly first_build_number="$(
+  /usr/bin/plutil -extract FleckBuildNumber raw -o - "$staged_app/Contents/Info.plist"
+)"
+readonly first_input_build_id="$(
+  /usr/bin/plutil -extract FleckInputBuildID raw -o - "$staged_app/Contents/Info.plist"
+)"
+test "$first_build_id" != "$first_input_build_id"
+test "$(/usr/bin/plutil -extract FleckBaselineManifestSHA256 raw -o - "$staged_app/Contents/Info.plist")" = \
+  "$fixture_manifest_hash"
+test "$(/usr/bin/plutil -extract FleckBaselineRecordID raw -o - "$staged_app/Contents/Info.plist")" = \
+  'fixture-accepted'
+test "$(/usr/bin/plutil -extract FleckBaselineRegistryStatus raw -o - "$staged_app/Contents/Info.plist")" = \
+  'active'
 readonly input_manifest_hash="$(tree_manifest "$input_app" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')"
 readonly expected_input_manifest="$test_root/expected-input.manifest"
 tree_manifest "$input_app" > "$expected_input_manifest"
@@ -540,6 +676,8 @@ test "$(/usr/bin/shasum -a 256 "$published_input_manifest" | /usr/bin/awk '{prin
 /usr/bin/grep -Fq "Source commit: $source_commit" "$receipt"
 /usr/bin/grep -Fq "Source tree: $source_tree" "$receipt"
 /usr/bin/grep -Fq "Input app manifest SHA-256: $input_manifest_hash" "$receipt"
+/usr/bin/grep -Fq "Input build ID: $first_input_build_id" "$receipt"
+/usr/bin/grep -Fq "Build ID: $first_build_id" "$receipt"
 
 /usr/bin/grep -Fq 'exec /usr/bin/open "$app_path"' "$launcher"
 if /usr/bin/grep -Fq '/usr/bin/open -n' "$launcher"; then
@@ -579,6 +717,9 @@ readonly extracted_handoff="$extract_root/Fleck Pre-Astra Corrected Build"
 test "$(tree_manifest "$handoff_root")" = "$(tree_manifest "$extracted_handoff")"
 /usr/bin/cmp -s "$published_input_manifest" \
   "$extracted_handoff/INPUT-APP-MANIFEST.sha256.tsv"
+test "$(/usr/bin/plutil -extract FleckBuildID raw -o - \
+  "$extracted_handoff/Fleck Pre-Astra Corrected Build.app/Contents/Info.plist")" = \
+  "$first_build_id"
 
 readonly first_input_manifest="$(tree_manifest "$input_app")"
 readonly first_publication_manifest="$(tree_manifest "$output_root")"
@@ -608,6 +749,19 @@ test "$first_publication_manifest" = "$(tree_manifest "$output_root")"
 printf '%s\n' 'fresh-build-2' > "$fixture_root/.build/fixture-build-version"
 "$fixture_root/Scripts/build-pre-astra-corrected-build.sh" >/dev/null
 test "$(/bin/cat "$staged_app/Contents/Resources/fixture-build-version.txt")" = 'fresh-build-2'
+readonly second_build_id="$(
+  /usr/bin/plutil -extract FleckBuildID raw -o - "$staged_app/Contents/Info.plist"
+)"
+readonly second_input_build_id="$(
+  /usr/bin/plutil -extract FleckInputBuildID raw -o - "$staged_app/Contents/Info.plist"
+)"
+readonly second_build_number="$(
+  /usr/bin/plutil -extract FleckBuildNumber raw -o - "$staged_app/Contents/Info.plist"
+)"
+test "$second_build_id" != "$first_build_id"
+test "$second_input_build_id" != "$first_input_build_id"
+test "$second_build_id" != "$second_input_build_id"
+test "$second_build_number" -gt "$((first_build_number + 1))"
 readonly second_publication_manifest="$(tree_manifest "$output_root")"
 readonly second_input_manifest="$(tree_manifest "$input_app")"
 test "$first_publication_manifest" != "$second_publication_manifest"
@@ -670,5 +824,10 @@ if "$fixture_root/Scripts/build-pre-astra-corrected-build.sh" \
   exit 1
 fi
 /usr/bin/grep -Fq 'forbidden model asset' "$test_root/weight.err"
+
+test "$(/usr/bin/shasum -a 256 "$fixture_accepted_root/manifest.json" | /usr/bin/awk '{print $1}')" = \
+  "$fixture_manifest_hash"
+test "$(/usr/bin/awk '{print $1}' "$fixture_accepted_root/manifest.sha256")" = \
+  "$fixture_manifest_hash"
 
 printf '%s\n' 'PASS: fresh-build provenance, exact identity, complete equivalence, and rollback-safe publication'

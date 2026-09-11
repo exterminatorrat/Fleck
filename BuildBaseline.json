@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "canonicalManifestSHA256": "07c15a3e41562f12b1dbc87eac8f708c60f3577c3281862035c2f8fc420e857a",
+  "selectedRecordID": "fleck-dd5c3e2-accepted-source-measurement-package",
+  "acceptedSourceCommit": "dd5c3e2d027d6adde6ad79a3f7d91cc1c9d33e21",
+  "acceptedSourceTree": "a8d6c703750d83651dacb96773f3d3c0e4a8034d",
+  "requiredRegistryStatus": "active"
+}

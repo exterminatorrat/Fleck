@@ -13,12 +13,14 @@
     case dictation = "Dictation"
     case vocabulary = "Vocabulary"
     case agents = "Agents"
+    case about = "About"
 
     static let fleckCases: [SettingsSection] = [.editing, .appearance, .shortcuts]
     static let voiceAndWritingCases: [SettingsSection] = [.dictation, .vocabulary]
     static let connectionCases: [SettingsSection] = [.agents]
+    static let informationCases: [SettingsSection] = [.about]
     static let allCases: [SettingsSection] =
-      fleckCases + voiceAndWritingCases + connectionCases
+      fleckCases + voiceAndWritingCases + connectionCases + informationCases
 
     var id: Self { self }
 
@@ -45,6 +47,8 @@
         "character.book.closed"
       case .agents:
         "person.2"
+      case .about:
+        "info.circle"
       }
     }
 
@@ -62,6 +66,8 @@
         "Manage personal vocabulary and dictation corrections."
       case .agents:
         "Control which local agents can work with your Fleck workspace."
+      case .about:
+        "View Fleck’s product version, build identity, source, and candidate status."
       }
     }
   }
@@ -102,6 +108,7 @@
         sectionGroup("Fleck", sections: SettingsSection.fleckCases)
         sectionGroup("Voice & Writing", sections: SettingsSection.voiceAndWritingCases)
         sectionGroup("Connections", sections: SettingsSection.connectionCases)
+        sectionGroup("Information", sections: SettingsSection.informationCases)
       }
       .listStyle(.sidebar)
       .scrollContentBackground(.hidden)
@@ -476,14 +483,16 @@
     @ObservedObject private var personalDictionarySettingsViewModel:
       PersonalDictionarySettingsViewModel
     @ObservedObject private var historyController: DictationHistoryController
+    private let buildIdentity: BuildIdentity
     @State private var selectedSection = SettingsSection.appearance
     @State private var showsHistoryClearConfirmation = false
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
     @State private var microphones: [DictationMicrophoneOption] = []
     @State private var recordingSelection = SettingsShortcutRecordingState()
 
-    init(runtime: DictationRuntime) {
+    init(runtime: DictationRuntime, buildIdentity: BuildIdentity = .current()) {
       self.runtime = runtime
+      self.buildIdentity = buildIdentity
       _admittedModelSettingsViewModel = ObservedObject(
         wrappedValue: runtime.admittedModelSettingsViewModel
       )
@@ -519,6 +528,8 @@
               vocabulary
             case .agents:
               AgentSettingsView()
+            case .about:
+              AboutSettingsView(identity: buildIdentity)
             }
           }
           .frame(maxWidth: .infinity, alignment: .leading)
