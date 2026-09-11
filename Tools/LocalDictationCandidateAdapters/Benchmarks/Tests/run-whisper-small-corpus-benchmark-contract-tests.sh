@@ -29,7 +29,7 @@ jq -e '
   .schemaVersion == 1
   and .candidate.model.id == "ggerganov/whisper.cpp:ggml-small.bin"
   and .candidate.model.revision == "80da2d8bfee42b0e836fc3a9890373e5defc00a6"
-  and .candidate.model.path == "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Quarantine/whisper-small-control/ggml-small.bin"
+  and .candidate.model.path == "${FLECK_WHISPER_SMALL_MODEL_PATH}"
   and .candidate.model.byteCount == 487601967
   and .candidate.model.sha256 == "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
   and .candidate.model.fileType == 1
@@ -38,11 +38,11 @@ jq -e '
   and .candidate.runtime.id == "whisper.cpp"
   and .candidate.runtime.version == "v1.9.2"
   and .candidate.runtime.sourceCommit == "306c88f4d1286aec1bf96e544632897886af5501"
-  and .candidate.runtime.sourcePath == "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Sources/whisper.cpp-306c88f4d1286aec1bf96e544632897886af5501"
-  and .candidate.runtime.cliPath == "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Builds/whisper-small-control/metal-static/bin/whisper-cli"
+  and .candidate.runtime.sourcePath == "${FLECK_WHISPER_CPP_SOURCE_PATH}"
+  and .candidate.runtime.cliPath == "${FLECK_WHISPER_CLI_PATH}"
   and .candidate.runtime.cliByteCount == 3271592
   and .candidate.runtime.cliSHA256 == "cbde25b4d8db46feeab59355809725ff11ec4039b3251a1997ddd3a187901e03"
-  and .candidate.runtime.buildCachePath == "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Builds/whisper-small-control/metal-static/CMakeCache.txt"
+  and .candidate.runtime.buildCachePath == "${FLECK_WHISPER_BUILD_CACHE_PATH}"
   and .candidate.runtime.architecture == "arm64"
   and .candidate.runtime.license == "MIT"
   and .candidate.runtime.buildFlags.BUILD_SHARED_LIBS == "OFF"
@@ -62,8 +62,8 @@ jq -e '
   and .candidate.runtime.buildFlags.WHISPER_BUILD_EXAMPLES == "ON"
   and (.candidate.runtime.buildFlags | length) == 15
   and .corpus.manifestPath == "Tools/LocalDictationCandidateAdapters/Benchmarks/Corpus/manifest-v1.json"
-  and .corpus.validationRoot == "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Prepared/corpus/fleurs-a3c817c-validation-subset-v1"
-  and .corpus.compositeRoot == "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Prepared/corpus/fleurs-a3c817c-public-human-composite-mixed-v1"
+  and .corpus.validationRoot == "${FLECK_FLEURS_VALIDATION_ROOT}"
+  and .corpus.compositeRoot == "${FLECK_FLEURS_COMPOSITE_ROOT}"
   and .corpus.manifestID == "fleurs-a3c817c-local-dictation-corpus-v1"
   and .corpus.sourceRevision == "a3c817cbf7c08863e0c472861c7c39e27ce7f38e"
   and .corpus.license == "CC-BY-4.0"

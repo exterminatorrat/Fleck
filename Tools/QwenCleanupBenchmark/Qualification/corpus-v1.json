@@ -33,7 +33,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-01",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -57,7 +57,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-02",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -81,7 +81,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-03",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -105,7 +105,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-04",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -129,7 +129,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-05",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -153,7 +153,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-06",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -177,7 +177,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-07",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -201,7 +201,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-08",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -225,7 +225,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-09",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -249,7 +249,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-10",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -273,7 +273,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-11",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -297,7 +297,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "en_us-12",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -321,7 +321,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "cmn_hans_cn-01",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -345,7 +345,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "cmn_hans_cn-02",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -369,7 +369,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "cmn_hans_cn-03",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -393,7 +393,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "cmn_hans_cn-04",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -417,7 +417,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "cmn_hans_cn-05",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -441,7 +441,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "cmn_hans_cn-06",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -465,7 +465,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "cmn_hans_cn-07",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -489,7 +489,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "cmn_hans_cn-08",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -513,7 +513,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "cmn_hans_cn-09",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -537,7 +537,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "cmn_hans_cn-10",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -561,7 +561,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "cmn_hans_cn-11",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -585,7 +585,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "cmn_hans_cn-12",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -609,7 +609,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "mixed-01",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -633,7 +633,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "mixed-02",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -657,7 +657,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "mixed-03",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -681,7 +681,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "mixed-04",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -705,7 +705,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "mixed-05",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -729,7 +729,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "mixed-06",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -753,7 +753,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "mixed-07",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -777,7 +777,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "mixed-08",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -801,7 +801,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "mixed-09",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -825,7 +825,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "mixed-10",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -849,7 +849,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "mixed-11",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -873,7 +873,7 @@
         "engine": "qwen",
         "field": "hypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
+        "path": "historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl",
         "recordID": "mixed-12",
         "sha256": "ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1"
       },
@@ -897,7 +897,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-01",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -921,7 +921,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-02",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -945,7 +945,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-03",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -969,7 +969,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-04",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -993,7 +993,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-05",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1017,7 +1017,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-06",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1041,7 +1041,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-07",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1065,7 +1065,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-08",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1089,7 +1089,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-09",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1113,7 +1113,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-10",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1137,7 +1137,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-11",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1161,7 +1161,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "en_us-12",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1185,7 +1185,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "cmn_hans_cn-01",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1209,7 +1209,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "cmn_hans_cn-02",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1233,7 +1233,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "cmn_hans_cn-03",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1257,7 +1257,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "cmn_hans_cn-04",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1281,7 +1281,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "cmn_hans_cn-05",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1305,7 +1305,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "cmn_hans_cn-06",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1329,7 +1329,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "cmn_hans_cn-07",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1353,7 +1353,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "cmn_hans_cn-08",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1377,7 +1377,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "cmn_hans_cn-09",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1401,7 +1401,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "cmn_hans_cn-10",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1425,7 +1425,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "cmn_hans_cn-11",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1449,7 +1449,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "cmn_hans_cn-12",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1473,7 +1473,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "mixed-01",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1497,7 +1497,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "mixed-02",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1521,7 +1521,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "mixed-03",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1545,7 +1545,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "mixed-04",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1569,7 +1569,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "mixed-05",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1593,7 +1593,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "mixed-06",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1617,7 +1617,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "mixed-07",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1641,7 +1641,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "mixed-08",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1665,7 +1665,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "mixed-09",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1689,7 +1689,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "mixed-10",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1713,7 +1713,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "mixed-11",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },
@@ -1737,7 +1737,7 @@
         "engine": "whisper",
         "field": "rawHypothesis",
         "kind": "externalBenchmark",
-        "path": "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl",
+        "path": "historical-external-evidence:whisper-small-control/transcripts.jsonl",
         "recordID": "mixed-12",
         "sha256": "8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf"
       },

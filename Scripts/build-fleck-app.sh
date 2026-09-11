@@ -53,6 +53,7 @@ readonly staged_app="$staging_root/Fleck.app"
 /bin/chmod 755 \
   "$staged_app/Contents/MacOS/Fleck" \
   "$staged_app/Contents/SharedSupport/fleck-agent"
+xcrun strip -S "$staged_app/Contents/MacOS/Fleck"
 
 readonly bundle_identifier="$(
   /usr/bin/plutil -extract CFBundleIdentifier raw -o - \

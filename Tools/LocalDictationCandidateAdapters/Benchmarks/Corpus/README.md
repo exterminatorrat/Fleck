@@ -18,6 +18,28 @@ English validation parquet is pinned to 236549523 bytes and SHA-256
 Mandarin validation parquet is pinned to 287985961 bytes and SHA-256
 `18698f80879a221f68318a4ccb8752b74c2f5bf521af0e0011b07e4670ea62ad`.
 
+## Licensing and attribution
+
+FLEURS-derived material is not covered by Fleck's MPL-2.0 license. The pinned
+[dataset card](https://huggingface.co/datasets/google/fleurs/blob/a3c817cbf7c08863e0c472861c7c39e27ce7f38e/README.md)
+declares [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+Fleck-authored schemas, metadata fields, synthetic cases, and tooling remain
+MPL-covered when they share a file with FLEURS-derived portions.
+
+Fleck selected 12 English and 12 Mandarin validation records, retained their
+reference text and metadata, and created 12 artificial bilingual composites by
+concatenating selected recordings with fixed silence gaps. It also generated
+ASR and cleanup outputs for evaluation. The composites are explicitly not
+natural code-switch evidence. Source audio is acquired separately and is not
+tracked in this repository.
+
+Please cite the source dataset as supplied by the pinned dataset card:
+
+> Alexis Conneau, Min Ma, Simran Khanuja, Yu Zhang, Vera Axelrod, Siddharth
+> Dalmia, Jason Riesa, Clara Rivera, and Ankur Bapna. “FLEURS: Few-shot
+> Learning Evaluation of Universal Representations of Speech.” arXiv preprint
+> arXiv:2205.12446 (2022). <https://arxiv.org/abs/2205.12446>
+
 The manifest contains 12 English and 12 Mandarin `publicHuman` cases, 12
 artificial `publicHumanComposite` mixed cases, and five deterministic
 `synthetic` nonspeech cases. `publicHumanComposite` is concatenated public

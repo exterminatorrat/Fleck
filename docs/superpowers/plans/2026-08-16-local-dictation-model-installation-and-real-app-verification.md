@@ -128,8 +128,8 @@ resource, downloader, or build script.
 - Use serialized offline-safe commands:
   `swift test --disable-automatic-resolution --no-parallel [--filter ...]`.
 - Reuse `./Scripts/build-fleck-app.sh`. The evidence artifact is
-  `/Users/harryjin/Fleck/.build/Fleck.app` only when the script runs from
-  `/Users/harryjin/Fleck`; an isolated-worktree bundle is not evidence for that
+  `${FLECK_REPO}/.build/Fleck.app` only when the script runs from
+  `${FLECK_REPO}`; an isolated-worktree bundle is not evidence for that
   exact path.
 - Preserve and classify the known unrelated `AppStateTests.swift` viewport
   assertion around line 916 (`18.0 >= 48.0`) if it appears on the inherited
@@ -3798,7 +3798,7 @@ merge, rebase, cherry-pick, push, or modify `AGENTS.md`:
 
 ~~~bash
 set -euo pipefail
-root=/Users/harryjin/Fleck
+root=${FLECK_REPO}
 final_accepted_sha="${FINAL_ACCEPTED_SHA:?the final accepted implementation SHA must come from the parent ship handoff}"
 final_branch=codex/local-dictation-real-app-final
 starting_root_sha=ab886d9968e6c1ae088d18e085938bec8a80f7c9
@@ -3910,9 +3910,9 @@ if (( full_suite_status != 0 )); then
   test -z "$unexpected_failure_records"
 fi
 ./Scripts/build-fleck-app.sh
-test -d /Users/harryjin/Fleck/.build/Fleck.app
-codesign --verify --deep --strict /Users/harryjin/Fleck/.build/Fleck.app
-open /Users/harryjin/Fleck/.build/Fleck.app
+test -d ${FLECK_REPO}/.build/Fleck.app
+codesign --verify --deep --strict ${FLECK_REPO}/.build/Fleck.app
+open ${FLECK_REPO}/.build/Fleck.app
 ~~~
 
 Any failed snapshot, ancestry, branch, dirty-file, unmerged-state, or

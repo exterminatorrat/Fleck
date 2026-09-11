@@ -45,7 +45,7 @@ func gemmaCleanupConfigurationBindsExactArtifactRuntimeAndCleanupNamespace() thr
   #expect(raw.files.count == 10)
   #expect(raw.downloadBytes == 771_863_021)
   #expect(raw.installedBytes == raw.downloadBytes)
-  #expect(raw.notices.contains("Gemma Cleanup Model Terms"))
+  #expect(raw.notices.contains("Gemma cleanup model terms"))
   #expect(raw.notices.contains("https://ai.google.dev/gemma/terms"))
   #expect(configuration.hardware == .init(
     architecture: "arm64",

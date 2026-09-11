@@ -28,7 +28,7 @@
 
 ## Accepted starting checkpoint
 
-- Program worktree: `/Users/harryjin/Fleck/.worktrees/local-writing-intelligence-program`
+- Program worktree: `${FLECK_REPO}/.worktrees/local-writing-intelligence-program`
 - Branch: `codex/local-writing-intelligence-program`
 - Accepted HEAD: `3372a096e51fe638693bad93c15405a263729dbe`
 - Accepted foundations: authority/base/docs/runners, the 1A1 corpus-manifest core, stage/physical receipts, dictionary-v2 values/codec/compiler, and cleanup validator regressions.

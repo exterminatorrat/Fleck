@@ -64,7 +64,7 @@ func parakeetConfigurationBindsExactManifestIdentityAndNamespace() throws {
   #expect(raw.files.count == 21)
   #expect(raw.downloadBytes == 464_413_247)
   #expect(raw.installedBytes == raw.downloadBytes)
-  #expect(raw.notices.contains("Third-Party Notices"))
+  #expect(raw.notices.contains("Third-party notices"))
   #expect(test.value.hardware == .init(
     architecture: "arm64",
     requestedLanguages: ["en"],

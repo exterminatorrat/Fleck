@@ -1093,7 +1093,7 @@ private func settleHostedFolderView(_ view: NSView) async {
 
   state.updateSelected(title: "First edited")
   #expect(state.workspace.notes(inFolderID: manualFolder.id).map(\.id) == [pinned.id, second.id, third.id, first.id])
-  try await Task.sleep(for: .milliseconds(500))
+  try await waitForSaveCount(recorder, 2)
   #expect(recorder.generations.count == 2)
 }
 

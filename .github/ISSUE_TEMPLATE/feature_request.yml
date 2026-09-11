@@ -1,0 +1,36 @@
+name: Feature request
+description: Propose one focused improvement
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Fleck favors a small native surface, local data, accessibility, and low resource use. Explain the user problem before the solution.
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: What task is difficult today, and for whom?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the smallest change that would solve the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and tradeoffs
+      description: Note current workarounds and effects on native behavior, privacy, accessibility, or resources.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This request contains no personal notes, credentials, recordings, or other private data.
+          required: true
+        - label: This is one focused request rather than a collection of unrelated changes.
+          required: true

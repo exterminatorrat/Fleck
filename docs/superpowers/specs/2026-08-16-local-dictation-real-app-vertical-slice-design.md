@@ -854,7 +854,7 @@ duplicate manifest paths fail before transport.
    `ab886d9968e6c1ae088d18e085938bec8a80f7c9` to agree. A live `main` may
    track `archive/main`, but `origin/main` is the operational content source.
    It then preflights the real
-   `/Users/harryjin/Fleck` checkout at exact root HEAD
+   `${FLECK_REPO}` checkout at exact root HEAD
    `ab886d9968e6c1ae088d18e085938bec8a80f7c9`, branch `main`, and status
    exactly ` M AGENTS.md`. It verifies the cumulative diff from that starting
    HEAD to the final accepted SHA does not modify `AGENTS.md`, snapshots the
@@ -874,7 +874,7 @@ duplicate manifest paths fail before transport.
    than one issue. Benign `0 failures (0 unexpected)` lines are ignored. The
    full-suite counts are not reduced to a one-test fixture.
    Every other failure aborts. Only then run `./Scripts/build-fleck-app.sh` and inspect
-   `/Users/harryjin/Fleck/.build/Fleck.app`. A bundle produced in an isolated
+   `${FLECK_REPO}/.build/Fleck.app`. A bundle produced in an isolated
    worktree is not evidence for that exact path.
 8. **Operator microphone test:** a human launches the development app, grants
    permissions, speaks a known sentence containing punctuation/filler/repetition
@@ -946,7 +946,7 @@ The milestone is complete only when all of the following are directly evidenced:
 
 - the focused SwiftPM and scope checks pass, with unrelated baseline failures
   classified rather than hidden;
-- the real-checkout build script produces `/Users/harryjin/Fleck/.build/Fleck.app`;
+- the real-checkout build script produces `${FLECK_REPO}/.build/Fleck.app`;
 - the development app launches from that artifact;
 - the app requests and receives the required microphone and Speech Recognition
   permissions, refuses network recognition, and reaches Apple on-device Speech;

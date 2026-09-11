@@ -243,7 +243,7 @@ responsive navigation behavior.
 
 The approved logo asset is used directly:
 
-`/Users/harryjin/.codex/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-logo-approved.png`
+`${PRIVATE_EVIDENCE_ROOT}/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-logo-approved.png`
 
 If the full logo image contains excess whitespace that prevents correct
 navigation sizing, a production-ready transparent crop may be derived from the

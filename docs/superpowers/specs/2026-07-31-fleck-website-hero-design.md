@@ -8,7 +8,7 @@ Status: Approved for implementation
 
 Accepted concept:
 
-`/Users/harryjin/.codex/generated_images/019fb779-8096-70d1-a4d7-a606fd4b86cd/exec-c9f5646d-84da-48ef-9295-f7cea729de6e.png`
+`${PRIVATE_EVIDENCE_ROOT}/generated_images/019fb779-8096-70d1-a4d7-a606fd4b86cd/exec-c9f5646d-84da-48ef-9295-f7cea729de6e.png`
 
 The implementation must reproduce only the first viewport shown in that image.
 No content may be added below the hero.

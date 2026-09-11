@@ -4,7 +4,7 @@
 
 **Owner:** Central primary orchestrator. Codex-native GPT-5.6 Sol / High implementers for bounded work; fresh Sol / High reviewers. Never Terra.
 
-**Baseline:** `origin/main` at `68b6b429ab4f1f130252d9865a2c616b7224cca7`, refreshed 2026-09-05. A later base must be a verified descendant. Working checkout: `/Users/harryjin/Fleck/.worktrees/central-orchestrator-validation`, branch `codex/central-orchestrator-validation`.
+**Baseline:** `origin/main` at `68b6b429ab4f1f130252d9865a2c616b7224cca7`, refreshed 2026-09-05. A later base must be a verified descendant. Working checkout: `${FLECK_REPO}/.worktrees/central-orchestrator-validation`, branch `codex/central-orchestrator-validation`.
 
 ## Outcome
 

@@ -8,9 +8,7 @@ struct ValidateCleanupCandidate {
   private static let warmDeadlineMilliseconds = 1_500
   private static let expectedModelID = "mlx-community/Qwen3.5-0.8B-MLX-4bit"
   private static let expectedRevision = "5d894f8cc4ef3e6c88537bf3746ed262f549da6a"
-  private static let expectedPython = "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/bin/python3.14"
   private static let EXPECTED_PYTHON_EXECUTABLE_SHA256 = "87d4df53fd91304be5bac391fb204643c36b7df2023c04a0953bcbc7d4fdf634"
-  private static let expectedRuntimeSitePackages = "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Tools/qwen35-cleanup-mlx-0.31.3/lib/python3.14/site-packages"
   private static let expectedRuntimeFileCount = 10_760
   private static let expectedRuntimeInventorySha256 = "7b1908f44a55ba5f9d857ff5615b69c3ef71b8519903691f86776e438790f214"
   private static let contractRuntimeFileCount = 0
@@ -355,8 +353,9 @@ struct ValidateCleanupCandidate {
     ], label: "runtime")
     let pythonVersion = try requiredString(object, "pythonVersion", maximumBytes: 1_024, allowFormatting: false)
     let verificationMode = try requiredString(object, "verificationMode", maximumBytes: 64, allowFormatting: false)
-    guard try requiredString(object, "pythonExecutable", maximumBytes: 4_096, allowFormatting: false) == expectedPython,
-          !pythonVersion.isEmpty,
+    let pythonExecutable = try requiredString(object, "pythonExecutable", maximumBytes: 4_096, allowFormatting: false)
+    try requireAbsoluteCanonicalPathString(pythonExecutable)
+    guard !pythonVersion.isEmpty,
           verificationMode == "exact-runtime-packages" || verificationMode == "contract-fixture" else {
       throw ValidationCLIError.schema("runtime identity")
     }
@@ -365,11 +364,6 @@ struct ValidateCleanupCandidate {
     }
     let runtimeSitePackages = try requiredString(object, "runtimeSitePackages", maximumBytes: 4_096, allowFormatting: false)
     try requireAbsoluteCanonicalPathString(runtimeSitePackages)
-    if verificationMode == "exact-runtime-packages" {
-      guard runtimeSitePackages == expectedRuntimeSitePackages else {
-        throw ValidationCLIError.schema("pinned runtime site-packages path")
-      }
-    }
     let expectedFileCount = verificationMode == "exact-runtime-packages" ? expectedRuntimeFileCount : contractRuntimeFileCount
     let expectedInventoryHash = verificationMode == "exact-runtime-packages" ? expectedRuntimeInventorySha256 : contractRuntimeInventorySha256
     guard try requiredInt(object, "runtimeFileCount") == expectedFileCount,

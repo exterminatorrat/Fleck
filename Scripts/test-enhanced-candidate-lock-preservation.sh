@@ -28,6 +28,7 @@ printf '%s\n' \
   '    test "$4" = "$FAKE_CANDIDATE_SCRATCH"' \
   '    test "$5" = "resolve"' \
   '    test "${FLECK_ENHANCED_CANDIDATE:-}" = "1"' \
+  '    /usr/bin/cmp -s "$FAKE_ORDINARY_FIXTURE" "$FAKE_REPO_ROOT/Package.resolved"' \
   '    /bin/mkdir "$FAKE_CANDIDATE_SCRATCH"' \
   '    /bin/cp "$FAKE_CANDIDATE_FIXTURE" "$FAKE_REPO_ROOT/Package.resolved"' \
   '    ;;' \
@@ -46,6 +47,7 @@ set +e
   cd "$foreign_root"
   PATH="$fake_bin:$PATH" \
   FAKE_REPO_ROOT="$repo_root" \
+  FAKE_ORDINARY_FIXTURE="$ordinary_copy" \
   FAKE_CANDIDATE_FIXTURE="$repo_root/Tests/Fixtures/enhanced-candidate-pin-valid.json" \
   FAKE_CANDIDATE_SCRATCH="$scratch" \
   "$script_dir/resolve-enhanced-candidate.sh" "$scratch" \

@@ -1121,7 +1121,7 @@ func reorderDestinationCommitsAndResetsSynchronouslyAtNativeEnd() throws {
   #expect(sourceViews[0].layer?.opacity == 1)
 }
 
-@Test @MainActor func reorderInteractionNativeLayerReversalUsesPresentationAndMotionCanBeDisabled() async throws {
+@Test @MainActor func reorderInteractionNativeLayerReversalUsesPresentationAndMotionCanBeDisabled() throws {
   let source = ReorderSourceHostingView(rootView: AnyView(Color.clear.frame(width: 120, height: 30)))
   let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 180, height: 40),
     styleMask: [.borderless], backing: .buffered, defer: false)
@@ -1129,11 +1129,16 @@ func reorderDestinationCommitsAndResetsSynchronouslyAtNativeEnd() throws {
   window.contentView = source
   window.makeKeyAndOrderFront(nil)
   defer { window.contentView = nil; window.orderOut(nil); window.close() }
+  window.displayIfNeeded()
+  CATransaction.flush()
   source.setReorderDisplacement(0, animated: false)
-  try await Task.sleep(nanoseconds: 30_000_000)
-  source.setReorderDisplacement(-80, animated: true)
-  try await Task.sleep(nanoseconds: 50_000_000)
   let layer = try #require(source.layer)
+  layer.speed = 0
+  layer.timeOffset = 0
+  source.setReorderDisplacement(-80, animated: true)
+  CATransaction.flush()
+  layer.timeOffset = AppMotion.standardDuration / 3
+  CATransaction.flush()
   let beforeReversal = try #require(layer.presentation()).transform.m41
   #expect(beforeReversal < -1 && beforeReversal > -79)
   source.setReorderDisplacement(0, animated: true)

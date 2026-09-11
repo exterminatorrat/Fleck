@@ -38,6 +38,17 @@ current executable.
 - The checked-in Foundation-only preflight builds without a native framework and fails with `artifact-identity-unadmitted` before helper resolution, path resolution, or native runtime construction. It performs no audio processing, context handling, locale mapping, transcription, or native inference.
 - The preflight accepts explicit absolute runtime/model/helper arguments as a local process boundary, but the unadmitted manifest prevents it from resolving or launching any helper. It contains no download code and makes no network requests.
 
+The native evaluation contract suite also requires an explicit prepared
+artifact directory. It has no machine-specific default:
+
+```sh
+export FLECK_QWEN_PREPARED_ROOT="/absolute/path/to/existing/prepared-qwen3-asr"
+bash Tools/LocalDictationCandidateAdapters/Spikes/QwenASR/Tests/run-native-evaluation-contract-tests.sh
+```
+
+The variable must identify an existing prepared directory. The script rejects
+a missing value or directory and does not download or locate a payload.
+
 ## Intended/historical future native-route semantics and gates
 
 - Intended future native-route semantics: Qwen3 through the C API is offline/final-only. That route must emit no partial events and must not claim true streaming.

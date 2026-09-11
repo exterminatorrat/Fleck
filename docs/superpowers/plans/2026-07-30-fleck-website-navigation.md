@@ -13,7 +13,7 @@
 - Framer project ID is `d0qX2IekJlwu8LZD98Js`.
 - Home page ID is `augiA20Il`, path `/`, with primary desktop breakpoint `WQLkyLRf1`.
 - The Home page is currently blank. Preserve that blank content canvas; this plan adds only shared navigation.
-- Use the approved logo asset at `/Users/harryjin/.codex/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-logo-approved.png`.
+- Use the approved logo asset at `${PRIVATE_EVIDENCE_ROOT}/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-logo-approved.png`.
 - Use IBM Plex Sans for navigation copy.
 - Use `#F4F0E7` Paper, `#202128` Graphite, `#7257F5` Violet, and `#B9C5B4` Sage.
 - Desktop content order is Fleck logo, Product, How it works, Agent access, Principles, Join the waitlist.
@@ -32,13 +32,13 @@
 **Local documentation**
 
 - Read: `docs/superpowers/specs/2026-07-30-fleck-website-navigation-design.md`
-- Read: `/Users/harryjin/.agents/skills/framer/projects/d0qX2IekJlwu8LZD98Js/prompt/how-projects-work.md`
-- Read: `/Users/harryjin/.agents/skills/framer/projects/d0qX2IekJlwu8LZD98Js/prompt/updating-the-project.md`
-- Read: `/Users/harryjin/.agents/skills/framer/projects/d0qX2IekJlwu8LZD98Js/prompt/implementation-strategy.md`
-- Evidence input: `/Users/harryjin/.codex/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-reference-craft.png`
-- Evidence output: `/Users/harryjin/.codex/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-desktop.png`
-- Evidence output: `/Users/harryjin/.codex/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-mobile-closed.png`
-- Evidence output: `/Users/harryjin/.codex/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-mobile-open.png`
+- Read: `${OPTIONAL_TOOLING_ROOT}/skills/framer/projects/d0qX2IekJlwu8LZD98Js/prompt/how-projects-work.md`
+- Read: `${OPTIONAL_TOOLING_ROOT}/skills/framer/projects/d0qX2IekJlwu8LZD98Js/prompt/updating-the-project.md`
+- Read: `${OPTIONAL_TOOLING_ROOT}/skills/framer/projects/d0qX2IekJlwu8LZD98Js/prompt/implementation-strategy.md`
+- Evidence input: `${PRIVATE_EVIDENCE_ROOT}/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-reference-craft.png`
+- Evidence output: `${PRIVATE_EVIDENCE_ROOT}/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-desktop.png`
+- Evidence output: `${PRIVATE_EVIDENCE_ROOT}/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-mobile-closed.png`
+- Evidence output: `${PRIVATE_EVIDENCE_ROOT}/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-mobile-open.png`
 
 **Framer objects**
 
@@ -69,10 +69,10 @@
 **Files:**
 
 - Read: `docs/superpowers/specs/2026-07-30-fleck-website-navigation-design.md`
-- Read: `/Users/harryjin/.agents/skills/framer/projects/d0qX2IekJlwu8LZD98Js/prompt/how-projects-work.md`
-- Read: `/Users/harryjin/.agents/skills/framer/projects/d0qX2IekJlwu8LZD98Js/prompt/updating-the-project.md`
-- Read: `/Users/harryjin/.agents/skills/framer/projects/d0qX2IekJlwu8LZD98Js/prompt/implementation-strategy.md`
-- Read: `/Users/harryjin/.codex/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-logo-approved.png`
+- Read: `${OPTIONAL_TOOLING_ROOT}/skills/framer/projects/d0qX2IekJlwu8LZD98Js/prompt/how-projects-work.md`
+- Read: `${OPTIONAL_TOOLING_ROOT}/skills/framer/projects/d0qX2IekJlwu8LZD98Js/prompt/updating-the-project.md`
+- Read: `${OPTIONAL_TOOLING_ROOT}/skills/framer/projects/d0qX2IekJlwu8LZD98Js/prompt/implementation-strategy.md`
+- Read: `${PRIVATE_EVIDENCE_ROOT}/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-logo-approved.png`
 
 **Interfaces:**
 
@@ -111,7 +111,7 @@ Expected:
 Open `https://www.craft.do/` in the Browser plugin, set a 1440 px desktop viewport, and capture the first viewport to:
 
 ```text
-/Users/harryjin/.codex/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-reference-craft.png
+${PRIVATE_EVIDENCE_ROOT}/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-reference-craft.png
 ```
 
 Expected: the image visibly includes Craft's floating top navigation with logo left, centered links, and the right-side action. Do not use the Mobbin sign-up screen as the reference.
@@ -149,7 +149,7 @@ Use the approved Fleck asset for the brand mark; the Logos catalog is requested 
 Run:
 
 ```bash
-cp "/Users/harryjin/.codex/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-logo-approved.png" /tmp/fleck-nav-logo.png
+cp "${PRIVATE_EVIDENCE_ROOT}/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-logo-approved.png" /tmp/fleck-nav-logo.png
 sips -Z 640 /tmp/fleck-nav-logo.png
 sips -g pixelWidth -g pixelHeight /tmp/fleck-nav-logo.png
 ```
@@ -730,9 +730,9 @@ Duplicates are allowed because desktop and drawer controls share destinations; u
 
 **Files:**
 
-- Create: `/Users/harryjin/.codex/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-desktop.png`
-- Create: `/Users/harryjin/.codex/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-mobile-closed.png`
-- Create: `/Users/harryjin/.codex/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-mobile-open.png`
+- Create: `${PRIVATE_EVIDENCE_ROOT}/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-desktop.png`
+- Create: `${PRIVATE_EVIDENCE_ROOT}/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-mobile-closed.png`
+- Create: `${PRIVATE_EVIDENCE_ROOT}/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-mobile-open.png`
 
 **Interfaces:**
 
@@ -761,9 +761,9 @@ Expected:
 
 Create one comparison image containing:
 
-1. `/Users/harryjin/.codex/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-reference-craft.png`.
+1. `${PRIVATE_EVIDENCE_ROOT}/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-nav-reference-craft.png`.
 2. `fleck-nav-desktop.png`.
-3. The Fleck Design Overview screenshot at `/Users/harryjin/.codex/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-framer-design-overview.jpg`.
+3. The Fleck Design Overview screenshot at `${PRIVATE_EVIDENCE_ROOT}/visualizations/2026/07/27/019fa2df-415f-7021-b22c-6d17a88ca9b9/fleck-framer-design-overview.jpg`.
 
 Review:
 

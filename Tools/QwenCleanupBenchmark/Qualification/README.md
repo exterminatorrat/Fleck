@@ -17,18 +17,20 @@ promoted automatically.
   destinations, number words and digits, prices and units, dates and times,
   URLs and paths, commands, commitments and modality, and negation.
 
-The corpus uses only these accepted final retained transcript sources. The
-runner rejects any substituted path, source hash, record identity, or baseline
-value before invoking the accepted harness:
+The corpus retains content identities from two historical external transcript
+sources. Its `sourceEvidence.path` values are public locators, not filesystem
+paths. At runtime, the caller supplies the current location of each retained
+file, and the runner verifies its hash, record identity, and baseline before
+invoking the accepted harness:
 
 ```text
-Qwen:
-/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl
+Qwen locator: historical-external-evidence:qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl
 SHA-256: ccfc1fcd88e2fbc5fb8462201ea02849e5ebb5099e89ec19e22fb4b93bc788b1
 
-Whisper:
-/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl
+Whisper locator: historical-external-evidence:whisper-small-control/transcripts.jsonl
 SHA-256: 8f6c8602f188b4f045b77bdb5e33e23532da51b247272027f85e81d01d279cdf
+
+Current sanitized corpus SHA-256: fca16ee1c04b77fa7b17489ea3d071eff3c0d049c78ae90e1977ca3421f10120
 ```
 
 No microphone audio is copied or tracked. Stress cases pin the checked-in
@@ -38,23 +40,42 @@ provenance, and external source identities.
 
 ## Real qualification
 
-Run the fake-only contract suite first. Then create a new empty external
-directory and run the qualification with the exact runtime and model paths:
+Run the fake-only contract suite first. It has four explicit external fixture
+inputs and no machine-specific defaults:
 
 ```sh
-bash Tools/QwenCleanupBenchmark/Qualification/Tests/run-contract-tests.sh
+export FLECK_QWEN_PYTHON_EXECUTABLE="/absolute/path/to/existing/python3.14"
+export FLECK_QWEN_QUALIFICATION_QWEN_SOURCE="/absolute/path/to/existing/qwen-transcripts.jsonl"
+export FLECK_QWEN_QUALIFICATION_WHISPER_SOURCE="/absolute/path/to/existing/whisper-transcripts.jsonl"
+export FLECK_QWEN_QUALIFICATION_RESCORE_FIXTURE_ROOT="/absolute/path/to/existing/rescore-fixture"
 
-mkdir -p "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/QwenCleanupQualification-NEW"
+bash Tools/QwenCleanupBenchmark/Qualification/Tests/run-contract-tests.sh
+```
+
+The contract suite creates fake model/runtime data under its private temporary
+directory. Its external inputs provide a standard-library Python executable
+and retained identity/rescore fixtures only.
+
+Then run the real qualification with the exact runtime and model paths:
+
+```sh
+export FLECK_QWEN_PYTHON_EXECUTABLE="/absolute/path/to/existing/python3.14"
+export FLECK_QWEN_RUNTIME_SITE_PACKAGES="/absolute/path/to/existing/site-packages"
+export FLECK_QWEN_MODEL_ROOT="/absolute/path/to/existing/qwen3.5-0.8b-model"
+export FLECK_QWEN_QUALIFICATION_OUTPUT_ROOT="/absolute/path/to/new-empty-qualification-output"
+export FLECK_QWEN_QUALIFICATION_QWEN_SOURCE="/absolute/path/to/existing/qwen-transcripts.jsonl"
+export FLECK_QWEN_QUALIFICATION_WHISPER_SOURCE="/absolute/path/to/existing/whisper-transcripts.jsonl"
+
 bash Tools/QwenCleanupBenchmark/Qualification/run-qwen-cleanup-qualification.sh \
   --real \
-  --corpus "$PWD/Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json" \
-  --qwen-source "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl" \
-  --whisper-source "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl" \
-  --python-executable "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/bin/python3.14" \
-  --runtime-site-packages "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Tools/qwen35-cleanup-mlx-0.31.3/lib/python3.14/site-packages" \
-  --model-root "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Quarantine/qwen3.5-0.8b-mlx-4bit" \
-  --output-root "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/QwenCleanupQualification-NEW"
+  --corpus "$PWD/Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json"
 ```
+
+The six environment variables are required unless the corresponding CLI
+options are supplied. Each input must be an existing canonical external path.
+The runner may create the named qualification output directory when its
+canonical parent exists, but the output must be new and empty. Nothing is
+downloaded or located automatically.
 
 The qualification invokes only the accepted
 `Tools/QwenCleanupBenchmark/run-qwen-cleanup-benchmark.sh`. That harness
@@ -113,11 +134,17 @@ and checked again at publication. Rescore mode launches neither the accepted
 harness nor a model:
 
 ```sh
+export FLECK_QWEN_PYTHON_EXECUTABLE="/absolute/path/to/existing/python3.14"
+export FLECK_QWEN_QUALIFICATION_OUTPUT_ROOT="/absolute/path/to/new-empty-rescore-output"
+
 bash Tools/QwenCleanupBenchmark/Qualification/run-qwen-cleanup-qualification.sh \
   --rescore \
-  --rescore-input-root "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/QwenCleanupQualification-PRIOR" \
-  --output-root "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/QwenCleanupQualification-RESCORE"
+  --rescore-input-root "/absolute/path/to/existing/prior-qualification-root"
 ```
+
+Rescore mode requires the Python and qualification-output variables plus the
+explicit `--rescore-input-root`; it does not read model/runtime/source
+variables and launches no harness or model.
 
 The rescore receipt records prior qualification attempts, including deadline
 instability and unsupported-shell failures; it remains developer-only and

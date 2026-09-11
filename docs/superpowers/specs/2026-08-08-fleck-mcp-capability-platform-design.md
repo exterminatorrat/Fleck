@@ -22,8 +22,11 @@ begins only after the capability and protocol contracts are stable. Fleck must
 not offer one-click arbitrary native add-on execution under its current
 non-sandboxed packaging.
 
-Fleck remains source-available under PolyForm Shield 1.0.0. Changing Fleck's
-license is outside this design. Add-ons declare and retain independent licenses.
+When this design was written on 2026-08-08, Fleck was source-available under
+PolyForm Shield 1.0.0 and a license change was outside its scope. Fleck has
+since moved to MPL-2.0; `LICENSE`, `NOTICE`, and `THIRD_PARTY_NOTICES.md`
+define the current boundary. Add-ons still declare and retain independent
+licenses.
 
 ## Verified Starting Point
 

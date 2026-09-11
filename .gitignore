@@ -1,9 +1,34 @@
+# macOS
 .DS_Store
+._*
+
+# Swift Package Manager
 .build/
 .build-candidate/
 .swiftpm/
+
+# Xcode
+*.xcarchive
+*.xcuserstate
+DerivedData/
+xcuserdata/
+
+# Website dependencies and build output
+website/.wrangler/
+website/dist/
+website/node_modules/
+
+# Local environment and signing secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+website/.dev.vars
+website/.openai/hosting.json
+*.mobileprovision
+*.p12
+*.provisionprofile
+
+# Local tooling and worktrees
 .superpowers/brainstorm/
 .worktrees/
-DerivedData/
-*.xcuserstate
-xcuserdata/

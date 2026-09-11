@@ -121,6 +121,9 @@ The maintainer subsequently authorized publishing this candidate and its plans.
 Local machine paths and personal runtime receipts are intentionally excluded
 from this public copy. The implementation constraints above describe the original
 local-only work; publication does not authorize a merge or acceptance promotion.
-Current `main` already includes the editor polish and later source-preview fixes.
-The candidate preserves its reviewed baseline and requires separate integration
-verification before it can be merged into that newer source tree.
+At initial publication, `main` already included the editor polish and later
+source-preview fixes. The draft preserved its reviewed baseline and required
+separate integration verification before merging into that newer source tree.
+Subsequent integration and merge-readiness evidence is recorded in
+[PR #31](https://github.com/exterminatorrat/Fleck/pull/31); this document records
+the original local design rather than a release or acceptance promotion.

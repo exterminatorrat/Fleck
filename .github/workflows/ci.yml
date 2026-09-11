@@ -15,7 +15,8 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository (actions/checkout v6.0.2)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Toolchain
         run: |
           xcodebuild -version
@@ -29,7 +30,7 @@ jobs:
       - name: Test ordinary graph
         run: |
           unset FLECK_ENHANCED_CANDIDATE
-          swift test --disable-automatic-resolution --no-parallel
+          Scripts/run-nonempty-swift-tests.sh '^.+$'
       - name: Build Fleck release product
         run: |
           unset FLECK_ENHANCED_CANDIDATE
@@ -40,17 +41,41 @@ jobs:
           swift build -c release --product fleck-agent
       - name: Audit agent boundary
         run: Scripts/audit-agent-boundary.sh
-      - name: Enforce executable size budget
-        run: Scripts/check-release-size.sh .build/release/Fleck
-      - name: Validate native bundle launch and Keychain contracts
+      - name: Test packaged app symbol stripping
+        run: Tests/Scripts/build-fleck-app-symbols.test.sh
+      - name: Package Fleck app
+        run: Scripts/build-fleck-app.sh
+      - name: Enforce packaged app size budget
+        run: Scripts/check-release-size.sh .build/Fleck.app
+      - name: Test release model-asset exclusion
+        run: Scripts/test-release-model-asset-exclusion.sh
+      - name: Validate macOS no-launch contract
+        run: bash Tests/Scripts/validate-macos-no-launch.test.sh
+      - name: Validate non-launching bundle metadata, signature, and packaging
         run: Scripts/validate-macos.sh
+
+  macos-enhanced:
+    name: macOS Enhanced Local candidate gates
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository (actions/checkout v6.0.2)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Install and verify ripgrep
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            brew install ripgrep
+          fi
+          rg --version
       - name: Verify Enhanced Local candidate pin
         run: Scripts/test-enhanced-candidate-pin.sh
       - name: Test Enhanced Local candidate graph
         run: |
-          Scripts/resolve-enhanced-candidate.sh .build-candidate \
-            swift test --disable-automatic-resolution --no-parallel \
-              --scratch-path .build-candidate
+          Scripts/run-nonempty-enhanced-tests.sh '^.+$'
           git diff --exit-code -- Package.resolved
       - name: Preserve ordinary lock from a foreign working directory
         run: |
@@ -60,3 +85,26 @@ jobs:
         run: |
           Scripts/check-candidate-release-rejected.sh
           git diff --exit-code -- Package.resolved
+
+  website:
+    name: Website tests and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - name: Check out repository (actions/checkout v6.0.2)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Set up Node.js (actions/setup-node v6.1.0)
+        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f
+        with:
+          node-version-file: website/.node-version
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Test website
+        run: npm test
+      - name: Build website
+        run: npm run build

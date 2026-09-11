@@ -33,7 +33,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-/bin/rm -f -- "$resolved"
 cd "$repo_root"
 FLECK_ENHANCED_CANDIDATE=1 \
   swift package --skip-update --scratch-path "$scratch" resolve

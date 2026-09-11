@@ -5,11 +5,11 @@ readonly script_dir="$(cd "$(dirname "$0")" && pwd -P)"
 readonly repo_root="$(git -C "$script_dir/../../.." rev-parse --show-toplevel)"
 readonly runner="$repo_root/Tools/QwenCleanupBenchmark/Qualification/run-qwen-cleanup-qualification.sh"
 readonly corpus="$repo_root/Tools/QwenCleanupBenchmark/Qualification/corpus-v1.json"
-readonly python="/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/bin/python3.14"
-readonly qwen_source="/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-5/transcripts.jsonl"
-readonly whisper_source="/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/whisper-small-control.YPRRYs/transcripts.jsonl"
-readonly rescore_source_root="/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/QwenCleanupQualification-20260820T213317Z"
-readonly test_root="$(realpath "$(mktemp -d /tmp/fleck-qwen-qualification-contract.XXXXXX)")"
+readonly python="${FLECK_QWEN_PYTHON_EXECUTABLE:-}"
+readonly qwen_source="${FLECK_QWEN_QUALIFICATION_QWEN_SOURCE:-}"
+readonly whisper_source="${FLECK_QWEN_QUALIFICATION_WHISPER_SOURCE:-}"
+readonly rescore_source_root="${FLECK_QWEN_QUALIFICATION_RESCORE_FIXTURE_ROOT:-}"
+readonly test_root="$(realpath "$(mktemp -d "${TMPDIR:-/tmp}/fleck-qwen-qualification-contract.XXXXXX")")"
 readonly fake_model="$test_root/fake-model"
 readonly fake_site="$test_root/fake-site"
 readonly fake_responses="$test_root/fake-responses.json"
@@ -24,6 +24,17 @@ readonly rescore_cold_evidence_swap_restore_fixture_root="$test_root/rescore-col
 readonly rescore_tmp_root="$test_root/rescore-tmp"
 readonly rescore_source_cold_baseline="$test_root/source-cold-manifest.json"
 trap 'rm -rf "$test_root"' EXIT
+
+for required_name in \
+  FLECK_QWEN_PYTHON_EXECUTABLE \
+  FLECK_QWEN_QUALIFICATION_QWEN_SOURCE \
+  FLECK_QWEN_QUALIFICATION_WHISPER_SOURCE \
+  FLECK_QWEN_QUALIFICATION_RESCORE_FIXTURE_ROOT; do
+  [[ -n "${!required_name:-}" ]] || {
+    echo "qualification-contract-failure: required environment missing: $required_name" >&2
+    exit 2
+  }
+done
 
 fail() {
   echo "qualification-contract-failure: $*" >&2
@@ -203,11 +214,11 @@ run_contract() {
 good_output="$test_root/good-output"
 run_contract good "$good_output"
 [[ "$RUN_CODE" -eq 0 ]] || { cat "$log_dir/good.log" >&2; fail "good fake qualification failed"; }
-"$python" -I -S - "$good_output" "$marker" <<'PY'
+"$python" -I -S - "$good_output" "$marker" "$qwen_source" "$whisper_source" <<'PY'
 import json
 import sys
 from pathlib import Path
-output, marker = map(Path, sys.argv[1:])
+output, marker, qwen_source, whisper_source = map(Path, sys.argv[1:])
 report = json.loads((output / "qualification-report.json").read_text())
 assert report["productionIntegrated"] is False
 assert report["packagedAppVerified"] is False
@@ -257,8 +268,8 @@ for path in output.glob("*.jsonl"):
             assert generation["requestCount"] == 1
             assert generation["retryCount"] == 0
 assert report["qualificationProvenance"]["acceptedFinalSourcesOnly"] is True
-assert any("real-5/transcripts.jsonl" in item["path"] for item in report["externalSourceEvidence"])
-assert any("whisper-small-control.YPRRYs" in item["path"] for item in report["externalSourceEvidence"])
+assert any(item["path"] == str(qwen_source) for item in report["externalSourceEvidence"])
+assert any(item["path"] == str(whisper_source) for item in report["externalSourceEvidence"])
 PY
 
 make_bad_corpus() {
@@ -303,9 +314,12 @@ run_contract bad-duplicate "$test_root/bad-duplicate-output" --corpus "$bad_dupl
 [[ "$RUN_CODE" -ne 0 ]] || fail "duplicate corpus key unexpectedly passed"
 grep -F "duplicate JSON key" "$log_dir/bad-duplicate.log" >/dev/null || fail "duplicate corpus key was not reported"
 
-run_contract old-source "$test_root/old-source-output" --qwen-source "/Users/harryjin/Library/Application Support/Fleck/ModelEvaluation/Evidence/RawRuns/qwen3-asr-0.6b-int8-20260821-real-4/transcripts.jsonl"
+older_qwen_source="$test_root/older-qwen-source.jsonl"
+cp "$qwen_source" "$older_qwen_source"
+printf '\n' >>"$older_qwen_source"
+run_contract old-source "$test_root/old-source-output" --qwen-source "$older_qwen_source"
 [[ "$RUN_CODE" -ne 0 ]] || fail "older Qwen evidence unexpectedly passed"
-grep -F "substituted/older Qwen evidence" "$log_dir/old-source.log" >/dev/null || fail "older Qwen evidence was not rejected"
+grep -F "source evidence hash mismatch" "$log_dir/old-source.log" >/dev/null || fail "older Qwen evidence was not rejected"
 
 race_output="$test_root/race-output"
 race_log="$log_dir/race.log"

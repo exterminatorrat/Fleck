@@ -4,6 +4,8 @@ set -euo pipefail
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly ordinary_runner="$script_dir/run-nonempty-swift-tests.sh"
 readonly enhanced_runner="$script_dir/run-nonempty-enhanced-tests.sh"
+readonly appkit_runner="$script_dir/run-swift-tests-with-appkit-host.sh"
+readonly appkit_host_source="$script_dir/../Tests/Support/AppKitTestMain.swift"
 readonly validate_script="$script_dir/validate-macos.sh"
 temp_path="$(mktemp -d "${TMPDIR:-/tmp}/fleck-nonempty-runner-test.XXXXXX")"
 readonly temp_root="$(cd -- "$temp_path" && pwd -P)"
@@ -23,14 +25,20 @@ fail() {
   exit 1
 }
 
-for runner in "$ordinary_runner" "$enhanced_runner"; do
+for runner in "$ordinary_runner" "$enhanced_runner" "$appkit_runner"; do
   [[ -x "$runner" ]] || fail "required runner is missing or not executable: $runner"
 done
+[[ -f "$appkit_host_source" ]] ||
+  fail "required AppKit host source is missing: $appkit_host_source"
 /usr/bin/grep -Fq '"$script_dir/run-nonempty-swift-tests.sh" '\''^.+$'\''' \
   "$validate_script" || fail 'validate-macos does not use the non-empty runner'
 
-/bin/mkdir -p "$fixture_scripts" "$fixture_bin" "$fixture_state" "$foreign_root"
-/bin/cp "$ordinary_runner" "$enhanced_runner" "$fixture_scripts/"
+/bin/mkdir -p "$fixture_scripts" "$fixture_bin" "$fixture_state" "$foreign_root" \
+  "$fixture_root/Tests/Support" \
+  "$fixture_state/platform/Developer/Library/Frameworks/Testing.framework" \
+  "$fixture_state/sdk"
+/bin/cp "$ordinary_runner" "$enhanced_runner" "$appkit_runner" "$fixture_scripts/"
+/bin/cp "$appkit_host_source" "$fixture_root/Tests/Support/"
 printf '// fixture package\n' > "$fixture_root/Package.swift"
 printf 'ordinary root lock\n' > "$fixture_root/Package.resolved"
 
@@ -84,6 +92,28 @@ if [ -n "${FAKE_REACHED_SWIFT_MARKER:-}" ]; then
 fi
 if [ -n "${FAKE_SWIFT_PID_FILE:-}" ]; then
   printf '%s\n' "$$" > "$FAKE_SWIFT_PID_FILE"
+fi
+
+if [ "${1:-}" = build ] && [ "${2:-}" = --build-tests ]; then
+  /bin/mkdir -p "$FAKE_STATE/bin"
+  if [ "${FAKE_SKIP_BUNDLE:-0}" != 1 ]; then
+    bundle="$FAKE_STATE/bin/FakePackageTests.xctest/Contents/MacOS"
+    /bin/mkdir -p "$bundle"
+    printf '%s\n' 'fake test bundle' > "$bundle/FakePackageTests"
+    /bin/chmod +x "$bundle/FakePackageTests"
+    if [ "${FAKE_MULTIPLE_BUNDLES:-0}" = 1 ]; then
+      second="$FAKE_STATE/bin/OtherPackageTests.xctest/Contents/MacOS"
+      /bin/mkdir -p "$second"
+      printf '%s\n' 'fake second test bundle' > "$second/OtherPackageTests"
+      /bin/chmod +x "$second/OtherPackageTests"
+    fi
+  fi
+  exit "${FAKE_BUILD_EXIT:-0}"
+fi
+
+if [ "${1:-}" = build ] && [ "${2:-}" = --show-bin-path ]; then
+  printf '%s\n' "$FAKE_STATE/bin"
+  exit "${FAKE_BIN_PATH_EXIT:-0}"
 fi
 
 if [ "${1:-}" = test ] && [ "${2:-}" = list ]; then
@@ -146,6 +176,13 @@ if [ "${1:-}" = test ]; then
   if [ "${FAKE_SIGNAL_RUNNER:-0}" = 1 ]; then
     kill -TERM "$PPID"
   fi
+  if [ "${FAKE_RUN_OUTPUT+x}" = x ]; then
+    if [ -n "$FAKE_RUN_OUTPUT" ]; then
+      printf '%s\n' "$FAKE_RUN_OUTPUT"
+    fi
+  else
+    printf '%s\n' '✔ Test run with 1 test in 0 suites passed after 0.001 seconds.'
+  fi
   exit "${FAKE_RUN_EXIT:-0}"
 fi
 
@@ -153,6 +190,136 @@ printf 'error: unexpected fake swift invocation: %s\n' "$*" >&2
 exit 90
 SH
 /bin/chmod +x "$fixture_bin/swift"
+
+cat > "$fixture_state/fake-appkit-host" <<'SH'
+#!/bin/sh
+set -eu
+
+printf '%s\n' "$*" >> "$FAKE_STATE/host-invocations"
+if [ -n "${FAKE_REACHED_SWIFT_MARKER:-}" ]; then
+  /usr/bin/touch "$FAKE_REACHED_SWIFT_MARKER"
+fi
+if [ -n "${FAKE_SWIFT_PID_FILE:-}" ]; then
+  printf '%s\n' "$$" > "$FAKE_SWIFT_PID_FILE"
+fi
+if [ "${FAKE_HOST_LOAD_EXIT:-0}" != 0 ]; then
+  printf '%s\n' 'error: failed to load test bundle: fixture failure' >&2
+  exit "$FAKE_HOST_LOAD_EXIT"
+fi
+if [ "${2:-}" = --list-tests ]; then
+  if [ -n "${FAKE_BLOCK_LIST_MARKER:-}" ]; then
+    /usr/bin/touch "$FAKE_BLOCK_LIST_MARKER"
+    while [ ! -e "$FAKE_RELEASE_LIST_MARKER" ]; do
+      /bin/sleep 0.05
+    done
+  fi
+  printf '%s\n' "${FAKE_LIST_OUTPUT:-}"
+  exit "${FAKE_LIST_EXIT:-0}"
+fi
+
+saw_no_parallel=0
+actual_filter=''
+shift
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --filter)
+      actual_filter="${2:-}"
+      shift 2
+      ;;
+    --no-parallel)
+      saw_no_parallel=1
+      shift
+      ;;
+    *)
+      printf 'error: unsupported fake host argument: %s\n' "$1" >&2
+      exit 94
+      ;;
+  esac
+done
+if [ "${FAKE_EXPECT_NO_PARALLEL:-0}" = 1 ] && [ "$saw_no_parallel" -ne 1 ]; then
+  printf '%s\n' 'error: native host run omitted --no-parallel' >&2
+  exit 93
+fi
+if [ -n "${FAKE_EXPECT_FILTER:-}" ] && [ "$actual_filter" != "$FAKE_EXPECT_FILTER" ]; then
+  printf 'error: expected derived filter %s, got %s\n' \
+    "$FAKE_EXPECT_FILTER" "$actual_filter" >&2
+  exit 92
+fi
+if [ -n "${FAKE_RUNTIME_IDENTIFIERS:-}" ]; then
+  : > "$FAKE_STATE/selected-runtime-identifiers"
+  printf '%s\n' "$FAKE_RUNTIME_IDENTIFIERS" |
+    while IFS= read -r runtime_identifier; do
+      if printf '%s\n' "$runtime_identifier" |
+        /usr/bin/grep -E -- "$actual_filter" >/dev/null; then
+        printf '%s\n' "$runtime_identifier" >> \
+          "$FAKE_STATE/selected-runtime-identifiers"
+      fi
+    done
+fi
+if [ -n "${FAKE_MUTATE_LOCK:-}" ]; then
+  printf 'mutated lock\n' > "$FAKE_MUTATE_LOCK"
+fi
+if [ -n "${FAKE_READONLY_LOCK_PARENT:-}" ]; then
+  /bin/chmod 400 "$FAKE_MUTATE_LOCK"
+  /bin/chmod 500 "$FAKE_READONLY_LOCK_PARENT"
+fi
+if [ "${FAKE_SIGNAL_RUNNER:-0}" = 1 ]; then
+  kill -TERM "$PPID"
+fi
+if [ "${FAKE_RUN_OUTPUT+x}" = x ]; then
+  if [ -n "$FAKE_RUN_OUTPUT" ]; then
+    printf '%s\n' "$FAKE_RUN_OUTPUT"
+  fi
+else
+  printf '%s\n' '✔ Test run with 1 test in 0 suites passed after 0.001 seconds.'
+fi
+exit "${FAKE_RUN_EXIT:-0}"
+SH
+/bin/chmod +x "$fixture_state/fake-appkit-host"
+
+cat > "$fixture_bin/swiftc" <<'SH'
+#!/bin/sh
+set -eu
+
+printf '%s\n' "$*" >> "$FAKE_STATE/swiftc-invocations"
+output=''
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -o ]; then
+    output="${2:-}"
+    break
+  fi
+  shift
+done
+[ -n "$output" ] || exit 95
+if [ "${FAKE_HOST_BUILD_EXIT:-0}" != 0 ]; then
+  exit "$FAKE_HOST_BUILD_EXIT"
+fi
+/bin/cp "$FAKE_STATE/fake-appkit-host" "$output"
+/bin/chmod +x "$output"
+SH
+/bin/chmod +x "$fixture_bin/swiftc"
+
+cat > "$fixture_bin/xcrun" <<'SH'
+#!/bin/sh
+set -eu
+
+printf '%s\n' "$*" >> "$FAKE_STATE/xcrun-invocations"
+case "$*" in
+  '--sdk macosx --show-sdk-path')
+    printf '%s\n' "$FAKE_STATE/sdk"
+    ;;
+  '--sdk macosx --show-sdk-platform-path')
+    printf '%s\n' "$FAKE_STATE/platform"
+    ;;
+  '--sdk macosx --find swiftc')
+    printf '%s\n' "$FAKE_STATE/../bin/swiftc"
+    ;;
+  *)
+    exit 96
+    ;;
+esac
+SH
+/bin/chmod +x "$fixture_bin/xcrun"
 
 run_capture() {
   local output_path="$1"
@@ -174,10 +341,20 @@ assert_root_lock() {
     fail 'root Package.resolved was not restored'
 }
 
+assert_completion_error() {
+  /usr/bin/grep -Fq \
+    'error: Swift test exited successfully without a final non-empty passing test summary' \
+    "$fixture_state/output" || fail 'missing Swift test completion error'
+}
+
 reset_invocations() {
   : > "$fixture_state/swift-invocations"
+  : > "$fixture_state/swiftc-invocations"
+  : > "$fixture_state/xcrun-invocations"
+  : > "$fixture_state/host-invocations"
   : > "$fixture_state/output"
   printf 'ordinary root lock\n' > "$fixture_root/Package.resolved"
+  /bin/rm -rf -- "$fixture_state/bin"
   /bin/rm -f -- "$fixture_state/enhanced-scratch" \
     "$fixture_state/resolver-root-backup" \
     "$fixture_state/resolver-root" \
@@ -203,6 +380,63 @@ run_enhanced() {
   )
 }
 
+assert_completion_contracts() {
+  local runner="$1"
+  local label="$2"
+  local identifier='CompletionTests.known()'
+  local identifier_regex='^CompletionTests\.known\(\)$'
+
+  reset_invocations
+  FAKE_LIST_OUTPUT="$identifier" \
+    FAKE_RUN_OUTPUT=$'✔ Test known() passed after 0.001 seconds.\n◇ Test stale() started.' \
+    run_capture "$fixture_state/output" "$runner" "$identifier_regex"
+  [[ "$RUN_STATUS" -ne 0 ]] || fail "$label incomplete zero exit unexpectedly passed"
+  assert_completion_error
+  assert_root_lock
+
+  reset_invocations
+  FAKE_LIST_OUTPUT="$identifier" \
+    FAKE_RUN_OUTPUT='' \
+    run_capture "$fixture_state/output" "$runner" "$identifier_regex"
+  [[ "$RUN_STATUS" -ne 0 ]] || fail "$label silent zero exit unexpectedly passed"
+  assert_completion_error
+  assert_root_lock
+
+  reset_invocations
+  FAKE_LIST_OUTPUT="$identifier" \
+    FAKE_RUN_OUTPUT='✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.' \
+    run_capture "$fixture_state/output" "$runner" "$identifier_regex"
+  [[ "$RUN_STATUS" -ne 0 ]] || fail "$label zero-test summary unexpectedly passed"
+  assert_completion_error
+  assert_root_lock
+
+  reset_invocations
+  FAKE_LIST_OUTPUT="$identifier" \
+    FAKE_RUN_OUTPUT='✘ Test run with 1 test in 0 suites failed after 0.001 seconds with 1 issue.' \
+    run_capture "$fixture_state/output" "$runner" "$identifier_regex"
+  [[ "$RUN_STATUS" -ne 0 ]] || fail "$label failure summary unexpectedly passed"
+  assert_completion_error
+  assert_root_lock
+
+  reset_invocations
+  FAKE_LIST_OUTPUT="$identifier" \
+    FAKE_RUN_OUTPUT='✔ Test run with 2 tests in 1 suite passed after 0.001 seconds.' \
+    run_capture "$fixture_state/output" "$runner" "$identifier_regex"
+  assert_status 0
+  /usr/bin/grep -Fxq \
+    '✔ Test run with 2 tests in 1 suite passed after 0.001 seconds.' \
+    "$fixture_state/output" || fail "$label did not stream successful test output"
+  assert_root_lock
+
+  reset_invocations
+  FAKE_LIST_OUTPUT="$identifier" \
+    FAKE_RUN_OUTPUT='◇ Test known() started.' \
+    FAKE_RUN_EXIT=37 \
+    run_capture "$fixture_state/output" "$runner" "$identifier_regex"
+  assert_status 37
+  assert_root_lock
+}
+
 run_crashing_ordinary() {
   cd "$foreign_root"
   exec env \
@@ -223,6 +457,99 @@ run_capture "$fixture_state/output" run_ordinary 'FleckCoreTests\.known\(\)$'
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'ordinary runner accepted an unanchored regex'
 [[ ! -s "$fixture_state/swift-invocations" ]] ||
   fail 'invalid regex reached swift'
+
+readonly real_sdk="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
+readonly real_platform="$(/usr/bin/xcrun --sdk macosx --show-sdk-platform-path)"
+readonly real_frameworks="$real_platform/Developer/Library/Frameworks"
+readonly real_host="$fixture_state/AppKitTestHost"
+"$(/usr/bin/xcrun --sdk macosx --find swiftc)" -parse-as-library \
+  -sdk "$real_sdk" -F "$real_frameworks" \
+  -framework AppKit -framework Testing \
+  -Xlinker -rpath -Xlinker "$real_frameworks" \
+  "$appkit_host_source" -o "$real_host"
+run_capture "$fixture_state/output" "$real_host" /missing/test-bundle --bogus
+[[ "$RUN_STATUS" -ne 0 ]] || fail 'native host accepted an unsupported argument'
+/usr/bin/grep -Fq 'error: unsupported test argument: --bogus' \
+  "$fixture_state/output" || fail 'native host did not report its unsupported argument'
+run_capture "$fixture_state/output" "$real_host" /missing/test-bundle
+[[ "$RUN_STATUS" -ne 0 ]] || fail 'native host accepted a missing test bundle'
+/usr/bin/grep -Fq 'error: test bundle binary is missing' "$fixture_state/output" ||
+  fail 'native host did not report its missing test bundle'
+printf '%s\n' 'not a Mach-O test bundle' > "$fixture_state/invalid-test-bundle"
+run_capture "$fixture_state/output" "$real_host" "$fixture_state/invalid-test-bundle"
+[[ "$RUN_STATUS" -ne 0 ]] || fail 'native host loaded an invalid test bundle'
+/usr/bin/grep -Fq 'error: failed to load test bundle:' "$fixture_state/output" ||
+  fail 'native host did not report its test bundle loading failure'
+
+assert_completion_contracts run_ordinary ordinary
+assert_completion_contracts run_enhanced enhanced
+
+reset_invocations
+FAKE_LIST_OUTPUT=$'TargetA.first()\nTargetB.second()' \
+  FAKE_EXPECT_FILTER='^.+$' \
+  FAKE_EXPECT_NO_PARALLEL=1 \
+  run_capture "$fixture_state/output" run_ordinary '^.+$'
+assert_status 0
+/usr/bin/grep -Fxq 'matched test count: 2' "$fixture_state/output" ||
+  fail 'ordinary whole-suite selection did not retain its exact non-empty count'
+assert_root_lock
+
+reset_invocations
+FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+  FAKE_HOST_LOAD_EXIT=41 \
+  run_capture "$fixture_state/output" \
+  run_ordinary '^FleckCoreTests\.known\(\)$'
+assert_status 41
+/usr/bin/grep -Fq 'error: failed to load test bundle: fixture failure' \
+  "$fixture_state/output" || fail 'ordinary runner hid the native loading failure'
+assert_root_lock
+
+reset_invocations
+FAKE_BUILD_EXIT=42 \
+  run_capture "$fixture_state/output" \
+  run_ordinary '^FleckCoreTests\.known\(\)$'
+assert_status 42
+[[ ! -s "$fixture_state/host-invocations" ]] ||
+  fail 'failed SwiftPM test build reached the native host'
+assert_root_lock
+
+reset_invocations
+FAKE_HOST_BUILD_EXIT=43 \
+  run_capture "$fixture_state/output" \
+  run_ordinary '^FleckCoreTests\.known\(\)$'
+assert_status 43
+[[ ! -s "$fixture_state/host-invocations" ]] ||
+  fail 'failed native host build reached test execution'
+assert_root_lock
+
+reset_invocations
+FAKE_SKIP_BUNDLE=1 \
+  run_capture "$fixture_state/output" \
+  run_ordinary '^FleckCoreTests\.known\(\)$'
+[[ "$RUN_STATUS" -ne 0 ]] || fail 'missing test bundle unexpectedly passed'
+/usr/bin/grep -Fq 'error: expected exactly one freshly built Swift test bundle, found 0' \
+  "$fixture_state/output" || fail 'missing test bundle was not rejected explicitly'
+assert_root_lock
+
+reset_invocations
+FAKE_MULTIPLE_BUNDLES=1 \
+  run_capture "$fixture_state/output" \
+  run_ordinary '^FleckCoreTests\.known\(\)$'
+[[ "$RUN_STATUS" -ne 0 ]] || fail 'ambiguous test bundles unexpectedly passed'
+/usr/bin/grep -Fq 'error: expected exactly one freshly built Swift test bundle, found 2' \
+  "$fixture_state/output" || fail 'ambiguous test bundles were not rejected explicitly'
+assert_root_lock
+
+reset_invocations
+/bin/mv "$fixture_state/platform/Developer/Library/Frameworks/Testing.framework" \
+  "$fixture_state/Testing.framework.hidden"
+run_capture "$fixture_state/output" run_ordinary '^FleckCoreTests\.known\(\)$'
+[[ "$RUN_STATUS" -ne 0 ]] || fail 'missing selected Testing framework unexpectedly passed'
+/usr/bin/grep -Fq 'error: selected macOS platform has no Testing framework:' \
+  "$fixture_state/output" || fail 'missing selected Testing framework was not rejected explicitly'
+/bin/mv "$fixture_state/Testing.framework.hidden" \
+  "$fixture_state/platform/Developer/Library/Frameworks/Testing.framework"
+assert_root_lock
 
 readonly old_coordination_artifact="$fixture_root/.build/.fleck-nonempty-swift-tests.lock"
 readonly coordination_artifact="$fixture_root/.build/.fleck-nonempty-swift-tests.lockf"
@@ -253,10 +580,14 @@ FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
   run_capture "$fixture_state/output" \
   run_ordinary '^FleckCoreTests\.missing\(\)$'
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'ordinary no-match unexpectedly passed'
-[[ "$(wc -l < "$fixture_state/swift-invocations" | tr -d ' ')" -eq 1 ]] ||
-  fail 'ordinary no-match invoked the filtered test run'
-/usr/bin/grep -Fq "$fixture_root|test list --disable-automatic-resolution" \
-  "$fixture_state/swift-invocations" || fail 'ordinary list used the caller cwd or wrong flags'
+[[ "$(wc -l < "$fixture_state/swift-invocations" | tr -d ' ')" -eq 2 ]] ||
+  fail 'ordinary no-match used an unexpected SwiftPM build sequence'
+/usr/bin/grep -Fq "$fixture_root|build --build-tests --disable-automatic-resolution" \
+  "$fixture_state/swift-invocations" || fail 'ordinary tests were not built from the repository root'
+[[ "$(wc -l < "$fixture_state/host-invocations" | tr -d ' ')" -eq 1 ]] ||
+  fail 'ordinary no-match invoked the native filtered test run'
+/usr/bin/grep -Fq -- '--list-tests' "$fixture_state/host-invocations" ||
+  fail 'ordinary no-match did not list through the native host'
 [[ "$(/usr/bin/stat -f %i "$fixture_root/Package.resolved")" = \
   "$ordinary_unchanged_inode" ]] || fail 'ordinary runner replaced an unchanged root lock'
 assert_root_lock
@@ -280,6 +611,22 @@ FAKE_LIST_OUTPUT='NestedTests.known()' \
   fail 'nested Package.resolved changed after no-match'
 assert_root_lock
 
+reset_invocations
+FAKE_LIST_OUTPUT='NestedTests.known()' \
+  FAKE_EXPECT_FILTER='^(NestedTests\.known\(\)/)' \
+  FAKE_EXPECT_NO_PARALLEL=1 \
+  run_capture "$fixture_state/output" \
+  run_ordinary --package-path Tools/Nested '^NestedTests\.known\(\)$'
+assert_status 0
+[[ ! -s "$fixture_state/host-invocations" ]] ||
+  fail 'research package unexpectedly used the AppKit host'
+/usr/bin/grep -Fq "$nested_root|test --disable-automatic-resolution --no-parallel" \
+  "$fixture_state/swift-invocations" ||
+  fail 'research package did not retain ordinary serial SwiftPM execution'
+/usr/bin/grep -Fxq 'ordinary nested lock' "$nested_root/Package.resolved" ||
+  fail 'nested Package.resolved changed after successful research run'
+assert_root_lock
+
 for unsafe_path in /tmp ../outside Tools/../Nested Tools/Missing Tools/EscapingLink; do
   reset_invocations
   run_capture "$fixture_state/output" run_ordinary \
@@ -300,7 +647,9 @@ assert_status 23
 /usr/bin/grep -Fxq 'matched test: FleckCoreTests.known()' "$fixture_state/output" ||
   fail 'ordinary runner did not report the matched canonical identifier'
 [[ "$(wc -l < "$fixture_state/swift-invocations" | tr -d ' ')" -eq 2 ]] ||
-  fail 'ordinary match did not run list and filtered test exactly once'
+  fail 'ordinary match used an unexpected SwiftPM build sequence'
+[[ "$(wc -l < "$fixture_state/host-invocations" | tr -d ' ')" -eq 2 ]] ||
+  fail 'ordinary match did not run native list and filtered test exactly once'
 assert_root_lock
 
 reset_invocations
@@ -357,15 +706,17 @@ FAKE_LIST_OUTPUT='FleckAppTests.EnhancedKnown()' \
   run_capture "$fixture_state/output" \
   run_enhanced '^FleckAppTests\.EnhancedMissing\(\)$'
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'enhanced no-match unexpectedly passed'
-[[ "$(wc -l < "$fixture_state/swift-invocations" | tr -d ' ')" -eq 1 ]] ||
-  fail 'enhanced no-match invoked the filtered test run'
+[[ "$(wc -l < "$fixture_state/swift-invocations" | tr -d ' ')" -eq 2 ]] ||
+  fail 'enhanced no-match used an unexpected SwiftPM build sequence'
+[[ "$(wc -l < "$fixture_state/host-invocations" | tr -d ' ')" -eq 1 ]] ||
+  fail 'enhanced no-match invoked the native filtered test run'
 resolver_root="$(cat "$fixture_state/resolver-root")"
 [[ "$resolver_root" != "$fixture_root" ]] ||
   fail 'enhanced resolver ran against the actual repository root'
-/usr/bin/grep -Fq "$resolver_root|test list --disable-automatic-resolution" \
+/usr/bin/grep -Fq "$resolver_root|build --build-tests --disable-automatic-resolution --scratch-path" \
   "$fixture_state/swift-invocations" || {
     /bin/cat "$fixture_state/swift-invocations" >&2
-    fail 'enhanced list used the caller cwd or wrong flags'
+    fail 'enhanced tests were not built from the resolver shadow root'
   }
 [[ "$(/usr/bin/stat -f %i "$fixture_root/Package.resolved")" = \
   "$enhanced_unchanged_inode" ]] || fail 'enhanced runner replaced an unchanged root lock'

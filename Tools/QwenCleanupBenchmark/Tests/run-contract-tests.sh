@@ -5,7 +5,20 @@ set -euo pipefail
 readonly script_dir="$(cd "$(dirname "$0")" && pwd)"
 readonly benchmark_dir="$(cd "$script_dir/.." && pwd)"
 readonly repo_root="$(git -C "$benchmark_dir/../.." rev-parse --show-toplevel)"
-readonly python_executable="/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/bin/python3.14"
+readonly python_executable="${FLECK_QWEN_PYTHON_EXECUTABLE:-}"
+if [[ -z "$python_executable" ]]; then
+  echo "contract-test-configuration-error: FLECK_QWEN_PYTHON_EXECUTABLE is required and must name the pinned canonical Python executable" >&2
+  exit 2
+fi
+if [[ "$python_executable" != /* || ! -f "$python_executable" || ! -x "$python_executable" || -L "$python_executable" ]]; then
+  echo "contract-test-configuration-error: FLECK_QWEN_PYTHON_EXECUTABLE must name an existing executable canonical regular file" >&2
+  exit 2
+fi
+canonical_python_executable="$(/bin/realpath "$python_executable")"
+if [[ "$canonical_python_executable" != "$python_executable" ]]; then
+  echo "contract-test-configuration-error: FLECK_QWEN_PYTHON_EXECUTABLE must not use a symlink or noncanonical alias" >&2
+  exit 2
+fi
 readonly helper="$benchmark_dir/qwen_cleanup_helper.py"
 readonly runner="$benchmark_dir/run-qwen-cleanup-benchmark.sh"
 readonly validator_source="$benchmark_dir/validate_cleanup_candidate.swift"
@@ -566,6 +579,7 @@ swiftc \
   -module-name FleckCore \
   -module-cache-path "$validator_test_build/module-cache" \
   "$repo_root/Sources/FleckCore/PersonalDictionary.swift" \
+  "$repo_root/Sources/FleckCore/CompiledPersonalDictionary.swift" \
   "$repo_root/Sources/FleckCore/PersonalDictionaryResolver.swift" \
   -o "$validator_test_build/libFleckCore.dylib" \
   -emit-module-path "$validator_test_build/FleckCore.swiftmodule"

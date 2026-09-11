@@ -710,6 +710,18 @@ private func settleTabStripHost(_ view: NSView) async {
   }
 }
 
+@MainActor
+private func advanceTabStripHostEventBoundary(_ view: NSView) async {
+  await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+    RunLoop.main.perform {
+      MainActor.assumeIsolated {
+        view.layoutSubtreeIfNeeded()
+        continuation.resume()
+      }
+    }
+  }
+}
+
 @Test func tabOverflowEndpointControlsStayEnabledForVisibleNotes() throws {
   let source = try tabNotesPanelSource()
   let tabStrip = try #require(
@@ -779,7 +791,11 @@ func reorderInteractionNativeLifetimeDoesNotEndBetweenPointerEvents() throws {
   await state.waitUntilInitialLoad()
   state.workspace = Workspace(notes: notes, selectedNoteID: notes[0].id)
   let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
-  let host = NSHostingView(rootView: NotesPanel(dictationRuntime: runtime, sizing: .container).environmentObject(state))
+  let host = NSHostingView(
+    rootView: NotesPanel(dictationRuntime: runtime, sizing: .container)
+      .environmentObject(state)
+      .environment(\._accessibilityReduceMotion, false)
+  )
   let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 430),
     styleMask: [.titled], backing: .buffered, defer: false)
   window.isReleasedWhenClosed = false
@@ -808,22 +824,32 @@ func reorderInteractionNativeLifetimeDoesNotEndBetweenPointerEvents() throws {
   #expect(abs(second.minX - first.maxX - 6) < 1)
   #expect(first.minX >= 0)
   #expect(destination.bounds.maxX - second.maxX > 30)
-  controller.moved(to: window.convertPoint(toScreen:
-    destination.convert(NSPoint(x: second.maxX, y: 15), to: nil)))
-  await settleTabStripHost(host)
   func sourceView(_ view: NSView) -> ReorderSourceHostingView? {
     if let source = view as? ReorderSourceHostingView, source.noteID == notes[1].id { return source }
     return view.subviews.lazy.compactMap { sourceView($0) }.first
   }
   let sibling = try #require(sourceView(destination))
   var positions: [CGFloat] = []
-  for _ in 0..<20 {
+  if let presentation = sibling.layer?.presentation(), let root = destination.layer?.presentation() {
+    positions.append(presentation.convert(presentation.bounds, to: root).minX)
+  }
+  controller.moved(to: window.convertPoint(toScreen:
+    destination.convert(NSPoint(x: second.maxX, y: 15), to: nil)))
+  let deadline = ProcessInfo.processInfo.systemUptime + 1
+  let intermediateRange = (first.minX + 1)..<(second.minX - 1)
+  var observedAnimation = false
+  var hasIntermediatePosition = false
+  repeat {
+    await advanceTabStripHostEventBoundary(host)
+    observedAnimation = observedAnimation
+      || sibling.layer?.animation(forKey: "fleck.tab-reorder") != nil
     if let presentation = sibling.layer?.presentation(), let root = destination.layer?.presentation() {
       positions.append(presentation.convert(presentation.bounds, to: root).minX)
     }
-    try await Task.sleep(nanoseconds: 12_000_000)
-  }
-  let hasIntermediatePosition = positions.contains { $0 > first.minX + 1 && $0 < second.minX - 1 }
+    hasIntermediatePosition = positions.contains { intermediateRange.contains($0) }
+  } while ProcessInfo.processInfo.systemUptime < deadline
+    && (!hasIntermediatePosition || sibling.layer?.animation(forKey: "fleck.tab-reorder") != nil)
+  #expect(observedAnimation)
   #expect(hasIntermediatePosition)
   let finalPosition = try #require(positions.last)
   #expect(abs(finalPosition - first.minX) < 1)

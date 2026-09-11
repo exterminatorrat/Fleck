@@ -60,6 +60,37 @@ alongside the preserved `C++17` build intent.
 
 These are build intent only and have not been executed here.
 
+## Native contract harness configuration
+
+The native contract harness has no machine-specific defaults. A developer who
+already has the exact external inputs must set all seven variables:
+
+| Variable | Required existing value |
+| --- | --- |
+| `FLECK_NEMOTRON_SOURCE_PATH` | pinned NeMo-Speech.cpp source directory |
+| `FLECK_NEMOTRON_MODEL_PATH` | pinned Nemotron Q8 GGUF model file |
+| `FLECK_NEMOTRON_RUNTIME_PATH` | matching built runtime directory |
+| `FLECK_NEMOTRON_ENGLISH_AUDIO_PATH` | English contract WAV file |
+| `FLECK_NEMOTRON_MANDARIN_AUDIO_PATH` | Mandarin contract WAV file |
+| `FLECK_NEMOTRON_MIXED_AUDIO_PATH` | mixed-language contract WAV file |
+| `FLECK_NEMOTRON_SILENCE_AUDIO_PATH` | deterministic silence WAV file |
+
+```sh
+export FLECK_NEMOTRON_SOURCE_PATH="/absolute/path/to/existing/NeMo-Speech.cpp"
+export FLECK_NEMOTRON_MODEL_PATH="/absolute/path/to/existing/nemotron.q8_0.gguf"
+export FLECK_NEMOTRON_RUNTIME_PATH="/absolute/path/to/existing/nemotron-runtime"
+export FLECK_NEMOTRON_ENGLISH_AUDIO_PATH="/absolute/path/to/existing/english.wav"
+export FLECK_NEMOTRON_MANDARIN_AUDIO_PATH="/absolute/path/to/existing/mandarin.wav"
+export FLECK_NEMOTRON_MIXED_AUDIO_PATH="/absolute/path/to/existing/mixed.wav"
+export FLECK_NEMOTRON_SILENCE_AUDIO_PATH="/absolute/path/to/existing/silence.wav"
+
+bash Tools/LocalDictationCandidateAdapters/Spikes/NemotronASR/Tests/run-nemotron-native-evaluation-contract-tests.sh
+```
+
+The script rejects missing external inputs. It does not download, discover, or
+reconfigure them, and this metadata packet does not claim that the command was
+run.
+
 ## Compiled-runtime admission boundary
 
 No compiled CPU or Metal dylib archive, archive checksum, archive size, or

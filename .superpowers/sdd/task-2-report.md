@@ -69,7 +69,7 @@ The later user-approved correction from `88decaf` removed the simulated macOS me
 
 All assets were copied mechanically from:
 
-`/Users/harryjin/Fleck/.worktrees/fleck-website-demo-capture-lab-current/.build/fleck-capture-lab/fleck-demo.ylWvga/Captures`
+`${FLECK_REPO}/.worktrees/fleck-website-demo-capture-lab-current/.build/fleck-capture-lab/fleck-demo.ylWvga/Captures`
 
 The source masters and derivatives were not altered. Destination hashes match the accepted manifest:
 

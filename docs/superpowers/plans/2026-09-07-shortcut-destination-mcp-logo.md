@@ -5,7 +5,7 @@ Requested batch: shortcut discovery/permission recovery, destination clarity, cu
 
 ## Grounding and scope
 
-Inspected accepted local candidate `15159fb` on `codex/activity-toolbar-sizing` in `/Users/harryjin/Fleck/.worktrees/editor-three-bug-fixes` and the task **Add Fleck logo to MCP** (`01a07c57-73e2-7fa1-8b53-06d11d7e9ca2`). That task investigated metadata and made no implementation claim. The friend's exact build remains unknown.
+Inspected accepted local candidate `15159fb` on `codex/activity-toolbar-sizing` in `${FLECK_REPO}/.worktrees/editor-three-bug-fixes` and the task **Add Fleck logo to MCP** (`01a07c57-73e2-7fa1-8b53-06d11d7e9ca2`). That task investigated metadata and made no implementation claim. The friend's exact build remains unknown.
 
 Existing behavior:
 - Right Option is the default configurable modifier. Hold and double-tap gestures already exist.

@@ -498,7 +498,7 @@ Expected: only owned source/tests and the approved spec/plan commits are present
 
 - [ ] **Step 5: Build and validate the exact packaged app manually**
 
-Use `Scripts/build-fleck-app.sh`. Resolve the executable path of every running Fleck process; terminate only a process whose executable is the known `/Users/harryjin/menubar-notes/.build/Fleck.app/Contents/MacOS/Fleck`, then launch that exact bundle. In designated Fleck QA notes only:
+Use `Scripts/build-fleck-app.sh`. Resolve the executable path of every running Fleck process; terminate only a process whose executable is the known `${FLECK_REPO}/.build/Fleck.app/Contents/MacOS/Fleck`, then launch that exact bundle. In designated Fleck QA notes only:
 
 1. Confirm silent listening bars are static while the dot and timer continue.
 2. Confirm soft, normal, and loud speech yield visibly increasing amplitudes and decay to rest.

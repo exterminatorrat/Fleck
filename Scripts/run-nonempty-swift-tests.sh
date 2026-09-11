@@ -3,6 +3,7 @@ set -euo pipefail
 
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
+readonly appkit_runner="$script_dir/run-swift-tests-with-appkit-host.sh"
 
 usage() {
   printf 'usage: %s [--package-path <repository-relative-package>] <anchored-test-identifier-regex>\n' \
@@ -206,6 +207,20 @@ finish() {
 readonly list_output="$state_dir/test-list"
 readonly canonical_output="$state_dir/canonical-test-list"
 readonly matches="$state_dir/matches"
+readonly test_output="$state_dir/test-output"
+
+if [[ "$package_root" = "$repo_root" ]]; then
+  [[ -x "$appkit_runner" ]] || {
+    printf 'error: AppKit Swift test runner is not executable: %s\n' \
+      "$appkit_runner" >&2
+    finish 2
+  }
+  set +e
+  "$appkit_runner" "$package_root" '' "$identifier_regex"
+  appkit_status=$?
+  set -e
+  finish "$appkit_status"
+fi
 
 set +e
 (
@@ -264,7 +279,23 @@ set +e
 (
   cd "$package_root"
   swift test --disable-automatic-resolution --no-parallel --filter "$run_filter"
-)
-test_status=$?
+) 2>&1 | /usr/bin/tee "$test_output"
+test_pipeline_status=("${PIPESTATUS[@]}")
 set -e
-finish "$test_status"
+test_status="${test_pipeline_status[0]}"
+output_status="${test_pipeline_status[1]}"
+(( test_status == 0 )) || finish "$test_status"
+if (( output_status != 0 )); then
+  printf '%s\n' 'error: failed to capture Swift test output' >&2
+  finish 1
+fi
+
+final_output_line="$(/usr/bin/awk 'NF { line = $0 } END { print line }' "$test_output")"
+if ! printf '%s\n' "$final_output_line" | LC_ALL=C /usr/bin/grep -Eq \
+  '^✔ Test run with [1-9][0-9]* tests? in [0-9]+ suites? passed after [0-9]+(\.[0-9]+)? seconds\.$'; then
+  printf '%s\n' \
+    'error: Swift test exited successfully without a final non-empty passing test summary' >&2
+  finish 1
+fi
+
+finish 0
