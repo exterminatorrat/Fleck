@@ -69,6 +69,11 @@ struct AgentPresentationTests {
     #expect(settings.contains("Connected Profiles"))
     #expect(settings.contains("Set up a local integration"))
     #expect(settings.contains("DisclosureGroup(\"Activity\")"))
+    #expect(settings.contains("Show agent update banners"))
+    #expect(settings.contains("appState.preferences.showAgentUpdateBanners"))
+    #expect(settings.contains("banners for future agent changes"))
+    #expect(settings.contains("does not replay earlier changes"))
+    #expect(settings.contains("Agent Activity remains available"))
     #expect(settings.contains("DisclosureGroup(\"Access\")"))
     #expect(!settings.contains("HStack {\n            addButton(\"Add Codex\""))
   }
@@ -239,6 +244,187 @@ struct AgentPresentationTests {
     #expect(banner.feedback.noteTitle == "Release")
     #expect(banner.message == "Claude updated Release (2)")
     #expect(!banner.message.contains("body"))
+  }
+
+  @Test @MainActor
+  func agentUpdateBannerPreferencePersistsWithoutReplayingSuppressedActivity() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AgentBannerPreference-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let note = Note(title: "Shared", body: "after", revision: 7)
+    var preferences = AppPreferences()
+    preferences.showAgentUpdateBanners = false
+    let store = LocalStore(rootURL: root)
+    try await store.save(
+      workspace: Workspace(notes: [note], selectedNoteID: note.id),
+      preferences: preferences,
+      trashedNotes: []
+    )
+    let activityStore = AgentActivityStore(rootURL: root)
+    let transaction = PreparedAgentTransaction(
+      changeID: UUID(),
+      noteID: note.id,
+      noteTitle: note.title,
+      actor: .integration(profileID: UUID(), displayName: "Codex"),
+      operationID: UUID(),
+      createdAt: Date(),
+      operation: .appendText,
+      patch: AgentTextPatch(
+        beforeText: "",
+        afterText: "after",
+        range: NSRange(location: 0, length: 0),
+        prefixContext: "",
+        suffixContext: ""
+      ),
+      previousRevision: 6,
+      resultingRevision: 7,
+      resultingBodySHA256: ""
+    )
+    let receipt = AgentWriteReceipt(
+      changeID: transaction.changeID,
+      noteID: note.id,
+      previousRevision: 6,
+      resultingRevision: 7
+    )
+    try activityStore.prepare(transaction)
+    try activityStore.commit(changeID: transaction.changeID, receipt: receipt)
+    let state = AppState(
+      store: store,
+      agentActivityStore: activityStore
+    )
+    await state.waitUntilInitialLoad()
+    #expect(!state.preferences.showAgentUpdateBanners)
+    #expect(state.agentActivity.count == 1)
+
+    let first = feedback(
+      changeID: UUID(),
+      noteID: note.id,
+      noteTitle: note.title,
+      actorName: "Codex"
+    )
+    let second = feedback(
+      changeID: UUID(),
+      noteID: note.id,
+      noteTitle: note.title,
+      actorName: "Claude"
+    )
+    state.publishAgentFeedback(first)
+    state.publishAgentFeedback(second)
+    #expect(state.agentBannerPresentation == nil)
+    #expect(state.latestAgentFeedback == second)
+    #expect(state.agentActivity.count == 1)
+
+    state.saveError = "Keep save error"
+    state.agentCleanupError = "Keep agent error"
+    state.updatePreferences { $0.showAgentUpdateBanners = true }
+    #expect(state.agentBannerPresentation == nil)
+    let future = feedback(
+      changeID: UUID(),
+      noteID: note.id,
+      noteTitle: note.title,
+      actorName: "Kimi"
+    )
+    state.publishAgentFeedback(future)
+    #expect(state.agentBannerPresentation?.feedback == future)
+    #expect(state.agentBannerPresentation?.count == 1)
+
+    state.updatePreferences { $0.showAgentUpdateBanners = false }
+    #expect(state.agentBannerPresentation == nil)
+    #expect(state.latestAgentFeedback == future)
+    #expect(state.agentActivity.count == 1)
+    #expect(state.saveError == "Keep save error")
+    #expect(state.agentCleanupError == "Keep agent error")
+    try await state.saveNow().value
+
+    let relaunched = AppState(store: LocalStore(rootURL: root))
+    await relaunched.waitUntilInitialLoad()
+    #expect(!relaunched.preferences.showAgentUpdateBanners)
+    #expect(relaunched.agentActivity.count == 1)
+    let afterRelaunch = feedback(
+      changeID: UUID(),
+      noteID: note.id,
+      noteTitle: note.title,
+      actorName: "Codex"
+    )
+    relaunched.publishAgentFeedback(afterRelaunch)
+    #expect(relaunched.agentBannerPresentation == nil)
+    #expect(relaunched.latestAgentFeedback == afterRelaunch)
+    #expect(relaunched.agentActivity.count == 1)
+  }
+
+  @Test @MainActor
+  func disablingAgentUpdateBannersClearsMenuAndPinnedHostsTogether() async throws {
+    NSApplication.shared.accessibilitySetValue(
+      true,
+      forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+    )
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("AgentBannerHosts-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let note = Note(title: "Shared")
+    let state = AppState(
+      store: LocalStore(rootURL: root),
+      saveOperation: { _, _, _, _ in .committed }
+    )
+    await state.waitUntilInitialLoad()
+    state.workspace = Workspace(notes: [note], selectedNoteID: note.id)
+    let menuRuntime = DictationRuntime(
+      appState: state,
+      applicationSupportURL: root.appendingPathComponent("Menu", isDirectory: true)
+    )
+    let pinnedRuntime = DictationRuntime(
+      appState: state,
+      applicationSupportURL: root.appendingPathComponent("Pinned", isDirectory: true)
+    )
+    let (menuWindow, menuHost) = await hostedWindow(
+      rootView: NotesPanel(
+        dictationRuntime: menuRuntime,
+        isPinned: false,
+        sizing: .container
+      )
+      .environmentObject(state),
+      size: NSSize(width: 800, height: 430)
+    )
+    let (pinnedWindow, pinnedHost) = await hostedWindow(
+      rootView: NotesPanel(
+        dictationRuntime: pinnedRuntime,
+        isPinned: true,
+        sizing: .container
+      )
+      .environmentObject(state),
+      size: NSSize(width: 800, height: 430)
+    )
+    defer {
+      menuWindow.contentView = nil
+      pinnedWindow.contentView = nil
+      menuWindow.orderOut(nil)
+      pinnedWindow.orderOut(nil)
+    }
+    let update = feedback(
+      changeID: UUID(),
+      noteID: note.id,
+      noteTitle: note.title,
+      actorName: "Codex"
+    )
+    state.publishAgentFeedback(update)
+    await settleAgentActivityHost(menuHost)
+    await settleAgentActivityHost(pinnedHost)
+    let message = "Codex updated Shared"
+    let dismissLabel = "Dismiss Agent Activity update"
+    #expect(state.agentBannerPresentation?.message == message)
+    #expect(agentActivityAccessibilityElement(menuHost, label: dismissLabel) != nil)
+    #expect(agentActivityAccessibilityElement(pinnedHost, label: dismissLabel) != nil)
+
+    state.updatePreferences { $0.showAgentUpdateBanners = false }
+    try await Task.sleep(for: .milliseconds(200))
+    await settleAgentActivityHost(menuHost)
+    await settleAgentActivityHost(pinnedHost)
+    #expect(agentActivityAccessibilityElement(menuHost, label: dismissLabel) == nil)
+    #expect(agentActivityAccessibilityElement(pinnedHost, label: dismissLabel) == nil)
+    #expect(menuWindow.isVisible)
+    #expect(pinnedWindow.isVisible)
+    await menuRuntime.shutdown()
+    await pinnedRuntime.shutdown()
   }
 
   @Test func agentBannerDismissalKeepsIndependentAndNewOccurrencesVisible() {
@@ -582,16 +768,18 @@ struct AgentPresentationTests {
 
   private func feedback(
     changeID: UUID,
+    noteID: UUID = UUID(),
     noteTitle: String,
-    actorName: String
+    actorName: String,
+    createdAt: Date = Date()
   ) -> AgentChangeFeedback {
     AgentChangeFeedback(
       changeID: changeID,
-      noteID: UUID(),
+      noteID: noteID,
       noteTitle: noteTitle,
       actor: .integration(profileID: UUID(), displayName: actorName),
       resultingRevision: 1,
-      createdAt: Date()
+      createdAt: createdAt
     )
   }
 

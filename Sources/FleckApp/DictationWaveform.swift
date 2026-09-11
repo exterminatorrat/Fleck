@@ -5,8 +5,8 @@
   @MainActor
   final class DictationWaveformModel: ObservableObject {
     static let barCount = 13
-    static let barWidth: CGFloat = 1.5
-    static let barGap: CGFloat = 1.5
+    static let barWidth: CGFloat = 2
+    static let barGap: CGFloat = 1
     static let minimumHeight: CGFloat = 3
     static let maximumHeight: CGFloat = 20
     static let reducedMaximumHeight: CGFloat = 12

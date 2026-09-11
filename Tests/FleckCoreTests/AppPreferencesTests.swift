@@ -64,6 +64,31 @@ import Testing
   #expect(!decoded.confirmBeforeMovingNotesToTrash)
 }
 
+@Test func agentUpdateBannerPreferenceDefaultsPersistsAndRejectsMalformedValues() throws {
+  #expect(AppPreferences().showAgentUpdateBanners)
+  let legacy = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: Data(#"{"fontFamily":"Menlo"}"#.utf8)
+  )
+  #expect(legacy.showAgentUpdateBanners)
+
+  for enabled in [true, false] {
+    let value = AppPreferences(showAgentUpdateBanners: enabled)
+    let decoded = try JSONDecoder().decode(
+      AppPreferences.self,
+      from: JSONEncoder().encode(value)
+    )
+    #expect(decoded.showAgentUpdateBanners == enabled)
+  }
+
+  #expect(throws: (any Error).self) {
+    try JSONDecoder().decode(
+      AppPreferences.self,
+      from: Data(#"{"showAgentUpdateBanners":"yes"}"#.utf8)
+    )
+  }
+}
+
 @Test func malformedUnfiledCompactPreferenceRejectsSnapshot() {
   #expect(throws: (any Error).self) {
     try JSONDecoder().decode(

@@ -1828,6 +1828,57 @@ private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
   }
 }
 
+@MainActor
+private final class UndoRoutingResponder: NSView {
+  let routedUndoManager = UndoManager()
+  private(set) var value = 0
+
+  override var acceptsFirstResponder: Bool { true }
+  override var undoManager: UndoManager? { routedUndoManager }
+
+  func setValue(_ value: Int) {
+    let previous = self.value
+    routedUndoManager.registerUndo(withTarget: self) { target in
+      target.setValue(previous)
+    }
+    self.value = value
+  }
+}
+
+@Test @MainActor func editorCommandsUndoAndRedoFollowTheFocusedResponder() throws {
+  let window = NSWindow(
+    contentRect: .init(x: 0, y: 0, width: 320, height: 240),
+    styleMask: [.titled], backing: .buffered, defer: false
+  )
+  let content = NSView(frame: window.contentView?.bounds ?? .zero)
+  let body = NSTextView(frame: NSRect(x: 0, y: 0, width: 160, height: 120))
+  let focused = UndoRoutingResponder(frame: NSRect(x: 160, y: 0, width: 160, height: 120))
+  content.addSubview(body)
+  content.addSubview(focused)
+  window.contentView = content
+  body.allowsUndo = true
+
+  let commands = EditorCommands()
+  commands.textView = body
+  var bodyUndoCount = 0
+  let bodyUndoManager = try #require(body.undoManager)
+  bodyUndoManager.registerUndo(withTarget: body) { _ in bodyUndoCount += 1 }
+  focused.setValue(1)
+
+  #expect(window.makeFirstResponder(focused))
+  commands.undo()
+  #expect(focused.value == 0)
+  #expect(bodyUndoCount == 0)
+  commands.redo()
+  #expect(focused.value == 1)
+  #expect(bodyUndoCount == 0)
+
+  #expect(window.makeFirstResponder(body))
+  commands.undo()
+  #expect(bodyUndoCount == 1)
+  #expect(focused.value == 1)
+}
+
 @Test @MainActor func editorCommandsReportsMixedForegroundAndBackgroundColors() {
   let textView = NSTextView()
   textView.string = "AB"
@@ -2217,6 +2268,13 @@ private final class EditorChangeRecorder: NSObject, NSTextViewDelegate {
 
 @Test func formattingBarUsesCurrentCommandStateAndOnlyNumericSizeInput() throws {
   let source = try notesPanelSource()
+  let fontTrigger = try #require(
+    source
+      .components(separatedBy: "fontPickerTarget = FontPickerTarget")
+      .last?
+      .components(separatedBy: ".help(\"Font:")
+      .first
+  )
 
   #expect(source.contains("currentFontFamily"))
   #expect(source.contains("isFontFamilyMixed"))
@@ -2226,6 +2284,12 @@ private final class EditorChangeRecorder: NSObject, NSTextViewDelegate {
   #expect(source.contains("commands.isFontSizeMixed ? \"Mixed\""))
   #expect(!source.contains("Stepper"))
   #expect(!source.contains("Font Size Presets"))
+  #expect(fontTrigger.contains("Text(fontFamilyDisplay)"))
+  #expect(!fontTrigger.contains("Text(\"Aa\")"))
+  #expect(!fontTrigger.contains("if presentation == .full"))
+  #expect(fontTrigger.contains(".frame(width: presentation == .full ? 112 : 64)"))
+  #expect(source.contains("HStack(spacing: presentation == .full ? 8 : 0)"))
+  #expect(source.contains(".padding(.horizontal, presentation == .full ? 16 : 4)"))
 }
 
 @Test func highlighterMarkerShapeUsesUprightBodyAndDistinctLowerChiselInk() throws {
@@ -2471,6 +2535,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     root: root,
     workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
   )
+  state.updatePreferences { $0.fontFamily = "Avenir Next" }
   let commands = EditorCommands()
   let (window, host) = hostedPanel(root: root, state: state, commands: commands)
   defer { window.orderOut(nil) }
@@ -2504,6 +2569,10 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
       #expect(contentFrame.contains(frame))
       #expect(hostFrame.contains(frame))
     }
+    let font = try #require(fontPickerAccessibilityElement(host, label: "Font"))
+    let value = font.perform(NSSelectorFromString("accessibilityValue"))?
+      .takeUnretainedValue() as? String
+    #expect(value == "Avenir Next")
   }
 
   try expectControlFramesWithinWindow(fullLabels, panelWidth: 800)
@@ -2536,6 +2605,16 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
 
 @Test func formattingBarCanAlwaysBeCollapsedAndRestoredFromTheHeader() throws {
   let source = try notesPanelSource()
+  let scopedEditor = try #require(
+    source
+      .components(separatedBy: "private var scopedEditor: some View")
+      .last?
+      .components(separatedBy: "private func neutralizeHiddenEditor()")
+      .first
+  )
+  let normalizedScopedEditor = scopedEditor
+    .split(whereSeparator: \.isWhitespace)
+    .joined(separator: " ")
 
   #expect(source.contains("Hide Editor toolbar"))
   #expect(source.contains("Show Editor toolbar"))
@@ -2551,6 +2630,10 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(source.contains("if reduceMotion"))
   #expect(source.contains("withAnimation(motion.quick)"))
   #expect(source.contains(".move(edge: .top).combined(with: .opacity)"))
+  #expect(normalizedScopedEditor.contains(
+    ".frame(maxWidth: .infinity, maxHeight: .infinity) .clipped() "
+      + ".onChange(of: isEditorVisible)"
+  ))
 
   let editorCommands = try #require(source.range(of: "@StateObject private var editorCommands = EditorCommands()"))
   let formattingBar = try #require(source.range(of: "if appState.preferences.showFormattingBar"))
@@ -4692,6 +4775,56 @@ private func sendHostedKeyDown(
     #expect(reopenedPicker.view.window?.isVisible != true)
     #expect(state.selectedNote == other)
     #expect(state.workspace.notes.first(where: { $0.id == updated.id }) == updated)
+  }
+}
+
+@Test @MainActor func formattingBarCollapseDismissesFontPopoverAndPreservesEditor() async throws {
+  NSApplication.shared.accessibilitySetValue(
+    true,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+  for width in [CGFloat(380), CGFloat(800)] {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let note = Note(title: "Popover fixture", body: "Body")
+    let state = await hostedPanelState(
+      root: root,
+      workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+    )
+    state.updatePreferences { $0.fontFamily = "Avenir Next" }
+    let commands = EditorCommands()
+    let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+    window.setContentSize(NSSize(width: width, height: 430))
+    await settleHostedView(host)
+    let editor = try #require(hostedPanelEditor(in: host))
+    let font = try #require(fontPickerAccessibilityElement(host, label: "Font"))
+    _ = font.perform(NSSelectorFromString("accessibilityPerformPress"))
+    await settleHostedView(host)
+    let searchFields: [NSSearchField] = NSApplication.shared.windows
+      .filter(\.isVisible)
+      .compactMap { window in
+        window.contentView.flatMap { hostedDescendant(in: $0, as: NSSearchField.self) }
+      }
+    let search = try #require(
+      searchFields.first(where: { $0.placeholderString == "Search fonts" })
+    )
+
+    state.updatePreferences { $0.showFormattingBar = false }
+    try await Task.sleep(for: .milliseconds(150))
+    await settleHostedView(host)
+    #expect(search.window?.isVisible != true)
+    #expect(fontPickerAccessibilityElement(host, label: "Font") == nil)
+    #expect(commands.textView === editor)
+
+    state.updatePreferences { $0.showFormattingBar = true }
+    try await Task.sleep(for: .milliseconds(150))
+    await settleHostedView(host)
+    let restoredFont = try #require(fontPickerAccessibilityElement(host, label: "Font"))
+    let value = restoredFont.perform(NSSelectorFromString("accessibilityValue"))?
+      .takeUnretainedValue() as? String
+    #expect(value == "Avenir Next")
+    #expect(commands.textView === editor)
+    window.orderOut(nil)
   }
 }
 
