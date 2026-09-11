@@ -26,8 +26,9 @@ or downloadable binary.
 
 ### Source identity and history
 
-- [ ] Merge only the reviewed launch changes, then record the exact final source
-      commit and tree and require a clean checkout of that commit.
+- [x] The reviewed launch changes are merged. The source baseline before this
+      documentation update is `0fb88088febbde7e0e8e003cd2aadf0b1c4c5a91`
+      with tree `2a9032097937b1a15e486a342998d155f64e0790`.
 - [x] The maintainer approved MPL-2.0 for Fleck-owned source and documentation
       in the current tree, subject to the documented third-party, data, and
       brand boundaries. Earlier revisions keep their accompanying licenses.
@@ -39,50 +40,58 @@ or downloadable binary.
       redistribution rights for the current and retained brand, generated, and
       captured assets identified in [`BRANDING.md`](../BRANDING.md), subject to
       its operating-system and third-party rights carve-outs.
-- [ ] Before the final source handoff and announcement, rerun the remote head/tag
-      inventory and stop if it differs from the accepted 15-head, zero-tag
-      record.
+- [x] A fresh post-merge inventory found 14 remote heads and no tags after the
+      merged launch branches were removed. The earlier 15-head approval remains
+      the historical publication record; a fixed head count is not a gate for
+      later reviewed pull-request work.
 - [ ] Confirm the final current tree contains no secrets, local paths, private
       fixtures, signing material, model weights, or internal-only files.
 
 ### Security and participation
 
 - [x] The `exterminatorrat/Fleck` repository is public without an announcement.
-      Public issues remain disabled, and pull-request creation is restricted to
-      collaborators.
+      Its API reports ordinary issues and pull requests enabled, with pull
+      requests allowed from all eligible contributors.
 - [x] GitHub private vulnerability reporting is enabled. Authenticated and
       anonymous repository-setting reads report it enabled, the external
       [report URL](https://github.com/exterminatorrat/Fleck/security/advisories/new)
       reaches GitHub's sign-in flow, and [`SECURITY.md`](../SECURITY.md) names
-      that route without claiming end-to-end delivery.
-- [ ] Submit a private test report as an outside reporter and verify the intended
-      maintainer receives the notification. Configuration reads and a login
-      redirect do not prove report submission or notification delivery.
+      that route.
+- [x] The owner confirmed that an outside private test report was submitted and
+      its maintainer notification was visible. This delivery check does not
+      establish a response or remediation timeline.
 - [x] The owner approved email to [Harry](mailto:harrythemen@outlook.com) as the
       private Code of Conduct reporting route, and the public documents name the
       route and recipient separately from GitHub private vulnerability
       reporting.
-- [ ] Send a private conduct-delivery test and verify that Harry receives it.
-      Owner approval and publication of the address do not prove inbox delivery
-      or establish a response timeline.
-- [ ] Enable issue and pull-request workflows only when both their reporting
-      routes and maintainer review capacity are ready; confirm the templates
-      render and their links resolve.
+- [x] The owner confirmed that a conduct test email was visible in Harry's
+      receiving inbox. This delivery check does not establish a response or
+      resolution timeline.
+- [x] Ordinary issue and pull-request intake is enabled. The issue chooser
+      returned HTTP 200 after GitHub's login redirect, and the issue and pull
+      request template sources were inspected.
+- [ ] Confirm the issue forms render after an authenticated GitHub sign-in.
 - [ ] Announce the source preview only after the final source identity, CI,
       merge, security- and conduct-report delivery, and launch-document gates
       are complete.
 
 ### Source verification
 
-- [ ] Require green GitHub CI at the exact final source commit.
-- [x] The reviewed plain-Vite baseline uses Node.js 22.12, Vite 8.2.2, and no
-      Cloudflare plugin, Wrangler configuration, or worker. Clean `npm ci`, full
-      and production-only audits with zero reported vulnerabilities, all six
-      website tests, and the production build passed for that baseline.
-- [ ] Repeat `npm ci`, `npm audit`, `npm audit --omit=dev`, `npm test`, and
-      `npm run build` from the exact final source commit with Node.js 22.12 or
-      later. Both audits must remain at zero; do not force unsupported dependency
-      overrides to obtain that result.
+- [x] GitHub Actions [run
+      34543017175](https://github.com/exterminatorrat/Fleck/actions/runs/34543017175)
+      passed at the exact `0fb88088febbde7e0e8e003cd2aadf0b1c4c5a91`
+      baseline: 2,268 ordinary tests in 31 suites, 2,476 Enhanced tests in 34
+      suites, all seven website tests, the website build, and the release checks
+      passed.
+- [x] A local website verification on 2026-09-11 used Node.js 26.7 and
+      npm 12.0.2 against the same source baseline. `npm ci`, full and
+      production-only audits with zero reported vulnerabilities, all seven
+      website tests, and the production build passed; the lockfile was
+      unchanged. Main CI separately covers the declared Node.js 22.12 baseline.
+- [ ] After this documentation update is merged, require green GitHub CI at the
+      exact resulting source commit before an announcement. Repeat the website
+      install, both audits, tests, and production build there; do not force
+      unsupported dependency overrides to obtain that result.
 - [ ] Confirm the MPL-2.0 license, notices, third-party attributions, dependency
       pins, and reserved-brand language match the source-preview tree.
 
