@@ -3,6 +3,15 @@
 All notable Fleck product changes are recorded here. Packaging a new build without changing
 the product does not add a changelog entry.
 
+## [1.0.2-beta.1] - 2026-09-12
+
+### Fixed
+
+- Restored the prior Notes editor polish from source commit
+  `cc6fcfb6b9955eab9de4d3a902e8be9fe33e0b44`: editor content is clipped to the panel bounds,
+  the font-family trigger remains readable at full and compact widths, and compact toolbar
+  spacing is tightened.
+
 ## [1.0.1-beta.1] - 2026-09-12
 
 ### Changed

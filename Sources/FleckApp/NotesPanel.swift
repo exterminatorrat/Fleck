@@ -2127,6 +2127,7 @@
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .clipped()
       .onChange(of: isEditorVisible) { _, isVisible in
         if isVisible {
           let restoreBodyFocus = restoreEditorFocusAfterHide
@@ -3300,7 +3301,7 @@
         let presentation = FormattingToolbarLayout.presentation(
           availableWidth: proxy.size.width
         )
-        HStack(spacing: presentation == .full ? 8 : 2) {
+        HStack(spacing: presentation == .full ? 8 : 0) {
         Menu {
           Button("Cancel Dictation", role: .destructive) {
             guard isEditorVisible else { return }
@@ -3388,13 +3389,10 @@
           isFontPickerPresented = fontPickerTarget != nil
         } label: {
           HStack(spacing: 5) {
-            Text("Aa")
-            if presentation == .full {
-              Text(fontFamilyDisplay).lineLimit(1).truncationMode(.tail)
-            }
+            Text(fontFamilyDisplay).lineLimit(1).truncationMode(.tail)
             Image(systemName: "chevron.down").font(.system(size: 8))
           }
-          .frame(width: presentation == .full ? 112 : 36)
+          .frame(width: presentation == .full ? 112 : 64)
         }
         .help("Font: \(fontFamilyDisplay)")
         .accessibilityLabel("Font")
@@ -3639,7 +3637,7 @@
         .animation(motion.quick, value: commands.isBold)
         .animation(motion.quick, value: commands.isItalic)
         .animation(motion.quick, value: commands.isUnderlined)
-        .padding(.horizontal, presentation == .full ? 16 : 8)
+        .padding(.horizontal, presentation == .full ? 16 : 4)
         .padding(.vertical, 9)
       }
       .frame(height: 44)
