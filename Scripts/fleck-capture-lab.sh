@@ -13,7 +13,8 @@ readonly common_checkout
 readonly common_build_root="$common_checkout/.build"
 readonly session_parent="$common_build_root"
 readonly product_build_root="$repo_root/.build"
-readonly canonical_fleck_app="$product_build_root/parakeet-test/Fleck.app"
+readonly legacy_fleck_app="$product_build_root/parakeet-test/Fleck.app"
+readonly identity_tool="$script_dir/fleck-build-identity.py"
 
 die() {
   printf 'error: %s\n' "$1" >&2
@@ -22,7 +23,7 @@ die() {
 
 usage() {
   printf \
-    'usage: %s prepare | launch <manifest> | verify <manifest> | postflight <manifest> | codex-command <manifest>\n' \
+    'usage: %s prepare [--fleck-app VERSIONED_APP] | launch <manifest> | verify <manifest> | postflight <manifest> | codex-command <manifest>\n' \
     "${0##*/}" >&2
   exit 2
 }
@@ -109,6 +110,8 @@ reject_tree_symlinks() {
 }
 
 require_canonical_fleck_app() {
+  local fleck_app="$1"
+  local allow_legacy="$2"
   local app_parent="$product_build_root/parakeet-test"
   local resolved_build_root
   local resolved_app_parent
@@ -116,19 +119,40 @@ require_canonical_fleck_app() {
   local app_symlinks
   [[ -d "$product_build_root" && ! -L "$product_build_root" \
     && -d "$app_parent" && ! -L "$app_parent" \
-    && -d "$canonical_fleck_app" && ! -L "$canonical_fleck_app" ]] \
+    && -d "$fleck_app" && ! -L "$fleck_app" ]] \
     || die "packaged Fleck app must be a canonical non-symlink tree"
   resolved_build_root="$(cd -- "$product_build_root" && pwd -P)"
   resolved_app_parent="$(cd -- "$app_parent" && pwd -P)"
-  resolved_fleck_app="$(cd -- "$canonical_fleck_app" && pwd -P)"
+  resolved_fleck_app="$(cd -- "$fleck_app" && pwd -P)"
   [[ "$resolved_build_root" == "$product_build_root" \
     && "$resolved_app_parent" == "$app_parent" \
-    && "$resolved_fleck_app" == "$canonical_fleck_app" ]] \
+    && "$resolved_fleck_app" == "$fleck_app" ]] \
     || die "packaged Fleck app must be a canonical non-symlink tree"
-  app_symlinks="$(/usr/bin/find -P "$canonical_fleck_app" -type l -print)" \
+  app_symlinks="$(/usr/bin/find -P "$fleck_app" -type l -print)" \
     || die "packaged Fleck app must be a canonical non-symlink tree"
   [[ -z "$app_symlinks" ]] \
     || die "packaged Fleck app must be a canonical non-symlink tree"
+  if [[ "$allow_legacy" == '1' && "$fleck_app" == "$legacy_fleck_app" ]]; then
+    return
+  fi
+  [[ "${fleck_app%/*}" == "$app_parent" \
+    && "${fleck_app##*/}" =~ ^Fleck\ ([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?)\ Build\ ([1-9][0-9]*)\.app$ ]] \
+    || die "packaged Fleck app must use its version and build under .build/parakeet-test"
+  local expected_version="${BASH_REMATCH[1]}"
+  local expected_build="${BASH_REMATCH[4]}"
+  local expected_name="${fleck_app##*/}"
+  expected_name="${expected_name%.app}"
+  local plist="$fleck_app/Contents/Info.plist"
+  [[ ! -L "$plist" && -f "$plist" \
+    && "$(/usr/bin/plutil -extract CFBundleName raw -o - "$plist" 2>/dev/null)" == "$expected_name" \
+    && "$(/usr/bin/plutil -extract CFBundleDisplayName raw -o - "$plist" 2>/dev/null)" == "$expected_name" \
+    && "$(/usr/bin/plutil -extract FleckBuildLabel raw -o - "$plist" 2>/dev/null)" == "$expected_name" \
+    && "$(/usr/bin/plutil -extract FleckVersion raw -o - "$plist" 2>/dev/null)" == "$expected_version" \
+    && "$(/usr/bin/plutil -extract FleckBuildNumber raw -o - "$plist" 2>/dev/null)" == "$expected_build" \
+    && "$(/usr/bin/plutil -extract FleckBuildFlavor raw -o - "$plist" 2>/dev/null)" == 'parakeet' \
+    && "$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$plist" 2>/dev/null)" == 'Fleck' \
+    && "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$plist" 2>/dev/null)" == 'com.harryjin.fleck' ]] \
+    || die "packaged Fleck app name and Parakeet build metadata do not agree"
 }
 
 resolve_capture_tool() {
@@ -160,8 +184,7 @@ read_manifest() {
     || die "Fleck data is outside its session"
   [[ "$fake_repo" == "$session_root/NorthstarDemo" ]] \
     || die "fake repository is outside its session"
-  [[ "$fleck_app" == "$canonical_fleck_app" ]] \
-    || die "capture manifest names the wrong Fleck app"
+  require_canonical_fleck_app "$fleck_app" 1
   reject_symlinks \
     "$session_root/Library" \
     "$session_root/Library/Application Support" \
@@ -211,16 +234,39 @@ test_fake_repository() {
 
 case "${1:-}" in
   prepare)
-    [[ $# -eq 1 ]] || usage
+    if [[ "${FLECK_CAPTURE_LAB_SKIP_BUILD:-0}" == "1" ]]; then
+      [[ $# -eq 3 && "$2" == '--fleck-app' && -n "$3" ]] || usage
+      fleck_app="$3"
+    else
+      [[ $# -eq 1 ]] || usage
+    fi
     prepare_session_parent
     if [[ "${FLECK_CAPTURE_LAB_SKIP_BUILD:-0}" != "1" ]]; then
-      "$repo_root/Scripts/build-parakeet-test-app.sh"
+      [[ ! -L "$product_build_root" \
+        && ( ! -e "$product_build_root" || -d "$product_build_root" ) ]] \
+        || die "product build root must be a canonical non-symlink directory"
+      /bin/mkdir -p "$product_build_root"
+      local_result_root="$(/usr/bin/mktemp -d "$product_build_root/.capture-lab-result.XXXXXX")"
+      local_result="$local_result_root/build-result.json"
+      if ! "$repo_root/Scripts/build-parakeet-test-app.sh" --result-file "$local_result"; then
+        /usr/bin/find "$local_result_root" -depth -delete || true
+        die 'Parakeet app build failed'
+      fi
+      if ! fleck_app="$("$identity_tool" read-result \
+        --repo "$repo_root" \
+        --result-file "$local_result" \
+        --flavor parakeet)"; then
+        /usr/bin/find "$local_result_root" -depth -delete || true
+        die 'Parakeet app result is invalid'
+      fi
+      /usr/bin/find "$local_result_root" -depth -delete
     fi
+    require_canonical_fleck_app "$fleck_app" 0
     session_root="$(/usr/bin/mktemp -d "$session_parent/f.XXXXXX")"
     /bin/chmod 700 "$session_root"
     require_session_root "$session_root"
     resolve_capture_tool
-    "$capture_tool" prepare --session-root "$session_root"
+    "$capture_tool" prepare --session-root "$session_root" --fleck-app "$fleck_app"
     ;;
   verify)
     [[ $# -eq 2 ]] || usage
@@ -242,7 +288,6 @@ case "${1:-}" in
     [[ $# -eq 2 ]] || usage
     read_manifest "$2"
     reject_tree_symlinks "$fleck_root" "$fake_repo"
-    require_canonical_fleck_app
     if /usr/bin/pgrep -x Fleck >/dev/null 2>&1; then
       die "Fleck is already running; leave it open and use this session later"
     fi

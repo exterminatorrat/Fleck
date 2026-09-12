@@ -144,7 +144,7 @@ class RepositoryFixture:
 class BuildIdentityTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -171,6 +171,137 @@ class BuildIdentityTests(unittest.TestCase):
         self.assertEqual(identity.bundle_version(99_990_000), "9999.99.99")
         with self.assertRaises(identity.IdentityError):
             identity.bundle_version(99_990_001)
+
+    def test_artifact_name_and_plist_names_come_from_one_capture(self):
+        fixture = self.fixture()
+        capture_path = fixture.begin()
+        capture = identity.load_capture(capture_path)
+        expected = f"Fleck {capture['productVersion']} Build {capture['buildNumber']}"
+        self.assertEqual(identity.artifact_name(capture), expected)
+        values = identity.plist_values(capture)
+        self.assertEqual(values["CFBundleName"], expected)
+        self.assertEqual(values["CFBundleDisplayName"], expected)
+        self.assertEqual(values["FleckBuildLabel"], expected)
+        identity.release_guard(capture)
+
+    def test_result_file_is_immutable_exact_and_bound_to_published_app(self):
+        fixture = self.fixture()
+        capture_path = fixture.begin()
+        capture = identity.load_capture(capture_path)
+        name = identity.artifact_name(capture)
+        app = fixture.repo / ".build" / f"{name}.app"
+        plist = app / "Contents" / "Info.plist"
+        plist.parent.mkdir(parents=True)
+        with plist.open("wb") as handle:
+            plistlib.dump(identity.plist_values(capture), handle)
+        results = fixture.repo / ".build" / "results"
+        results.mkdir()
+        result = results / "development.json"
+
+        ownership = identity.write_result(capture, app, result)
+        self.assertRegex(ownership, r"^[0-9]+:[0-9]+$")
+        self.assertEqual(
+            json.loads(result.read_text(encoding="utf-8")),
+            {"appPath": str(app), "buildID": capture["buildID"]},
+        )
+        self.assertEqual(identity.read_result(fixture.repo, result, "development"), app)
+        before = result.read_bytes()
+        with self.assertRaises(identity.IdentityError):
+            identity.write_result(capture, app, result)
+        self.assertEqual(result.read_bytes(), before)
+        identity.release_guard(capture)
+
+    def test_result_reader_binds_uuid_metadata_flavor_and_publication_root(self):
+        fixture = self.fixture()
+        capture_path = fixture.begin()
+        capture = identity.load_capture(capture_path)
+        name = identity.artifact_name(capture)
+        app = fixture.repo / ".build" / f"{name}.app"
+        plist = app / "Contents" / "Info.plist"
+        plist.parent.mkdir(parents=True)
+        with plist.open("wb") as handle:
+            plistlib.dump(identity.plist_values(capture), handle)
+        result = fixture.repo / ".build" / "result.json"
+        identity.write_result(capture, app, result)
+
+        with self.assertRaisesRegex(identity.IdentityError, "publication root"):
+            identity.read_result(fixture.repo, result, "parakeet")
+        value = json.loads(result.read_text(encoding="utf-8"))
+        value["buildID"] = str(uuid.uuid4())
+        result.write_text(json.dumps(value), encoding="utf-8")
+        with self.assertRaisesRegex(identity.IdentityError, "does not match"):
+            identity.read_result(fixture.repo, result, "development")
+        identity.release_guard(capture)
+
+    def test_owned_result_removal_preserves_a_substituted_destination(self):
+        fixture = self.fixture()
+        capture_path = fixture.begin()
+        capture = identity.load_capture(capture_path)
+        name = identity.artifact_name(capture)
+        app = fixture.repo / ".build" / f"{name}.app"
+        plist = app / "Contents" / "Info.plist"
+        plist.parent.mkdir(parents=True)
+        with plist.open("wb") as handle:
+            plistlib.dump(identity.plist_values(capture), handle)
+        result = fixture.repo / ".build" / "result.json"
+        ownership = identity.write_result(capture, app, result)
+        replacement = fixture.repo / ".build" / "replacement"
+        replacement.write_text("replacement sentinel\n", encoding="utf-8")
+        replacement.replace(result)
+
+        with self.assertRaisesRegex(identity.IdentityError, "substituted"):
+            identity.remove_owned_result(fixture.repo, result, ownership)
+        self.assertEqual(result.read_text(encoding="utf-8"), "replacement sentinel\n")
+        result.unlink()
+        second = fixture.repo / ".build" / "second.json"
+        second_ownership = identity.write_result(capture, app, second)
+        identity.remove_owned_result(fixture.repo, second, second_ownership)
+        self.assertFalse(os.path.lexists(second))
+        identity.release_guard(capture)
+
+    def test_result_path_rejects_outside_existing_and_symlinked_destinations(self):
+        fixture = self.fixture()
+        build = fixture.repo / ".build"
+        build.mkdir()
+        results = build / "results"
+        results.mkdir()
+        outside = self.root / "outside.json"
+        existing = results / "existing.json"
+        existing.write_text("sentinel\n", encoding="utf-8")
+        target = build / "target"
+        target.mkdir()
+        link = build / "linked"
+        link.symlink_to(target, target_is_directory=True)
+
+        for rejected in (
+            Path("relative.json"),
+            outside,
+            existing,
+            link / "result.json",
+        ):
+            with self.subTest(path=rejected):
+                with self.assertRaises(identity.IdentityError):
+                    identity.validate_result_path(fixture.repo, rejected)
+        self.assertEqual(existing.read_text(encoding="utf-8"), "sentinel\n")
+
+    def test_failed_result_verification_leaves_no_success_result(self):
+        fixture = self.fixture()
+        capture_path = fixture.begin()
+        capture = identity.load_capture(capture_path)
+        name = identity.artifact_name(capture)
+        app = fixture.repo / ".build" / f"{name}.app"
+        plist = app / "Contents" / "Info.plist"
+        plist.parent.mkdir(parents=True)
+        values = identity.plist_values(capture)
+        values["FleckBuildID"] = str(uuid.uuid4())
+        with plist.open("wb") as handle:
+            plistlib.dump(values, handle)
+        result = fixture.repo / ".build" / "failed-result.json"
+
+        with self.assertRaises(identity.IdentityError):
+            identity.write_result(capture, app, result)
+        self.assertFalse(os.path.lexists(result))
+        identity.release_guard(capture)
 
     def test_rejects_missing_and_malformed_version_and_baseline(self):
         repo = self.root / "invalid"

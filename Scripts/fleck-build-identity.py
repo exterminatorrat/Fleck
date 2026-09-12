@@ -317,8 +317,20 @@ def load_capture(path):
     return capture
 
 
+def artifact_name(capture):
+    version = capture.get("productVersion")
+    number = capture.get("buildNumber")
+    if not isinstance(version, str) or not VERSION_RE.fullmatch(version) \
+            or not isinstance(number, int) or number < 1:
+        fail("build identity capture cannot produce an artifact name")
+    return f"Fleck {version} Build {number}"
+
+
 def plist_values(capture):
+    name = artifact_name(capture)
     values = {
+        "CFBundleDisplayName": name,
+        "CFBundleName": name,
         "CFBundleShortVersionString": capture["numericProductVersion"],
         "CFBundleVersion": capture["bundleVersion"],
         "FleckVersion": capture["productVersion"],
@@ -329,6 +341,7 @@ def plist_values(capture):
         "FleckSourceTree": capture["sourceTree"],
         "FleckBuildFlavor": capture["flavor"],
         "FleckBuildConfiguration": capture["configuration"],
+        "FleckBuildLabel": name,
         "FleckCandidateStatus": capture["candidateStatus"],
         "FleckBaselineManifestSHA256": capture["baselineManifestSHA256"],
         "FleckBaselineRecordID": capture["baselineRecordID"],
@@ -437,7 +450,7 @@ def check_repo(repo):
         else:
             builder_index = source.find('FLECK_BUILD_IDENTITY_NESTED_TOKEN=')
             finish_index = source.find('$identity_tool" finish')
-            publication_index = source.find('if ! /bin/mv "$staged_publication"')
+            publication_index = source.find("renamex_np(")
             if not source.find('$identity_tool" begin') < builder_index < stamp_index \
                     < finish_index < publication_index:
                 fail("corrected packaging identity hooks are not ordered around build and publication")
@@ -566,6 +579,157 @@ def command_finish(args):
     verify_plist(capture, args.plist)
 
 
+def validate_result_path(repo, value):
+    repo = Path(repo).resolve()
+    build_root = repo / ".build"
+    result = Path(value)
+    if not result.is_absolute():
+        fail("result file path must be absolute")
+    try:
+        result.relative_to(build_root)
+    except ValueError:
+        fail("result file must be inside the owning worktree .build directory")
+    if result == build_root:
+        fail("result file must be below the owning worktree .build directory")
+    current = result.parent
+    while True:
+        if not current.exists() or current.is_symlink() or not current.is_dir() \
+                or current.resolve() != current:
+            fail("result file parent must be an existing canonical non-symlink directory")
+        if current == build_root:
+            break
+        if build_root not in current.parents:
+            fail("result file must be inside the owning worktree .build directory")
+        current = current.parent
+    if os.path.lexists(result):
+        fail("result file destination must not already exist")
+    return result
+
+
+def read_result(repo_value, result_value, flavor):
+    repo = Path(repo_value).resolve()
+    build_root = repo / ".build"
+    result = Path(result_value)
+    if not result.is_absolute():
+        fail("result file path must be absolute")
+    try:
+        result.relative_to(build_root)
+    except ValueError:
+        fail("result file must be inside the owning worktree .build directory")
+    if result.is_symlink() or not result.is_file() or result.resolve() != result:
+        fail("result file must be an existing canonical non-symlink file")
+    try:
+        value = json.loads(result.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        fail("build result is not valid JSON")
+    if not isinstance(value, dict) or set(value) != {"appPath", "buildID"} \
+            or not all(isinstance(value[key], str) and value[key] for key in value):
+        fail("build result must contain exactly nonempty appPath and buildID strings")
+    try:
+        parsed_build_id = uuid.UUID(value["buildID"])
+    except ValueError:
+        fail("build result contains an invalid build ID")
+    if str(parsed_build_id) != value["buildID"]:
+        fail("build result contains a noncanonical build ID")
+    app = Path(value["appPath"])
+    if not app.is_absolute() or app.is_symlink() or not app.is_dir() or app.resolve() != app:
+        fail("build result app must be an absolute canonical non-symlink directory")
+    expected_parent = build_root if flavor == "development" else build_root / "parakeet-test"
+    if app.parent != expected_parent:
+        fail(f"build result app is outside the {flavor} publication root")
+    plist = read_plist(app / "Contents/Info.plist")
+    version = plist.get("FleckVersion")
+    number = plist.get("FleckBuildNumber")
+    if not isinstance(version, str) or not VERSION_RE.fullmatch(version) \
+            or not isinstance(number, str) or not re.fullmatch(r"[1-9][0-9]*", number):
+        fail("build result app has invalid version or build metadata")
+    name = f"Fleck {version} Build {number}"
+    if app.name != name + ".app" \
+            or plist.get("CFBundleName") != name \
+            or plist.get("CFBundleDisplayName") != name \
+            or plist.get("FleckBuildLabel") != name \
+            or plist.get("FleckBuildFlavor") != flavor:
+        fail("build result app name and metadata do not agree")
+    if plist.get("FleckBuildID") != value["buildID"]:
+        fail("build result build ID does not match the app plist")
+    return app
+
+
+def remove_owned_result(repo_value, result_value, identity):
+    repo = Path(repo_value).resolve()
+    build_root = repo / ".build"
+    result = Path(result_value)
+    if not re.fullmatch(r"[0-9]+:[0-9]+", identity):
+        fail("build result ownership identity is invalid")
+    if not result.is_absolute():
+        fail("result file path must be absolute")
+    try:
+        result.relative_to(build_root)
+    except ValueError:
+        fail("result file must be inside the owning worktree .build directory")
+    expected = tuple(int(value) for value in identity.split(":"))
+    if not os.path.lexists(result):
+        return
+    if result.is_symlink() or not result.is_file() or result.resolve() != result:
+        fail("refusing to remove an unsafe build result")
+    current = result.lstat()
+    if (current.st_dev, current.st_ino) != expected:
+        fail("refusing to remove a substituted build result")
+    result.unlink()
+    directory = os.open(result.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def write_result(capture, app_value, result_value):
+    repo = Path(capture["repo"]).resolve()
+    result = validate_result_path(repo, result_value)
+    app = Path(app_value)
+    if not app.is_absolute() or app.is_symlink() or not app.is_dir() or app.resolve() != app:
+        fail("published app path must be an absolute canonical non-symlink directory")
+    try:
+        app.relative_to(repo / ".build")
+    except ValueError:
+        fail("published app path must be inside the owning worktree .build directory")
+    if app.name != artifact_name(capture) + ".app":
+        fail("published app name does not match captured build identity")
+    verify_plist(capture, app / "Contents/Info.plist")
+    payload = {"appPath": str(app), "buildID": capture["buildID"]}
+    temporary = result.parent / f".{result.name}.{uuid.uuid4()}.tmp"
+    published = False
+    created_identity = None
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            json.dump(payload, handle, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        created = temporary.stat()
+        created_identity = (created.st_dev, created.st_ino)
+        os.link(temporary, result)
+        published = True
+        temporary.unlink()
+        directory = os.open(result.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        return f"{created_identity[0]}:{created_identity[1]}"
+    except OSError as error:
+        if published and created_identity:
+            try:
+                current = result.lstat()
+                if not result.is_symlink() \
+                        and (current.st_dev, current.st_ino) == created_identity:
+                    result.unlink()
+            except OSError:
+                pass
+        temporary.unlink(missing_ok=True)
+        fail(f"could not write immutable build result: {error}")
+
+
 def info_text(capture, bundle_identifier):
     fields = [
         ("Product version", capture["productVersion"]),
@@ -626,6 +790,23 @@ def parser():
     info = sub.add_parser("info")
     info.add_argument("--capture", required=True)
     info.add_argument("--bundle-identifier", required=True)
+    name = sub.add_parser("name")
+    name.add_argument("--capture", required=True)
+    result_path = sub.add_parser("validate-result-path")
+    result_path.add_argument("--repo", required=True)
+    result_path.add_argument("--result-file", required=True)
+    write = sub.add_parser("write-result")
+    write.add_argument("--capture", required=True)
+    write.add_argument("--app", required=True)
+    write.add_argument("--result-file", required=True)
+    read = sub.add_parser("read-result")
+    read.add_argument("--repo", required=True)
+    read.add_argument("--result-file", required=True)
+    read.add_argument("--flavor", required=True, choices=("development", "parakeet"))
+    remove = sub.add_parser("remove-owned-result")
+    remove.add_argument("--repo", required=True)
+    remove.add_argument("--result-file", required=True)
+    remove.add_argument("--identity", required=True)
     return result
 
 
@@ -658,6 +839,16 @@ def main():
         print(capture[args.name])
     elif args.command == "info":
         print(info_text(load_capture(args.capture), args.bundle_identifier))
+    elif args.command == "name":
+        print(artifact_name(load_capture(args.capture)))
+    elif args.command == "validate-result-path":
+        validate_result_path(args.repo, args.result_file)
+    elif args.command == "write-result":
+        print(write_result(load_capture(args.capture), args.app, args.result_file))
+    elif args.command == "read-result":
+        print(read_result(args.repo, args.result_file, args.flavor))
+    elif args.command == "remove-owned-result":
+        remove_owned_result(args.repo, args.result_file, args.identity)
 
 
 if __name__ == "__main__":

@@ -32,8 +32,12 @@
       guard self == .bundledHelperMissing else { return nil }
       return """
         Build and open the packaged app:
-        Scripts/build-fleck-app.sh
-        /usr/bin/open -n .build/Fleck.app
+        mkdir -p .build &&
+        RESULT_DIR="$(mktemp -d "$PWD/.build/development-result.XXXXXX")" &&
+        RESULT_FILE="$RESULT_DIR/build-result.json" &&
+        Scripts/build-fleck-app.sh --result-file "$RESULT_FILE" &&
+        FLECK_APP="$(Scripts/fleck-build-identity.py read-result --repo "$PWD" --result-file "$RESULT_FILE" --flavor development)" &&
+        /usr/bin/open -n "$FLECK_APP"
         """
     }
   }

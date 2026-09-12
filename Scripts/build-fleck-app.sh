@@ -4,11 +4,19 @@ set -euo pipefail
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
 readonly build_root="$repo_root/.build"
-readonly app_destination="$build_root/Fleck.app"
 readonly info_plist="$repo_root/Sources/FleckApp/Info.plist"
 readonly canonical_mark="$repo_root/website/public/fleck-mark.png"
 readonly identity_tool="$script_dir/fleck-build-identity.py"
 readonly identity_mode="${FLECK_BUILD_IDENTITY_MODE:-local}"
+
+result_file=''
+if [[ $# -gt 0 ]]; then
+  if [[ $# -ne 2 || "$1" != '--result-file' || -z "$2" ]]; then
+    printf 'usage: %s [--result-file ABSOLUTE_PATH]\n' "${0##*/}" >&2
+    exit 2
+  fi
+  result_file="$2"
+fi
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   printf 'error: building Fleck.app requires macOS\n' >&2
@@ -23,8 +31,17 @@ fi
 
 cd "$repo_root"
 /bin/mkdir -p "$build_root"
+if [[ -n "$result_file" ]]; then
+  "$identity_tool" validate-result-path --repo "$repo_root" --result-file "$result_file"
+fi
 readonly identity_capture="$build_root/.fleck-app-build-identity.$$.json"
 staging_root=""
+app_destination=""
+publication_created=0
+published_device=""
+published_inode=""
+result_identity=""
+build_succeeded=0
 cleanup() {
   local exit_code=$?
   trap - EXIT
@@ -35,9 +52,22 @@ cleanup() {
         ;;
     esac
   fi
+  if (( publication_created != 0 && build_succeeded == 0 )) \
+    && [[ -n "$app_destination" && ! -L "$app_destination" && -d "$app_destination" \
+      && "$app_destination" == "$build_root"/Fleck\ *.app \
+      && "$(/usr/bin/stat -f '%d' "$app_destination" 2>/dev/null || true)" == "$published_device" \
+      && "$(/usr/bin/stat -f '%i' "$app_destination" 2>/dev/null || true)" == "$published_inode" ]]; then
+    /usr/bin/find "$app_destination" -depth -delete || exit_code=1
+  fi
   if [[ -f "$identity_capture" && ! -L "$identity_capture" ]]; then
     "$identity_tool" release --capture "$identity_capture" || exit_code=1
     /bin/rm -f -- "$identity_capture" || exit_code=1
+  fi
+  if (( exit_code != 0 )) && [[ -n "$result_identity" ]]; then
+    "$identity_tool" remove-owned-result \
+      --repo "$repo_root" \
+      --result-file "$result_file" \
+      --identity "$result_identity" || exit_code=1
   fi
   exit "$exit_code"
 }
@@ -48,6 +78,13 @@ trap cleanup EXIT
   --configuration Release \
   --mode "$identity_mode" \
   --capture "$identity_capture"
+readonly artifact_label="$("$identity_tool" name --capture "$identity_capture")"
+app_destination="$build_root/$artifact_label.app"
+readonly app_destination
+if [[ -e "$app_destination" || -L "$app_destination" ]]; then
+  printf 'error: refusing to overwrite existing development app: %s\n' "$app_destination" >&2
+  exit 1
+fi
 
 swift build -c release --product Fleck --disable-automatic-resolution
 swift build -c release --product fleck-agent --disable-automatic-resolution
@@ -96,6 +133,8 @@ readonly designated_requirement="=designated => identifier \"$bundle_identifier\
   --plist "$staged_app/Contents/Info.plist"
 
 readonly swift_path="$(xcrun --find swift)"
+published_device="$(/usr/bin/stat -f '%d' "$staged_app")"
+published_inode="$(/usr/bin/stat -f '%i' "$staged_app")"
 "$swift_path" -e '
   import Foundation
 
@@ -103,11 +142,37 @@ readonly swift_path="$(xcrun --find swift)"
   let staged = URL(fileURLWithPath: arguments[1])
   let destination = URL(fileURLWithPath: arguments[2])
   let fileManager = FileManager.default
-  if fileManager.fileExists(atPath: destination.path) {
-    _ = try fileManager.replaceItemAt(destination, withItemAt: staged)
-  } else {
-    try fileManager.moveItem(at: staged, to: destination)
+  guard !fileManager.fileExists(atPath: destination.path) else {
+    throw NSError(domain: "FleckDevelopmentPackaging", code: 1)
   }
+  try fileManager.moveItem(at: staged, to: destination)
 ' "$staged_app" "$app_destination"
+publication_created=1
+if [[ -n "${FLECK_DEVELOPMENT_TEST_REPLACE_AFTER_PUBLICATION:-}" ]]; then
+  canonical_tmp="$(cd -- "${TMPDIR:-/tmp}" && pwd -P)"
+  if [[ "$FLECK_DEVELOPMENT_TEST_REPLACE_AFTER_PUBLICATION" != '1' \
+    || "$repo_root" != "$canonical_tmp"/* \
+    || "$(/bin/cat "$repo_root/.fleck-development-packager-test-fixture" 2>/dev/null || true)" \
+      != 'fleck-development-packager-test-fixture-v1' ]]; then
+    printf '%s\n' 'error: development publication replacement failpoint is unavailable' >&2
+    exit 1
+  fi
+  /bin/mv "$app_destination" "$build_root/.development-owned-publication.$$"
+  /bin/mkdir "$app_destination"
+  printf '%s\n' 'replacement sentinel' > "$app_destination/sentinel"
+  printf '%s\n' 'error: injected failure after development publication replacement' >&2
+  exit 1
+fi
+/usr/bin/codesign --verify --deep --strict "$app_destination"
+"$identity_tool" verify \
+  --capture "$identity_capture" \
+  --plist "$app_destination/Contents/Info.plist"
+if [[ -n "$result_file" ]]; then
+  result_identity="$("$identity_tool" write-result \
+    --capture "$identity_capture" \
+    --app "$app_destination" \
+    --result-file "$result_file")"
+fi
+build_succeeded=1
 
 printf 'Built development-signed app bundle: %s\n' "$app_destination"

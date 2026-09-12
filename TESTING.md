@@ -27,8 +27,12 @@ From the repository root:
 xcode-select -p
 swift --version
 Scripts/validate-macos.sh
-Scripts/build-fleck-app.sh
-/usr/bin/open -n .build/Fleck.app
+mkdir -p .build &&
+RESULT_DIR="$(mktemp -d "$PWD/.build/development-result.XXXXXX")" &&
+RESULT_FILE="$RESULT_DIR/build-result.json" &&
+Scripts/build-fleck-app.sh --result-file "$RESULT_FILE" &&
+FLECK_APP="$(Scripts/fleck-build-identity.py read-result --repo "$PWD" --result-file "$RESULT_FILE" --flavor development)" &&
+/usr/bin/open -n "$FLECK_APP"
 ```
 
 Look for the note icon in the macOS menu bar, then click it to open the notes
@@ -40,8 +44,7 @@ macOS privacy permissions.
 
 ## Packaged editor and branding checklist
 
-Build and launch only the packaged app with `Scripts/build-fleck-app.sh` and
-`/usr/bin/open -n .build/Fleck.app`. Use disposable tabs to the right of the
+Build with `Scripts/build-fleck-app.sh --result-file <absolute-path-under-.build>` and launch only the exact `appPath` recorded in that invocation result. Use disposable tabs to the right of the
 leftmost personal tab. Record pass/fail without note text, screenshots of
 private notes, credentials, selection contents, or agent information.
 
@@ -71,6 +74,16 @@ source project is a Swift Package. `Scripts/build-fleck-app.sh` assembles an
 ad-hoc development-signed native `.app`, but no distribution-signed artifact
 exists. Launch-at-login must be validated later from the packaged and signed
 application.
+
+Each packager accepts optional `--result-file ABSOLUTE_PATH`. The path must be
+absent, non-symlinked, and below the owning worktree's canonical `.build`
+directory. On success it contains only `appPath` and `buildID`; consumers must
+pin that exact result rather than scan for or infer the newest artifact. The
+development app is `.build/Fleck <version> Build <number>.app`, the Parakeet app
+is `.build/parakeet-test/Fleck <version> Build <number>.app`, and corrected
+packaging publishes `.build/Fleck <version> Build <number>/` with its equally
+named app, launcher, provenance, input manifest, and ZIP. All are immutable:
+collisions fail without replacing any earlier versioned or legacy output.
 
 ## Agent workspace release gates
 
@@ -174,8 +187,7 @@ distribution signing, notarization, or distribution.
 - **Status:** PENDING — no Codex, Claude Code, Kimi, generic CLI, live Keychain,
   physical-device accessibility, or distribution result is claimed by the
   automated run.
-- **Required setup:** Build with `Scripts/build-fleck-app.sh`; launch with
-  `/usr/bin/open -n .build/Fleck.app`; install the **Agent Connector**; create
+- **Required setup:** Build with `Scripts/build-fleck-app.sh --result-file <absolute-path-under-.build>`; launch the exact recorded `appPath`; install the **Agent Connector**; create
   one temporary shared note and four separate temporary profiles in
   **Settings → Agents**. Record the commit, macOS/Xcode/Swift versions, client
   versions, profile names, and timestamps.
@@ -771,8 +783,12 @@ until the StoreKit 2 access phase replaces that adapter.
 Build and open the packaged app first:
 
 ```sh
-Scripts/build-fleck-app.sh
-/usr/bin/open -n .build/Fleck.app
+mkdir -p .build &&
+RESULT_DIR="$(mktemp -d "$PWD/.build/development-result.XXXXXX")" &&
+RESULT_FILE="$RESULT_DIR/build-result.json" &&
+Scripts/build-fleck-app.sh --result-file "$RESULT_FILE" &&
+FLECK_APP="$(Scripts/fleck-build-identity.py read-result --repo "$PWD" --result-file "$RESULT_FILE" --flavor development)" &&
+/usr/bin/open -n "$FLECK_APP"
 ```
 
 In a second Terminal window, measure resident memory:
@@ -843,7 +859,7 @@ when no measurement was taken; tests and a build do not create runtime
 evidence.
 
 The packaged-app boundary is manual. Build and launch the exact QA app with
-`Scripts/build-fleck-app.sh` and `/usr/bin/open -n .build/Fleck.app` only from
+`Scripts/build-fleck-app.sh --result-file <absolute-path-under-.build>` and the exact recorded `appPath` only from
 a disposable macOS account or another isolated QA environment. Current
 production persistence has no safe test-root override, so the harness never
 launches Fleck and never reads, copies, moves, or deletes the user's Fleck

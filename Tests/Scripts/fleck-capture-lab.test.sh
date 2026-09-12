@@ -80,14 +80,38 @@ readonly packager_test_bin
 /bin/mkdir -p "$packager_test_scripts" "$packager_test_bin"
 initialize_fixture_repository "$packager_test_root"
 /bin/cp Scripts/fleck-capture-lab.sh "$packager_test_scripts/fleck-capture-lab.sh"
+/bin/cp Scripts/fleck-build-identity.py "$packager_test_scripts/fleck-build-identity.py"
 
 enhanced_packager_sentinel="$packager_test_root/enhanced-packager-called"
 readonly enhanced_packager_sentinel
 lightweight_packager_sentinel="$packager_test_root/lightweight-packager-called"
 readonly lightweight_packager_sentinel
 printf '%s\n' \
-  '#!/bin/sh' \
+  '#!/usr/bin/env bash' \
+  'set -euo pipefail' \
   '/usr/bin/touch "$FLECK_CAPTURE_LAB_ENHANCED_PACKAGER_SENTINEL"' \
+  '[[ $# -eq 2 && "$1" == "--result-file" ]]' \
+  'root="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"' \
+  'app="$root/.build/parakeet-test/Fleck 1.0.1-beta.1 Build 41.app"' \
+  '/bin/mkdir -p "$app/Contents"' \
+  '/usr/bin/plutil -create xml1 "$app/Contents/Info.plist"' \
+  '/usr/bin/plutil -insert CFBundleName -string "Fleck 1.0.1-beta.1 Build 41" "$app/Contents/Info.plist"' \
+  '/usr/bin/plutil -insert CFBundleDisplayName -string "Fleck 1.0.1-beta.1 Build 41" "$app/Contents/Info.plist"' \
+  '/usr/bin/plutil -insert CFBundleExecutable -string Fleck "$app/Contents/Info.plist"' \
+  '/usr/bin/plutil -insert CFBundleIdentifier -string com.harryjin.fleck "$app/Contents/Info.plist"' \
+  '/usr/bin/plutil -insert FleckBuildLabel -string "Fleck 1.0.1-beta.1 Build 41" "$app/Contents/Info.plist"' \
+  '/usr/bin/plutil -insert FleckVersion -string 1.0.1-beta.1 "$app/Contents/Info.plist"' \
+  '/usr/bin/plutil -insert FleckBuildNumber -string 41 "$app/Contents/Info.plist"' \
+  '/usr/bin/plutil -insert FleckBuildID -string 11111111-1111-4111-8111-111111111111 "$app/Contents/Info.plist"' \
+  '/usr/bin/plutil -insert FleckBuildFlavor -string parakeet "$app/Contents/Info.plist"' \
+  'result_id="${FLECK_CAPTURE_LAB_FAKE_RESULT_BUILD_ID:-11111111-1111-4111-8111-111111111111}"' \
+  '/usr/bin/python3 - "$2" "$app" "$result_id" <<'"'"'PY'"'"'' \
+  'import json' \
+  'import sys' \
+  'with open(sys.argv[1], "x", encoding="utf-8") as handle:' \
+  '    json.dump({"appPath": sys.argv[2], "buildID": sys.argv[3]}, handle, sort_keys=True)' \
+  '    handle.write("\n")' \
+  'PY' \
   > "$packager_test_scripts/build-parakeet-test-app.sh"
 printf '%s\n' \
   '#!/bin/sh' \
@@ -118,6 +142,7 @@ printf '%s\n' \
   > "$packager_test_bin/fleck-capture-lab"
 /bin/chmod 755 \
   "$packager_test_scripts/fleck-capture-lab.sh" \
+  "$packager_test_scripts/fleck-build-identity.py" \
   "$packager_test_scripts/build-parakeet-test-app.sh" \
   "$packager_test_scripts/build-fleck-app.sh" \
   "$packager_test_bin/swift" \
@@ -137,6 +162,18 @@ if [[ -e "$lightweight_packager_sentinel" ]]; then
   printf 'default prepare invoked build-fleck-app.sh\n' >&2
   exit 1
 fi
+expect_failure \
+  /usr/bin/env \
+    PATH="$packager_test_bin:/usr/bin:/bin" \
+    FLECK_CAPTURE_LAB_SKIP_BUILD=0 \
+    FLECK_CAPTURE_LAB_FAKE_RESULT_BUILD_ID=22222222-2222-4222-8222-222222222222 \
+    FLECK_CAPTURE_LAB_ENHANCED_PACKAGER_SENTINEL="$enhanced_packager_sentinel" \
+    FLECK_CAPTURE_LAB_LIGHTWEIGHT_PACKAGER_SENTINEL="$lightweight_packager_sentinel" \
+    FLECK_CAPTURE_LAB_FAKE_BIN_PATH="$packager_test_bin" \
+    "$packager_test_scripts/fleck-capture-lab.sh" prepare
+/bin/cp -R \
+  "$packager_test_root/.build/parakeet-test/Fleck 1.0.1-beta.1 Build 41.app" \
+  "$packager_test_root/.build/parakeet-test/Fleck.app"
 
 fake_postflight_root="$packager_test_root/.build/f.POST01"
 readonly fake_postflight_root
@@ -230,11 +267,45 @@ expect_error \
     PATH="$packager_test_bin:/usr/bin:/bin" \
     FLECK_CAPTURE_LAB_SKIP_BUILD=1 \
     FLECK_CAPTURE_LAB_FAKE_BIN_PATH="$packager_test_bin" \
-    "$long_checkout/Scripts/fleck-capture-lab.sh" prepare
+    "$long_checkout/Scripts/fleck-capture-lab.sh" prepare --fleck-app /invalid/versioned.app
 
+capture_fixture_build_number="$(/usr/bin/python3 -c 'import time; print(time.time_ns())')"
+readonly capture_fixture_build_number
+capture_fixture_label="Fleck 1.0.1-beta.1 Build $capture_fixture_build_number"
+readonly capture_fixture_label
+capture_fixture_app="$repo_root/.build/parakeet-test/$capture_fixture_label.app"
+readonly capture_fixture_app
+test ! -e "$capture_fixture_app"
+/bin/mkdir -p "$capture_fixture_app/Contents"
+readonly capture_fixture_device="$(/usr/bin/stat -f '%d' "$capture_fixture_app")"
+readonly capture_fixture_inode="$(/usr/bin/stat -f '%i' "$capture_fixture_app")"
+cleanup_capture_fixture_app() {
+  local exit_code=$?
+  trap - EXIT
+  if [[ ! -L "$capture_fixture_app" && -d "$capture_fixture_app" \
+    && "$(/usr/bin/stat -f '%d' "$capture_fixture_app" 2>/dev/null || true)" == "$capture_fixture_device" \
+    && "$(/usr/bin/stat -f '%i' "$capture_fixture_app" 2>/dev/null || true)" == "$capture_fixture_inode" ]]; then
+    /usr/bin/find "$capture_fixture_app" -depth -delete || exit_code=1
+  elif [[ -e "$capture_fixture_app" || -L "$capture_fixture_app" ]]; then
+    printf 'refusing to remove substituted capture fixture app: %s\n' "$capture_fixture_app" >&2
+    exit_code=1
+  fi
+  exit "$exit_code"
+}
+trap cleanup_capture_fixture_app EXIT
+/usr/bin/plutil -create xml1 "$capture_fixture_app/Contents/Info.plist"
+for name_key in CFBundleName CFBundleDisplayName FleckBuildLabel; do
+  /usr/bin/plutil -insert "$name_key" -string "$capture_fixture_label" \
+    "$capture_fixture_app/Contents/Info.plist"
+done
+/usr/bin/plutil -insert CFBundleExecutable -string Fleck "$capture_fixture_app/Contents/Info.plist"
+/usr/bin/plutil -insert CFBundleIdentifier -string com.harryjin.fleck "$capture_fixture_app/Contents/Info.plist"
+/usr/bin/plutil -insert FleckVersion -string 1.0.1-beta.1 "$capture_fixture_app/Contents/Info.plist"
+/usr/bin/plutil -insert FleckBuildNumber -string "$capture_fixture_build_number" "$capture_fixture_app/Contents/Info.plist"
+/usr/bin/plutil -insert FleckBuildFlavor -string parakeet "$capture_fixture_app/Contents/Info.plist"
 session_output="$(
   FLECK_CAPTURE_LAB_SKIP_BUILD=1 \
-    Scripts/fleck-capture-lab.sh prepare
+    Scripts/fleck-capture-lab.sh prepare --fleck-app "$capture_fixture_app"
 )"
 readonly session_output
 manifest="$(printf '%s\n' "$session_output" | sed -n 's/^Manifest: //p')"
@@ -539,6 +610,7 @@ initialize_fixture_repository "$quoted_checkout"
 /bin/chmod 700 "$quoted_checkout/.build"
 /bin/cp Scripts/fleck-capture-lab.sh "$quoted_checkout/Scripts/fleck-capture-lab.sh"
 /bin/chmod 755 "$quoted_checkout/Scripts/fleck-capture-lab.sh"
+/bin/mkdir -p "$quoted_checkout/.build/parakeet-test/Fleck.app/Contents"
 quoted_session="$quoted_checkout/.build/f.QUOTE1"
 readonly quoted_session
 quoted_fleck_root="$quoted_session/Library/Application Support/Fleck"

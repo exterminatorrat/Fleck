@@ -1,7 +1,7 @@
 # Fleck version and build identity
 
 `VERSION` is the single product-version authority. It uses SemVer and currently identifies
-the beta product as `1.0.0-beta.1`. `CHANGELOG.md` records factual product changes under a
+the beta product as `1.0.1-beta.1`. `CHANGELOG.md` records factual product changes under a
 matching version heading.
 
 ## Product-version decisions
@@ -39,6 +39,27 @@ Packaged bundles carry the full product version, decimal build number, encoded b
 UUID, UTC build time, complete source commit and tree, flavor, configuration, candidate
 status, and accepted-baseline record/hash/status. Corrected repacks allocate a new outer UUID
 and also retain the input app UUID and complete input-tree manifest hash.
+
+The one artifact-label formatter is `Scripts/fleck-build-identity.py name --capture`; it emits
+`Fleck <productVersion> Build <buildNumber>` from the already captured identity. Packagers use
+that value for `CFBundleName`, `CFBundleDisplayName`, `FleckBuildLabel`, and every newly
+published app or corrected-handoff name. They never reread `VERSION` or predict an allocator
+value after capture.
+
+All three packagers accept optional `--result-file ABSOLUTE_PATH`. The result destination must
+not exist and must be below the canonical worktree `.build` directory through existing,
+non-symlink parents. Only after publication and final bundle verification, the packager creates
+the result atomically without replacement as an object containing exactly the absolute
+`appPath` and captured `buildID`. A failed invocation leaves no success result. Consumers pin
+that per-invocation path; they do not select a newest artifact or rely on the preserved legacy
+unversioned outputs.
+
+Versioned publications are immutable. Development and Parakeet builds publish one app at
+`.build/<label>.app` and `.build/parakeet-test/<label>.app`. Corrected packaging consumes only
+its nested Parakeet result and publishes `.build/<label>/`, containing `<label>.app`,
+`Launch <label>.command`, provenance files, and `<label>-arm64.zip`; extracting the ZIP yields
+one top-level `<label>` directory. A collision aborts without replacing, deleting, renaming, or
+aliasing any prior versioned or legacy artifact.
 
 ## Canonical accepted baseline
 

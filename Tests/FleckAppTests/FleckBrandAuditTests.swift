@@ -188,7 +188,10 @@ func fleckMarkRetainsPackagedImageAfterBackingFileDisappears() throws {
 
   #expect(documentation.allSatisfy { $0.contains("Agent Connector") })
   #expect(testing.contains("Scripts/build-fleck-app.sh"))
-  #expect(testing.contains("/usr/bin/open -n .build/Fleck.app"))
+  #expect(testing.contains("--result-file"))
+  #expect(testing.contains("fleck-build-identity.py read-result"))
+  #expect(testing.contains("mktemp -d"))
+  #expect(!testing.contains("development.json"))
   #expect(!testing.contains("swift run Fleck"))
   #expect(!testing.contains("Product → Run"))
   #expect(
@@ -222,6 +225,11 @@ func fleckMarkRetainsPackagedImageAfterBackingFileDisappears() throws {
   #expect(validationScript.contains("signature uses a build-specific code hash"))
   #expect(validationScript.contains("Contents/Resources/fleck-mark.png"))
   #expect(validationScript.contains("LSUIElement"))
+  #expect(validationScript.contains("fleck-build-identity.py"))
+  #expect(validationScript.contains("read-result"))
+  #expect(buildScript.contains("remove-owned-result"))
+  #expect(buildScript.contains("published_device"))
+  #expect(buildScript.contains("published_inode"))
 }
 
 @Test func packagedDevelopmentAccessIsEnabledOnlyByTheDevelopmentBuildScript() throws {

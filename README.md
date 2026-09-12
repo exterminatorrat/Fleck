@@ -145,9 +145,18 @@ resource, signing, and distribution gates.
 Build and launch the packaged app when testing native macOS behavior:
 
 ```sh
-Scripts/build-fleck-app.sh
-/usr/bin/open -n .build/Fleck.app
+mkdir -p .build &&
+RESULT_DIR="$(mktemp -d "$PWD/.build/development-result.XXXXXX")" &&
+RESULT_FILE="$RESULT_DIR/build-result.json" &&
+Scripts/build-fleck-app.sh --result-file "$RESULT_FILE" &&
+FLECK_APP="$(Scripts/fleck-build-identity.py read-result --repo "$PWD" --result-file "$RESULT_FILE" --flavor development)" &&
+/usr/bin/open -n "$FLECK_APP"
 ```
+
+Every packaging invocation allocates an immutable `Fleck <version> Build <number>`
+artifact name. A requested result file is created only after the new app has been
+published and verified; existing versioned and legacy unversioned outputs are never
+replaced.
 
 `swift run Fleck` launches a bare executable without the app-bundle privacy
 identity. It is not valid evidence for interactive dictation, Input Monitoring,

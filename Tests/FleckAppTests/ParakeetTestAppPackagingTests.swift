@@ -33,6 +33,7 @@ private struct FakeFixture {
 private struct RunningPackager {
   let process: Process
   let standardError: Pipe
+  let resultFile: URL
 }
 
 private enum FixtureError: Error {
@@ -96,7 +97,7 @@ private func makeFakeFixture(
     throw FixtureError.missingRepositoryRoot
   }
 
-  let root = fileManager.temporaryDirectory
+  let root = fileManager.temporaryDirectory.resolvingSymlinksInPath()
     .appendingPathComponent("fleck-parakeet-packaging-\(UUID().uuidString)", isDirectory: true)
   let scripts = root.appendingPathComponent("Scripts", isDirectory: true)
   let sources = root.appendingPathComponent("Sources/FleckApp/Resources", isDirectory: true)
@@ -759,6 +760,7 @@ private func environment(
   gemmaBuildFails: Bool = false,
   gemmaBuildMutatesLock: Bool = false,
   escapingRpathSurvives: Bool = false,
+  failAfterResult: Bool = false,
   reportedSDKVersion: String? = nil
 ) -> [String: String] {
   var environment = ProcessInfo.processInfo.environment
@@ -798,6 +800,7 @@ private func environment(
   environment["FAKE_REPORTED_SDK_VERSION"] = reportedSDKVersion ?? ""
   environment["FAKE_UNSAFE_STAGING"] = unsafeStaging ? "1" : "0"
   environment["FAKE_UNSAFE_STAGING_PATH"] = fixture.unsafeStaging.path
+  environment["FLECK_PARAKEET_TEST_FAIL_AFTER_RESULT"] = failAfterResult ? "1" : ""
   environment["FLECK_BUILD_IDENTITY_TEST_ACCEPTED_ROOT"] = fixture.acceptedRoot.path
   environment["FLECK_BUILD_IDENTITY_TEST_DATABASE"] = fixture.identityDatabase.path
   environment["FLECK_BUILD_IDENTITY_TEST_FIXTURE"] = "1"
@@ -811,15 +814,21 @@ private func launchPackager(
   gemmaBuildFails: Bool = false,
   gemmaBuildMutatesLock: Bool = false,
   escapingRpathSurvives: Bool = false,
+  failAfterResult: Bool = false,
   reportedSDKVersion: String? = nil,
   useHostBash: Bool = false
 ) throws -> RunningPackager {
   let standardError = Pipe()
+  let canonicalBuild = try runFixtureCommand("/bin/pwd", ["-P"], currentDirectory: fixture.build)
+  let resultFile = URL(fileURLWithPath: canonicalBuild, isDirectory: true)
+    .appendingPathComponent("result-\(runID).json")
   let process = Process()
   process.executableURL = useHostBash
     ? URL(fileURLWithPath: "/bin/bash")
     : fixture.appScript
-  process.arguments = useHostBash ? [fixture.appScript.path] : []
+  process.arguments = useHostBash
+    ? [fixture.appScript.path, "--result-file", resultFile.path]
+    : ["--result-file", resultFile.path]
   process.currentDirectoryURL = fixture.root
   process.environment = environment(
     for: fixture,
@@ -828,12 +837,30 @@ private func launchPackager(
     gemmaBuildFails: gemmaBuildFails,
     gemmaBuildMutatesLock: gemmaBuildMutatesLock,
     escapingRpathSurvives: escapingRpathSurvives,
+    failAfterResult: failAfterResult,
     reportedSDKVersion: reportedSDKVersion
   )
   process.standardOutput = FileHandle.nullDevice
   process.standardError = standardError
   try process.run()
-  return RunningPackager(process: process, standardError: standardError)
+  return RunningPackager(process: process, standardError: standardError, resultFile: resultFile)
+}
+
+private func publishedApp(from running: RunningPackager) throws -> URL {
+  let object = try #require(
+    JSONSerialization.jsonObject(with: Data(contentsOf: running.resultFile)) as? [String: String]
+  )
+  #expect(Set(object.keys) == ["appPath", "buildID"])
+  let path = try #require(object["appPath"])
+  #expect(UUID(uuidString: try #require(object["buildID"])) != nil)
+  return URL(fileURLWithPath: path, isDirectory: true)
+}
+
+private func versionedApps(in fixture: FakeFixture) throws -> [URL] {
+  let root = fixture.build.appendingPathComponent("parakeet-test", isDirectory: true)
+  guard fileManager.fileExists(atPath: root.path) else { return [] }
+  return try fileManager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+    .filter { $0.lastPathComponent.hasPrefix("Fleck ") && $0.pathExtension == "app" }
 }
 
 private func waitForPath(_ url: URL, timeout: TimeInterval = 5) -> Bool {
@@ -937,13 +964,10 @@ func parakeetPackagerLinksAndValidatesActiveSDKVersion() throws {
   let standardError = output(from: running.standardError)
 
   #expect(running.process.terminationStatus == 0, Comment(rawValue: standardError))
-  #expect(
-    fileManager.fileExists(
-      atPath: fixture.build.appendingPathComponent("parakeet-test/Fleck.app").path
-    )
-  )
-  let bundledRuntime = fixture.build.appendingPathComponent(
-    "parakeet-test/Fleck.app/Contents/Frameworks/libswiftCompatibilitySpan.dylib"
+  let app = try publishedApp(from: running)
+  #expect(fileManager.fileExists(atPath: app.path))
+  let bundledRuntime = app.appendingPathComponent(
+    "Contents/Frameworks/libswiftCompatibilitySpan.dylib"
   )
   #expect(try Data(contentsOf: bundledRuntime) == Data(contentsOf: fixture.swiftRuntimeSource))
   let toolEvents = try String(contentsOf: fixture.helperToolLog, encoding: .utf8)
@@ -971,7 +995,7 @@ func parakeetPackagerAllowsNoPortableSwiftRuntimeWithHostBash() throws {
   let standardError = output(from: running.standardError)
 
   #expect(running.process.terminationStatus == 0, Comment(rawValue: standardError))
-  let packagedApp = fixture.build.appendingPathComponent("parakeet-test/Fleck.app")
+  let packagedApp = try publishedApp(from: running)
   #expect(fileManager.fileExists(atPath: packagedApp.path))
   #expect(!fileManager.fileExists(
     atPath: packagedApp.appendingPathComponent("Contents/Frameworks").path
@@ -998,9 +1022,8 @@ func parakeetPackagerRejectsMissingOrUnsafeRequiredSwiftRuntime(_ runtimeMode: S
   } else {
     #expect(error.contains("required Swift runtime source is missing or unsafe"))
   }
-  #expect(!fileManager.fileExists(
-    atPath: fixture.build.appendingPathComponent("parakeet-test/Fleck.app").path
-  ))
+  #expect(!fileManager.fileExists(atPath: running.resultFile.path))
+  #expect(try versionedApps(in: fixture).isEmpty)
   #expect(!fileManager.fileExists(atPath: fixture.codesignLog.path))
   #expect(try Data(contentsOf: fixture.root.appendingPathComponent("Package.resolved"))
     == Data(contentsOf: fixture.originalLock))
@@ -1030,9 +1053,8 @@ func parakeetPackagerRejectsUnsupportedRuntimeDependenciesAndRollsBack(
     #expect(error.contains("unpermitted dynamic dependency"))
     #expect(error.contains("@rpath/libUnapproved.dylib"))
   }
-  #expect(!fileManager.fileExists(
-    atPath: fixture.build.appendingPathComponent("parakeet-test/Fleck.app").path
-  ))
+  #expect(!fileManager.fileExists(atPath: running.resultFile.path))
+  #expect(try versionedApps(in: fixture).isEmpty)
   #expect(!fileManager.fileExists(atPath: fixture.codesignLog.path))
   #expect(try Data(contentsOf: fixture.root.appendingPathComponent("Package.resolved"))
     == Data(contentsOf: fixture.originalLock))
@@ -1056,11 +1078,8 @@ func parakeetPackagerRejectsExecutableLinkedAgainstDifferentSDKVersion() throws 
 
   #expect(running.process.terminationStatus != 0)
   #expect(standardError.contains("SDK stamp does not match active SDK: 14.0 (expected 26.5)"))
-  #expect(
-    !fileManager.fileExists(
-      atPath: fixture.build.appendingPathComponent("parakeet-test/Fleck.app").path
-    )
-  )
+  #expect(!fileManager.fileExists(atPath: running.resultFile.path))
+  #expect(try versionedApps(in: fixture).isEmpty)
 }
 
 @Test
@@ -1073,8 +1092,8 @@ func parakeetPackagerPlacesMLXResourceBundleBesideStandaloneGemmaHelper() throws
   waitForExit(running)
 
   #expect(running.process.terminationStatus == 0)
-  let sharedSupport = fixture.build.appendingPathComponent(
-    "parakeet-test/Fleck.app/Contents/SharedSupport",
+  let sharedSupport = try publishedApp(from: running).appendingPathComponent(
+    "Contents/SharedSupport",
     isDirectory: true
   )
   let helper = sharedSupport.appendingPathComponent("gemma-cleanup-helper")
@@ -1153,7 +1172,7 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
   #expect(gemmaBuildLines[11].hasSuffix("/Products/gemma-cleanup-helper"))
   #expect(gemmaBuildLines[12].hasSuffix("/Products/mlx-swift_Cmlx.bundle"))
 
-  let app = fixture.build.appendingPathComponent("parakeet-test/Fleck.app")
+  let app = try publishedApp(from: try #require(first))
   let executableContents = try String(
     contentsOf: app.appendingPathComponent("Contents/MacOS/Fleck"),
     encoding: .utf8
@@ -1236,6 +1255,77 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
 }
 
 @Test
+func parakeetPackagerPublishesRepeatedVersionBuildsWithoutReplacingLegacyOrPriorApps() throws {
+  let fixture = try makeFakeFixture()
+  defer { try? fileManager.removeItem(at: fixture.root) }
+  try fileManager.removeItem(at: fixture.holdFile)
+  let legacy = fixture.build.appendingPathComponent("parakeet-test/Fleck.app", isDirectory: true)
+  try fileManager.createDirectory(at: legacy, withIntermediateDirectories: true)
+  let sentinel = legacy.appendingPathComponent("sentinel")
+  try Data("legacy\n".utf8).write(to: sentinel)
+
+  let first = try launchPackager(fixture: fixture, runID: "repeat-first")
+  waitForExit(first)
+  #expect(first.process.terminationStatus == 0, Comment(rawValue: output(from: first.standardError)))
+  let firstApp = try publishedApp(from: first)
+  let firstBytes = try Data(contentsOf: firstApp.appendingPathComponent("Contents/MacOS/Fleck"))
+
+  let second = try launchPackager(fixture: fixture, runID: "repeat-second")
+  waitForExit(second)
+  #expect(second.process.terminationStatus == 0, Comment(rawValue: output(from: second.standardError)))
+  let secondApp = try publishedApp(from: second)
+
+  #expect(firstApp != secondApp)
+  #expect(try versionedApps(in: fixture).count == 2)
+  #expect(try Data(contentsOf: firstApp.appendingPathComponent("Contents/MacOS/Fleck")) == firstBytes)
+  #expect(try String(contentsOf: sentinel, encoding: .utf8) == "legacy\n")
+  #expect(try Data(contentsOf: first.resultFile) != Data(contentsOf: second.resultFile))
+}
+
+@Test
+func parakeetPackagerFailureAfterResultRemovesOnlyItsPublishedAppAndResult() throws {
+  let fixture = try makeFakeFixture()
+  defer { try? fileManager.removeItem(at: fixture.root) }
+  try fileManager.removeItem(at: fixture.holdFile)
+
+  let running = try launchPackager(
+    fixture: fixture,
+    runID: "post-result-failure",
+    failAfterResult: true
+  )
+  waitForExit(running)
+  let error = output(from: running.standardError)
+
+  #expect(running.process.terminationStatus != 0)
+  #expect(error.contains("injected failure after result publication"))
+  #expect(!fileManager.fileExists(atPath: running.resultFile.path))
+  #expect(try versionedApps(in: fixture).isEmpty)
+}
+
+@Test
+func parakeetPackagerAllocatorResetCollisionPreservesExistingAppAndWritesNoResult() throws {
+  let fixture = try makeFakeFixture()
+  defer { try? fileManager.removeItem(at: fixture.root) }
+  try fileManager.removeItem(at: fixture.holdFile)
+
+  let first = try launchPackager(fixture: fixture, runID: "collision-first")
+  waitForExit(first)
+  #expect(first.process.terminationStatus == 0, Comment(rawValue: output(from: first.standardError)))
+  let firstApp = try publishedApp(from: first)
+  let before = try Data(contentsOf: firstApp.appendingPathComponent("Contents/MacOS/Fleck"))
+  try fileManager.removeItem(at: fixture.identityDatabase)
+
+  let collision = try launchPackager(fixture: fixture, runID: "collision-second")
+  waitForExit(collision)
+  let error = output(from: collision.standardError)
+  #expect(collision.process.terminationStatus != 0)
+  #expect(error.contains("refusing to overwrite existing test app"), Comment(rawValue: error))
+  #expect(!fileManager.fileExists(atPath: collision.resultFile.path))
+  #expect(try versionedApps(in: fixture) == [firstApp])
+  #expect(try Data(contentsOf: firstApp.appendingPathComponent("Contents/MacOS/Fleck")) == before)
+}
+
+@Test
 func parakeetPackagerRejectsEscapingRpathThatSurvivesStripping() throws {
   let fixture = try makeFakeFixture()
   defer { try? fileManager.removeItem(at: fixture.root) }
@@ -1252,9 +1342,8 @@ func parakeetPackagerRejectsEscapingRpathThatSurvivesStripping() throws {
   #expect(running.process.terminationStatus != 0)
   #expect(error.contains("unpermitted LC_RPATH"))
   #expect(error.contains("@executable_path/../lib"))
-  #expect(!fileManager.fileExists(
-    atPath: fixture.build.appendingPathComponent("parakeet-test/Fleck.app").path
-  ))
+  #expect(!fileManager.fileExists(atPath: running.resultFile.path))
+  #expect(try versionedApps(in: fixture).isEmpty)
   #expect(!fileManager.fileExists(atPath: fixture.codesignLog.path))
 }
 
@@ -1274,7 +1363,8 @@ func parakeetPackagerCleansHelperBuildAfterFailure() throws {
   #expect(!running.process.isRunning)
   #expect(running.process.terminationStatus != 0)
   #expect(fileManager.fileExists(atPath: fixture.xcodeBuildEntered.path))
-  #expect(!fileManager.fileExists(atPath: fixture.build.appendingPathComponent("parakeet-test/Fleck.app").path))
+  #expect(!fileManager.fileExists(atPath: running.resultFile.path))
+  #expect(try versionedApps(in: fixture).isEmpty)
   #expect(!fileManager.fileExists(atPath: fixture.build.appendingPathComponent(".parakeet-test.lock").path))
   #expect(!fileManager.fileExists(atPath: fixture.codesignLog.path))
   #expect((try? fileManager.contentsOfDirectory(atPath: fixture.temporaryDirectory.path))?.isEmpty == true)
@@ -1322,9 +1412,8 @@ func parakeetPackagerRejectsIncompleteOrAmbiguousGemmaRuntime(_ resourceMode: St
   default:
     Issue.record("Unexpected Gemma resource fixture mode")
   }
-  #expect(!fileManager.fileExists(
-    atPath: fixture.build.appendingPathComponent("parakeet-test/Fleck.app").path
-  ))
+  #expect(!fileManager.fileExists(atPath: running.resultFile.path))
+  #expect(try versionedApps(in: fixture).isEmpty)
   #expect(try Data(contentsOf: fixture.gemmaPackage.appendingPathComponent("Package.resolved"))
     == Data(contentsOf: fixture.originalGemmaLock))
   #expect(try Data(contentsOf: fixture.root.appendingPathComponent("Package.resolved"))
@@ -1393,7 +1482,8 @@ func parakeetPackagerRefusesUnsafeTempSubstitution() throws {
   #expect(running.process.terminationStatus != 0)
   #expect(error.contains("refusing cleanup"))
   #expect(fileManager.fileExists(atPath: fixture.unsafeStaging.path))
-  #expect(!fileManager.fileExists(atPath: fixture.build.appendingPathComponent("parakeet-test/Fleck.app").path))
+  #expect(!fileManager.fileExists(atPath: running.resultFile.path))
+  #expect(try versionedApps(in: fixture).isEmpty)
   #expect(!fileManager.fileExists(atPath: fixture.build.appendingPathComponent("Fleck_FleckApp.bundle").path))
   #expect(!fileManager.fileExists(atPath: fixture.build.appendingPathComponent(".parakeet-test.lock").path))
   let restoredLock = try Data(contentsOf: fixture.root.appendingPathComponent("Package.resolved"))
