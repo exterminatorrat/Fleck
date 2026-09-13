@@ -3,6 +3,20 @@
 All notable Fleck product changes are recorded here. Packaging a new build without changing
 the product does not add a changelog entry.
 
+## [1.0.3-beta.1] - 2026-09-13
+
+### Added
+
+- Added a persisted setting to hide routine agent update banners while keeping Agent Activity
+  available for review.
+
+### Changed
+
+- Integrated the dictation capsule presentation from source commit
+  `72f81e561cc75c5a19fbad69c7546d97686fcda1`: active dictation uses a single 36-point row,
+  the 13-bar waveform uses the reviewed spacing, and settled results and choosers retain their
+  centered, content-aware placement.
+
 ## [1.0.2-beta.1] - 2026-09-12
 
 ### Fixed

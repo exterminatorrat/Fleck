@@ -76,6 +76,23 @@
         setupInstructions
         DisclosureGroup("Activity") {
           VStack(alignment: .leading, spacing: 8) {
+            SettingsPreferenceRow(
+              "Show agent update banners",
+              detail: "Show banners for future agent changes. Turning this on does not replay earlier changes; Agent Activity remains available."
+            ) {
+              Toggle(
+                isOn: Binding(
+                  get: { appState.preferences.showAgentUpdateBanners },
+                  set: { enabled in
+                    appState.updatePreferences { $0.showAgentUpdateBanners = enabled }
+                  }
+                )
+              ) { EmptyView() }
+              .labelsHidden()
+              .toggleStyle(.switch)
+              .controlSize(.small)
+              .accessibilityLabel("Show agent update banners")
+            }
             Text("Review changes made by authorized local integrations.")
               .font(.caption)
               .foregroundStyle(.secondary)

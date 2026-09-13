@@ -18,11 +18,11 @@ import Testing
   )
 
   #expect(DictationWaveformModel.barCount == 13)
-  #expect(DictationWaveformModel.barWidth == 1.5)
-  #expect(DictationWaveformModel.barGap == 1.5)
+  #expect(DictationWaveformModel.barWidth == 2)
+  #expect(DictationWaveformModel.barGap == 1)
   #expect(
     CGFloat(DictationWaveformModel.barCount) * DictationWaveformModel.barWidth
-      + CGFloat(DictationWaveformModel.barCount - 1) * DictationWaveformModel.barGap == 37.5
+      + CGFloat(DictationWaveformModel.barCount - 1) * DictationWaveformModel.barGap == 38
   )
   #expect(DictationWaveformModel.minimumHeight == 3)
   #expect(DictationWaveformModel.maximumHeight == 20)

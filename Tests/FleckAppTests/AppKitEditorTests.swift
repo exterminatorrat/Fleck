@@ -1828,6 +1828,57 @@ private func rtfRoundTrip(_ textView: NSTextView) -> ListAwareTextView {
   }
 }
 
+@MainActor
+private final class UndoRoutingResponder: NSView {
+  let routedUndoManager = UndoManager()
+  private(set) var value = 0
+
+  override var acceptsFirstResponder: Bool { true }
+  override var undoManager: UndoManager? { routedUndoManager }
+
+  func setValue(_ value: Int) {
+    let previous = self.value
+    routedUndoManager.registerUndo(withTarget: self) { target in
+      target.setValue(previous)
+    }
+    self.value = value
+  }
+}
+
+@Test @MainActor func editorCommandsUndoAndRedoFollowTheFocusedResponder() throws {
+  let window = NSWindow(
+    contentRect: .init(x: 0, y: 0, width: 320, height: 240),
+    styleMask: [.titled], backing: .buffered, defer: false
+  )
+  let content = NSView(frame: window.contentView?.bounds ?? .zero)
+  let body = NSTextView(frame: NSRect(x: 0, y: 0, width: 160, height: 120))
+  let focused = UndoRoutingResponder(frame: NSRect(x: 160, y: 0, width: 160, height: 120))
+  content.addSubview(body)
+  content.addSubview(focused)
+  window.contentView = content
+  body.allowsUndo = true
+
+  let commands = EditorCommands()
+  commands.textView = body
+  var bodyUndoCount = 0
+  let bodyUndoManager = try #require(body.undoManager)
+  bodyUndoManager.registerUndo(withTarget: body) { _ in bodyUndoCount += 1 }
+  focused.setValue(1)
+
+  #expect(window.makeFirstResponder(focused))
+  commands.undo()
+  #expect(focused.value == 0)
+  #expect(bodyUndoCount == 0)
+  commands.redo()
+  #expect(focused.value == 1)
+  #expect(bodyUndoCount == 0)
+
+  #expect(window.makeFirstResponder(body))
+  commands.undo()
+  #expect(bodyUndoCount == 1)
+  #expect(focused.value == 1)
+}
+
 @Test @MainActor func editorCommandsReportsMixedForegroundAndBackgroundColors() {
   let textView = NSTextView()
   textView.string = "AB"

@@ -165,6 +165,7 @@
     init(
       status: DictationCapsuleStatus,
       action: DictationCapsuleAction? = nil,
+      chooser: DictationCapsuleChooser? = nil,
       context: DictationCapsuleContext? = nil
     ) {
       let context = context ?? DictationCapsuleContext(status: status)
@@ -205,11 +206,16 @@
         symbolName = "exclamationmark.circle"
       }
 
-      let widthCeiling = Self.widthCeiling(for: status)
+      let widthCeiling = Self.widthCeiling(
+        for: status,
+        action: action,
+        chooser: chooser
+      )
       let measuredWidth = Self.measuredWidth(
         for: copy,
         status: status,
         action: action,
+        chooser: chooser,
         ceiling: widthCeiling
       )
       self.visibleText = copy.visible
@@ -224,6 +230,16 @@
 
     static func widthCeiling(for status: DictationCapsuleStatus) -> CGFloat {
       DictationCapsuleController.size(for: status).width
+    }
+
+    private static func widthCeiling(
+      for status: DictationCapsuleStatus,
+      action: DictationCapsuleAction?,
+      chooser: DictationCapsuleChooser?
+    ) -> CGFloat {
+      let base = widthCeiling(for: status)
+      guard let chooser, chooser.displaysMenu else { return base }
+      return base + chooserWidth(for: chooser) + (action == nil ? 15 : 7)
     }
 
     static func tailTruncated(_ text: String, maxCharacters: Int) -> String {
@@ -289,6 +305,7 @@
       for copy: (visible: String?, voiceOver: String),
       status: DictationCapsuleStatus,
       action: DictationCapsuleAction?,
+      chooser: DictationCapsuleChooser?,
       ceiling: CGFloat
     ) -> CGFloat {
       guard let visible = copy.visible else { return ceiling }
@@ -296,14 +313,22 @@
       let glyphWidth: CGFloat = status == .finalizing || status == .cleaning
         || status == .routing || status == .saving ? 0 : 14
       let actionWidth = action.map(Self.actionWidth(for:)) ?? 0
-      let dividerWidth: CGFloat = action == nil ? 0 : actionDividerSize.width + 14
+      let chooserWidth = chooser.flatMap { $0.displaysMenu ? Self.chooserWidth(for: $0) : nil } ?? 0
+      let controlSpacing: CGFloat = actionWidth > 0 && chooserWidth > 0 ? 7 : 0
+      let dividerWidth: CGFloat = actionWidth == 0 && chooserWidth == 0
+        ? 0
+        : actionDividerSize.width + 14
       let estimate = 16 + markWidth + 7 + glyphWidth + (glyphWidth > 0 ? 7 : 0)
-        + CGFloat(visible.count) * 7 + dividerWidth + actionWidth
+        + CGFloat(visible.count) * 7 + dividerWidth + actionWidth + controlSpacing + chooserWidth
       return min(ceiling, max(ceil(estimate), 1))
     }
 
     static func actionWidth(for action: DictationCapsuleAction) -> CGFloat {
       max(CGFloat(action.buttonTitle.count) * 7 + 4, 28)
+    }
+
+    static func chooserWidth(for chooser: DictationCapsuleChooser) -> CGFloat {
+      CGFloat(chooser.menuTitle.count) * 7 + 9
     }
   }
 
@@ -616,7 +641,7 @@
       }
       let intrinsicWidth = visible.map(\.width).reduce(0, +)
         + spacing * CGFloat(max(visible.count - 1, 0))
-      let width = proposal.width.flatMap { $0.isFinite ? max($0, intrinsicWidth) : nil }
+      let width = proposal.width.flatMap { $0.isFinite ? max($0, 0) : nil }
         ?? intrinsicWidth
       return CGSize(width: width, height: maxHeight)
     }
@@ -632,10 +657,19 @@
         sizes[$0].width > 0 && sizes[$0].height > 0
       }
       let orderedIndices = Array(visibleIndices)
+      var proposedSizes = sizes
+      if orderedIndices.count == 2 {
+        let fixedIndex = orderedIndices[0]
+        let flexibleIndex = orderedIndices[1]
+        proposedSizes[flexibleIndex].width = max(
+          bounds.width - proposedSizes[fixedIndex].width - spacing,
+          0
+        )
+      }
       var cursor = isReversed ? bounds.maxX : bounds.minX
 
       for index in orderedIndices {
-        let size = sizes[index]
+        let size = proposedSizes[index]
         let x = isReversed ? cursor - size.width : cursor
         subviews[index].place(
           at: CGPoint(x: x, y: bounds.midY - size.height / 2),
@@ -661,11 +695,11 @@
       guard let maxHeight = visible.map(\.height).max() else {
         return .zero
       }
-      return CGSize(
-        width: visible.map(\.width).reduce(0, +)
-          + spacing * CGFloat(max(visible.count - 1, 0)),
-        height: maxHeight
-      )
+      let intrinsicWidth = visible.map(\.width).reduce(0, +)
+        + spacing * CGFloat(max(visible.count - 1, 0))
+      let width = proposal.width.flatMap { $0.isFinite ? max($0, 0) : nil }
+        ?? intrinsicWidth
+      return CGSize(width: width, height: maxHeight)
     }
 
     func placeSubviews(
@@ -684,9 +718,21 @@
         }
         return index
       }
+      var proposedSizes = sizes
+      if let statusIndex = elements.firstIndex(of: .statusText),
+        orderedIndices.contains(statusIndex)
+      {
+        let fixedWidth = orderedIndices.filter { $0 != statusIndex }
+          .map { proposedSizes[$0].width }
+          .reduce(0, +)
+        proposedSizes[statusIndex].width = max(
+          bounds.width - fixedWidth - spacing * CGFloat(max(orderedIndices.count - 1, 0)),
+          0
+        )
+      }
       var cursor = bounds.minX
       for index in orderedIndices {
-        let size = sizes[index]
+        let size = proposedSizes[index]
         subviews[index].place(
           at: CGPoint(x: cursor, y: bounds.midY - size.height / 2),
           proposal: ProposedViewSize(size)
@@ -947,10 +993,16 @@
     let keepInboxTitle = "Keep in Inbox"
     let keepInboxAccessibilityLabel = "Keep dictation in Inbox"
 
+    var displaysMenu: Bool {
+      !choices.isEmpty || allowsKeepInInbox
+    }
+
+    var menuTitle: String {
+      choices.isEmpty ? keepInboxTitle : "Choose note"
+    }
+
     var menuAccessibilityLabel: String {
-      choices.isEmpty && allowsKeepInInbox
-        ? keepInboxTitle
-        : "Choose note"
+      menuTitle
     }
 
     var menuAccessibilityHint: String {
@@ -1727,7 +1779,8 @@
 
     nonisolated static func size(
       for status: DictationCapsuleStatus,
-      measuredWidth: CGFloat? = nil
+      measuredWidth: CGFloat? = nil,
+      widthCeiling: CGFloat? = nil
     ) -> CGSize {
       let ceiling: CGSize
       switch status {
@@ -1755,7 +1808,7 @@
       case .saved, .savedWithoutCleanup, .routingFailure, .failed, .noSpeech:
         guard let measuredWidth else { return ceiling }
         return CGSize(
-          width: min(max(measuredWidth, 0), ceiling.width),
+          width: min(max(measuredWidth, 0), widthCeiling ?? ceiling.width),
           height: ceiling.height
         )
       default:
@@ -1889,12 +1942,16 @@
       let presentation = DictationCapsulePresentation(
         status: currentContext.status,
         action: presentationModel.action,
+        chooser: currentChooser,
         context: currentContext
       )
       let finalFrame = Self.frame(
         for: currentDock,
-        status: currentContext.status,
-        measuredWidth: presentation.measuredWidth,
+        size: Self.size(
+          for: currentContext.status,
+          measuredWidth: presentation.measuredWidth,
+          widthCeiling: presentation.widthCeiling
+        ),
         in: screen.visibleFrame
       )
       let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -2006,6 +2063,7 @@
       DictationCapsulePresentation(
         status: model.context.status,
         action: model.action,
+        chooser: model.chooser,
         context: model.context
       )
     }
@@ -2129,7 +2187,7 @@
       case .listening:
         listeningContent
       case .finalizing, .cleaning, .routing, .saving:
-        processingContent
+        processingCore
       default:
         FleckRailLayout(
           order: FleckRailContentOrder.markAndContent(for: model.dock),
@@ -2193,19 +2251,6 @@
     }
 
     @ViewBuilder
-    private var processingContent: some View {
-      if let detail = presentation.secondaryVisibleText {
-        VStack(spacing: 0) {
-          capturedContextText(detail, lineLimit: 1)
-          processingCore
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-      } else {
-        processingCore
-      }
-    }
-
-    @ViewBuilder
     private var processingCore: some View {
       if model.showsProcessingLabel {
         HStack(spacing: 7) {
@@ -2256,70 +2301,27 @@
           by: DictationWaveformRefreshSchedule.interval(reduceMotion: reduceMotion)
         )
       ) { context in
-        listeningLayout(at: context.date)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityLabel("Dictation listening")
+        listeningCore(at: context.date)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .accessibilityLabel("Dictation listening")
       }
     }
 
-    @ViewBuilder
-    private func listeningLayout(at date: Date) -> some View {
-      if let detail = presentation.secondaryVisibleText {
-        HStack(spacing: 4) {
+    private func listeningCore(at date: Date) -> some View {
+      ZStack {
+        waveform(at: date)
+        HStack {
           if model.dock == .right {
             listeningActionZone(at: date)
-            capturedListeningContext(detail, at: date)
+            Spacer(minLength: 0)
             identityMark
           } else {
             identityMark
-            capturedListeningContext(detail, at: date)
+            Spacer(minLength: 0)
             listeningActionZone(at: date)
           }
         }
-      } else {
-        ZStack {
-          waveform(at: date)
-          HStack {
-            if model.dock == .right {
-              listeningActionZone(at: date)
-              Spacer(minLength: 0)
-              identityMark
-            } else {
-              identityMark
-              Spacer(minLength: 0)
-              listeningActionZone(at: date)
-            }
-          }
-        }
       }
-    }
-
-    private func capturedListeningContext(_ detail: String, at date: Date) -> some View {
-      VStack(spacing: 0) {
-        capturedContextText(
-          detail,
-          lineLimit: 1
-        )
-        .frame(height: 16)
-        waveform(at: date)
-          .frame(height: 20)
-      }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func capturedContextText(
-      _ detail: String,
-      lineLimit: Int,
-      fontSize: CGFloat = 8.5
-    ) -> some View {
-      Text(detail)
-        .font(.system(size: fontSize, weight: .medium, design: .default))
-        .lineLimit(lineLimit)
-        .multilineTextAlignment(.center)
-        .truncationMode(.tail)
-        .foregroundStyle(model.colors.secondaryTextColor)
-        .background(FleckRailFrameProbe(identifier: "fleck-rail-context"))
-        .accessibilityHidden(true)
     }
 
     private func listeningActionZone(at date: Date) -> some View {
@@ -2484,6 +2486,7 @@
         .lineLimit(1)
         .truncationMode(.tail)
         .foregroundStyle(model.colors.primaryTextColor)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(FleckRailFrameProbe(identifier: "fleck-terminal-text"))
       }
     }
@@ -2528,10 +2531,8 @@
 
     @ViewBuilder
     private var chooserMenu: some View {
-      if let chooser = model.chooser,
-        !chooser.choices.isEmpty || chooser.allowsKeepInInbox
-      {
-        Menu(chooser.choices.isEmpty ? "Keep in Inbox" : "Choose note") {
+      if let chooser = model.chooser, chooser.displaysMenu {
+        Menu(chooser.menuTitle) {
           ForEach(chooser.choices) { choice in
             Button(choice.menuTitle) {
               model.choiceHandler(chooser.captureID, choice.id)
@@ -2550,6 +2551,7 @@
         }
         .menuStyle(.borderlessButton)
         .font(.system(size: 11, weight: .semibold))
+        .background(FleckRailFrameProbe(identifier: "fleck-rail-chooser"))
         .accessibilityLabel(chooser.menuAccessibilityLabel)
         .accessibilityHint(chooser.menuAccessibilityHint)
       }
@@ -2625,6 +2627,7 @@
         model: model,
         inputRouter: inputRouter
       )
+      self.hostingView.sizingOptions = []
       super.init(frame: .zero)
       hostingView.translatesAutoresizingMaskIntoConstraints = false
       addSubview(hostingView)
