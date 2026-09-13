@@ -5,20 +5,24 @@ readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
 readonly build_root="$repo_root/.build"
 readonly input_builder="$script_dir/build-parakeet-test-app.sh"
-readonly input_app="$build_root/parakeet-test/Fleck.app"
-readonly output_root="$build_root/pre-astra-corrected"
-readonly legacy_zip="$build_root/Fleck-Pre-Astra-Corrected-Build-arm64.zip"
-readonly lock_path="$build_root/.pre-astra-corrected.lock"
-readonly handoff_name='Fleck Pre-Astra Corrected Build'
-readonly app_name="$handoff_name.app"
-readonly launcher_name="Launch $handoff_name.command"
+readonly identity_tool="$script_dir/fleck-build-identity.py"
+readonly identity_mode="${FLECK_BUILD_IDENTITY_MODE:-local}"
+readonly lock_path="$build_root/.corrected-packaging.lock"
 readonly receipt_name='BUILD-PROVENANCE.txt'
 readonly input_manifest_name='INPUT-APP-MANIFEST.sha256.tsv'
-readonly zip_name='Fleck-Pre-Astra-Corrected-Build-arm64.zip'
 readonly expected_bundle_identifier='com.harryjin.fleck'
 readonly expected_executable='Fleck'
 readonly expected_requirement='designated => identifier "com.harryjin.fleck"'
-readonly build_label='Pre-Astra Corrected Build'
+readonly identity_capture="$build_root/.corrected-build-identity.$$.json"
+
+result_file=''
+if [[ $# -gt 0 ]]; then
+  if [[ $# -ne 2 || "$1" != '--result-file' || -z "$2" ]]; then
+    printf 'usage: %s [--result-file ABSOLUTE_PATH]\n' "${0##*/}" >&2
+    exit 2
+  fi
+  result_file="$2"
+fi
 
 die() {
   printf 'error: %s\n' "$1" >&2
@@ -26,12 +30,12 @@ die() {
 }
 
 if [[ "$(uname -s)" != 'Darwin' ]]; then
-  die 'pre-Astra packaging requires macOS'
+  die 'corrected packaging requires macOS'
 fi
 if [[ "$(uname -m)" != 'arm64' ]]; then
-  die 'pre-Astra packaging requires an arm64 host'
+  die 'corrected packaging requires an arm64 host'
 fi
-for tool in git plutil codesign lipo ditto unzip shasum find mktemp awk cmp grep sed sort stat; do
+for tool in git plutil codesign lipo ditto unzip shasum find mktemp awk cmp grep sed sort stat swift; do
   tool_path="$(command -v "$tool" || true)"
   [[ -n "$tool_path" && -x "$tool_path" ]] || die "required tool is unavailable: $tool"
 done
@@ -46,12 +50,19 @@ fi
   || die "build root is not a canonical directory: $build_root"
 [[ "$(cd -- "$build_root" && pwd -P)" == "$build_root" ]] \
   || die "build root is not canonical: $build_root"
+if [[ -n "$result_file" ]]; then
+  "$identity_tool" validate-result-path --repo "$repo_root" --result-file "$result_file"
+fi
 [[ ! -L "$input_builder" && -f "$input_builder" && -x "$input_builder" ]] \
   || die "input builder is missing or unsafe: $input_builder"
+[[ ! -L "$identity_tool" && -f "$identity_tool" && -x "$identity_tool" ]] \
+  || die "build identity tool is missing or unsafe: $identity_tool"
 [[ "$(/usr/bin/git -C "$repo_root" rev-parse --show-toplevel 2>/dev/null)" == "$repo_root" ]] \
   || die 'script is not running from its owning Git worktree'
 /usr/bin/git -C "$repo_root" ls-files --error-unmatch -- 'Scripts/build-parakeet-test-app.sh' \
   >/dev/null 2>&1 || die 'input builder is not tracked by this worktree'
+/usr/bin/git -C "$repo_root" ls-files --error-unmatch -- 'Scripts/fleck-build-identity.py' \
+  >/dev/null 2>&1 || die 'build identity tool is not tracked by this worktree'
 readonly source_commit="$(/usr/bin/git -C "$repo_root" rev-parse --verify 'HEAD^{commit}' 2>/dev/null)"
 readonly source_tree="$(/usr/bin/git -C "$repo_root" rev-parse --verify 'HEAD^{tree}' 2>/dev/null)"
 [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || die 'could not resolve a full source commit'
@@ -167,71 +178,30 @@ require_fixture_failpoint() {
 lock_directory_created=0
 lock_owner_temp=''
 operation_root=''
-previous_input=''
-input_transaction_started=0
-input_committed=0
-publication_backup=''
-legacy_zip_backup=''
-publication_swap_started=0
 publication_committed=0
+publication_created=0
+published_device=''
+published_inode=''
+result_identity=''
 staged_publication=''
+output_root=''
 cleanup() {
   local exit_code=$?
   trap - EXIT HUP INT TERM
 
-  if (( publication_committed == 0 )); then
-    if (( publication_swap_started != 0 )) && [[ -n "$staged_publication" \
-      && ! -e "$staged_publication" && ( -e "$output_root" || -L "$output_root" ) ]]; then
-      if [[ ! -L "$output_root" && -d "$output_root" \
-        && "$(cd -- "$output_root" && pwd -P)" == "$output_root" ]]; then
-        /usr/bin/find "$output_root" -depth -delete || exit_code=1
-      else
-        printf 'error: refusing to remove an unsafe failed publication: %s\n' "$output_root" >&2
-        exit_code=1
-      fi
-    fi
-    if [[ -n "$publication_backup" && ! -L "$publication_backup" \
-      && -d "$publication_backup" ]]; then
-      if [[ ! -e "$output_root" && ! -L "$output_root" ]]; then
-        /bin/mv "$publication_backup" "$output_root" || exit_code=1
-      else
-        printf 'error: could not restore prior publication because its path is occupied: %s\n' \
-          "$output_root" >&2
-        exit_code=1
-      fi
-    fi
-    if [[ -n "$legacy_zip_backup" && ! -L "$legacy_zip_backup" \
-      && -f "$legacy_zip_backup" ]]; then
-      if [[ ! -e "$legacy_zip" && ! -L "$legacy_zip" ]]; then
-        /bin/mv "$legacy_zip_backup" "$legacy_zip" || exit_code=1
-      else
-        printf 'error: could not restore prior legacy ZIP because its path is occupied: %s\n' \
-          "$legacy_zip" >&2
-        exit_code=1
-      fi
-    fi
-  fi
-  if (( input_committed == 0 )) && { (( input_transaction_started != 0 )) \
-    || [[ -n "$previous_input" && -d "$previous_input" ]]; }; then
-    if [[ -L "$input_app" || -f "$input_app" ]]; then
-      /usr/bin/find "$input_app" -maxdepth 0 \( -type f -o -type l \) -delete || exit_code=1
-    elif [[ -d "$input_app" ]]; then
-      /usr/bin/find "$input_app" -depth -delete || exit_code=1
-    elif [[ -e "$input_app" ]]; then
-      printf 'error: refusing to remove an unsupported failed input path: %s\n' "$input_app" >&2
-      exit_code=1
-    fi
-    if [[ -n "$previous_input" && ! -L "$previous_input" && -d "$previous_input" ]]; then
-      /bin/mkdir -p "$(dirname -- "$input_app")"
-      /bin/mv "$previous_input" "$input_app" || exit_code=1
-    fi
+  if (( publication_created != 0 && publication_committed == 0 )) \
+    && [[ -n "$output_root" && ! -L "$output_root" && -d "$output_root" \
+      && "$output_root" == "$build_root"/Fleck\ *\ Build\ * \
+      && "$(/usr/bin/stat -f '%d' "$output_root" 2>/dev/null || true)" == "$published_device" \
+      && "$(/usr/bin/stat -f '%i' "$output_root" 2>/dev/null || true)" == "$published_inode" ]]; then
+    /usr/bin/find "$output_root" -depth -delete || exit_code=1
   fi
   if [[ -n "$operation_root" && ! -L "$operation_root" && -d "$operation_root" \
-    && "$operation_root" == "$build_root"/.pre-astra-corrected-operation.* ]]; then
+    && "$operation_root" == "$build_root"/.corrected-packaging-operation.* ]]; then
     /usr/bin/find "$operation_root" -depth -delete || exit_code=1
   fi
   if [[ -n "$lock_owner_temp" && ! -L "$lock_owner_temp" && -f "$lock_owner_temp" \
-    && "$lock_owner_temp" == "$build_root"/.pre-astra-corrected-lock-owner.* ]]; then
+    && "$lock_owner_temp" == "$build_root"/.corrected-packaging-lock-owner.* ]]; then
     /usr/bin/find "$lock_owner_temp" -maxdepth 0 -type f -delete || exit_code=1
   fi
   if (( lock_directory_created != 0 )); then
@@ -249,81 +219,163 @@ cleanup() {
       exit_code=1
     fi
   fi
+  if [[ -f "$identity_capture" && ! -L "$identity_capture" ]]; then
+    "$identity_tool" release --capture "$identity_capture" || exit_code=1
+    /usr/bin/find "$identity_capture" -maxdepth 0 -type f -delete || exit_code=1
+  fi
+  if (( exit_code != 0 )) && [[ -n "$result_identity" ]]; then
+    "$identity_tool" remove-owned-result \
+      --repo "$repo_root" \
+      --result-file "$result_file" \
+      --identity "$result_identity" || exit_code=1
+  fi
   exit "$exit_code"
 }
 trap cleanup EXIT HUP INT TERM
 
-lock_owner_temp="$(/usr/bin/mktemp "$build_root/.pre-astra-corrected-lock-owner.XXXXXX")"
+lock_owner_temp="$(/usr/bin/mktemp "$build_root/.corrected-packaging-lock-owner.XXXXXX")"
 if [[ -n "${FLECK_PRE_ASTRA_TEST_FAIL_LOCK_OWNER_WRITE:-}" ]]; then
   require_fixture_failpoint "$FLECK_PRE_ASTRA_TEST_FAIL_LOCK_OWNER_WRITE" 'lock-owner'
   die 'injected lock-owner creation failure'
 fi
 printf '%s\n' "$source_commit:$$" > "$lock_owner_temp" \
-  || die 'could not create pre-Astra lock owner'
+  || die 'could not create corrected-packaging lock owner'
 if ! /bin/mkdir "$lock_path" 2>/dev/null; then
-  die "another pre-Astra build/package operation holds the lock: $lock_path"
+  die "another corrected build/package operation holds the lock: $lock_path"
 fi
 lock_directory_created=1
-/bin/mv "$lock_owner_temp" "$lock_path/owner" || die 'could not install pre-Astra lock owner'
+/bin/mv "$lock_owner_temp" "$lock_path/owner" || die 'could not install corrected-packaging lock owner'
 lock_owner_temp=''
-operation_root="$(/usr/bin/mktemp -d "$build_root/.pre-astra-corrected-operation.XXXXXX")"
+operation_root="$(/usr/bin/mktemp -d "$build_root/.corrected-packaging-operation.XXXXXX")"
 
-if [[ -e "$input_app" || -L "$input_app" ]]; then
-  [[ ! -L "$input_app" && -d "$input_app" ]] || die "existing input app is unsafe: $input_app"
-  [[ "$(cd -- "$input_app" && pwd -P)" == "$input_app" ]] || die "existing input app is not canonical: $input_app"
-  previous_input="$operation_root/previous-input.app"
-  /bin/mv "$input_app" "$previous_input"
+identity_test_arguments=()
+if [[ -n "${FLECK_BUILD_IDENTITY_TEST_ACCEPTED_ROOT:-}" \
+  || -n "${FLECK_BUILD_IDENTITY_TEST_DATABASE:-}" ]]; then
+  if [[ -z "${FLECK_BUILD_IDENTITY_TEST_ACCEPTED_ROOT:-}" \
+    || -z "${FLECK_BUILD_IDENTITY_TEST_DATABASE:-}" ]]; then
+    die 'build identity test root and database must be supplied together'
+  fi
+  if [[ "$(/bin/cat "$repo_root/.fleck-build-identity-test-fixture" 2>/dev/null || true)" \
+    != 'fleck-build-identity-test-fixture-v1' ]]; then
+    die 'build identity test injection is unavailable outside an explicit fixture'
+  fi
+  identity_test_arguments+=(
+    --test-accepted-root "$FLECK_BUILD_IDENTITY_TEST_ACCEPTED_ROOT"
+    --test-database "$FLECK_BUILD_IDENTITY_TEST_DATABASE"
+  )
+fi
+"$identity_tool" begin \
+  --repo "$repo_root" \
+  --flavor corrected \
+  --configuration Debug \
+  --mode "$identity_mode" \
+  --capture "$identity_capture" \
+  "${identity_test_arguments[@]+"${identity_test_arguments[@]}"}"
+readonly nested_identity_token="$(
+  "$identity_tool" field --capture "$identity_capture" guardToken
+)"
+readonly handoff_name="$("$identity_tool" name --capture "$identity_capture")"
+readonly app_name="$handoff_name.app"
+readonly launcher_name="Launch $handoff_name.command"
+readonly zip_name="$handoff_name-arm64.zip"
+readonly build_label="$handoff_name"
+output_root="$build_root/$handoff_name"
+readonly output_root
+if [[ -e "$output_root" || -L "$output_root" ]]; then
+  die "refusing to overwrite existing corrected publication: $output_root"
 fi
 
-input_transaction_started=1
-if ! "$input_builder"; then
+readonly input_result="$operation_root/parakeet-result.json"
+if ! /usr/bin/env FLECK_BUILD_IDENTITY_NESTED_TOKEN="$nested_identity_token" \
+  "$input_builder" --result-file "$input_result"; then
   die 'fresh input build failed'
 fi
 verify_clean_source
+[[ ! -L "$input_result" && -f "$input_result" ]] \
+  || die 'fresh input build succeeded without an immutable result'
+if ! /usr/bin/python3 - "$input_result" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        value = json.load(handle)
+except (OSError, UnicodeError, json.JSONDecodeError):
+    sys.exit(1)
+if set(value) != {"appPath", "buildID"} \
+        or not all(isinstance(value[key], str) and value[key] for key in value):
+    sys.exit(1)
+PY
+then
+  die 'fresh input build result is malformed or has unexpected fields'
+fi
+readonly input_app="$(/usr/bin/plutil -extract appPath raw -o - "$input_result")"
+readonly result_input_build_id="$(/usr/bin/plutil -extract buildID raw -o - "$input_result")"
 [[ ! -L "$input_app" && -d "$input_app" ]] || die 'fresh build did not produce the input app'
 [[ "$(cd -- "$input_app" && pwd -P)" == "$input_app" ]] || die 'fresh input app is not canonical'
+input_app_label="${input_app##*/}"
+input_app_label="${input_app_label%.app}"
+[[ "${input_app%/*}" == "$build_root/parakeet-test" \
+  && "${input_app##*/}" =~ ^Fleck\ ([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?)\ Build\ ([1-9][0-9]*)\.app$ ]] \
+  || die 'fresh input result names an app outside the Parakeet publication root'
+readonly input_product_version="${BASH_REMATCH[1]}"
+readonly input_build_number="${BASH_REMATCH[4]}"
 verify_app "$input_app" ''
+[[ "$(plist_value "$input_app" CFBundleName)" == "$input_app_label" \
+  && "$(plist_value "$input_app" CFBundleDisplayName)" == "$input_app_label" \
+  && "$(plist_value "$input_app" FleckBuildLabel)" == "$input_app_label" \
+  && "$(plist_value "$input_app" FleckVersion)" == "$input_product_version" \
+  && "$(plist_value "$input_app" FleckBuildNumber)" == "$input_build_number" \
+  && "$(plist_value "$input_app" FleckBuildFlavor)" == 'parakeet' ]] \
+  || die 'fresh input app name and Parakeet identity metadata do not agree'
+"$identity_tool" verify --source-only \
+  --capture "$identity_capture" \
+  --plist "$input_app/Contents/Info.plist"
+readonly input_build_id="$(plist_value "$input_app" FleckBuildID)"
+[[ "$result_input_build_id" == "$input_build_id" ]] \
+  || die 'fresh input result build ID does not match the input app plist'
 
 readonly input_manifest="$operation_root/input-app.manifest"
 readonly input_manifest_after="$operation_root/input-app-after.manifest"
 write_tree_manifest "$input_app" "$input_manifest"
 readonly input_manifest_hash="$(/usr/bin/shasum -a 256 "$input_manifest" | /usr/bin/awk '{print $1}')"
+"$identity_tool" augment \
+  --capture "$identity_capture" \
+  --input-build-id "$input_build_id" \
+  --input-manifest-sha256 "$input_manifest_hash"
 
-staged_publication="$operation_root/publication"
-readonly staged_handoff="$staged_publication/$handoff_name"
+staged_publication="$operation_root/$handoff_name"
+readonly staged_handoff="$staged_publication"
 readonly staged_app="$staged_handoff/$app_name"
 readonly staged_launcher="$staged_handoff/$launcher_name"
 readonly staged_receipt="$staged_handoff/$receipt_name"
 readonly staged_input_manifest="$staged_handoff/$input_manifest_name"
-readonly staged_zip="$staged_publication/$zip_name"
+readonly staged_zip="$operation_root/$zip_name"
 /bin/mkdir -p "$staged_handoff"
 /bin/cp -p "$input_manifest" "$staged_input_manifest"
 /bin/chmod 644 "$staged_input_manifest"
 /usr/bin/ditto --norsrc "$input_app" "$staged_app"
 
 readonly staged_plist="$staged_app/Contents/Info.plist"
-/usr/bin/plutil -replace CFBundleDisplayName -string "$handoff_name" "$staged_plist"
-/usr/bin/plutil -replace CFBundleName -string "$handoff_name" "$staged_plist"
-for key in FleckBuildLabel FleckSourceCommit FleckSourceTree FleckInputManifestSHA256; do
+for key in FleckBuildLabel FleckInputBuildID FleckInputManifestSHA256; do
   /usr/bin/plutil -remove "$key" "$staged_plist" >/dev/null 2>&1 || true
 done
-/usr/bin/plutil -insert FleckBuildLabel -string "$build_label" "$staged_plist"
-/usr/bin/plutil -insert FleckSourceCommit -string "$source_commit" "$staged_plist"
-/usr/bin/plutil -insert FleckSourceTree -string "$source_tree" "$staged_plist"
-/usr/bin/plutil -insert FleckInputManifestSHA256 -string "$input_manifest_hash" "$staged_plist"
+"$identity_tool" stamp \
+  --capture "$identity_capture" \
+  --plist "$staged_plist"
 
 {
   printf 'Build label: %s\n' "$build_label"
-  printf 'Source commit: %s\n' "$source_commit"
-  printf 'Source tree: %s\n' "$source_tree"
-  printf 'Input app manifest SHA-256: %s\n' "$input_manifest_hash"
+  "$identity_tool" info \
+    --capture "$identity_capture" \
+    --bundle-identifier "$expected_bundle_identifier"
 } > "$staged_receipt"
 /bin/chmod 644 "$staged_receipt"
 /bin/cat > "$staged_launcher" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 readonly script_dir="$(cd -- "$(dirname -- "$0")" && pwd -P)"
-readonly app_path="$script_dir/Fleck Pre-Astra Corrected Build.app"
+readonly app_path="$script_dir/__FLECK_VERSIONED_APP__.app"
 if [[ -L "$app_path" || ! -d "$app_path" ]]; then
   printf 'error: adjacent Fleck app is missing or unsafe: %s\n' "$app_path" >&2
   exit 1
@@ -363,7 +415,7 @@ cleanup_launcher() {
   exit "$exit_code"
 }
 trap cleanup_launcher EXIT HUP INT TERM
-if ! inventory_file="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/fleck-pre-astra-launch.XXXXXX")"; then
+if ! inventory_file="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/fleck-corrected-launch.XXXXXX")"; then
   printf '%s\n' 'error: could not create secure Fleck process inventory' >&2
   exit 1
 fi
@@ -422,12 +474,16 @@ remove_inventory
 trap - EXIT HUP INT TERM
 exec /usr/bin/open "$app_path"
 EOF
+/usr/bin/sed -i '' "s/__FLECK_VERSIONED_APP__/$handoff_name/g" "$staged_launcher"
 /bin/chmod 755 "$staged_launcher"
 
 /usr/bin/codesign --force --sign - \
   --preserve-metadata=identifier,entitlements,requirements,flags,runtime \
   "$staged_app"
 verify_app "$staged_app" "$source_commit"
+"$identity_tool" verify \
+  --capture "$identity_capture" \
+  --plist "$staged_app/Contents/Info.plist"
 [[ "$(plist_value "$staged_app" FleckInputManifestSHA256)" == "$input_manifest_hash" ]] \
   || die 'staged app has unexpected FleckInputManifestSHA256'
 /usr/bin/cmp -s "$input_manifest" "$staged_input_manifest" \
@@ -451,6 +507,9 @@ readonly verification_root="$operation_root/verification"
 readonly extracted_handoff="$verification_root/$handoff_name"
 readonly extracted_app="$extracted_handoff/$app_name"
 verify_app "$extracted_app" "$source_commit"
+"$identity_tool" verify \
+  --capture "$identity_capture" \
+  --plist "$extracted_app/Contents/Info.plist"
 /usr/bin/cmp -s "$input_manifest" "$extracted_handoff/$input_manifest_name" \
   || die 'extracted input manifest differs from the manifest used for provenance'
 write_tree_manifest "$extracted_handoff" "$extracted_handoff_manifest"
@@ -460,52 +519,60 @@ write_tree_manifest "$extracted_handoff" "$extracted_handoff_manifest"
 write_tree_manifest "$input_app" "$input_manifest_after"
 /usr/bin/cmp -s "$input_manifest" "$input_manifest_after" \
   || die 'complete input app changed during packaging'
+/bin/mv "$staged_zip" "$staged_handoff/$zip_name" \
+  || die 'could not place the verified ZIP in the staged handoff'
 readonly staged_publication_manifest="$operation_root/staged-publication.manifest"
 readonly published_publication_manifest="$operation_root/published-publication.manifest"
 write_tree_manifest "$staged_publication" "$staged_publication_manifest"
 verify_clean_source
+"$identity_tool" finish \
+  --capture "$identity_capture" \
+  --plist "$staged_app/Contents/Info.plist"
 if [[ -n "${FLECK_PRE_ASTRA_TEST_FAIL_AFTER_FINAL_SOURCE_CHECK:-}" ]]; then
   require_fixture_failpoint "$FLECK_PRE_ASTRA_TEST_FAIL_AFTER_FINAL_SOURCE_CHECK" \
     'final-source'
   die 'injected failure after final source check'
 fi
 
-if [[ -L "$output_root" || ( -e "$output_root" && ! -d "$output_root" ) ]]; then
-  die "publication root is unsafe: $output_root"
-fi
-if [[ -d "$output_root" && "$(cd -- "$output_root" && pwd -P)" != "$output_root" ]]; then
-  die "publication root is not canonical: $output_root"
-fi
-if [[ -L "$legacy_zip" || ( -e "$legacy_zip" && ! -f "$legacy_zip" ) ]]; then
-  die "legacy ZIP path is unsafe: $legacy_zip"
-fi
-if [[ -f "$legacy_zip" ]]; then
-  legacy_zip_backup="$operation_root/previous-legacy.zip"
-  /bin/mv "$legacy_zip" "$legacy_zip_backup"
-fi
-if [[ -d "$output_root" ]]; then
-  publication_backup="$operation_root/previous-publication"
-  /bin/mv "$output_root" "$publication_backup"
+if [[ -e "$output_root" || -L "$output_root" ]]; then
+  die "corrected publication destination must remain unused: $output_root"
 fi
 if [[ -n "${FLECK_PRE_ASTRA_TEST_FAIL_PUBLICATION_AFTER_BACKUP:-}" ]]; then
   require_fixture_failpoint "$FLECK_PRE_ASTRA_TEST_FAIL_PUBLICATION_AFTER_BACKUP" \
     'publication'
   die 'injected publication failure after publication backup'
 fi
-publication_swap_started=1
-if ! /bin/mv "$staged_publication" "$output_root"; then
+if [[ -n "${FLECK_PRE_ASTRA_TEST_LATE_PUBLICATION_COLLISION:-}" ]]; then
+  require_fixture_failpoint "$FLECK_PRE_ASTRA_TEST_LATE_PUBLICATION_COLLISION" \
+    'late-publication-collision'
+  /bin/mkdir "$output_root" || die 'could not create late publication collision fixture'
+  printf '%s\n' 'late collision sentinel' > "$output_root/sentinel"
+fi
+published_device="$(/usr/bin/stat -f '%d' "$staged_publication")"
+published_inode="$(/usr/bin/stat -f '%i' "$staged_publication")"
+if ! /usr/bin/swift -e '
+  import Darwin
+
+  guard renamex_np(CommandLine.arguments[1], CommandLine.arguments[2], UInt32(RENAME_EXCL)) == 0 else {
+    exit(1)
+  }
+' "$staged_publication" "$output_root"; then
   die 'could not atomically install the verified publication'
 fi
+publication_created=1
 if [[ -n "${FLECK_PRE_ASTRA_TEST_FAIL_AFTER_PUBLICATION_SWAP:-}" ]]; then
   require_fixture_failpoint "$FLECK_PRE_ASTRA_TEST_FAIL_AFTER_PUBLICATION_SWAP" \
     'publication-swap'
   die 'injected failure after publication swap'
 fi
 
-readonly published_app="$output_root/$handoff_name/$app_name"
-readonly published_launcher="$output_root/$handoff_name/$launcher_name"
+readonly published_app="$output_root/$app_name"
+readonly published_launcher="$output_root/$launcher_name"
 readonly published_zip="$output_root/$zip_name"
 verify_app "$published_app" "$source_commit"
+"$identity_tool" verify \
+  --capture "$identity_capture" \
+  --plist "$published_app/Contents/Info.plist"
 write_tree_manifest "$output_root" "$published_publication_manifest"
 /usr/bin/cmp -s "$staged_publication_manifest" "$published_publication_manifest" \
   || die 'complete published handoff differs from the verified staged publication'
@@ -515,13 +582,26 @@ if [[ -n "${FLECK_PRE_ASTRA_TEST_FAIL_AFTER_LEGACY_ZIP_BACKUP:-}" ]]; then
   die 'injected failure after legacy ZIP backup'
 fi
 
+if [[ -n "$result_file" ]]; then
+  result_identity="$("$identity_tool" write-result \
+    --capture "$identity_capture" \
+    --app "$published_app" \
+    --result-file "$result_file")"
+fi
+if [[ -n "${FLECK_PRE_ASTRA_TEST_FAIL_AFTER_RESULT:-}" ]]; then
+  require_fixture_failpoint "$FLECK_PRE_ASTRA_TEST_FAIL_AFTER_RESULT" 'post-result'
+  die 'injected failure after result publication'
+fi
+
 printf 'Packaged app: %s\n' "$published_app"
 printf 'Packaged launcher: %s\n' "$published_launcher"
 printf 'Packaged ZIP: %s\n' "$published_zip"
 printf 'Source commit: %s\n' "$source_commit"
 printf 'Source tree: %s\n' "$source_tree"
 printf 'Input app manifest SHA-256: %s\n' "$input_manifest_hash"
+printf 'Input build ID: %s\n' "$input_build_id"
+printf 'Build ID: %s\n' "$(plist_value "$published_app" FleckBuildID)"
 printf 'App executable SHA-256: %s\n' \
   "$(/usr/bin/shasum -a 256 "$published_app/Contents/MacOS/Fleck" | /usr/bin/awk '{print $1}')"
 printf 'ZIP SHA-256: %s\n' "$(/usr/bin/shasum -a 256 "$published_zip" | /usr/bin/awk '{print $1}')"
-input_committed=1 publication_committed=1
+publication_committed=1

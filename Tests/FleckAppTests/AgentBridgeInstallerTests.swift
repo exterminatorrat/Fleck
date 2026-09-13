@@ -17,9 +17,12 @@ struct AgentBridgeInstallerTests {
     )
     #expect(
       error.recoverySuggestion?.contains(
-        "/usr/bin/open -n .build/Fleck.app"
+        "fleck-build-identity.py read-result"
       ) == true
     )
+    #expect(error.recoverySuggestion?.contains("--result-file") == true)
+    #expect(error.recoverySuggestion?.contains("mktemp -d") == true)
+    #expect(error.recoverySuggestion?.contains("development.json") == false)
     for forbidden in [
       "FleckApp.",
       "FleckCore.",

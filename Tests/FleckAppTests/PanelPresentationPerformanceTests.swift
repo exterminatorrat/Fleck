@@ -1063,10 +1063,25 @@ collectSamples(process, item, 1, function() { return state.now; }, function(mill
     let packagedPath = repositoryRoot()
       .appendingPathComponent(".build/Fleck.app/Contents/MacOS/Fleck")
       .path
+    let versionedPath = repositoryRoot()
+      .appendingPathComponent(
+        ".build/Fleck 1.0.1-beta.1 Build 417.app/Contents/MacOS/Fleck"
+      )
+      .path
 
     #expect(try runShell(command, arguments: [packagedPath]).status == 0)
+    #expect(try runShell(command, arguments: [versionedPath]).status == 0)
     #expect(try runShell(command, arguments: ["/tmp/Fleck"]).status != 0)
     #expect(try runShell(command, arguments: ["/tmp/Other.app/Contents/MacOS/Other"]).status != 0)
+    for nearMatch in [
+      "/tmp/Fleck 1.0.1-beta.1 Build 0.app/Contents/MacOS/Fleck",
+      "/tmp/Fleck 1.0.1-beta.1 Build 417-copy.app/Contents/MacOS/Fleck",
+      "/tmp/Fleck 1.0 Build 417.app/Contents/MacOS/Fleck",
+      "/tmp/Fleck 1.0.1-beta.1 Build 417.app/Contents/MacOS/Other",
+      "/tmp/Fleck 1.0.1-beta.1 Build 417.app/Fleck",
+    ] {
+      #expect(try runShell(command, arguments: [nearMatch]).status != 0)
+    }
   }
 
   @Test func FleckPanelMeasurementRejectsFleckApplicationSupportIdentityAliasesBeforePIDWork() throws {

@@ -201,7 +201,11 @@ func fleckMarkRetainsPackagedImageAfterBackingFileDisappears() throws {
 
   #expect(documentation.allSatisfy { $0.contains("Agent Connector") })
   #expect(testing.contains("Scripts/build-fleck-app.sh"))
-  #expect(testing.contains("/usr/bin/open -n .build/Fleck.app"))
+  #expect(testing.contains("--result-file"))
+  #expect(testing.contains("fleck-build-identity.py read-result"))
+  #expect(testing.contains("mktemp -d"))
+  #expect(!testing.contains("development.json"))
+  #expect(testing.contains("/usr/bin/open -n \"$FLECK_APP\""))
   #expect(testing.contains("`swift run Fleck` is not a substitute."))
   #expect(testing.components(separatedBy: "swift run Fleck").count - 1 == 1)
   #expect(

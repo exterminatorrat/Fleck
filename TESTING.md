@@ -27,6 +27,8 @@ Run from the repository root with the Enhanced candidate unset:
 
 ```sh
 unset FLECK_ENHANCED_CANDIDATE
+python3 -B -m unittest discover -s Tests/Scripts -p test_build_identity.py
+python3 -B Scripts/fleck-build-identity.py check
 Scripts/run-nonempty-swift-tests.sh '^.+$'
 ```
 
@@ -55,22 +57,40 @@ resolution stays disabled so a check does not rewrite the reviewed lockfile.
 
 ## Packaged native app
 
-Build without launching:
+Maintainer handoff packaging requires a clean committed source tree and the
+project's private accepted-build registry. Build without launching:
 
 ```sh
 unset FLECK_ENHANCED_CANDIDATE
-Scripts/build-fleck-app.sh
+mkdir -p .build
+RESULT_DIR="$(mktemp -d "$PWD/.build/development-result.XXXXXX")"
+RESULT_FILE="$RESULT_DIR/build-result.json"
+Scripts/build-fleck-app.sh --result-file "$RESULT_FILE"
+FLECK_APP="$(Scripts/fleck-build-identity.py read-result \
+  --repo "$PWD" \
+  --result-file "$RESULT_FILE" \
+  --flavor development)"
 ```
 
 Only launch when the test plan calls for interactive native evidence:
 
 ```sh
-/usr/bin/open -n .build/Fleck.app
+/usr/bin/open -n "$FLECK_APP"
 ```
 
 `swift run Fleck` is not a substitute. A bare executable lacks the packaged app's
 privacy identity and embedded Agent Connector, so it cannot prove permission,
 dictation, signing, launch-at-login, or bundle behavior.
+
+Each packager accepts an optional `--result-file ABSOLUTE_PATH` below the
+owning worktree's canonical `.build` directory. On success it records only the
+exact `appPath` and `buildID`; consumers must not scan for or infer the newest
+artifact. Development and Parakeet apps, corrected-build folders, launchers,
+and ZIPs use the captured `Fleck <version> Build <number>` name and never replace
+an earlier versioned or legacy output.
+Hosted CI sets the explicit `ci-unverified` mode for non-handoff packaging.
+Contributors without the private registry use their issue or pull-request base
+and that hosted mode rather than weakening local handoff verification.
 
 ## Safe native test environment
 

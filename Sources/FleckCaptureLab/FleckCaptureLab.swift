@@ -16,16 +16,21 @@ enum FleckCaptureLab {
   }
 
   static func run(arguments: [String], now: Date = Date()) async throws -> String {
-    guard arguments.count == 3 else { throw WebsiteDemoError.invalidArguments }
+    guard arguments.count >= 3 else { throw WebsiteDemoError.invalidArguments }
     let path = arguments[2]
     guard NSString(string: path).isAbsolutePath else {
       throw WebsiteDemoError.sessionRootMustBeAbsolute
     }
 
     switch (arguments[0], arguments[1]) {
-    case ("prepare", "--session-root"):
+    case ("prepare", "--session-root") where arguments.count == 5 && arguments[3] == "--fleck-app":
+      let fleckAppPath = arguments[4]
+      guard NSString(string: fleckAppPath).isAbsolutePath else {
+        throw WebsiteDemoError.invalidManifest
+      }
       let manifest = try await WebsiteDemoSession.prepare(
         at: URL(fileURLWithPath: path, isDirectory: true),
+        fleckApp: URL(fileURLWithPath: fleckAppPath, isDirectory: true),
         now: now
       )
       return """
@@ -35,12 +40,12 @@ enum FleckCaptureLab {
       Fake repository: \(manifest.fakeRepository.path)
 
       """
-    case ("verify", "--manifest"):
+    case ("verify", "--manifest") where arguments.count == 3:
       let state = try await WebsiteDemoSession.verify(
         manifestAt: URL(fileURLWithPath: path)
       )
       return "Task state: \(state.rawValue)\n"
-    case ("postflight", "--manifest"):
+    case ("postflight", "--manifest") where arguments.count == 3:
       let state = try await WebsiteDemoSession.postflight(
         manifestAt: URL(fileURLWithPath: path)
       )
@@ -65,7 +70,7 @@ extension WebsiteDemoError: LocalizedError {
   var errorDescription: String? {
     switch self {
     case .invalidArguments:
-      "Use prepare --session-root <absolute-path>, verify --manifest <absolute-path>, or postflight --manifest <absolute-path>."
+      "Use prepare --session-root <absolute-path> --fleck-app <absolute-versioned-app>, verify --manifest <absolute-path>, or postflight --manifest <absolute-path>."
     case .sessionRootMustBeAbsolute:
       "The capture-lab path must be absolute."
     case .unsafeSessionRoot:
@@ -231,7 +236,11 @@ enum WebsiteDemoFixture {
 }
 
 enum WebsiteDemoSession {
-  static func prepare(at root: URL, now: Date = Date()) async throws -> WebsiteDemoManifest {
+  static func prepare(
+    at root: URL,
+    fleckApp: URL,
+    now: Date = Date()
+  ) async throws -> WebsiteDemoManifest {
     let fileManager = FileManager.default
     let sessionRoot = try safeSessionRoot(root)
     try fileManager.createDirectory(at: sessionRoot, withIntermediateDirectories: true)
@@ -239,11 +248,14 @@ enum WebsiteDemoSession {
     let fleckRoot = sessionRoot
       .appendingPathComponent("Library/Application Support/Fleck", isDirectory: true)
     let fakeRepository = sessionRoot.appendingPathComponent("NorthstarDemo", isDirectory: true)
+    guard isSupportedFleckApp(fleckApp, allowLegacy: false) else {
+      throw WebsiteDemoError.invalidManifest
+    }
     let manifest = WebsiteDemoManifest(
       sessionRoot: sessionRoot,
       fleckRoot: fleckRoot,
       fakeRepository: fakeRepository,
-      fleckApp: canonicalFleckApp,
+      fleckApp: fleckApp,
       projectNames: WebsiteDemoFixture.projectNames,
       captureCommands: WebsiteDemoFixture.captureCommands
     )
@@ -313,7 +325,7 @@ enum WebsiteDemoSession {
       manifestURL == manifest.manifestURL.standardizedFileURL.resolvingSymlinksInPath(),
       manifest.fleckRoot.standardizedFileURL == expectedFleckRoot.standardizedFileURL,
       manifest.fakeRepository.standardizedFileURL == expectedRepository.standardizedFileURL,
-      manifest.fleckApp.standardizedFileURL == canonicalFleckApp.standardizedFileURL,
+      isSupportedFleckApp(manifest.fleckApp, allowLegacy: true),
       manifest.projectNames == WebsiteDemoFixture.projectNames,
       manifest.captureCommands == WebsiteDemoFixture.captureCommands
     else {
@@ -357,8 +369,25 @@ enum WebsiteDemoSession {
     .deletingLastPathComponent()
     .deletingLastPathComponent()
 
-  private static let canonicalFleckApp = packageRoot
+  private static let legacyFleckApp = packageRoot
     .appendingPathComponent(".build/parakeet-test/Fleck.app", isDirectory: true)
+
+  private static func isSupportedFleckApp(_ app: URL, allowLegacy: Bool) -> Bool {
+    guard app.isFileURL, app.path.hasPrefix("/"), app.standardizedFileURL == app else {
+      return false
+    }
+    if allowLegacy, app == legacyFleckApp {
+      return true
+    }
+    let parent = packageRoot.appendingPathComponent(".build/parakeet-test", isDirectory: true)
+    guard app.deletingLastPathComponent() == parent else {
+      return false
+    }
+    return app.lastPathComponent.range(
+      of: #"^Fleck [0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)? Build [1-9][0-9]*\.app$"#,
+      options: .regularExpression
+    ) != nil
+  }
 
   private static let requiredRepositoryFiles = [
     "AGENTS.md",

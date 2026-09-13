@@ -23,6 +23,17 @@ private struct TemporaryDirectory {
   }
 }
 
+private func versionedFleckApp() -> URL {
+  URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .appendingPathComponent(
+      ".build/parakeet-test/Fleck 1.0.1-beta.1 Build 417.app",
+      isDirectory: true
+    )
+}
+
 private enum TestCommandError: Error {
   case failed(Int32, String)
 }
@@ -266,7 +277,7 @@ private func completeWorkflow(
   let session = try TemporaryDirectory()
   let now = Date(timeIntervalSince1970: 1_725_000_000)
 
-  let manifest = try await WebsiteDemoSession.prepare(at: session.url, now: now)
+  let manifest = try await WebsiteDemoSession.prepare(at: session.url, fleckApp: versionedFleckApp(), now: now)
   let snapshot = try await LocalStore(rootURL: manifest.fleckRoot).loadSnapshot()
 
   #expect(snapshot.workspace.notes.map(\.title) == [
@@ -289,7 +300,7 @@ private func completeWorkflow(
   try FileManager.default.createDirectory(at: fleckRoot, withIntermediateDirectories: true)
 
   await #expect(throws: WebsiteDemoError.sessionAlreadyPrepared) {
-    try await WebsiteDemoSession.prepare(at: session.url, now: Date(timeIntervalSince1970: 1))
+    try await WebsiteDemoSession.prepare(at: session.url, fleckApp: versionedFleckApp(), now: Date(timeIntervalSince1970: 1))
   }
 }
 
@@ -299,7 +310,7 @@ private func completeWorkflow(
   try Data("{}".utf8).write(to: manifestURL)
 
   await #expect(throws: WebsiteDemoError.sessionAlreadyPrepared) {
-    try await WebsiteDemoSession.prepare(at: session.url, now: Date(timeIntervalSince1970: 1))
+    try await WebsiteDemoSession.prepare(at: session.url, fleckApp: versionedFleckApp(), now: Date(timeIntervalSince1970: 1))
   }
 }
 
@@ -307,6 +318,7 @@ private func completeWorkflow(
   await #expect(throws: WebsiteDemoError.sessionRootMustBeAbsolute) {
     try await WebsiteDemoSession.prepare(
       at: URL(string: "relative-session")!,
+      fleckApp: versionedFleckApp(),
       now: Date(timeIntervalSince1970: 1)
     )
   }
@@ -316,6 +328,7 @@ private func completeWorkflow(
   let session = try TemporaryDirectory()
   let manifest = try await WebsiteDemoSession.prepare(
     at: session.url,
+    fleckApp: versionedFleckApp(),
     now: Date(timeIntervalSince1970: 1_725_000_000)
   )
   let encoded = try Data(contentsOf: manifest.manifestURL)
@@ -330,6 +343,7 @@ private func completeWorkflow(
   let session = try TemporaryDirectory()
   let manifest = try await WebsiteDemoSession.prepare(
     at: session.url,
+    fleckApp: versionedFleckApp(),
     now: Date(timeIntervalSince1970: 1_725_000_000)
   )
   let object = try #require(
@@ -347,6 +361,7 @@ private func completeWorkflow(
   let session = try TemporaryDirectory()
   let manifest = try await WebsiteDemoSession.prepare(
     at: session.url,
+    fleckApp: versionedFleckApp(),
     now: Date(timeIntervalSince1970: 1_725_000_000)
   )
   var object = try #require(
@@ -369,16 +384,16 @@ private func completeWorkflow(
   let session = try TemporaryDirectory()
   let manifest = try await WebsiteDemoSession.prepare(
     at: session.url,
+    fleckApp: versionedFleckApp(),
     now: Date(timeIntervalSince1970: 1_725_000_000)
   )
   let packageRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
     .deletingLastPathComponent()
-  let enhancedApp = packageRoot
-    .appendingPathComponent(".build/parakeet-test/Fleck.app", isDirectory: true)
+  let enhancedApp = versionedFleckApp()
   let lightweightApp = packageRoot
-    .appendingPathComponent(".build/Fleck.app", isDirectory: true)
+    .appendingPathComponent(".build/Fleck 1.0.1-beta.1 Build 417.app", isDirectory: true)
 
   #expect(manifest.fleckApp.standardizedFileURL == enhancedApp.standardizedFileURL)
   #expect(manifest.fleckApp.standardizedFileURL != lightweightApp.standardizedFileURL)
@@ -398,10 +413,58 @@ private func completeWorkflow(
   }
 }
 
+@Test(arguments: [
+  ".build/parakeet-test/Fleck.app",
+  ".build/parakeet-test/Fleck 1.0.1-beta.1 Build 0.app",
+  ".build/parakeet-test/Fleck 1.0.1-beta.1 Build 417-copy.app",
+  ".build/Fleck 1.0.1-beta.1 Build 417.app",
+  ".build/parakeet-test/../Fleck 1.0.1-beta.1 Build 417.app",
+])
+func newSessionsRejectLegacyDevelopmentAndMalformedAppPaths(_ relativePath: String) async throws {
+  let session = try TemporaryDirectory()
+  let packageRoot = versionedFleckApp()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  await #expect(throws: WebsiteDemoError.invalidManifest) {
+    try await WebsiteDemoSession.prepare(
+      at: session.url,
+      fleckApp: packageRoot.appendingPathComponent(relativePath, isDirectory: true),
+      now: Date(timeIntervalSince1970: 1)
+    )
+  }
+}
+
+@Test func verifierRetainsOnlyTheExactLegacyParakeetPath() async throws {
+  let session = try TemporaryDirectory()
+  let manifest = try await WebsiteDemoSession.prepare(
+    at: session.url,
+    fleckApp: versionedFleckApp(),
+    now: Date(timeIntervalSince1970: 1_725_000_000)
+  )
+  let legacyApp = versionedFleckApp()
+    .deletingLastPathComponent()
+    .appendingPathComponent("Fleck.app", isDirectory: true)
+  let legacyManifest = WebsiteDemoManifest(
+    sessionRoot: manifest.sessionRoot,
+    fleckRoot: manifest.fleckRoot,
+    fakeRepository: manifest.fakeRepository,
+    fleckApp: legacyApp,
+    projectNames: manifest.projectNames,
+    captureCommands: manifest.captureCommands
+  )
+  let encoder = JSONEncoder()
+  encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+  try encoder.encode(legacyManifest).write(to: manifest.manifestURL, options: .atomic)
+
+  #expect(try await WebsiteDemoSession.verify(manifestAt: manifest.manifestURL) == .open)
+}
+
 @Test func verifierRejectsUnsafeSessionRootsBeforeWorkspaceAccess() async throws {
   let session = try TemporaryDirectory()
   let validManifest = try await WebsiteDemoSession.prepare(
     at: session.url,
+    fleckApp: versionedFleckApp(),
     now: Date(timeIntervalSince1970: 1_725_000_000)
   )
   let unsafeRoots = [
@@ -446,6 +509,7 @@ private func completeWorkflow(
 
   let manifest = try await WebsiteDemoSession.prepare(
     at: session.url,
+    fleckApp: versionedFleckApp(),
     now: Date(timeIntervalSince1970: 1_725_000_000)
   )
 
@@ -460,6 +524,7 @@ private func completeWorkflow(
   let session = try TemporaryDirectory()
   let manifest = try await WebsiteDemoSession.prepare(
     at: session.url,
+    fleckApp: versionedFleckApp(),
     now: Date(timeIntervalSince1970: 1_725_000_000)
   )
   let files = try regularFilePaths(in: manifest.fakeRepository)
@@ -574,6 +639,7 @@ private func completeWorkflow(
   let session = try TemporaryDirectory()
   let manifest = try await WebsiteDemoSession.prepare(
     at: session.url,
+    fleckApp: versionedFleckApp(),
     now: Date(timeIntervalSince1970: 1_725_000_000)
   )
   let store = LocalStore(rootURL: manifest.fleckRoot)
@@ -600,6 +666,7 @@ func verifierRejectsRepositoryContamination(_ contamination: RepositoryContamina
   let session = try TemporaryDirectory()
   let manifest = try await WebsiteDemoSession.prepare(
     at: session.url,
+    fleckApp: versionedFleckApp(),
     now: Date(timeIntervalSince1970: 1_725_000_000)
   )
 
@@ -630,6 +697,7 @@ func verifierRejectsRepositoryContamination(_ contamination: RepositoryContamina
   let session = try TemporaryDirectory()
   let manifest = try await WebsiteDemoSession.prepare(
     at: session.url,
+    fleckApp: versionedFleckApp(),
     now: Date(timeIntervalSince1970: 1_725_000_000)
   )
   for directory in ["DictationModels", "CleanupModels"] {
@@ -649,6 +717,7 @@ func verifierRejectsRepositoryContamination(_ contamination: RepositoryContamina
   let session = try TemporaryDirectory()
   let manifest = try await WebsiteDemoSession.prepare(
     at: session.url,
+    fleckApp: versionedFleckApp(),
     now: Date(timeIntervalSince1970: 1_725_000_000)
   )
 
@@ -683,6 +752,7 @@ func verifierRejectsRepositoryContamination(_ contamination: RepositoryContamina
   let session = try TemporaryDirectory()
   let manifest = try await WebsiteDemoSession.prepare(
     at: session.url,
+    fleckApp: versionedFleckApp(),
     now: Date(timeIntervalSince1970: 1_725_000_000)
   )
   try await completeWorkflow(in: manifest)
@@ -712,6 +782,7 @@ func verifierRejectsRepositoryContamination(_ contamination: RepositoryContamina
   let session = try TemporaryDirectory()
   let manifest = try await WebsiteDemoSession.prepare(
     at: session.url,
+    fleckApp: versionedFleckApp(),
     now: Date(timeIntervalSince1970: 1_725_000_000)
   )
   try await completeWorkflow(in: manifest)
@@ -727,6 +798,7 @@ func postflightRejectsIncompleteOrIncoherentWorkflow(
   let session = try TemporaryDirectory()
   let manifest = try await WebsiteDemoSession.prepare(
     at: session.url,
+    fleckApp: versionedFleckApp(),
     now: Date(timeIntervalSince1970: 1_725_000_000)
   )
   try await completeWorkflow(in: manifest, contamination: contamination)

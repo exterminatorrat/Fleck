@@ -163,6 +163,7 @@ func candidateStartupUsesActivatedConfigurationAndRefreshesItsInstaller() throws
   #expect(SettingsSection.fleckCases == [.editing, .appearance, .shortcuts])
   #expect(SettingsSection.voiceAndWritingCases == [.dictation, .vocabulary])
   #expect(SettingsSection.connectionCases == [.agents])
+  #expect(SettingsSection.informationCases == [.about])
   #expect(SettingsSection.editing.title == "General")
   #expect(SettingsSection.editing.description ==
     "Choose how Fleck edits and organizes your notes.")

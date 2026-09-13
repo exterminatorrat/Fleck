@@ -14,9 +14,14 @@ jobs:
     name: macOS build and tests
     runs-on: macos-26
     timeout-minutes: 30
+    env:
+      FLECK_BUILD_IDENTITY_MODE: ci-unverified
+      PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - name: Check out repository (actions/checkout v6.0.2)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
       - name: Toolchain
         run: |
           xcodebuild -version
@@ -27,6 +32,10 @@ jobs:
             brew install ripgrep
           fi
           rg --version
+      - name: Check product version and build identity policy
+        run: |
+          python3 -B -m unittest discover -s Tests/Scripts -p test_build_identity.py
+          python3 -B Scripts/fleck-build-identity.py check
       - name: Test ordinary graph
         run: |
           unset FLECK_ENHANCED_CANDIDATE
@@ -44,9 +53,17 @@ jobs:
       - name: Test packaged app symbol stripping
         run: Tests/Scripts/build-fleck-app-symbols.test.sh
       - name: Package Fleck app
-        run: Scripts/build-fleck-app.sh
+        run: |
+          mkdir -p .build/ci-development-result
+          result_file="$PWD/.build/ci-development-result/build-result.json"
+          Scripts/build-fleck-app.sh --result-file "$result_file"
+          app_path="$(Scripts/fleck-build-identity.py read-result \
+            --repo "$PWD" \
+            --result-file "$result_file" \
+            --flavor development)"
+          printf 'FLECK_APP=%s\n' "$app_path" >> "$GITHUB_ENV"
       - name: Enforce packaged app size budget
-        run: Scripts/check-release-size.sh .build/Fleck.app
+        run: Scripts/check-release-size.sh "$FLECK_APP"
       - name: Test release model-asset exclusion
         run: Scripts/test-release-model-asset-exclusion.sh
       - name: Validate macOS no-launch contract
