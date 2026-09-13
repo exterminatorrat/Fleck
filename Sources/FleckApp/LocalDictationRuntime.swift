@@ -240,6 +240,10 @@ actor LocalDictationRuntime {
     )
   }
 
+  var modelMutationWaiterCountForTesting: Int {
+    mutationWaiters.count
+  }
+
   private var cancellationInProgressIsActive: Bool {
     cancellationInProgress != nil
   }
