@@ -59,20 +59,28 @@ func gemmaProcessTransportPublishesOnlyRequestLifecycleAndProvesGracefulDrain() 
 @Test
 func gemmaProcessTransportRejectsPrematureShutdownAcknowledgement() async throws {
   let fixture = try GemmaHelperFixture(mode: "premature-shutdown-ack")
-  defer { fixture.forceKillForTest() }
+  let initialWriteGate = DispatchSemaphore(value: 0)
+  defer {
+    fixture.forceKillForTest()
+    initialWriteGate.signal()
+  }
   let transport = GemmaCleanupProcessTransport(
     helperExecutableURL: fixture.helperExecutableURL,
     modelDirectoryURL: fixture.modelDirectory,
     sandboxExecutableURL: nil,
-    timing: .short,
     beforeInitialWrite: {
-      _ = fixture.waitForMarkerSynchronously("premature-shutdown-ack")
-      usleep(250_000)
+      initialWriteGate.wait()
+    },
+    afterInputClose: {
+      fixture.mark("stdin-close-completed")
     }
   )
   let session = try transport.start(GemmaProcessTestRequest.make())
   let events = try await withTimeout { try await collect(session.events) }
   #expect(events.map { try? wireKind($0) } == ["ready", "started", "completed"])
+  try await fixture.waitForMarker("premature-ack-rejected")
+  initialWriteGate.signal()
+  try await fixture.waitForMarker("stdin-close-completed")
 
   let graceful = await session.terminationAcknowledgement(
     for: .graceful(requireCancellationAcknowledgement: false)
@@ -92,20 +100,28 @@ func gemmaProcessTransportRejectsPrematureShutdownAcknowledgement() async throws
 @Test
 func gemmaProcessTransportRejectsPrematureCancellationAcknowledgement() async throws {
   let fixture = try GemmaHelperFixture(mode: "premature-cancellation-ack")
-  defer { fixture.forceKillForTest() }
+  let initialWriteGate = DispatchSemaphore(value: 0)
+  defer {
+    fixture.forceKillForTest()
+    initialWriteGate.signal()
+  }
   let transport = GemmaCleanupProcessTransport(
     helperExecutableURL: fixture.helperExecutableURL,
     modelDirectoryURL: fixture.modelDirectory,
     sandboxExecutableURL: nil,
-    timing: .short,
     beforeInitialWrite: {
-      _ = fixture.waitForMarkerSynchronously("premature-cancellation-ack")
-      usleep(250_000)
+      initialWriteGate.wait()
+    },
+    afterInputClose: {
+      fixture.mark("stdin-close-completed")
     }
   )
   let session = try transport.start(GemmaProcessTestRequest.make())
   let events = try await withTimeout { try await collect(session.events) }
   #expect(events.map { try? wireKind($0) } == ["ready", "started", "completed"])
+  try await fixture.waitForMarker("premature-ack-rejected")
+  initialWriteGate.signal()
+  try await fixture.waitForMarker("stdin-close-completed")
 
   session.requestCancellation()
   let graceful = await session.terminationAcknowledgement(
@@ -1141,22 +1157,21 @@ emit_shutdown_ack() {
 }
 
 if [ "$mode" = "premature-shutdown-ack" ]; then
+  trap ': > "$model_directory/premature-ack-rejected"; exit 0' TERM
   /usr/bin/printf '%s\n' '{"schemaVersion":1,"kind":"ready"}'
   emit_started "cleanup-test"
   emit_completed "cleanup-test"
   emit_shutdown_ack "shutdown-cleanup-test"
-  : > "$model_directory/premature-shutdown-ack"
-  exit 0
+  while :; do :; done
 fi
 
 if [ "$mode" = "premature-cancellation-ack" ]; then
+  trap ': > "$model_directory/premature-ack-rejected"; exit 0' TERM
   /usr/bin/printf '%s\n' '{"schemaVersion":1,"kind":"ready"}'
   emit_started "cleanup-test"
   emit_completed "cleanup-test"
   emit_cancel_ack "cancel-cleanup-test" "cleanup-test"
-  emit_shutdown_ack "shutdown-cleanup-test"
-  : > "$model_directory/premature-cancellation-ack"
-  exit 0
+  while :; do :; done
 fi
 
 if [ "$mode" = "ignore-term" ]; then
