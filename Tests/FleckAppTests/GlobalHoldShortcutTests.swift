@@ -390,6 +390,7 @@ func physicalGestureReceiptReachesHandlerBeforeQueuedEndDelivery() async throws 
   fixture.clock.advance(by: .milliseconds(40))
   fixture.monitor.emit(.released(.rightOption))
   await fixture.shortcut.drainEvents()
+  await fixture.shortcut.waitForTerminalObservation()
 
   try fixture.shortcut.configure(.leftOption)
 
