@@ -15,6 +15,7 @@
 </p>
 
 <p align="center">
+  <a href="#download-and-launch-fleck">Download &amp; launch</a> ·
   <a href="#what-is-here">Features</a> ·
   <a href="#build-and-test">Build &amp; test</a> ·
   <a href="ARCHITECTURE.md">Architecture</a> ·
@@ -23,13 +24,49 @@
   <a href="SECURITY.md">Security</a>
 </p>
 
-> **Source Preview:** This repository publishes Fleck source for inspection and
-> local development. It provides no signed or notarized app, GitHub Release,
-> supported release, or downloadable binary.
+## Download and launch Fleck
 
-> **Developer Preview:** Fleck is under active development. There is no
-> supported binary release yet, and storage formats and contributor-facing
-> interfaces may change during the 0.x series.
+> **No public app download yet.** Fleck is currently a source preview. There is
+> no published app ZIP or GitHub Release to download and launch. GitHub's
+> **Code → Download ZIP** downloads source code, not an installable Mac app.
+
+Check [GitHub Releases](https://github.com/exterminatorrat/fleck/releases) for
+published app builds. Until the first binary release is published there, no
+public "newest build" is available. Local development candidates and GitHub
+Actions artifacts are not supported public releases.
+
+### Installing a future app release
+
+**These steps apply only after an app ZIP is published on GitHub Releases.**
+
+1. Open [GitHub Releases](https://github.com/exterminatorrat/fleck/releases) and
+   choose the newest published app release. Read its supported macOS versions,
+   Mac architecture, known limitations, and upgrade notes. A **Pre-release**
+   label means it is a preview, not a stable release.
+2. Under that release's **Assets**, download the **Fleck app ZIP** for your Mac
+   and its checksum file. Do **not** choose **Source code (zip)** or
+   **Source code (tar.gz)**; neither contains a ready-to-run app. Verify the
+   ZIP against the release's SHA-256 checksum before opening it.
+3. Double-click the ZIP in Finder to extract it, then drag
+   `Fleck <version> Build <number>.app` into **Applications**, keeping its
+   versioned name.
+4. Open **Applications** and double-click that Fleck app. Follow the release's
+   first-launch instructions. If macOS blocks it, check the release's signing
+   and notarization notes rather than disabling Gatekeeper or removing
+   quarantine protection.
+5. Look for **Fleck in the macOS menu bar** and click its icon to open the
+   workspace. Fleck is a menu-bar app, so do not rely on a Dock icon to find it.
+
+A prebuilt app does not require Xcode, Swift, Node.js, or Terminal build commands.
+For the current source-only preview, developers can instead
+[get the source](#get-the-source) and [build and test](#build-and-test).
+Packaged development apps require the maintainer's private build registry;
+those commands are not an end-user installer.
+
+Fleck is under active development. Storage formats and contributor-facing
+interfaces may change during the 0.x public-preview series. See the
+[release policy and binary-distribution checklist](docs/RELEASES.md) for the
+remaining release gates.
 
 ## What is here
 
@@ -57,6 +94,9 @@ See [Implementation status](IMPLEMENTATION_STATUS.md) for the short current
 roadmap and [Architecture](ARCHITECTURE.md) for the system boundaries.
 
 ## Requirements
+
+These are **source-development requirements**. For a future prebuilt app, use
+the macOS and architecture requirements listed on its release page instead.
 
 | Requirement | Version or scope |
 | --- | --- |
