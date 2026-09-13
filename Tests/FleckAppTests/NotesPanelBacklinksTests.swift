@@ -118,54 +118,59 @@ func NotesPanelDoubleBracketPickerInsertsAndDerivesBacklink() async throws {
     backing: .buffered,
     defer: false
   )
-  window.contentView = host
-  window.makeKeyAndOrderFront(nil)
-  await settleBacklinksHost(host)
+  try await withBacklinksFixtureLifecycle(window: window, runtime: runtime) {
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+    await settleBacklinksHost(host)
 
-  let editor = try #require(hostedBacklinksDescendant(in: host, as: ListAwareTextView.self))
-  #expect(window.makeFirstResponder(editor))
-  editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
-  editor.insertText("[[", replacementRange: editor.selectedRange())
-  await settleBacklinksHost(host)
-  #expect(picker.isPresented)
+    let editor = try #require(hostedBacklinksDescendant(in: host, as: ListAwareTextView.self))
+    #expect(window.makeFirstResponder(editor))
+    editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
+    editor.insertText("[[", replacementRange: editor.selectedRange())
+    await settleBacklinksHost(host)
+    #expect(picker.isPresented)
 
-  picker.setQuery(target.title, in: state.workspace.notes)
-  await settleBacklinksHost(host)
-  let queryField = try #require(
-    hostedBacklinksDescendants(in: host, as: NSTextField.self)
-      .first { $0.placeholderString == "Link to note" }
-  )
-  #expect(window.makeFirstResponder(queryField))
-  let returnEvent = try #require(
-    NSEvent.keyEvent(
-      with: .keyDown,
-      location: .zero,
-      modifierFlags: [],
-      timestamp: 0,
-      windowNumber: window.windowNumber,
-      context: nil,
-      characters: "\r",
-      charactersIgnoringModifiers: "\r",
-      isARepeat: false,
-      keyCode: 36
+    picker.setQuery(target.title, in: state.workspace.notes)
+    try await requireBacklinksPickerReady(
+      picker,
+      query: target.title,
+      targetNoteID: target.id,
+      in: host
     )
-  )
-  window.sendEvent(returnEvent)
-  await settleBacklinksHost(host)
+    let queryField = try #require(
+      hostedBacklinksDescendants(in: host, as: NSTextField.self)
+        .first { $0.placeholderString == "Link to note" }
+    )
+    try #require(window.makeFirstResponder(queryField))
+    let queryFieldEditor = try #require(queryField.currentEditor() as? NSTextView)
+    try #require(window.firstResponder === queryFieldEditor)
+    let returnEvent = try #require(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: 0,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: "\r",
+        charactersIgnoringModifiers: "\r",
+        isARepeat: false,
+        keyCode: 36
+      )
+    )
+    window.sendEvent(returnEvent)
+    await settleBacklinksHost(host)
 
-  let token = NoteLinkFormatter.markdown(label: target.displayTitle, targetNoteID: target.id)
-  #expect(state.selectedNote?.body == "Before \(token)")
-  #expect(!picker.isPresented)
-  #expect(backlinks.incoming(to: target.id).map(\.sourceNoteID) == [source.id])
+    let token = NoteLinkFormatter.markdown(label: target.displayTitle, targetNoteID: target.id)
+    #expect(state.selectedNote?.body == "Before \(token)")
+    #expect(!picker.isPresented)
+    #expect(backlinks.incoming(to: target.id).map(\.sourceNoteID) == [source.id])
 
-  state.select(target.id)
-  await settleBacklinksHost(host)
-  #expect(state.folderID(for: target.id) == folder.id)
-  #expect(backlinks.incoming(to: target.id).map(\.sourceNoteID) == [source.id])
-
-  window.contentView = nil
-  window.orderOut(nil)
-  await runtime.shutdown()
+    state.select(target.id)
+    await settleBacklinksHost(host)
+    #expect(state.folderID(for: target.id) == folder.id)
+    #expect(backlinks.incoming(to: target.id).map(\.sourceNoteID) == [source.id])
+  }
 }
 
 @Test @MainActor
@@ -436,53 +441,63 @@ func NotesPanelLinkPickerRejectsStaleSourceRevisionWithoutEditing() async throws
     backing: .buffered,
     defer: false
   )
-  window.contentView = host
-  window.makeKeyAndOrderFront(nil)
-  await settleBacklinksHost(host)
+  try await withBacklinksFixtureLifecycle(window: window, runtime: runtime) {
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+    await settleBacklinksHost(host)
 
-  picker.present(
-    sourceNoteID: source.id,
-    replacementRange: NSRange(location: 0, length: 4),
-    sourceRevision: source.revision
-  )
-  await settleBacklinksHost(host)
-  picker.setQuery(target.title, in: state.workspace.notes)
-  await settleBacklinksHost(host)
-  #expect(picker.results.map(\.noteID) == [target.id])
-
-  state.updateSelected(body: "Changed body")
-  await settleBacklinksHost(host)
-  let expectedBody = try #require(state.selectedNote?.body)
-  let expectedGeneration = state.persistenceGeneration
-  let queryField = try #require(
-    hostedBacklinksDescendants(in: host, as: NSTextField.self)
-      .first { $0.placeholderString == "Link to note" }
-  )
-  #expect(window.makeFirstResponder(queryField))
-  let returnEvent = try #require(
-    NSEvent.keyEvent(
-      with: .keyDown,
-      location: .zero,
-      modifierFlags: [],
-      timestamp: 0,
-      windowNumber: window.windowNumber,
-      context: nil,
-      characters: "\r",
-      charactersIgnoringModifiers: "\r",
-      isARepeat: false,
-      keyCode: 36
+    picker.present(
+      sourceNoteID: source.id,
+      replacementRange: NSRange(location: 0, length: 4),
+      sourceRevision: source.revision
     )
-  )
-  window.sendEvent(returnEvent)
-  await settleBacklinksHost(host)
+    await settleBacklinksHost(host)
+    picker.setQuery(target.title, in: state.workspace.notes)
+    try await requireBacklinksPickerReady(
+      picker,
+      query: target.title,
+      targetNoteID: target.id,
+      in: host
+    )
+    #expect(picker.results.map(\.noteID) == [target.id])
 
-  #expect(!picker.isPresented)
-  #expect(state.selectedNote?.body == expectedBody)
-  #expect(state.persistenceGeneration == expectedGeneration)
+    state.updateSelected(body: "Changed body")
+    try await requireBacklinksPickerReady(
+      picker,
+      query: target.title,
+      targetNoteID: target.id,
+      in: host
+    )
+    let expectedBody = try #require(state.selectedNote?.body)
+    let expectedGeneration = state.persistenceGeneration
+    let queryField = try #require(
+      hostedBacklinksDescendants(in: host, as: NSTextField.self)
+        .first { $0.placeholderString == "Link to note" }
+    )
+    try #require(window.makeFirstResponder(queryField))
+    let queryFieldEditor = try #require(queryField.currentEditor() as? NSTextView)
+    try #require(window.firstResponder === queryFieldEditor)
+    let returnEvent = try #require(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: 0,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: "\r",
+        charactersIgnoringModifiers: "\r",
+        isARepeat: false,
+        keyCode: 36
+      )
+    )
+    window.sendEvent(returnEvent)
+    await settleBacklinksHost(host)
 
-  window.contentView = nil
-  window.orderOut(nil)
-  await runtime.shutdown()
+    #expect(!picker.isPresented)
+    #expect(state.selectedNote?.body == expectedBody)
+    #expect(state.persistenceGeneration == expectedGeneration)
+  }
 }
 
 @Test @MainActor
@@ -619,125 +634,130 @@ func NotesPanelCrossNoteNavigationDoesNotReuseDismantledEditorUndo() async throw
     backing: .buffered,
     defer: false
   )
-  window.contentView = host
-  window.makeKeyAndOrderFront(nil)
-  await settleBacklinksHost(host)
+  try await withBacklinksFixtureLifecycle(window: window, runtime: runtime) {
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+    await settleBacklinksHost(host)
 
-  let sourceEditor = try #require(
-    hostedBacklinksDescendant(in: host, as: ListAwareTextView.self)
-  )
-  #expect(window.makeFirstResponder(sourceEditor))
-  sourceEditor.setSelectedRange(NSRange(location: sourceEditor.string.utf16.count, length: 0))
-  sourceEditor.insertText("[[", replacementRange: sourceEditor.selectedRange())
-  await settleBacklinksHost(host)
-  #expect(picker.isPresented)
-
-  picker.setQuery(target.title, in: state.workspace.notes)
-  await settleBacklinksHost(host)
-  let queryField = try #require(
-    hostedBacklinksDescendants(in: host, as: NSTextField.self)
-      .first { $0.placeholderString == "Link to note" }
-  )
-  #expect(window.makeFirstResponder(queryField))
-  let returnEvent = try #require(
-    NSEvent.keyEvent(
-      with: .keyDown,
-      location: .zero,
-      modifierFlags: [],
-      timestamp: 0,
-      windowNumber: window.windowNumber,
-      context: nil,
-      characters: "\r",
-      charactersIgnoringModifiers: "\r",
-      isARepeat: false,
-      keyCode: 36
+    let sourceEditor = try #require(
+      hostedBacklinksDescendant(in: host, as: ListAwareTextView.self)
     )
-  )
-  window.sendEvent(returnEvent)
-  await settleBacklinksHost(host)
+    #expect(window.makeFirstResponder(sourceEditor))
+    sourceEditor.setSelectedRange(NSRange(location: sourceEditor.string.utf16.count, length: 0))
+    sourceEditor.insertText("[[", replacementRange: sourceEditor.selectedRange())
+    await settleBacklinksHost(host)
+    #expect(picker.isPresented)
 
-  let token = NoteLinkFormatter.markdown(label: target.displayTitle, targetNoteID: target.id)
-  let sourceBody = "Before \(token)"
-  #expect(state.selectedNote?.body == sourceBody)
-  #expect(!picker.isPresented)
-
-  let link = try #require(NoteLinkParser.links(in: sourceEditor.string).first)
-  let container = try #require(sourceEditor.textContainer)
-  sourceEditor.layoutManager?.ensureLayout(for: container)
-  let glyphRange = sourceEditor.layoutManager?.glyphRange(
-    forCharacterRange: link.range,
-    actualCharacterRange: nil
-  ) ?? NSRange(location: 0, length: 0)
-  let linkRect = try #require(
-    sourceEditor.layoutManager?.boundingRect(forGlyphRange: glyphRange, in: container)
-  )
-  let point = sourceEditor.convert(
-    NSPoint(
-      x: linkRect.midX + sourceEditor.textContainerOrigin.x,
-      y: linkRect.midY + sourceEditor.textContainerOrigin.y
-    ),
-    to: nil
-  )
-  let click = try #require(
-    NSEvent.mouseEvent(
-      with: .leftMouseDown,
-      location: point,
-      modifierFlags: [.command],
-      timestamp: 0,
-      windowNumber: window.windowNumber,
-      context: nil,
-      eventNumber: 7,
-      clickCount: 1,
-      pressure: 1
+    picker.setQuery(target.title, in: state.workspace.notes)
+    try await requireBacklinksPickerReady(
+      picker,
+      query: target.title,
+      targetNoteID: target.id,
+      in: host
     )
-  )
-  sourceEditor.mouseDown(with: click)
-  await settleBacklinksHost(host)
+    let queryField = try #require(
+      hostedBacklinksDescendants(in: host, as: NSTextField.self)
+        .first { $0.placeholderString == "Link to note" }
+    )
+    try #require(window.makeFirstResponder(queryField))
+    let queryFieldEditor = try #require(queryField.currentEditor() as? NSTextView)
+    try #require(window.firstResponder === queryFieldEditor)
+    let returnEvent = try #require(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: 0,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: "\r",
+        charactersIgnoringModifiers: "\r",
+        isARepeat: false,
+        keyCode: 36
+      )
+    )
+    window.sendEvent(returnEvent)
+    await settleBacklinksHost(host)
 
-  #expect(state.workspace.selectedNoteID == target.id)
-  let targetEditor = try #require(
-    hostedBacklinksDescendants(in: host, as: ListAwareTextView.self)
-      .first { $0.string == target.body }
-  )
-  #expect(commands.textView === targetEditor)
-  #expect(sourceEditor.onOpenNoteLink == nil)
-  #expect(sourceEditor.undoManager == nil)
-  #expect(backlinks.incoming(to: target.id).map(\.sourceNoteID) == [source.id])
-  backlinks.toggleDisclosure()
-  await settleBacklinksHost(host)
+    let token = NoteLinkFormatter.markdown(label: target.displayTitle, targetNoteID: target.id)
+    let sourceBody = "Before \(token)"
+    #expect(state.selectedNote?.body == sourceBody)
+    #expect(!picker.isPresented)
 
-  let backlink = try #require(backlinks.incoming(to: target.id).first)
-  state.select(backlink.sourceNoteID)
-  await settleBacklinksHost(host)
+    let link = try #require(NoteLinkParser.links(in: sourceEditor.string).first)
+    let container = try #require(sourceEditor.textContainer)
+    sourceEditor.layoutManager?.ensureLayout(for: container)
+    let glyphRange = sourceEditor.layoutManager?.glyphRange(
+      forCharacterRange: link.range,
+      actualCharacterRange: nil
+    ) ?? NSRange(location: 0, length: 0)
+    let linkRect = try #require(
+      sourceEditor.layoutManager?.boundingRect(forGlyphRange: glyphRange, in: container)
+    )
+    let point = sourceEditor.convert(
+      NSPoint(
+        x: linkRect.midX + sourceEditor.textContainerOrigin.x,
+        y: linkRect.midY + sourceEditor.textContainerOrigin.y
+      ),
+      to: nil
+    )
+    let click = try #require(
+      NSEvent.mouseEvent(
+        with: .leftMouseDown,
+        location: point,
+        modifierFlags: [.command],
+        timestamp: 0,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: 7,
+        clickCount: 1,
+        pressure: 1
+      )
+    )
+    sourceEditor.mouseDown(with: click)
+    await settleBacklinksHost(host)
 
-  let returnedEditor = try #require(
-    hostedBacklinksDescendants(in: host, as: ListAwareTextView.self)
-      .first { $0 !== sourceEditor && $0.string == sourceBody }
-  )
-  #expect(state.workspace.selectedNoteID == source.id)
-  #expect(commands.textView === returnedEditor)
-  #expect(sourceEditor.string == sourceBody)
-  #expect(targetEditor.string == target.body)
+    #expect(state.workspace.selectedNoteID == target.id)
+    let targetEditor = try #require(
+      hostedBacklinksDescendants(in: host, as: ListAwareTextView.self)
+        .first { $0.string == target.body }
+    )
+    #expect(commands.textView === targetEditor)
+    #expect(sourceEditor.onOpenNoteLink == nil)
+    #expect(sourceEditor.undoManager == nil)
+    #expect(backlinks.incoming(to: target.id).map(\.sourceNoteID) == [source.id])
+    backlinks.toggleDisclosure()
+    await settleBacklinksHost(host)
 
-  commands.undo()
-  await settleBacklinksHost(host)
-  #expect(commands.textView === returnedEditor)
-  #expect(sourceEditor.string == sourceBody)
-  #expect(returnedEditor.string == sourceBody)
-  #expect(state.workspace.notes.first(where: { $0.id == source.id })?.body == sourceBody)
-  #expect(state.workspace.notes.first(where: { $0.id == target.id })?.body == target.body)
+    let backlink = try #require(backlinks.incoming(to: target.id).first)
+    state.select(backlink.sourceNoteID)
+    await settleBacklinksHost(host)
 
-  commands.redo()
-  await settleBacklinksHost(host)
-  #expect(commands.textView === returnedEditor)
-  #expect(sourceEditor.string == sourceBody)
-  #expect(returnedEditor.string == sourceBody)
-  #expect(state.workspace.notes.first(where: { $0.id == source.id })?.body == sourceBody)
-  #expect(state.workspace.notes.first(where: { $0.id == target.id })?.body == target.body)
+    let returnedEditor = try #require(
+      hostedBacklinksDescendants(in: host, as: ListAwareTextView.self)
+        .first { $0 !== sourceEditor && $0.string == sourceBody }
+    )
+    #expect(state.workspace.selectedNoteID == source.id)
+    #expect(commands.textView === returnedEditor)
+    #expect(sourceEditor.string == sourceBody)
+    #expect(targetEditor.string == target.body)
 
-  window.contentView = nil
-  window.orderOut(nil)
-  await runtime.shutdown()
+    commands.undo()
+    await settleBacklinksHost(host)
+    #expect(commands.textView === returnedEditor)
+    #expect(sourceEditor.string == sourceBody)
+    #expect(returnedEditor.string == sourceBody)
+    #expect(state.workspace.notes.first(where: { $0.id == source.id })?.body == sourceBody)
+    #expect(state.workspace.notes.first(where: { $0.id == target.id })?.body == target.body)
+
+    commands.redo()
+    await settleBacklinksHost(host)
+    #expect(commands.textView === returnedEditor)
+    #expect(sourceEditor.string == sourceBody)
+    #expect(returnedEditor.string == sourceBody)
+    #expect(state.workspace.notes.first(where: { $0.id == source.id })?.body == sourceBody)
+    #expect(state.workspace.notes.first(where: { $0.id == target.id })?.body == target.body)
+  }
 }
 
 @Test @MainActor
@@ -867,4 +887,53 @@ private func settleBacklinksHost(_ view: NSView) async {
     view.layoutSubtreeIfNeeded()
     await Task.yield()
   }
+}
+
+@MainActor
+private func requireBacklinksPickerReady(
+  _ picker: NoteLinkPickerController,
+  query: String,
+  targetNoteID: UUID,
+  in view: NSView
+) async throws {
+  await settleBacklinksHost(view)
+  let deadline = ContinuousClock.now + .seconds(2)
+  while
+    (!picker.isPresented
+      || picker.query != query
+      || !picker.resultsAreCurrent
+      || picker.results.map(\.noteID) != [targetNoteID]
+      || picker.highlightedNoteID != targetNoteID),
+    ContinuousClock.now < deadline
+  {
+    view.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
+  try #require(
+    picker.isPresented
+      && picker.query == query
+      && picker.resultsAreCurrent
+      && picker.results.map(\.noteID) == [targetNoteID]
+      && picker.highlightedNoteID == targetNoteID,
+    "Timed out waiting for the current note-link picker result: presented=\(picker.isPresented), query=\(String(reflecting: picker.query)), resultsAreCurrent=\(picker.resultsAreCurrent), resultIDs=\(picker.results.map(\.noteID)), highlightedNoteID=\(String(describing: picker.highlightedNoteID)), targetNoteID=\(targetNoteID)"
+  )
+}
+
+@MainActor
+private func withBacklinksFixtureLifecycle(
+  window: NSWindow,
+  runtime: DictationRuntime,
+  body: @MainActor () async throws -> Void
+) async throws {
+  let result: Result<Void, Error>
+  do {
+    try await body()
+    result = .success(())
+  } catch {
+    result = .failure(error)
+  }
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+  try result.get()
 }
