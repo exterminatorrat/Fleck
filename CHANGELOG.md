@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.0.4-beta.1] - 2026-09-13
+
+### Changed
+
+- The selected note-tab capsule now travels and resizes smoothly between tabs while note
+  selection and editor updates remain immediate.
+
 ## [1.0.3-beta.1] - 2026-09-13
 
 ### Added

@@ -859,7 +859,6 @@
     @StateObject private var searchController: WorkspaceSearchController
     @StateObject private var noteLinkPickerController: NoteLinkPickerController
     @StateObject private var backlinkController: BacklinkController
-    @Namespace private var selectedTabHighlight
     @State private var isImporting = false
     @State private var isExporting = false
     @State private var isShowingTrash = false
@@ -1514,7 +1513,14 @@
                 Color.clear
                   .frame(width: 0, height: 0)
                   .id(TabScrollTarget.leading)
-                FluidTabStripHost(controller: fluidTabDrag) {
+                FluidTabStripHost(
+                  controller: fluidTabDrag,
+                  selectedID: appState.workspace.selectedNoteID,
+                  selectedColor: visibleNotes.first(where: {
+                    $0.id == appState.workspace.selectedNoteID
+                  }).map { tabColor(for: $0, opacity: 0.22) },
+                  reduceMotion: reduceMotion
+                ) {
                 HStack(spacing: 6) {
                 ForEach(visibleNotes) { note in
             Button {
@@ -1537,11 +1543,7 @@
               .padding(.vertical, 6)
               .contentShape(Capsule())
               .background {
-                if note.id == appState.workspace.selectedNoteID {
-                  Capsule()
-                    .fill(tabColor(for: note, opacity: 0.22))
-                    .matchedGeometryEffect(id: "selected-tab", in: selectedTabHighlight)
-                } else if note.tabColorHex != nil {
+                if note.id != appState.workspace.selectedNoteID, note.tabColorHex != nil {
                   Capsule()
                     .fill(tabColor(for: note, opacity: 0.10))
                 }
@@ -1672,7 +1674,6 @@
               }
               .padding(.horizontal, 12)
               .frame(height: 37, alignment: .center)
-              .animation(motion.spatial, value: appState.workspace.selectedNoteID)
               .animation(motion.spatial, value: visibleNotes.map(\.id))
               .fixedSize(horizontal: true, vertical: false)
               .frame(minWidth: tabViewportWidth, alignment: .leading)
@@ -4172,9 +4173,16 @@
 
   private struct FluidTabStripHost<Content: View>: NSViewRepresentable {
     @ObservedObject var controller: FluidTabDragController
+    let selectedID: UUID?
+    let selectedColor: Color?
+    let reduceMotion: Bool
     let content: Content
-    init(controller: FluidTabDragController, @ViewBuilder content: () -> Content) {
+    init(controller: FluidTabDragController, selectedID: UUID?, selectedColor: Color?,
+      reduceMotion: Bool, @ViewBuilder content: () -> Content) {
       self.controller = controller
+      self.selectedID = selectedID
+      self.selectedColor = selectedColor
+      self.reduceMotion = reduceMotion
       self.content = content()
     }
     func makeNSView(context: Context) -> FluidTabDestinationView {
@@ -4187,11 +4195,103 @@
     }
     func updateNSView(_ view: FluidTabDestinationView, context: Context) {
       view.rootView = AnyView(content.environment(\.self, context.environment))
+      view.updateSelection(
+        noteID: selectedID,
+        color: selectedColor.flatMap {
+          NSColor(cgColor: $0.resolve(in: context.environment).cgColor)
+        },
+        reduceMotion: reduceMotion
+      )
     }
   }
 
   final class FluidTabDestinationView: NSHostingView<AnyView> {
     weak var controller: FluidTabDragController?
+    let selectionHighlightLayer = CALayer()
+    private var selectedID: UUID?
+    private var selectedColor: NSColor?
+    private var selectionTargetFrame: CGRect?
+    private var reduceMotion = false
+
+    func updateSelection(noteID: UUID?, color: NSColor?, reduceMotion: Bool) {
+      wantsLayer = true
+      if selectionHighlightLayer.superlayer == nil {
+        selectionHighlightLayer.isHidden = true
+        layer?.insertSublayer(selectionHighlightLayer, at: 0)
+      }
+      let changed = selectedID != noteID
+      let hadVisibleSelection = !selectionHighlightLayer.isHidden
+        && selectionHighlightLayer.opacity != 0 && selectionTargetFrame != nil
+      selectedID = noteID
+      selectedColor = color
+      self.reduceMotion = reduceMotion
+      CATransaction.begin()
+      CATransaction.setDisableActions(true)
+      selectionHighlightLayer.backgroundColor = color?.cgColor
+      CATransaction.commit()
+      if reduceMotion {
+        selectionHighlightLayer.removeAnimation(forKey: "fleck.tab-selection")
+      }
+      syncSelectionFrame(animated: changed && hadVisibleSelection && !reduceMotion)
+    }
+
+    override func layout() {
+      super.layout()
+      syncSelectionFrame(animated: false)
+    }
+
+    func selectionSourcePresentationDidChange(_ source: ReorderSourceHostingView, animated: Bool) {
+      guard source.noteID == selectedID else { return }
+      syncSelectionFrame(animated: animated && !reduceMotion)
+    }
+
+    func selectedCapsuleColor(for source: ReorderSourceHostingView) -> NSColor? {
+      source.noteID == selectedID ? selectedColor : nil
+    }
+
+    private func syncSelectionFrame(animated: Bool) {
+      guard let selectedID, selectedColor != nil, let source = sourceView(for: selectedID) else {
+        selectionHighlightLayer.removeAnimation(forKey: "fleck.tab-selection")
+        selectionTargetFrame = nil
+        selectionHighlightLayer.isHidden = true
+        return
+      }
+      var target = convert(source.labelCapsuleRect, from: source)
+      target.origin.x += source.layer?.transform.m41 ?? 0
+      let hidden = source.layer?.opacity == 0
+      CATransaction.begin()
+      CATransaction.setDisableActions(true)
+      selectionHighlightLayer.isHidden = false
+      selectionHighlightLayer.opacity = hidden ? 0 : 1
+      CATransaction.commit()
+      guard target != selectionTargetFrame else { return }
+      let fromPosition = selectionHighlightLayer.presentation()?.position ?? selectionHighlightLayer.position
+      let fromBounds = selectionHighlightLayer.presentation()?.bounds ?? selectionHighlightLayer.bounds
+      selectionTargetFrame = target
+      CATransaction.begin()
+      CATransaction.setDisableActions(true)
+      selectionHighlightLayer.position = CGPoint(x: target.midX, y: target.midY)
+      selectionHighlightLayer.bounds = CGRect(origin: .zero, size: target.size)
+      selectionHighlightLayer.cornerRadius = target.height / 2
+      selectionHighlightLayer.removeAnimation(forKey: "fleck.tab-selection")
+      if animated {
+        let position = CABasicAnimation(keyPath: "position")
+        position.fromValue = fromPosition
+        position.toValue = selectionHighlightLayer.position
+        position.duration = AppMotion.selectionDuration
+        let bounds = CABasicAnimation(keyPath: "bounds")
+        bounds.fromValue = fromBounds
+        bounds.toValue = selectionHighlightLayer.bounds
+        bounds.duration = AppMotion.selectionDuration
+        let group = CAAnimationGroup()
+        group.animations = [position, bounds]
+        group.duration = AppMotion.selectionDuration
+        group.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        group.beginTime = CACurrentMediaTime()
+        selectionHighlightLayer.add(group, forKey: "fleck.tab-selection")
+      }
+      CATransaction.commit()
+    }
 
     func sourceFrames() -> [UUID: CGRect] {
       var frames: [UUID: CGRect] = [:]
@@ -4400,6 +4500,18 @@
   final class ReorderSourceHostingView: NSHostingView<AnyView> {
     var noteID: UUID?
 
+    var labelCapsuleRect: CGRect {
+      let fitting = fittingSize
+      guard fitting.width > 0, fitting.height > 0 else { return bounds }
+      let size = CGSize(width: min(bounds.width, fitting.width), height: min(bounds.height, fitting.height))
+      return CGRect(
+        x: bounds.midX - size.width / 2,
+        y: bounds.midY - size.height / 2,
+        width: size.width,
+        height: size.height
+      )
+    }
+
     // Keep layout in its original order during hover. AppKit owns the layer
     // transition, including interruption, instead of relying on SwiftUI to
     // animate the frame of a native representable during drag tracking.
@@ -4424,6 +4536,7 @@
         layer.add(animation, forKey: key)
       }
       CATransaction.commit()
+      tabDestination?.selectionSourcePresentationDidChange(self, animated: animated)
     }
 
     func setDraggingSourceHidden(_ hidden: Bool) {
@@ -4432,6 +4545,12 @@
       CATransaction.setDisableActions(true)
       layer?.opacity = hidden ? 0 : 1
       CATransaction.commit()
+      tabDestination?.selectionSourcePresentationDidChange(self, animated: false)
+    }
+
+    private var tabDestination: FluidTabDestinationView? {
+      sequence(first: superview, next: { $0?.superview })
+        .compactMap { $0 as? FluidTabDestinationView }.first
     }
 
     var onEnd: ((NSDragOperation) -> Void)?
@@ -4524,14 +4643,17 @@
         guard let captured = bitmapImageRepForCachingDisplay(in: bounds) else { return }
         cacheDisplay(in: bounds, to: captured)
         image = Self.compositedDraggingImage(
-          captured: captured, size: bounds.size, appearance: effectiveAppearance
+          captured: captured, size: bounds.size, appearance: effectiveAppearance,
+          selectedCapsuleColor: tabDestination?.selectedCapsuleColor(for: self),
+          selectedCapsuleRect: labelCapsuleRect
         ) ?? image
       }
       return image
     }
 
     static func compositedDraggingImage(captured: NSBitmapImageRep, size: NSSize,
-      appearance: NSAppearance) -> NSImage? {
+      appearance: NSAppearance, selectedCapsuleColor: NSColor? = nil,
+      selectedCapsuleRect: NSRect? = nil) -> NSImage? {
       guard let representation = NSBitmapImageRep(
         bitmapDataPlanes: nil,
         pixelsWide: captured.pixelsWide,
@@ -4558,6 +4680,13 @@
         )
         NSColor.windowBackgroundColor.setFill()
         surface.fill()
+        if let selectedCapsuleColor {
+          selectedCapsuleColor.setFill()
+          let capsule = selectedCapsuleRect ?? rect
+          NSBezierPath(
+            roundedRect: capsule, xRadius: capsule.height / 2, yRadius: capsule.height / 2
+          ).fill()
+        }
         capturedImage.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1,
           respectFlipped: true, hints: nil)
         NSColor.separatorColor.setStroke()
