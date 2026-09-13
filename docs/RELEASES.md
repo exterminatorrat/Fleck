@@ -4,6 +4,12 @@ Fleck has no published binary release. Public source visibility is a source
 preview, not an app release. Any future public build will be a Developer
 Preview in the 0.x series.
 
+The repository's `1.0.3-beta.1` local development identity records accumulated
+development and packaging provenance only. It is not a public release and does
+not supersede the 0.x public-preview policy; changing that policy requires an
+explicit owner decision. Do not create retroactive releases from local builds
+or development changelog entries.
+
 ## 0.x strategy
 
 - Minor versions may change storage, UI, and contributor-facing interfaces while

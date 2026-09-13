@@ -368,10 +368,16 @@ if [ "$profile_pid" -eq 0 ]; then
 fi
 
 is_packaged_fleck_path_shape() {
-  case "$1" in
+  executable_path=$1
+  case "$executable_path" in
     */Fleck.app/Contents/MacOS/Fleck) return 0 ;;
+    */Contents/MacOS/Fleck) ;;
     *) return 1 ;;
   esac
+  bundle_path=${executable_path%/Contents/MacOS/Fleck}
+  bundle_name=${bundle_path##*/}
+  printf '%s\n' "$bundle_name" | /usr/bin/grep -Eq \
+    '^Fleck [0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)? Build [1-9][0-9]*\.app$'
 }
 
 process_name=$(ps -p "$profile_pid" -o comm= | awk '{gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print}')

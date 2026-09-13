@@ -3,6 +3,7 @@ set -euo pipefail
 
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
+readonly identity_tool="$script_dir/fleck-build-identity.py"
 
 if [[ -n "${FLECK_ENHANCED_CANDIDATE+x}" ]]; then
   printf '%s\n' \
@@ -39,10 +40,47 @@ printf '%s\n' '--- Tests ---'
 "$script_dir/run-nonempty-swift-tests.sh" '^.+$'
 
 printf '%s\n' '--- Release build ---'
-swift package clean
-"$script_dir/build-fleck-app.sh"
+validation_result_root="$(/usr/bin/mktemp -d "$repo_root/.build/.validation-result.XXXXXX")"
+readonly validation_result_device="$(/usr/bin/stat -f '%d' "$validation_result_root")"
+readonly validation_result_inode="$(/usr/bin/stat -f '%i' "$validation_result_root")"
+validation_result_pending=1
+cleanup_validation_result() {
+  local exit_code=$?
+  trap - EXIT
+  if (( validation_result_pending != 0 )); then
+    if [[ ! -L "$validation_result_root" && -d "$validation_result_root" \
+      && "$(/usr/bin/stat -f '%d' "$validation_result_root" 2>/dev/null || true)" == "$validation_result_device" \
+      && "$(/usr/bin/stat -f '%i' "$validation_result_root" 2>/dev/null || true)" == "$validation_result_inode" ]]; then
+      /usr/bin/find "$validation_result_root" -depth -delete || exit_code=1
+    else
+      printf '%s\n' 'error: refusing to remove a substituted validation result directory' >&2
+      exit_code=1
+    fi
+  fi
+  exit "$exit_code"
+}
+trap cleanup_validation_result EXIT
+readonly build_result="$validation_result_root/build-result.json"
+"$script_dir/build-fleck-app.sh" --result-file "$build_result"
 
-readonly app_bundle="$repo_root/.build/Fleck.app"
+if ! app_bundle="$("$identity_tool" read-result \
+  --repo "$repo_root" \
+  --result-file "$build_result" \
+  --flavor development)"; then
+  printf '%s\n' 'error: development packager returned an invalid result' >&2
+  exit 1
+fi
+if [[ ! -L "$validation_result_root" && -d "$validation_result_root" \
+  && "$(/usr/bin/stat -f '%d' "$validation_result_root")" == "$validation_result_device" \
+  && "$(/usr/bin/stat -f '%i' "$validation_result_root")" == "$validation_result_inode" ]]; then
+  /usr/bin/find "$validation_result_root" -depth -delete
+  validation_result_pending=0
+  trap - EXIT
+else
+  printf '%s\n' 'error: refusing to remove a substituted validation result directory' >&2
+  exit 1
+fi
+readonly app_bundle
 readonly app_binary="$app_bundle/Contents/MacOS/Fleck"
 readonly bundled_helper="$app_bundle/Contents/SharedSupport/fleck-agent"
 readonly bundled_mark="$app_bundle/Contents/Resources/fleck-mark.png"

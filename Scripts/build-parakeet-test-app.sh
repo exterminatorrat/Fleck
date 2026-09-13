@@ -10,18 +10,29 @@ readonly gemma_cleanup_package_manifest="$gemma_cleanup_package/Package.swift"
 readonly gemma_cleanup_resolved="$gemma_cleanup_package/Package.resolved"
 readonly info_plist="$repo_root/Sources/FleckApp/Info.plist"
 readonly canonical_mark="$repo_root/website/public/fleck-mark.png"
+readonly identity_tool="$script_dir/fleck-build-identity.py"
+readonly identity_mode="${FLECK_BUILD_IDENTITY_MODE:-local}"
 readonly manifest="$repo_root/Sources/FleckApp/Resources/EnhancedModelManifest.json"
 readonly notices="$repo_root/Sources/FleckApp/Resources/ThirdPartyNotices.md"
 readonly gemma_cleanup_manifest="$repo_root/Sources/FleckApp/Resources/GemmaCleanupModelManifest.json"
 readonly gemma_cleanup_notice="$repo_root/Sources/FleckApp/Resources/GemmaCleanupNotice.md"
 readonly build_root="$repo_root/.build"
 readonly output_root="$build_root/parakeet-test"
-readonly app_destination="$output_root/Fleck.app"
 readonly sibling_resource_output="$output_root/Fleck_FleckApp.bundle"
 readonly expected_bundle_identifier="com.harryjin.fleck"
 readonly lock_path="$build_root/.parakeet-test.lock"
 readonly lock_owner_marker_name=".parakeet-owner"
 readonly cleanup_marker_name=".parakeet-cleanup-owner"
+readonly identity_capture="$build_root/.parakeet-build-identity.$$.json"
+
+result_file=''
+if [[ $# -gt 0 ]]; then
+  if [[ $# -ne 2 || "$1" != '--result-file' || -z "$2" ]]; then
+    printf 'usage: %s [--result-file ABSOLUTE_PATH]\n' "${0##*/}" >&2
+    exit 2
+  fi
+  result_file="$2"
+fi
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   printf '%s\n' 'error: building the Parakeet test app requires macOS' >&2
@@ -98,6 +109,9 @@ readonly canonical_build_root="$(cd -- "$build_root" && pwd -P)"
 if [[ "$canonical_build_root" != "$build_root" ]]; then
   printf 'error: repository build root is not canonical: %s\n' "$build_root" >&2
   exit 1
+fi
+if [[ -n "$result_file" ]]; then
+  "$identity_tool" validate-result-path --repo "$repo_root" --result-file "$result_file"
 fi
 readonly requested_tmp_root="${TMPDIR:-/tmp}"
 if [[ ! -d "$requested_tmp_root" ]]; then
@@ -201,6 +215,12 @@ gemma_scratch_marker=""
 staging_marker=""
 lock_owner_marker=""
 lock_acquired=0
+app_destination=""
+publication_created=0
+published_device=""
+published_inode=""
+result_identity=""
+build_succeeded=0
 gemma_lock_backup=""
 gemma_lock_backup_ready=0
 readonly invocation_token="$(/usr/bin/uuidgen)"
@@ -256,6 +276,13 @@ cleanup() {
   local exit_code=$?
   local cleanup_status=0
   trap - EXIT HUP INT TERM
+  if (( publication_created != 0 && build_succeeded == 0 )) \
+    && [[ -n "$app_destination" && ! -L "$app_destination" && -d "$app_destination" \
+      && "$app_destination" == "$output_root"/Fleck\ *.app \
+      && "$(/usr/bin/stat -f '%d' "$app_destination" 2>/dev/null || true)" == "$published_device" \
+      && "$(/usr/bin/stat -f '%i' "$app_destination" 2>/dev/null || true)" == "$published_inode" ]]; then
+    /usr/bin/find "$app_destination" -depth -delete || cleanup_status=1
+  fi
   if (( gemma_lock_backup_ready != 0 )); then
     if [[ -L "$gemma_cleanup_resolved" ]]; then
       /bin/rm -f -- "$gemma_cleanup_resolved"
@@ -287,8 +314,24 @@ cleanup() {
   if ! release_lock; then
     cleanup_status=1
   fi
+  if [[ -f "$identity_capture" && ! -L "$identity_capture" ]]; then
+    if ! "$identity_tool" release --capture "$identity_capture"; then
+      cleanup_status=1
+    fi
+    if ! /bin/rm -f -- "$identity_capture"; then
+      cleanup_status=1
+    fi
+  fi
   if (( cleanup_status != 0 && exit_code == 0 )); then
     exit_code=1
+  fi
+  if (( exit_code != 0 )) && [[ -n "$result_identity" ]]; then
+    if ! "$identity_tool" remove-owned-result \
+      --repo "$repo_root" \
+      --result-file "$result_file" \
+      --identity "$result_identity"; then
+      exit_code=1
+    fi
   fi
   exit "$exit_code"
 }
@@ -319,6 +362,40 @@ fi
 if ! validate_lock_owner; then
   exit 1
 fi
+
+identity_test_arguments=()
+if [[ -n "${FLECK_BUILD_IDENTITY_TEST_ACCEPTED_ROOT:-}" \
+  || -n "${FLECK_BUILD_IDENTITY_TEST_DATABASE:-}" ]]; then
+  if [[ -z "${FLECK_BUILD_IDENTITY_TEST_ACCEPTED_ROOT:-}" \
+    || -z "${FLECK_BUILD_IDENTITY_TEST_DATABASE:-}" ]]; then
+    printf '%s\n' 'error: build identity test root and database must be supplied together' >&2
+    exit 1
+  fi
+  if [[ "$(/bin/cat "$repo_root/.fleck-build-identity-test-fixture" 2>/dev/null || true)" \
+    != 'fleck-build-identity-test-fixture-v1' ]]; then
+    printf '%s\n' 'error: build identity test injection is unavailable outside an explicit fixture' >&2
+    exit 1
+  fi
+  identity_test_arguments+=(
+    --test-accepted-root "$FLECK_BUILD_IDENTITY_TEST_ACCEPTED_ROOT"
+    --test-database "$FLECK_BUILD_IDENTITY_TEST_DATABASE"
+  )
+fi
+identity_nested_arguments=()
+if [[ -n "${FLECK_BUILD_IDENTITY_NESTED_TOKEN:-}" ]]; then
+  identity_nested_arguments+=(--nested-token "$FLECK_BUILD_IDENTITY_NESTED_TOKEN")
+fi
+"$identity_tool" begin \
+  --repo "$repo_root" \
+  --flavor parakeet \
+  --configuration Debug \
+  --mode "$identity_mode" \
+  --capture "$identity_capture" \
+  "${identity_test_arguments[@]+"${identity_test_arguments[@]}"}" \
+  "${identity_nested_arguments[@]+"${identity_nested_arguments[@]}"}"
+readonly artifact_label="$("$identity_tool" name --capture "$identity_capture")"
+app_destination="$output_root/$artifact_label.app"
+readonly app_destination
 
 if [[ -L "$output_root" || ( -e "$output_root" && ! -d "$output_root" ) ]]; then
   printf 'error: test app output root is not a directory: %s\n' "$output_root" >&2
@@ -689,6 +766,10 @@ for exact_pair in \
   fi
 done
 
+"$identity_tool" stamp \
+  --capture "$identity_capture" \
+  --plist "$staged_app/Contents/Info.plist"
+
 verify_arm64() {
   local executable="$1"
   local architectures
@@ -1015,6 +1096,10 @@ if /usr/bin/grep -Fq 'cdhash' <<<"$app_signature_requirement" \
   exit 1
 fi
 
+"$identity_tool" finish \
+  --capture "$identity_capture" \
+  --plist "$staged_app/Contents/Info.plist"
+
 if [[ -e "$app_destination" || -L "$app_destination" \
   || -e "$sibling_resource_output" || -L "$sibling_resource_output" ]]; then
   printf '%s\n' 'error: test app publication destinations must be unused' >&2
@@ -1037,7 +1122,10 @@ publish_atomic() {
   ' "$staged" "$destination"
 }
 
+published_device="$(/usr/bin/stat -f '%d' "$staged_app")"
+published_inode="$(/usr/bin/stat -f '%i' "$staged_app")"
 publish_atomic "$staged_app" "$app_destination"
+publication_created=1
 "$codesign_path" --verify --deep --strict "$app_destination"
 if [[ -e "$sibling_resource_output" || -L "$sibling_resource_output" ]]; then
   printf 'error: sibling resource bundle was published: %s\n' \
@@ -1084,6 +1172,27 @@ if ! /usr/bin/cmp -s \
   printf '%s\n' 'error: published Gemma cleanup notice differs from source' >&2
   exit 1
 fi
+
+"$identity_tool" verify \
+  --capture "$identity_capture" \
+  --plist "$app_destination/Contents/Info.plist"
+if [[ -n "$result_file" ]]; then
+  result_identity="$("$identity_tool" write-result \
+    --capture "$identity_capture" \
+    --app "$app_destination" \
+    --result-file "$result_file")"
+fi
+if [[ -n "${FLECK_PARAKEET_TEST_FAIL_AFTER_RESULT:-}" ]]; then
+  if [[ "$FLECK_PARAKEET_TEST_FAIL_AFTER_RESULT" != '1' \
+    || "$(/bin/cat "$repo_root/.fleck-build-identity-test-fixture" 2>/dev/null || true)" \
+      != 'fleck-build-identity-test-fixture-v1' ]]; then
+    printf '%s\n' 'error: post-result test failpoint is unavailable outside its explicit fixture' >&2
+    exit 1
+  fi
+  printf '%s\n' 'error: injected failure after result publication' >&2
+  exit 1
+fi
+build_succeeded=1
 
 printf 'Built arm64 ad-hoc Parakeet test app: %s\n' "$app_destination"
 printf 'Manual open command (not run):\n  /usr/bin/open -n "%s"\n' "$app_destination"

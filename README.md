@@ -104,17 +104,35 @@ The test runner does not launch the product `Fleck.app`, but its synthetic
 AppKit host may create fixture windows and change focus. Run native fixtures in
 a disposable macOS test account or session with synthetic content.
 
-Build the development-signed app bundle without launching it:
+Maintainer handoff packaging requires a clean committed source tree and the
+project's private accepted-build registry. It builds the development-signed app
+bundle without launching it:
 
 ```sh
-Scripts/build-fleck-app.sh
+mkdir -p .build
+RESULT_DIR="$(mktemp -d "$PWD/.build/development-result.XXXXXX")"
+RESULT_FILE="$RESULT_DIR/build-result.json"
+Scripts/build-fleck-app.sh --result-file "$RESULT_FILE"
+FLECK_APP="$(Scripts/fleck-build-identity.py read-result \
+  --repo "$PWD" \
+  --result-file "$RESULT_FILE" \
+  --flavor development)"
+printf 'Built %s\n' "$FLECK_APP"
 ```
 
 Interactive native testing is a separate, explicit step:
 
 ```sh
-/usr/bin/open -n .build/Fleck.app
+/usr/bin/open -n "$FLECK_APP"
 ```
+
+Every packaging invocation allocates an immutable
+`Fleck <version> Build <number>` app name. A requested result file appears only
+after the app is published and verified, so consumers use that exact path
+instead of guessing a newest artifact or replacing an earlier build.
+Hosted CI uses the explicit `ci-unverified` mode for non-handoff packaging;
+contributors without the private registry must not bypass the local checks or
+describe a CI artifact as accepted.
 
 Opening Fleck creates local Application Support data and may request macOS
 permissions. Use a disposable macOS test account and synthetic fixtures, never

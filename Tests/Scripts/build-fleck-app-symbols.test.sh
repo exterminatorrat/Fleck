@@ -4,7 +4,8 @@ set -euo pipefail
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/../.." && pwd -P)"
 readonly packager="$repo_root/Scripts/build-fleck-app.sh"
-readonly test_root="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/fleck-app-symbols.XXXXXX")"
+readonly identity_tool="$repo_root/Scripts/fleck-build-identity.py"
+readonly test_root="$(cd -P -- "$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/fleck-app-symbols.XXXXXX")" && pwd)"
 
 cleanup() {
   /usr/bin/find "$test_root" -depth -delete
@@ -32,6 +33,23 @@ launch_sentinel="$test_root/launched"
   "$fixture_root/website/public" \
   "$fake_bin"
 /bin/cp "$packager" "$fixture_root/Scripts/build-fleck-app.sh"
+/bin/cp "$identity_tool" "$fixture_root/Scripts/fleck-build-identity.py"
+printf '1.0.3-beta.1\n' > "$fixture_root/VERSION"
+cat > "$fixture_root/CHANGELOG.md" <<'CHANGELOG'
+# Changelog
+
+## [1.0.3-beta.1] - 2026-09-13
+CHANGELOG
+cat > "$fixture_root/BuildBaseline.json" <<'BASELINE'
+{
+  "schemaVersion": 1,
+  "canonicalManifestSHA256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "selectedRecordID": "fixture-accepted",
+  "acceptedSourceCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "acceptedSourceTree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "requiredRegistryStatus": "active"
+}
+BASELINE
 cat > "$fixture_root/Sources/FleckApp/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -53,6 +71,20 @@ SCRIPT
 cat > "$fake_bin/xcodebuild" <<'SCRIPT'
 #!/bin/sh
 printf 'Xcode fixture\n'
+SCRIPT
+cat > "$fake_bin/git" <<SCRIPT
+#!/bin/bash
+set -euo pipefail
+if [[ "\${1:-}" == '-C' ]]; then shift 2; fi
+case "\${1:-} \${2:-}" in
+  'rev-parse --show-toplevel') printf '%s\n' '$fixture_root' ;;
+  'rev-parse HEAD^{commit}') printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ;;
+  'rev-parse HEAD^{tree}') printf '%s\n' 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' ;;
+  'ls-files -v') ;;
+  'status --porcelain=v1') ;;
+  'merge-base --is-ancestor') ;;
+  *) exit 2 ;;
+esac
 SCRIPT
 cat > "$fake_bin/swift" <<'SCRIPT'
 #!/bin/bash
@@ -102,21 +134,37 @@ if [[ "$1" == 'strip' && "$2" == '-S' && $# == 3 ]]; then
 fi
 exit 2
 SCRIPT
-/bin/chmod 755 "$fake_bin"/* "$fixture_root/Scripts/build-fleck-app.sh"
+/bin/chmod 755 \
+  "$fake_bin"/* \
+  "$fixture_root/Scripts/build-fleck-app.sh" \
+  "$fixture_root/Scripts/fleck-build-identity.py"
 
 run_packager() {
+  local result_file="$1"
+  shift
   /usr/bin/env \
     PATH="$fake_bin:/usr/bin:/bin" \
+    CI=true \
+    GITHUB_ACTIONS=true \
+    FLECK_BUILD_IDENTITY_MODE=ci-unverified \
     FLECK_TEST_FAKE_BIN="$fake_bin" \
     FLECK_TEST_LAUNCH_SENTINEL="$launch_sentinel" \
     FLECK_TEST_STRIP_LOG="$strip_log" \
     "$@" \
-    "$fixture_root/Scripts/build-fleck-app.sh"
+    "$fixture_root/Scripts/build-fleck-app.sh" \
+    --result-file "$result_file"
 }
 
-run_packager >/dev/null
+results="$fixture_root/.build/results"
+/bin/mkdir -p "$results"
+first_result="$results/first.json"
+run_packager "$first_result" >/dev/null
 original="$fixture_root/.build/release/Fleck"
-packaged="$fixture_root/.build/Fleck.app/Contents/MacOS/Fleck"
+packaged_app="$("$fixture_root/Scripts/fleck-build-identity.py" read-result \
+  --repo "$fixture_root" \
+  --result-file "$first_result" \
+  --flavor development)"
+packaged="$packaged_app/Contents/MacOS/Fleck"
 test -f "$original"
 test -f "$packaged"
 /usr/bin/grep -Fq 'DEBUG_SYMBOLS' "$original" \
@@ -128,11 +176,11 @@ fi
   || fail 'packager did not strip exactly one executable'
 [[ "$(/bin/cat "$strip_log")" == *'/.build/.fleck-app.'*'/Fleck.app/Contents/MacOS/Fleck' ]] \
   || fail 'packager stripped a non-staged executable'
-/usr/bin/codesign --verify --deep --strict "$fixture_root/.build/Fleck.app"
+/usr/bin/codesign --verify --deep --strict "$packaged_app"
 test ! -e "$launch_sentinel" || fail 'packager launched the executable'
 
 packaged_hash="$(/usr/bin/shasum -a 256 "$packaged" | /usr/bin/awk '{print $1}')"
-if run_packager FLECK_TEST_STRIP_FAIL=1 >/dev/null 2>&1; then
+if run_packager "$results/failed.json" FLECK_TEST_STRIP_FAIL=1 >/dev/null 2>&1; then
   fail 'packager continued after strip failed'
 fi
 [[ "$(/usr/bin/shasum -a 256 "$packaged" | /usr/bin/awk '{print $1}')" == "$packaged_hash" ]] \
