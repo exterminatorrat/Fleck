@@ -243,7 +243,9 @@ import Testing
     await runtime.waitUntilColdForModelMutation()
     await completions.mark()
   }
-  await Task.yield()
+  try await waitForRuntimeCondition("model mutation waiter to register") {
+    await runtime.modelMutationWaiterCountForTesting == 1
+  }
   #expect(await completions.count == 0)
 
   await asrLoadGate.openGate()
@@ -262,6 +264,9 @@ import Testing
     return
   }
 
+  try await waitForRuntimeCondition("model mutation to finish") {
+    await completions.count == 1
+  }
   await mutation.value
   #expect(await completions.count == 1)
   #expect(await runtime.snapshot().residency == .active)
@@ -675,11 +680,16 @@ import Testing
     await runtime.waitUntilColdForModelMutation()
     await completions.mark()
   }
-  await Task.yield()
+  try await waitForRuntimeCondition("model mutation waiter to register") {
+    await runtime.modelMutationWaiterCountForTesting == 1
+  }
   #expect(await completions.count == 0)
   #expect(await asr.unloadCallCount == 0)
 
   await asrLoadGate.openGate()
+  try await waitForRuntimeCondition("model mutation to finish") {
+    await completions.count == 1
+  }
   await preparation.value
   await mutation.value
 
@@ -709,7 +719,9 @@ import Testing
     await runtime.waitUntilColdForModelMutation()
     await completions.mark()
   }
-  await Task.yield()
+  try await waitForRuntimeCondition("model mutation waiter to register") {
+    await runtime.modelMutationWaiterCountForTesting == 1
+  }
   #expect(await completions.count == 0)
   #expect(await cleanup.unloadCallCount == 1)
   await #expect(throws: LocalDictationRuntimeError.modelMutationInProgress) {
@@ -717,6 +729,9 @@ import Testing
   }
 
   await cleanupUnloadGate.openGate()
+  try await waitForRuntimeCondition("model mutation to finish") {
+    await completions.count == 1
+  }
   await mutation.value
 
   #expect(await completions.count == 1)
@@ -739,12 +754,14 @@ import Testing
     await runtime.waitUntilColdForModelMutation()
     await completions.mark()
   }
-  await Task.yield()
   let secondWaiter = Task {
     await runtime.waitUntilColdForModelMutation()
     await completions.mark()
   }
-  await Task.yield()
+  try await waitForRuntimeCondition("both model mutation waiters to register") {
+    await runtime.modelMutationWaiterCountForTesting == 2
+  }
+  #expect(await completions.count == 0)
 
   await #expect(throws: LocalDictationRuntimeError.modelMutationInProgress) {
     try await runtime.acquireCaptureLease()
@@ -753,13 +770,18 @@ import Testing
   let release = Task {
     await runtime.releaseCaptureLease(lease)
   }
-  await asrUnloadGate.waitUntilWaiting()
+  try await waitForRuntimeCondition("release to reach the ASR unload gate") {
+    await asrUnloadGate.isWaiting
+  }
   #expect(await completions.count == 0)
   await #expect(throws: LocalDictationRuntimeError.modelMutationInProgress) {
     try await runtime.acquireCaptureLease()
   }
 
   await asrUnloadGate.openGate()
+  try await waitForRuntimeCondition("both model mutation waiters to finish") {
+    await completions.count == 2
+  }
   await release.value
   await firstWaiter.value
   await secondWaiter.value
@@ -916,6 +938,18 @@ import Testing
   #expect(labels == ["residency", "asrHealth", "cleanupHealth", "hasActiveLease"])
 }
 
+private func waitForRuntimeCondition(
+  _ comment: Comment,
+  sourceLocation: SourceLocation = #_sourceLocation,
+  _ condition: () async -> Bool
+) async throws {
+  let deadline = ContinuousClock.now + .seconds(5)
+  while !(await condition()) {
+    try #require(ContinuousClock.now < deadline, comment, sourceLocation: sourceLocation)
+    await Task.yield()
+  }
+}
+
 private func makeRuntime(
   asr: FakeRuntimeAdapter,
   cleanup: FakeRuntimeAdapter,
@@ -1027,6 +1061,10 @@ private actor AsyncRuntimeGate {
   private var isOpen = false
   private var waiters: [CheckedContinuation<Void, Never>] = []
   private var waitingObservers: [CheckedContinuation<Void, Never>] = []
+
+  var isWaiting: Bool {
+    !waiters.isEmpty
+  }
 
   func wait() async {
     guard !isOpen else { return }
