@@ -485,6 +485,9 @@
     private let forceEnhancedInferenceCold: @MainActor () async -> Void
     private let disableCleanup: @MainActor () -> Void
     private let drainCleanup: @MainActor () async -> Void
+    private let escapeRegistrar: any EscapeHotKeyRegistering
+    private let scheduleEscapeCancellation:
+      @MainActor (@escaping @MainActor () async -> Void) -> Void
     private var desiredModifier: DictationModifierKey?
     private var needsModifierApplication = false
     private var capsuleOwner: CapsuleOwner?
@@ -502,6 +505,9 @@
     private var preloadCapsuleUpdate: CapsuleUpdate?
     private var lastCoordinatorEvent: DictationCoordinatorEvent?
     private var activeOwnership: DictationShortcutOwnership?
+    private var escapeAttemptedSessionID: UUID?
+    private var escapeBoundSessionID: UUID?
+    private var escapeCancellationRequestedSessionID: UUID?
     private var openSettingsBridge: (@MainActor () -> Void)?
     private var startupAssessmentTask: Task<Void, Never>?
     private var initialLoadSynchronizationTask: Task<Void, Never>?
@@ -762,6 +768,11 @@
       capsuleSleeper: @escaping @MainActor (Duration) async -> Void = { duration in
         try? await Task.sleep(for: duration)
       },
+      scheduleEscapeCancellation: @escaping @MainActor (
+        @escaping @MainActor () async -> Void
+      ) -> Void = { operation in
+        _ = Task { @MainActor in await operation() }
+      },
       startResourceMonitoring: @escaping @MainActor () -> Void = {},
       stopResourceMonitoring: @escaping @MainActor () -> Void = {},
       forceEnhancedInferenceCold: @escaping @MainActor () async -> Void = {},
@@ -782,6 +793,10 @@
       self.engineProvider = engineProvider
       self.coordinator = coordinator
       self.shortcutController = shortcutController
+      guard let escapeRegistrar = shortcutController.takeEscapeRegistrarForRuntime() else {
+        preconditionFailure("DictationRuntime requires idle Escape registrar ownership")
+      }
+      self.escapeRegistrar = escapeRegistrar
       self.capsuleController = capsuleController
       let resolvedPersonalDictionaryStore = personalDictionaryStore
         ?? PersonalDictionaryStore(rootURL: AgentBridgeEndpoint.applicationSupportURL())
@@ -796,6 +811,7 @@
           context: .cleanup(fallbackLabel: "Faithful Local Fallback")
         )
       self.capsuleSleeper = capsuleSleeper
+      self.scheduleEscapeCancellation = scheduleEscapeCancellation
       self.stopResourceMonitoring = stopResourceMonitoring
       self.forceEnhancedInferenceCold = forceEnhancedInferenceCold
       self.disableCleanup = disableCleanup
@@ -822,6 +838,9 @@
       )
       phase = coordinator.phase
       modifierMonitorState = shortcutController.monitorState
+      escapeRegistrar.eventHandler = { [weak self] in
+        self?.receiveEscapeHotKey()
+      }
 
       cleanupPresentationSubscription = self.cleanupAdmittedModelSettingsViewModel
         .$presentation
@@ -1210,6 +1229,7 @@
       }
       shutdownCount += 1
       invalidateCapsuleReturn()
+      tearDownEscapeRegistration()
       let startupAssessmentTask = startupAssessmentTask
       let initialLoadSynchronizationTask = initialLoadSynchronizationTask
       let terminalSynchronizationTask = terminalSynchronizationTask
@@ -1288,6 +1308,7 @@
     }
 
     private func receive(_ event: DictationCoordinatorEvent) {
+      updateEscapeRegistration(for: event)
       lastCoordinatorEvent = event
       activeOwnership = shortcutController.activeOwnership
       phase = event.phase
@@ -1321,6 +1342,84 @@
       #endif
       presentCapsuleUpdate(.coordinator(event))
       synchronizeAfter(event)
+    }
+
+    private func updateEscapeRegistration(for event: DictationCoordinatorEvent) {
+      guard let sessionID = event.context?.sessionID else { return }
+      if event.terminal != nil {
+        guard escapeAttemptedSessionID == sessionID else { return }
+        escapeAttemptedSessionID = nil
+        escapeBoundSessionID = nil
+        escapeCancellationRequestedSessionID = nil
+        unregisterEscape()
+        return
+      }
+      guard event.phase == .arming, escapeAttemptedSessionID != sessionID else { return }
+      escapeAttemptedSessionID = sessionID
+      escapeBoundSessionID = sessionID
+      escapeCancellationRequestedSessionID = nil
+      do {
+        try escapeRegistrar.register(
+          modifier: shortcutController.registeredModifier
+            ?? appState?.preferences.dictationModifierKey
+        )
+      } catch {
+        appState?.saveError =
+          "Escape cancellation could not be enabled for this recording. Use Cancel Dictation."
+      }
+    }
+
+    private func receiveEscapeHotKey() {
+      guard
+        let sessionID = escapeBoundSessionID,
+        escapeCancellationRequestedSessionID != sessionID
+      else { return }
+      let shortcutSession: DictationShortcutSession?
+      if let ownership = shortcutController.activeOwnership {
+        guard
+          ownership.session.id == sessionID,
+          shortcutController.prepareRuntimeEscapeCancellation(ownership.session)
+        else { return }
+        shortcutSession = ownership.session
+      } else {
+        shortcutSession = nil
+      }
+      escapeCancellationRequestedSessionID = sessionID
+      scheduleEscapeCancellation { [weak self] in
+        guard
+          let self,
+          self.escapeBoundSessionID == sessionID,
+          self.lastCoordinatorEvent?.terminal == nil,
+          self.lastCoordinatorEvent?.context?.sessionID == sessionID
+        else { return }
+        if let shortcutSession {
+          await self.shortcutController.deliverPreparedRuntimeEscapeCancellation(shortcutSession)
+        } else {
+          await self.coordinator.cancel()
+        }
+      }
+    }
+
+    @discardableResult
+    private func unregisterEscape() -> Bool {
+      do {
+        try escapeRegistrar.unregister()
+        return true
+      } catch {
+        appState?.saveError =
+          "Escape cancellation could not be disabled. The shortcut may remain reserved until Fleck quits."
+        return false
+      }
+    }
+
+    private func tearDownEscapeRegistration() {
+      escapeBoundSessionID = nil
+      escapeAttemptedSessionID = nil
+      escapeCancellationRequestedSessionID = nil
+      escapeRegistrar.eventHandler = nil
+      if !unregisterEscape() {
+        unregisterEscape()
+      }
     }
 
     private func receiveOwnership(_ ownership: DictationShortcutOwnership?) {
@@ -2033,9 +2132,18 @@
       let forceEnhancedInferenceCold = forceEnhancedInferenceCold
       let disableCleanup = disableCleanup
       let drainCleanup = drainCleanup
+      let escapeRegistrar = escapeRegistrar
+      let appState = appState
       stopResourceMonitoring()
       disableCleanup()
       Task { @MainActor in
+        escapeRegistrar.eventHandler = nil
+        do {
+          try escapeRegistrar.unregister()
+        } catch {
+          appState?.saveError =
+            "Escape cancellation could not be disabled. The shortcut may remain reserved until Fleck quits."
+        }
         await coordinator.cancel()
         await coordinator.waitForTerminal()
         await drainCleanup()

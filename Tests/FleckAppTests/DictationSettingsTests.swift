@@ -1564,7 +1564,6 @@ private func settleSettingsHost(_ view: NSView) async {
 @Test func dictationShortcutHelpModeDismissesOnlyTheHealthyIdleGuide() {
   #expect(DictationShortcutHelpMode.readyTutorial.canDismissGuide)
   #expect(!DictationShortcutHelpMode.recovery.canDismissGuide)
-  #expect(!DictationShortcutHelpMode.activeDestination.canDismissGuide)
   #expect(
     DictationShortcutHelpMode.resolve(
       isReady: true,
@@ -1591,8 +1590,115 @@ private func settleSettingsHost(_ view: NSView) async {
       isReady: true,
       isCaptureActive: true,
       showsGuide: false
-    ) == .activeDestination
+    ) == nil
   )
+}
+
+@Test func dictationShortcutHelpModeOmitsEveryActiveCaptureGuide() {
+  for isReady in [false, true] {
+    for showsGuide in [false, true] {
+      #expect(
+        DictationShortcutHelpMode.resolve(
+          isReady: isReady,
+          isCaptureActive: true,
+          showsGuide: showsGuide
+        ) == nil
+      )
+    }
+  }
+}
+
+@Test @MainActor
+func hostedNotesPanelOmitsActiveDestinationGuideForFocusedAndSmartCapture()
+  async throws
+{
+  let note = Note(title: "Example note")
+  let fixture = try await RuntimeFixture(finalText: nil, routingNotes: [note])
+  await fixture.runtime.awaitStartupAssessment()
+  let editorCommands = EditorCommands()
+  let size = NSSize(width: 720, height: 480)
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: fixture.runtime,
+      sizing: .container,
+      editorCommands: editorCommands
+    )
+    .environmentObject(fixture.appState)
+    .frame(width: size.width, height: size.height)
+  )
+  let window = DictationKeyWindowProbe(
+    contentRect: NSRect(origin: .zero, size: size),
+    styleMask: [.borderless],
+    backing: .buffered,
+    defer: false
+  )
+  window.isReleasedWhenClosed = false
+  window.contentView = host
+  await settleSettingsHost(host)
+  defer {
+    window.contentView = nil
+    window.close()
+  }
+
+  func capture(_ name: String) throws -> Data {
+    let image = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+    host.cacheDisplay(in: host.bounds, to: image)
+    let pngData = try #require(image.representation(using: .png, properties: [:]))
+    #expect(!pngData.isEmpty)
+    if let captureDirectory = ProcessInfo.processInfo.environment[
+      "FLECK_DICTATION_BANNER_CAPTURE_DIR"
+    ] {
+      let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      try pngData.write(to: directory.appendingPathComponent(name + ".png"))
+    }
+    return pngData
+  }
+
+  #expect(fixture.appState.preferences.showDictationShortcutGuide)
+  #expect(
+    DictationShortcutHelpMode.resolve(
+      isReady: fixture.runtime.modifierShortcutPresentation.isReady,
+      isCaptureActive: fixture.runtime.canCancel,
+      showsGuide: fixture.appState.preferences.showDictationShortcutGuide
+    ) == .readyTutorial
+  )
+  let idleImage = try capture("notes-panel-idle-guide")
+
+  let textView = try #require(editorCommands.textView)
+  window.reportsKey = true
+  #expect(window.makeFirstResponder(textView))
+  await fixture.runtime.toggle()
+  #expect(fixture.runtime.canCancel)
+  #expect(fixture.runtime.destinationGuidanceCopy == "Dictating into Example note")
+  #expect(
+    DictationShortcutHelpMode.resolve(
+      isReady: fixture.runtime.modifierShortcutPresentation.isReady,
+      isCaptureActive: fixture.runtime.canCancel,
+      showsGuide: fixture.appState.preferences.showDictationShortcutGuide
+    ) == nil
+  )
+  await settleSettingsHost(host)
+  let focusedImage = try capture("notes-panel-active-focused")
+  #expect(focusedImage != idleImage)
+  await fixture.runtime.cancel()
+
+  _ = window.makeFirstResponder(nil)
+  window.reportsKey = false
+  await fixture.runtime.toggle()
+  #expect(fixture.runtime.canCancel)
+  #expect(fixture.runtime.destinationGuidanceCopy == "Smart Capture")
+  #expect(
+    DictationShortcutHelpMode.resolve(
+      isReady: fixture.runtime.modifierShortcutPresentation.isReady,
+      isCaptureActive: fixture.runtime.canCancel,
+      showsGuide: fixture.appState.preferences.showDictationShortcutGuide
+    ) == nil
+  )
+  await settleSettingsHost(host)
+  let smartCaptureImage = try capture("notes-panel-active-smart-capture")
+  #expect(smartCaptureImage != idleImage)
+  await fixture.runtime.cancel()
 }
 
 @Test func notesPanelExposesModifierMonitoringRecoveryBesideTheEditor() throws {
@@ -3866,6 +3972,147 @@ func DictationRuntimeDeinitStopsAndCoolsWhenFinalReleaseHappensOffMainActor()
   ])
 }
 
+@Test @MainActor func DictationRuntimeRegistersEscapeDuringSuspendedCaptureStartup()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: "saved")
+  let providerGate = DictationTestGate()
+  fixture.provider.gate = providerGate
+  let starting = Task { await fixture.runtime.toggle() }
+  await fixture.provider.waitUntilRequested()
+
+  #expect(fixture.runtime.phase == .arming)
+  #expect(fixture.escapeRegistrar.registerCount == 1)
+  #expect(fixture.escapeRegistrar.isRegistered)
+
+  fixture.escapeRegistrar.emit()
+  await providerGate.open()
+  await starting.value
+  for _ in 0..<100 where fixture.runtime.phase != .idle {
+    await Task.yield()
+  }
+  #expect(fixture.runtime.phase == .idle)
+  #expect(fixture.engine.cancelCount == 1)
+  #expect(fixture.escapeRegistrar.unregisterCount == 1)
+}
+
+@Test @MainActor func DictationRuntimeEscapeIsOnceOnlyAndInactiveOutsideCapture() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved")
+  fixture.escapeRegistrar.emit()
+  #expect(fixture.engine.cancelCount == 0)
+
+  await fixture.runtime.toggle()
+  fixture.escapeRegistrar.emit()
+  fixture.escapeRegistrar.emit()
+  for _ in 0..<100 where fixture.runtime.phase != .idle {
+    await Task.yield()
+  }
+
+  #expect(fixture.runtime.phase == .idle)
+  #expect(fixture.engine.cancelCount == 1)
+  #expect(fixture.escapeRegistrar.registerCount == 1)
+  #expect(fixture.escapeRegistrar.unregisterCount == 1)
+  fixture.escapeRegistrar.emit()
+  await Task.yield()
+  #expect(fixture.engine.cancelCount == 1)
+}
+
+@Test @MainActor func DictationRuntimeQueuedEscapeCannotCancelNextCapture() async throws {
+  let queue = RuntimeEscapeOperationQueue()
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    scheduleEscapeCancellation: { operation in queue.append(operation) }
+  )
+  await fixture.runtime.toggle()
+  fixture.escapeRegistrar.emit()
+  fixture.escapeRegistrar.emit()
+  #expect(queue.count == 1)
+
+  await fixture.runtime.cancel()
+  await fixture.runtime.toggle()
+  #expect(fixture.runtime.phase == .listening(mode: .smartCapture, engine: .standard))
+
+  await queue.runFirst()
+  #expect(fixture.runtime.phase == .listening(mode: .smartCapture, engine: .standard))
+
+  fixture.escapeRegistrar.emit()
+  await queue.runFirst()
+  #expect(fixture.runtime.phase == .idle)
+}
+
+@Test @MainActor func DictationRuntimePinsEffectiveModifierForEscapeCapture() async throws {
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    preferredModifier: .rightOption
+  )
+  await fixture.runtime.awaitStartupAssessment()
+  #expect(fixture.runtime.actualModifier == .rightOption)
+
+  await fixture.runtime.toggle()
+  fixture.appState.preferences.dictationModifierKey = .leftControl
+
+  #expect(fixture.escapeRegistrar.registeredModifiers == [.rightOption])
+  await fixture.runtime.cancel()
+  #expect(fixture.escapeRegistrar.unregisterCount == 1)
+}
+
+@Test @MainActor func DictationRuntimeEscapeRegistrationFailureWarnsWithoutStoppingCapture()
+  async throws
+{
+  let fixture = try await RuntimeFixture(
+    finalText: "saved",
+    escapeRegisterError: GlobalHoldShortcut.RegistrationError.system(-70)
+  )
+
+  await fixture.runtime.toggle()
+
+  #expect(fixture.runtime.phase == .listening(mode: .smartCapture, engine: .standard))
+  #expect(fixture.escapeRegistrar.registerCount == 1)
+  #expect(fixture.engine.finishCount == 0)
+  #expect(fixture.engine.cancelCount == 0)
+  #expect(fixture.history.records.isEmpty)
+  #expect(fixture.appState.saveError
+    == "Escape cancellation could not be enabled for this recording. Use Cancel Dictation.")
+
+  fixture.escapeRegistrar.emit()
+  await Task.yield()
+  #expect(fixture.engine.cancelCount == 0)
+  await fixture.runtime.cancel()
+  #expect(fixture.engine.cancelCount == 1)
+  #expect(fixture.escapeRegistrar.registerCount == 1)
+}
+
+@Test @MainActor func DictationRuntimeShutdownCleansRuntimeOwnedEscapeOnce() async throws {
+  let fixture = try await RuntimeFixture(finalText: "saved")
+  await fixture.runtime.toggle()
+
+  await fixture.runtime.shutdown()
+  await fixture.runtime.shutdown()
+
+  #expect(fixture.escapeRegistrar.unregisterCount == 1)
+  #expect(fixture.escapeRegistrar.eventHandler == nil)
+}
+
+@Test @MainActor func DictationRuntimeReportsEscapeCleanupFailureAndRetriesAtShutdown()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: "saved")
+  await fixture.runtime.toggle()
+  fixture.escapeRegistrar.unregisterError =
+    GlobalHoldShortcut.RegistrationError.system(-71)
+
+  await fixture.runtime.cancel()
+
+  #expect(fixture.escapeRegistrar.unregisterCount == 1)
+  #expect(fixture.appState.saveError
+    == "Escape cancellation could not be disabled. The shortcut may remain reserved until Fleck quits.")
+
+  fixture.escapeRegistrar.unregisterError = nil
+  await fixture.runtime.shutdown()
+  #expect(fixture.escapeRegistrar.unregisterCount == 2)
+  #expect(!fixture.escapeRegistrar.isRegistered)
+}
+
 private func historyRecord(
   raw: String,
   cleaned: String?,
@@ -4022,9 +4269,15 @@ private final class RuntimeFixture {
     cleanupFails: Bool = false,
     historySaveFailureAttempt: Int? = nil,
     historySaveBlockingAttempt: Int? = nil,
+    escapeRegisterError: Error? = nil,
     saving: (any DictationSaving)? = nil,
     capsuleSleeper: @escaping @MainActor (Duration) async -> Void = { duration in
       try? await Task.sleep(for: duration)
+    },
+    scheduleEscapeCancellation: @escaping @MainActor (
+      @escaping @MainActor () async -> Void
+    ) -> Void = { operation in
+      _ = Task { @MainActor in await operation() }
     }
   ) async throws {
     let root = FileManager.default.temporaryDirectory
@@ -4068,6 +4321,7 @@ private final class RuntimeFixture {
     }
     monitor.accessGranted = monitorAccessGranted
     monitor.requestAccessResult = monitorRequestAccessResult
+    escapeRegistrar.registerError = escapeRegisterError
     engine = RuntimeSpeechEngine(
       finalText: finalText,
       kind: preferredEngine,
@@ -4144,6 +4398,7 @@ private final class RuntimeFixture {
       admittedModelSettingsViewModel: admittedModelSettingsViewModel,
       availabilityProvider: availabilityProvider ?? { availability },
       capsuleSleeper: capsuleSleeper,
+      scheduleEscapeCancellation: scheduleEscapeCancellation,
       startResourceMonitoring: {
         resourceLifecycle?.append(.monitorStarted)
       },
@@ -4201,9 +4456,50 @@ private final class RuntimeModifierMonitor: ModifierKeyMonitoring {
 @MainActor
 private final class RuntimeEscapeRegistrar: EscapeHotKeyRegistering {
   var eventHandler: (() -> Void)?
+  var registerError: Error?
+  var unregisterError: Error?
+  private(set) var registerCount = 0
+  private(set) var unregisterCount = 0
+  private(set) var registeredModifiers: [DictationModifierKey?] = []
+  private(set) var isRegistered = false
 
-  func register() throws {}
-  func unregister() {}
+  func register() throws {
+    try register(modifier: nil)
+  }
+
+  func register(modifier: DictationModifierKey?) throws {
+    registerCount += 1
+    registeredModifiers.append(modifier)
+    if let registerError { throw registerError }
+    isRegistered = true
+  }
+
+  func unregister() throws {
+    guard isRegistered else { return }
+    unregisterCount += 1
+    if let unregisterError { throw unregisterError }
+    isRegistered = false
+  }
+
+  func emit() {
+    guard isRegistered else { return }
+    eventHandler?()
+  }
+}
+
+@MainActor
+private final class RuntimeEscapeOperationQueue {
+  private var operations: [@MainActor () async -> Void] = []
+  var count: Int { operations.count }
+
+  func append(_ operation: @escaping @MainActor () async -> Void) {
+    operations.append(operation)
+  }
+
+  func runFirst() async {
+    guard !operations.isEmpty else { return }
+    await operations.removeFirst()()
+  }
 }
 
 @MainActor
@@ -4243,6 +4539,8 @@ private final class RuntimeSpeechEngine: SpeechEngine {
   var startGate: DictationTestGate?
   var finishGate: DictationTestGate?
   var releaseGate: DictationTestGate?
+  private(set) var finishCount = 0
+  private(set) var cancelCount = 0
   private(set) var releaseCount = 0
   private var level: (@MainActor (Float) -> Void)?
   private var levelCallbacks: [@MainActor (Float) -> Void] = []
@@ -4271,11 +4569,12 @@ private final class RuntimeSpeechEngine: SpeechEngine {
   }
 
   func finish() async throws -> String? {
+    finishCount += 1
     if let finishGate { await finishGate.wait() }
     return finalText
   }
 
-  func cancel() async {}
+  func cancel() async { cancelCount += 1 }
   func emitLevel(_ value: Float) { level?(value) }
   func emitLevel(fromCaptureAt index: Int, value: Float) {
     levelCallbacks[index](value)

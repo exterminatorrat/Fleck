@@ -3,6 +3,19 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.0.6-beta.1] - 2026-09-13
+
+### Changed
+
+- Removed the active-capture destination guidance banner above the editor.
+
+## [1.0.5-beta.1] - 2026-09-13
+
+### Fixed
+
+- Made Escape cancel every active dictation capture, including toolbar, modifier-hold, and
+  capsule starts, with plain Escape or the configured Option, Control, or Command modifier.
+
 ## [1.0.4-beta.1] - 2026-09-13
 
 ### Changed

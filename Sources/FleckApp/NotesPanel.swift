@@ -3210,21 +3210,17 @@
 
     var body: some View {
       HStack(spacing: 8) {
-        Image(systemName: mode == .activeDestination
-          ? "scope"
-          : presentation.recoveryAction == nil
-            ? "keyboard"
-            : "keyboard.badge.ellipsis")
+        Image(systemName: presentation.recoveryAction == nil
+          ? "keyboard"
+          : "keyboard.badge.ellipsis")
           .foregroundStyle(.secondary)
         VStack(alignment: .leading, spacing: 1) {
-          if mode != .activeDestination {
-            Text(presentation.statusCopy)
-              .font(.caption)
-            if let detail = presentation.detailCopy {
-              Text(detail)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            }
+          Text(presentation.statusCopy)
+            .font(.caption)
+          if let detail = presentation.detailCopy {
+            Text(detail)
+              .font(.caption2)
+              .foregroundStyle(.secondary)
           }
           if mode != .recovery {
             HStack(spacing: 4) {
@@ -3271,11 +3267,7 @@
       .frame(maxWidth: .infinity, alignment: .leading)
       .background(.quaternary.opacity(0.35))
       .accessibilityElement(children: .contain)
-      .accessibilityLabel(
-        mode == .activeDestination
-          ? "Dictation destination. \(destinationCopy)"
-          : presentation.capsuleAccessibilityLabel
-      )
+      .accessibilityLabel(presentation.capsuleAccessibilityLabel)
     }
   }
 

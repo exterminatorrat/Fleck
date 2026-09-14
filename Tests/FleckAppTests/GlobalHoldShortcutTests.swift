@@ -418,6 +418,42 @@ func physicalGestureReceiptReachesHandlerBeforeQueuedEndDelivery() async throws 
   #expect(fixture.escape.eventHandler == nil)
 }
 
+@Test @MainActor func runtimeTakesEscapeRegistrarOnlyOnceWhileIdle() async {
+  let fixture = ShortcutFixture()
+
+  let registrar = fixture.shortcut.takeEscapeRegistrarForRuntime()
+
+  #expect((registrar as AnyObject?) === fixture.escape)
+  #expect(fixture.shortcut.takeEscapeRegistrarForRuntime() == nil)
+  #expect(fixture.escape.eventHandler == nil)
+}
+
+@Test @MainActor func runtimeOwnedEscapeSurvivesShortcutUninstall() async {
+  let fixture = ShortcutFixture()
+  let registrar = fixture.shortcut.takeEscapeRegistrarForRuntime()
+  var deliveries = 0
+  registrar?.eventHandler = { deliveries += 1 }
+
+  await fixture.shortcut.uninstall()
+  fixture.escape.emit()
+
+  #expect(deliveries == 1)
+  #expect(fixture.escape.unregisterCount == 0)
+  #expect(fixture.escape.eventHandler != nil)
+}
+
+@Test @MainActor func activeShortcutCannotTransferEscapeRegistrar() async {
+  let fixture = ShortcutFixture()
+  fixture.handler.autoCompleteTerminal = false
+  #expect(fixture.shortcut.startPointerHandsFree())
+
+  #expect(fixture.shortcut.takeEscapeRegistrarForRuntime() == nil)
+
+  await fixture.shortcut.cancelOwnedSession()
+  fixture.handler.completeCurrentTerminal()
+  await fixture.shortcut.waitForTerminalObservation()
+}
+
 @Test @MainActor func configurationAfterUninstallIsRejected() async throws {
   let fixture = ShortcutFixture()
   try fixture.shortcut.configure(.rightOption)
@@ -599,7 +635,9 @@ func physicalGestureReceiptReachesHandlerBeforeQueuedEndDelivery() async throws 
 @Test @MainActor func escapeCancelsPointerSessionExactlyOnce() async throws {
   let fixture = ShortcutFixture()
   fixture.handler.autoCompleteTerminal = false
+  try fixture.shortcut.configure(.rightOption)
   #expect(fixture.shortcut.startPointerHandsFree())
+  #expect(fixture.escape.registeredModifiers == [.rightOption])
 
   fixture.escape.emit()
   fixture.escape.emit()
@@ -922,9 +960,15 @@ private final class EscapeRegistrarSpy: EscapeHotKeyRegistering {
   var eventHandler: (() -> Void)?
   private(set) var registerCount = 0
   private(set) var unregisterCount = 0
+  private(set) var registeredModifiers: [DictationModifierKey?] = []
 
   func register() throws {
     registerCount += 1
+  }
+
+  func register(modifier: DictationModifierKey?) throws {
+    registerCount += 1
+    registeredModifiers.append(modifier)
   }
 
   func unregister() {
