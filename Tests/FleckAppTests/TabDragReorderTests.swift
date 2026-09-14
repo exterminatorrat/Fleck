@@ -9,7 +9,7 @@ import FleckCore
 private final class NativePreviewDraggingSessionProbe: NSDraggingSession {}
 
 private func nativeTabDragReadableForegroundFraction(in image: NSImage,
-  darkAppearance: Bool) -> Double {
+  lightForeground: Bool) -> Double {
   guard let bitmap = image.representations.first as? NSBitmapImageRep,
     bitmap.pixelsWide > 8, bitmap.pixelsHigh > 8
   else { return 0 }
@@ -27,10 +27,10 @@ private func nativeTabDragReadableForegroundFraction(in image: NSImage,
       let luminance = 0.2126 * color.redComponent
         + 0.7152 * color.greenComponent
         + 0.0722 * color.blueComponent
-      let backgroundLuminance: CGFloat = darkAppearance ? 0 : 1
+      let backgroundLuminance: CGFloat = lightForeground ? 0 : 1
       let compositedLuminance = color.alphaComponent * luminance
         + (1 - color.alphaComponent) * backgroundLuminance
-      return darkAppearance ? compositedLuminance > 0.55 : compositedLuminance < 0.45
+      return lightForeground ? compositedLuminance > 0.55 : compositedLuminance < 0.45
     }.count
   }
   return Double(foregroundCount) / Double(pixelCount)
@@ -1133,9 +1133,11 @@ func nativeTabDragPreviewFollowsPointerAndClosesOnEveryFinishPath() throws {
 
 @Test @MainActor
 func nativeTabDragReadabilityCompositesTranslucentForeground() throws {
-  for (darkAppearance, foreground) in [
-    (true, NSColor(deviceRed: 1, green: 1, blue: 1, alpha: 0.75)),
-    (false, NSColor(deviceRed: 0, green: 0, blue: 0, alpha: 0.75)),
+  for (lightForeground, foreground, oppositeForeground) in [
+    (true, NSColor(deviceRed: 1, green: 1, blue: 1, alpha: 0.75),
+      NSColor(deviceRed: 0, green: 0, blue: 0, alpha: 0.75)),
+    (false, NSColor(deviceRed: 0, green: 0, blue: 0, alpha: 0.75),
+      NSColor(deviceRed: 1, green: 1, blue: 1, alpha: 0.75)),
   ] {
     let bitmap = try #require(NSBitmapImageRep(
       bitmapDataPlanes: nil,
@@ -1156,8 +1158,15 @@ func nativeTabDragReadabilityCompositesTranslucentForeground() throws {
     let image = NSImage(size: bitmap.size)
     image.addRepresentation(bitmap)
     #expect(nativeTabDragReadableForegroundFraction(
-      in: image, darkAppearance: darkAppearance
+      in: image, lightForeground: lightForeground
     ) == 1)
+
+    for y in 0..<bitmap.pixelsHigh {
+      for x in 0..<bitmap.pixelsWide { bitmap.setColor(oppositeForeground, atX: x, y: y) }
+    }
+    #expect(nativeTabDragReadableForegroundFraction(
+      in: image, lightForeground: lightForeground
+    ) == 0)
 
     for y in 0..<bitmap.pixelsHigh {
       for x in 0..<bitmap.pixelsWide {
@@ -1165,7 +1174,7 @@ func nativeTabDragReadabilityCompositesTranslucentForeground() throws {
       }
     }
     #expect(nativeTabDragReadableForegroundFraction(
-      in: image, darkAppearance: darkAppearance
+      in: image, lightForeground: lightForeground
     ) == 0)
   }
 }
@@ -1334,8 +1343,9 @@ func hostedUnselectedTabBuildsVisibleDragItemBeforeNativeWillBegin() async throw
         from: renderedSource, to: previewImage
       ) < 0.02)
     }
+    let expectedLightForeground = captureCase.selected || captureCase.dark
     #expect(nativeTabDragReadableForegroundFraction(
-      in: previewImage, darkAppearance: captureCase.dark
+      in: previewImage, lightForeground: expectedLightForeground
     ) > 0.01,
       "appearance=\(captureCase.appearance.rawValue) selected=\(captureCase.selected)")
     #expect(capturedSource?.began != nil)

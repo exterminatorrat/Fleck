@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.0.9-beta.1] - 2026-09-14
+
+### Fixed
+
+- Selected note tab labels use solid white in both light and dark appearance.
+
 ## [1.0.8-beta.1] - 2026-09-14
 
 ### Fixed
