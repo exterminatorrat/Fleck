@@ -127,6 +127,7 @@
             systemImage: "point.3.connected.trianglepath.dotted",
             description: Text("Changes made by authorized integrations appear here.")
           )
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
           ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
