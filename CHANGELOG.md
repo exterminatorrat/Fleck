@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.0.8-beta.1] - 2026-09-14
+
+### Fixed
+
+- Kept the Agent Activity header at the top and its empty state centered across supported sizes.
+
 ## [1.0.7-beta.1] - 2026-09-14
 
 ### Fixed
