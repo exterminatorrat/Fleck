@@ -9,7 +9,6 @@
   enum DictationShortcutHelpMode: Equatable {
     case readyTutorial
     case recovery
-    case activeDestination
 
     var canDismissGuide: Bool {
       self == .readyTutorial
@@ -20,7 +19,7 @@
       isCaptureActive: Bool,
       showsGuide: Bool
     ) -> Self? {
-      if isCaptureActive { return .activeDestination }
+      if isCaptureActive { return nil }
       if !isReady { return .recovery }
       return showsGuide ? .readyTutorial : nil
     }

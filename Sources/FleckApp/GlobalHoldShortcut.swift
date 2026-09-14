@@ -63,7 +63,14 @@
   protocol EscapeHotKeyRegistering: AnyObject {
     var eventHandler: (() -> Void)? { get set }
     func register() throws
-    func unregister()
+    func register(modifier: DictationModifierKey?) throws
+    func unregister() throws
+  }
+
+  extension EscapeHotKeyRegistering {
+    func register(modifier _: DictationModifierKey?) throws {
+      try register()
+    }
   }
 
   @MainActor
@@ -80,7 +87,7 @@
 
     private enum Delivery {
       case transition(ModifierKeyTransition, ContinuousClock.Instant)
-      case escape
+      case escape(DictationShortcutSession)
       case monitorLost
     }
 
@@ -116,6 +123,7 @@
     private var pendingDeliveryCount = 0
     private var terminalTask: Task<Void, Never>?
     private var isUninstalled = false
+    private var escapeLifecycleIsRuntimeManaged = false
     private(set) var monitorState = ModifierMonitorState.stopped
     private(set) var registeredModifier: DictationModifierKey?
 
@@ -155,7 +163,12 @@
         self?.monitorDidChange(state)
       }
       escapeRegistrar.eventHandler = { [weak self] in
-        self?.enqueue(.escape)
+        guard
+          let self,
+          !self.escapeLifecycleIsRuntimeManaged,
+          let session = self.activeOwnership?.session
+        else { return }
+        self.enqueue(.escape(session))
       }
     }
 
@@ -222,6 +235,32 @@
       await terminalTask?.value
     }
 
+    func prepareRuntimeEscapeCancellation(_ session: DictationShortcutSession) -> Bool {
+      guard let ownership = activeOwnership, ownership.session == session else { return false }
+      return prepareCancellation(ownership, allowAfterFinish: true)
+    }
+
+    func deliverPreparedRuntimeEscapeCancellation(_ session: DictationShortcutSession) async {
+      guard
+        activeOwnership?.session == session,
+        cancelRequested
+      else { return }
+      await handler?.cancelShortcut(session)
+    }
+
+    func takeEscapeRegistrarForRuntime() -> (any EscapeHotKeyRegistering)? {
+      guard
+        !isUninstalled,
+        !escapeLifecycleIsRuntimeManaged,
+        !escapeRegistered,
+        activeOwnership == nil,
+        pendingDeliveryCount == 0
+      else { return nil }
+      escapeLifecycleIsRuntimeManaged = true
+      escapeRegistrar.eventHandler = nil
+      return escapeRegistrar
+    }
+
     @discardableResult
     func startPointerHandsFree() -> Bool {
       beginOwnedSession(
@@ -250,7 +289,9 @@
       registeredModifier = nil
       monitor.transitionHandler = nil
       monitor.stateHandler = nil
-      escapeRegistrar.eventHandler = nil
+      if !escapeLifecycleIsRuntimeManaged {
+        escapeRegistrar.eventHandler = nil
+      }
       monitorStopExpected = true
       monitor.stop()
       monitorStopExpected = false
@@ -288,6 +329,7 @@
       guard case .released(let modifier) = transition,
         modifier == registeredModifier,
         physicalPrimaryDown,
+        !cancelRequested,
         activeOwnership?.isHandsFree == false,
         !ignoresReleaseAfterHandsFreeStart,
         let session = activeOwnership?.session,
@@ -304,8 +346,8 @@
       switch delivery {
       case .transition(let transition, let instant):
         await receive(transition, at: instant)
-      case .escape:
-        await receiveEscape()
+      case .escape(let session):
+        await receiveEscape(session)
       case .monitorLost:
         await receiveMonitorLoss()
       }
@@ -373,6 +415,10 @@
     }
 
     private func receiveSelectedRelease(at now: ContinuousClock.Instant) async {
+      guard !cancelRequested else {
+        clearTapState()
+        return
+      }
       if ignoresReleaseAfterHandsFreeStart {
         ignoresReleaseAfterHandsFreeStart = false
         return
@@ -397,8 +443,12 @@
       await requestFinish(ownership, physicalGesture: physicalGesture)
     }
 
-    private func receiveEscape() async {
-      guard escapeRegistered, let ownership = activeOwnership else { return }
+    private func receiveEscape(_ session: DictationShortcutSession) async {
+      guard
+        escapeRegistered,
+        let ownership = activeOwnership,
+        ownership.session == session
+      else { return }
       await requestCancel(ownership, allowAfterFinish: true)
     }
 
@@ -515,14 +565,22 @@
       _ ownership: DictationShortcutOwnership,
       allowAfterFinish: Bool = false
     ) async {
+      guard prepareCancellation(ownership, allowAfterFinish: allowAfterFinish) else { return }
+      await handler?.cancelShortcut(ownership.session)
+    }
+
+    private func prepareCancellation(
+      _ ownership: DictationShortcutOwnership,
+      allowAfterFinish: Bool
+    ) -> Bool {
       guard
         activeOwnership?.session == ownership.session,
         !cancelRequested,
         !finishRequested || ownership.isHandsFree || allowAfterFinish
-      else { return }
+      else { return false }
       cancelRequested = true
       clearTapState()
-      await handler?.cancelShortcut(ownership.session)
+      return true
     }
 
     private func observeTerminal(_ session: DictationShortcutSession) {
@@ -554,9 +612,9 @@
     }
 
     private func registerEscape() {
-      guard !escapeRegistered else { return }
+      guard !escapeLifecycleIsRuntimeManaged, !escapeRegistered else { return }
       do {
-        try escapeRegistrar.register()
+        try escapeRegistrar.register(modifier: registeredModifier)
         escapeRegistered = true
       } catch let error as RegistrationError {
         onRegistrationError(error)
@@ -566,15 +624,23 @@
     }
 
     private func unregisterEscape() {
-      guard escapeRegistered else { return }
-      escapeRegistrar.unregister()
+      guard !escapeLifecycleIsRuntimeManaged, escapeRegistered else { return }
       escapeRegistered = false
+      do {
+        try escapeRegistrar.unregister()
+      } catch let error as RegistrationError {
+        onRegistrationError(error)
+      } catch {
+        onRegistrationError(.system(OSStatus(eventInternalErr)))
+      }
     }
 
     isolated deinit {
       monitor.transitionHandler = nil
       monitor.stateHandler = nil
-      escapeRegistrar.eventHandler = nil
+      if !escapeLifecycleIsRuntimeManaged {
+        escapeRegistrar.eventHandler = nil
+      }
       monitor.stop()
       unregisterEscape()
       if let ownership = activeOwnership, let handler {
@@ -586,23 +652,66 @@
   }
 
   @MainActor
-  private final class EscapeHotKeyRegistrar: EscapeHotKeyRegistering {
+  final class EscapeHotKeyRegistrar: EscapeHotKeyRegistering {
+    struct Operations {
+      let installHandler:
+        @MainActor (EventHandlerUPP, UnsafeMutableRawPointer) -> (OSStatus, EventHandlerRef?)
+      let removeHandler: @MainActor (EventHandlerRef) -> OSStatus
+      let registerHotKey:
+        @MainActor (UInt32, UInt32, EventHotKeyID, OptionBits) ->
+          (OSStatus, EventHotKeyRef?)
+      let unregisterHotKey: @MainActor (EventHotKeyRef) -> OSStatus
+
+      @MainActor static let live = Operations(
+        installHandler: { handler, userData in
+          var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+          )
+          var reference: EventHandlerRef?
+          let status = InstallEventHandler(
+            GetApplicationEventTarget(),
+            handler,
+            1,
+            &eventType,
+            userData,
+            &reference
+          )
+          return (status, reference)
+        },
+        removeHandler: { RemoveEventHandler($0) },
+        registerHotKey: { keyCode, modifiers, hotKeyID, options in
+          var reference: EventHotKeyRef?
+          let status = RegisterEventHotKey(
+            keyCode,
+            modifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            options,
+            &reference
+          )
+          return (status, reference)
+        },
+        unregisterHotKey: { UnregisterEventHotKey($0) }
+      )
+    }
+
     var eventHandler: (() -> Void)?
 
-    private static let signature: OSType = 0x4D4F5445
-    private static let escapeID: UInt32 = 2
-    private static let escapeKeyCode: UInt32 = 53
+    static let signature: OSType = 0x4D4F5445
+    static let escapeKeyCode: UInt32 = 53
+    private static var nextHotKeyID: UInt32 = 1
+    private let operations: Operations
     private var eventHandlerRef: EventHandlerRef?
     private var eventHandlerStatus = OSStatus(noErr)
-    private var registration: EventHotKeyRef?
+    private var activeRegistrations: [(id: UInt32, reference: EventHotKeyRef)] = []
+    private var activeModifiers: [UInt32]?
+    private var activeIDs: Set<UInt32> = []
+    private var pendingCleanup: [EventHotKeyRef] = []
 
-    init() {
-      var eventType = EventTypeSpec(
-        eventClass: OSType(kEventClassKeyboard),
-        eventKind: UInt32(kEventHotKeyPressed)
-      )
-      eventHandlerStatus = InstallEventHandler(
-        GetApplicationEventTarget(),
+    init(operations: Operations = .live) {
+      self.operations = operations
+      let result = operations.installHandler(
         { _, event, userData in
           guard let event, let userData else { return OSStatus(eventNotHandledErr) }
           var hotKeyID = EventHotKeyID()
@@ -616,56 +725,130 @@
             &hotKeyID
           )
           guard status == noErr else { return status }
-          guard
-            hotKeyID.signature == EscapeHotKeyRegistrar.signature,
-            hotKeyID.id == EscapeHotKeyRegistrar.escapeID
-          else {
-            return OSStatus(eventNotHandledErr)
-          }
           let registrar = Unmanaged<EscapeHotKeyRegistrar>.fromOpaque(userData)
             .takeUnretainedValue()
-          MainActor.assumeIsolated {
-            registrar.eventHandler?()
+          return MainActor.assumeIsolated {
+            registrar.handleHotKeyID(hotKeyID)
           }
-          return noErr
         },
-        1,
-        &eventType,
-        Unmanaged.passUnretained(self).toOpaque(),
-        &eventHandlerRef
+        Unmanaged.passUnretained(self).toOpaque()
       )
+      eventHandlerStatus = result.0 == noErr && result.1 == nil
+        ? OSStatus(eventInternalErr)
+        : result.0
+      eventHandlerRef = result.1
     }
 
     func register() throws {
-      guard registration == nil else { return }
+      try register(modifier: nil)
+    }
+
+    func register(modifier: DictationModifierKey?) throws {
+      let modifiers = Self.modifiers(for: modifier)
+      if let activeModifiers {
+        guard activeModifiers == modifiers else {
+          throw GlobalHoldShortcut.RegistrationError.activeSession
+        }
+        return
+      }
       guard eventHandlerStatus == noErr else {
         throw GlobalHoldShortcut.RegistrationError.system(eventHandlerStatus)
       }
-      var reference: EventHotKeyRef?
-      let status = RegisterEventHotKey(
-        Self.escapeKeyCode,
-        0,
-        EventHotKeyID(signature: Self.signature, id: Self.escapeID),
-        GetApplicationEventTarget(),
-        0,
-        &reference
-      )
-      guard status == noErr, let reference else {
-        throw GlobalHoldShortcut.RegistrationError.system(status)
+      if !pendingCleanup.isEmpty {
+        let references = pendingCleanup
+        pendingCleanup.removeAll()
+        let cleanupStatus = cleanUp(references)
+        guard pendingCleanup.isEmpty else {
+          throw GlobalHoldShortcut.RegistrationError.system(cleanupStatus!)
+        }
       }
-      registration = reference
+
+      var staged: [(id: UInt32, reference: EventHotKeyRef)] = []
+      let ids = try modifiers.map { _ in try Self.allocateHotKeyID() }
+      for (modifierMask, id) in zip(modifiers, ids) {
+        let result = operations.registerHotKey(
+          Self.escapeKeyCode,
+          modifierMask,
+          EventHotKeyID(signature: Self.signature, id: id),
+          0
+        )
+        if let reference = result.1 {
+          staged.append((id, reference))
+        }
+        guard result.0 == noErr, result.1 != nil else {
+          activeIDs.removeAll()
+          let cleanupStatus = cleanUp(staged.map(\.reference))
+          throw GlobalHoldShortcut.RegistrationError.system(
+            cleanupStatus ?? (result.0 == noErr ? OSStatus(eventInternalErr) : result.0)
+          )
+        }
+      }
+      activeRegistrations = staged
+      activeModifiers = modifiers
+      activeIDs = Set(staged.map(\.id))
     }
 
-    func unregister() {
-      guard let registration else { return }
-      UnregisterEventHotKey(registration)
-      self.registration = nil
+    func unregister() throws {
+      activeIDs.removeAll()
+      let references = activeRegistrations.map(\.reference) + pendingCleanup
+      activeRegistrations.removeAll()
+      activeModifiers = nil
+      pendingCleanup.removeAll()
+      if let status = cleanUp(references) {
+        throw GlobalHoldShortcut.RegistrationError.system(status)
+      }
+    }
+
+    func handleHotKeyID(_ hotKeyID: EventHotKeyID) -> OSStatus {
+      guard
+        hotKeyID.signature == Self.signature,
+        activeIDs.contains(hotKeyID.id)
+      else { return OSStatus(eventNotHandledErr) }
+      eventHandler?()
+      return noErr
+    }
+
+    private static func modifiers(for modifier: DictationModifierKey?) -> [UInt32] {
+      switch modifier {
+      case .leftOption, .rightOption:
+        [0, UInt32(optionKey)]
+      case .leftControl, .rightControl:
+        [0, UInt32(controlKey)]
+      case .leftCommand, .rightCommand:
+        [0, UInt32(cmdKey)]
+      case .function, nil:
+        [0]
+      }
+    }
+
+    private static func allocateHotKeyID() throws -> UInt32 {
+      guard nextHotKeyID < UInt32.max else {
+        throw GlobalHoldShortcut.RegistrationError.system(OSStatus(eventInternalErr))
+      }
+      defer { nextHotKeyID += 1 }
+      return nextHotKeyID
+    }
+
+    @discardableResult
+    private func cleanUp(_ references: [EventHotKeyRef]) -> OSStatus? {
+      var firstFailure: OSStatus?
+      for reference in references {
+        let status = operations.unregisterHotKey(reference)
+        if status != noErr {
+          firstFailure = firstFailure ?? status
+          pendingCleanup.append(reference)
+        }
+      }
+      return firstFailure
     }
 
     isolated deinit {
-      unregister()
+      activeIDs.removeAll()
+      for registration in activeRegistrations.map(\.reference) + pendingCleanup {
+        _ = operations.unregisterHotKey(registration)
+      }
       if let eventHandlerRef {
-        RemoveEventHandler(eventHandlerRef)
+        _ = operations.removeHandler(eventHandlerRef)
       }
     }
   }
