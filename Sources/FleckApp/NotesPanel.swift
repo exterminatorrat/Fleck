@@ -2245,6 +2245,7 @@
             richTextRTF: note.richTextRTF,
             title: note.title,
             titleFontFamily: note.titleFontFamily ?? appState.preferences.fontFamily,
+            isPinned: isPinned,
             onTitleChange: { title in
               guard visibleSelectedNote?.id == note.id else { return }
               appState.updateSelected(title: title)
