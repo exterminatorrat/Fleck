@@ -4646,44 +4646,24 @@
     static func compositedDraggingImage(captured: NSBitmapImageRep, size: NSSize,
       appearance: NSAppearance, selectedCapsuleColor: NSColor? = nil,
       selectedCapsuleRect: NSRect? = nil) -> NSImage? {
-      guard let representation = NSBitmapImageRep(
-        bitmapDataPlanes: nil,
-        pixelsWide: captured.pixelsWide,
-        pixelsHigh: captured.pixelsHigh,
-        bitsPerSample: 8,
-        samplesPerPixel: 4,
-        hasAlpha: true,
-        isPlanar: false,
-        colorSpaceName: .deviceRGB,
-        bytesPerRow: 0,
-        bitsPerPixel: 0
-      ) else { return nil }
+      let image = NSImage(size: size)
+      guard let selectedCapsuleColor else {
+        image.addRepresentation(captured)
+        return image
+      }
+      guard let representation = captured.copy() as? NSBitmapImageRep else { return nil }
       representation.size = size
       guard let context = NSGraphicsContext(bitmapImageRep: representation) else { return nil }
-      let image = NSImage(size: size)
-      let capturedImage = NSImage(size: size)
-      capturedImage.addRepresentation(captured)
       appearance.performAsCurrentDrawingAppearance {
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = context
         let rect = NSRect(origin: .zero, size: size)
-        let surface = NSBezierPath(
-          roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6
-        )
-        NSColor.windowBackgroundColor.setFill()
-        surface.fill()
-        if let selectedCapsuleColor {
-          selectedCapsuleColor.setFill()
-          let capsule = selectedCapsuleRect ?? rect
-          NSBezierPath(
-            roundedRect: capsule, xRadius: capsule.height / 2, yRadius: capsule.height / 2
-          ).fill()
-        }
-        capturedImage.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1,
-          respectFlipped: true, hints: nil)
-        NSColor.separatorColor.setStroke()
-        surface.lineWidth = 1
-        surface.stroke()
+        context.compositingOperation = .destinationOver
+        selectedCapsuleColor.setFill()
+        let capsule = selectedCapsuleRect ?? rect
+        NSBezierPath(
+          roundedRect: capsule, xRadius: capsule.height / 2, yRadius: capsule.height / 2
+        ).fill()
         NSGraphicsContext.restoreGraphicsState()
       }
       image.addRepresentation(representation)
