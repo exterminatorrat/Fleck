@@ -1538,7 +1538,10 @@
                     .accessibilityLabel(AgentSharingPresentation.sharedBadgeAccessibilityLabel)
                 }
               }
-              .foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
+              .foregroundStyle(
+                note.id == appState.workspace.selectedNoteID || colorScheme == .dark
+                  ? Color.white : Color.black
+              )
               .padding(.horizontal, 10)
               .padding(.vertical, 6)
               .contentShape(Capsule())
