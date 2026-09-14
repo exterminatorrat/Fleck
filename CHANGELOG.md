@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.0.7-beta.1] - 2026-09-14
+
+### Fixed
+
+- Removed the faint rounded rectangular backing from dragged note tabs while preserving the
+  selected capsule, captured tab content, and transparent padding.
+
 ## [1.0.6-beta.1] - 2026-09-13
 
 ### Changed

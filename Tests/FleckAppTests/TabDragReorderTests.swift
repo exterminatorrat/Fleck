@@ -8,6 +8,63 @@ import FleckCore
 
 private final class NativePreviewDraggingSessionProbe: NSDraggingSession {}
 
+private func nativeTabDragReadableForegroundFraction(in image: NSImage,
+  darkAppearance: Bool) -> Double {
+  guard let bitmap = image.representations.first as? NSBitmapImageRep,
+    bitmap.pixelsWide > 8, bitmap.pixelsHigh > 8
+  else { return 0 }
+  let scale = max(1, CGFloat(bitmap.pixelsHigh) / image.size.height)
+  let leadingInset = max(2, Int((20 * scale).rounded(.up)))
+  let trailingInset = max(2, Int((4 * scale).rounded(.up)))
+  let verticalInset = max(2, Int((4 * scale).rounded(.up)))
+  let xs = leadingInset..<(bitmap.pixelsWide - trailingInset)
+  let ys = verticalInset..<(bitmap.pixelsHigh - verticalInset)
+  let pixelCount = xs.count * ys.count
+  let foregroundCount = ys.reduce(0) { count, y in
+    count + xs.filter { x in
+      guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+      else { return false }
+      let luminance = 0.2126 * color.redComponent
+        + 0.7152 * color.greenComponent
+        + 0.0722 * color.blueComponent
+      let backgroundLuminance: CGFloat = darkAppearance ? 0 : 1
+      let compositedLuminance = color.alphaComponent * luminance
+        + (1 - color.alphaComponent) * backgroundLuminance
+      return darkAppearance ? compositedLuminance > 0.55 : compositedLuminance < 0.45
+    }.count
+  }
+  return Double(foregroundCount) / Double(pixelCount)
+}
+
+private func nativeTabDragMaximumPixelComponentDelta(from source: NSImage, to result: NSImage,
+  outside excludedRect: NSRect? = nil) -> CGFloat {
+  guard let sourceBitmap = source.representations.first as? NSBitmapImageRep,
+    let resultBitmap = result.representations.first as? NSBitmapImageRep,
+    sourceBitmap.pixelsWide == resultBitmap.pixelsWide,
+    sourceBitmap.pixelsHigh == resultBitmap.pixelsHigh
+  else { return .infinity }
+  let scaleX = CGFloat(sourceBitmap.pixelsWide) / source.size.width
+  let scaleY = CGFloat(sourceBitmap.pixelsHigh) / source.size.height
+  var maximum: CGFloat = 0
+  for y in 0..<sourceBitmap.pixelsHigh {
+    for x in 0..<sourceBitmap.pixelsWide {
+      let point = NSPoint(x: (CGFloat(x) + 0.5) / scaleX,
+        y: source.size.height - (CGFloat(y) + 0.5) / scaleY)
+      if excludedRect?.contains(point) == true { continue }
+      guard let sourceColor = sourceBitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+        let resultColor = resultBitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+      else { return .infinity }
+      maximum = max(maximum, abs(sourceColor.alphaComponent - resultColor.alphaComponent))
+      if sourceColor.alphaComponent > 0.01 || resultColor.alphaComponent > 0.01 {
+        maximum = max(maximum, abs(sourceColor.redComponent - resultColor.redComponent))
+        maximum = max(maximum, abs(sourceColor.greenComponent - resultColor.greenComponent))
+        maximum = max(maximum, abs(sourceColor.blueComponent - resultColor.blueComponent))
+      }
+    }
+  }
+  return maximum
+}
+
 @Test func noteDropPresentationRejectsSameFolderAndInvalidDragStates() throws {
   let work = try Folder(id: UUID(), name: "Work")
   let other = try Folder(id: UUID(), name: "Other")
@@ -957,11 +1014,16 @@ func nativeTabDragImageFillsBothHalvesAtRetinaScale() throws {
     samplesPerPixel: 4,
     hasAlpha: true,
     isPlanar: false,
-    colorSpaceName: .deviceRGB,
+    colorSpaceName: .calibratedRGB,
     bytesPerRow: 0,
     bitsPerPixel: 0
   ))
   captured.size = NSSize(width: 100, height: 37)
+  let contentColor = NSColor(calibratedRed: 0.1, green: 0.45, blue: 0.95, alpha: 0.75)
+  for y in 28..<46 {
+    for x in 20..<80 { captured.setColor(contentColor, atX: x, y: y) }
+    for x in 120..<180 { captured.setColor(contentColor, atX: x, y: y) }
+  }
   let image = try #require(ReorderSourceHostingView.compositedDraggingImage(
     captured: captured,
     size: captured.size,
@@ -969,12 +1031,22 @@ func nativeTabDragImageFillsBothHalvesAtRetinaScale() throws {
   ))
   let representation = try #require(image.representations.first as? NSBitmapImageRep)
 
+  #expect(representation === captured)
+  #expect(representation.colorSpace == captured.colorSpace)
   #expect(representation.pixelsWide == 200)
   #expect(representation.pixelsHigh == 74)
   #expect(image.size == NSSize(width: 100, height: 37))
-  for point in [(25, 18), (175, 18), (25, 55), (175, 55)] {
-    #expect((representation.colorAt(x: point.0, y: point.1)?.alphaComponent ?? 0) > 0.99)
+  for point in [(30, 36), (70, 36), (130, 36), (170, 36)] {
+    let source = try #require(captured.colorAt(x: point.0, y: point.1)?.usingColorSpace(.sRGB))
+    let result = try #require(
+      representation.colorAt(x: point.0, y: point.1)?.usingColorSpace(.sRGB)
+    )
+    #expect(abs(result.redComponent - source.redComponent) < 0.02)
+    #expect(abs(result.greenComponent - source.greenComponent) < 0.02)
+    #expect(abs(result.blueComponent - source.blueComponent) < 0.02)
+    #expect(abs(result.alphaComponent - source.alphaComponent) < 0.02)
   }
+  #expect((representation.colorAt(x: 4, y: 4)?.alphaComponent ?? 1) < 0.02)
 }
 
 @Test @MainActor
@@ -1060,6 +1132,45 @@ func nativeTabDragPreviewFollowsPointerAndClosesOnEveryFinishPath() throws {
 }
 
 @Test @MainActor
+func nativeTabDragReadabilityCompositesTranslucentForeground() throws {
+  for (darkAppearance, foreground) in [
+    (true, NSColor(deviceRed: 1, green: 1, blue: 1, alpha: 0.75)),
+    (false, NSColor(deviceRed: 0, green: 0, blue: 0, alpha: 0.75)),
+  ] {
+    let bitmap = try #require(NSBitmapImageRep(
+      bitmapDataPlanes: nil,
+      pixelsWide: 68,
+      pixelsHigh: 37,
+      bitsPerSample: 8,
+      samplesPerPixel: 4,
+      hasAlpha: true,
+      isPlanar: false,
+      colorSpaceName: .deviceRGB,
+      bytesPerRow: 0,
+      bitsPerPixel: 0
+    ))
+    bitmap.size = NSSize(width: 68, height: 37)
+    for y in 0..<bitmap.pixelsHigh {
+      for x in 0..<bitmap.pixelsWide { bitmap.setColor(foreground, atX: x, y: y) }
+    }
+    let image = NSImage(size: bitmap.size)
+    image.addRepresentation(bitmap)
+    #expect(nativeTabDragReadableForegroundFraction(
+      in: image, darkAppearance: darkAppearance
+    ) == 1)
+
+    for y in 0..<bitmap.pixelsHigh {
+      for x in 0..<bitmap.pixelsWide {
+        bitmap.setColor(NSColor(deviceRed: 0, green: 0, blue: 0, alpha: 0), atX: x, y: y)
+      }
+    }
+    #expect(nativeTabDragReadableForegroundFraction(
+      in: image, darkAppearance: darkAppearance
+    ) == 0)
+  }
+}
+
+@Test @MainActor
 func hostedUnselectedTabBuildsVisibleDragItemBeforeNativeWillBegin() async throws {
   func visiblePixels(in image: NSImage) -> Int {
     guard let data = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data)
@@ -1069,47 +1180,6 @@ func hostedUnselectedTabBuildsVisibleDragItemBeforeNativeWillBegin() async throw
         bitmap.colorAt(x: $0, y: y)?.alphaComponent ?? 0 > 0.01
       }.count
     }
-  }
-  func opaqueInteriorFraction(in image: NSImage) -> Double {
-    guard let data = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data),
-      bitmap.pixelsWide > 8, bitmap.pixelsHigh > 8
-    else { return 0 }
-    let scale = max(1, CGFloat(bitmap.pixelsHigh) / image.size.height)
-    let horizontalInset = max(2, Int((4 * scale).rounded(.up)))
-    let bandHalfHeight = max(1, Int((3 * scale).rounded(.up)))
-    let xs = horizontalInset..<(bitmap.pixelsWide - horizontalInset)
-    let ys = (bitmap.pixelsHigh / 2 - bandHalfHeight)..<(bitmap.pixelsHigh / 2 + bandHalfHeight)
-    let pixelCount = xs.count * ys.count
-    let opaqueCount = ys.reduce(0) { count, y in
-      count + xs.filter { x in
-        bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0 > 0.99
-      }.count
-    }
-    return Double(opaqueCount) / Double(pixelCount)
-  }
-  func readableForegroundFraction(in image: NSImage, darkAppearance: Bool) -> Double {
-    guard let data = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data),
-      bitmap.pixelsWide > 8, bitmap.pixelsHigh > 8
-    else { return 0 }
-    let scale = max(1, CGFloat(bitmap.pixelsHigh) / image.size.height)
-    let leadingInset = max(2, Int((20 * scale).rounded(.up)))
-    let trailingInset = max(2, Int((4 * scale).rounded(.up)))
-    let verticalInset = max(2, Int((4 * scale).rounded(.up)))
-    let xs = leadingInset..<(bitmap.pixelsWide - trailingInset)
-    let ys = verticalInset..<(bitmap.pixelsHigh - verticalInset)
-    let pixelCount = xs.count * ys.count
-    let foregroundCount = ys.reduce(0) { count, y in
-      count + xs.filter { x in
-        guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
-          color.alphaComponent > 0.99
-        else { return false }
-        let luminance = 0.2126 * color.redComponent
-          + 0.7152 * color.greenComponent
-          + 0.0722 * color.blueComponent
-        return darkAppearance ? luminance > 0.55 : luminance < 0.45
-      }.count
-    }
-    return Double(foregroundCount) / Double(pixelCount)
   }
   func renderedImage(of view: NSView) throws -> NSImage {
     let bounds = view.bounds
@@ -1169,8 +1239,8 @@ func hostedUnselectedTabBuildsVisibleDragItemBeforeNativeWillBegin() async throw
     await settleTabStripHost(host)
     let destination = try #require(findDestination(host))
     let source = try #require(findSource(captureCase.noteID, in: destination))
-    let renderedSource = try renderedImage(of: source)
-    #expect(visiblePixels(in: renderedSource) > 0)
+    let preEventSource = try renderedImage(of: source)
+    #expect(visiblePixels(in: preEventSource) > 0)
     let originalBegin = try #require(source.onNativeBegin)
     source.onNativeBegin = {
       let (provider, pasteboardWriter, end) = originalBegin()
@@ -1182,10 +1252,14 @@ func hostedUnselectedTabBuildsVisibleDragItemBeforeNativeWillBegin() async throw
     var draggingItems: [NSDraggingItem] = []
     var capturedSource: ReorderNativeSource?
     var capturedEvent: NSEvent?
+    var sourceImageAtDrag: NSImage?
     source.interceptNativeDrag = { items, nativeSource, event in
       draggingItems = items
       capturedSource = nativeSource
       capturedEvent = event
+      source.effectiveAppearance.performAsCurrentDrawingAppearance {
+        sourceImageAtDrag = try? renderedImage(of: source)
+      }
       return true
     }
     let sourceFrame = destination.convert(source.bounds, from: source)
@@ -1218,16 +1292,51 @@ func hostedUnselectedTabBuildsVisibleDragItemBeforeNativeWillBegin() async throw
     let item = try #require(draggingItems.first)
     let preview = try #require(capturedSource?.preview)
     let previewImage = preview.image
+    let renderedSource = try #require(sourceImageAtDrag)
+    let sourceRepresentation = try #require(
+      renderedSource.representations.first as? NSBitmapImageRep
+    )
+    let previewRepresentation = try #require(
+      previewImage.representations.first as? NSBitmapImageRep
+    )
     #expect(previewImage.size == source.bounds.size)
-    #expect(previewImage.representations.first?.pixelsWide == renderedSource.representations.first?.pixelsWide)
-    #expect(previewImage.representations.first?.pixelsHigh == renderedSource.representations.first?.pixelsHigh)
+    #expect(previewRepresentation.pixelsWide == sourceRepresentation.pixelsWide)
+    #expect(previewRepresentation.pixelsHigh == sourceRepresentation.pixelsHigh)
+    #expect(previewRepresentation.colorSpace == sourceRepresentation.colorSpace)
     #expect(item.draggingFrame == source.bounds)
     #expect(item.imageComponents?.contains(where: { $0.contents != nil }) != true)
     #expect(!preview.panel.isVisible)
     #expect(capturedEvent?.locationInWindow == start)
     #expect(visiblePixels(in: previewImage) > 0)
-    #expect(opaqueInteriorFraction(in: previewImage) > 0.98)
-    #expect(readableForegroundFraction(in: previewImage, darkAppearance: captureCase.dark) > 0.01,
+    if captureCase.selected {
+      let capsuleRect = source.labelCapsuleRect
+      #expect(capsuleRect.minY == 4.5)
+      #expect(capsuleRect.height == 28)
+      #expect(nativeTabDragMaximumPixelComponentDelta(
+        from: renderedSource, to: previewImage, outside: capsuleRect.insetBy(dx: -1, dy: -1)
+      ) < 0.02)
+      let scale = CGFloat(previewRepresentation.pixelsHigh) / previewImage.size.height
+      let sourceTransparentInsideCapsule = (0..<previewRepresentation.pixelsHigh).contains { y in
+        (0..<previewRepresentation.pixelsWide).contains { x in
+          let point = NSPoint(x: (CGFloat(x) + 0.5) / scale,
+            y: previewImage.size.height - (CGFloat(y) + 0.5) / scale)
+          guard capsuleRect.insetBy(dx: 4, dy: 4).contains(point),
+            let sourceColor = sourceRepresentation.colorAt(x: x, y: y),
+            let previewColor = previewRepresentation.colorAt(x: x, y: y)
+          else { return false }
+          return sourceColor.alphaComponent < 0.1
+            && previewColor.alphaComponent > sourceColor.alphaComponent + 0.1
+        }
+      }
+      #expect(sourceTransparentInsideCapsule)
+    } else {
+      #expect(nativeTabDragMaximumPixelComponentDelta(
+        from: renderedSource, to: previewImage
+      ) < 0.02)
+    }
+    #expect(nativeTabDragReadableForegroundFraction(
+      in: previewImage, darkAppearance: captureCase.dark
+    ) > 0.01,
       "appearance=\(captureCase.appearance.rawValue) selected=\(captureCase.selected)")
     #expect(capturedSource?.began != nil)
     #expect(capturedSource?.moved != nil)

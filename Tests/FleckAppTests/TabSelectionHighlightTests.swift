@@ -147,40 +147,94 @@ func nativeTabSelectionHandlesMissingDisplacedAndHiddenSources() {
 
 @Test @MainActor
 func selectedNativeTabDragCompositePaintsCapsuleBehindCapturedContent() throws {
-  let captured = try #require(NSBitmapImageRep(
-    bitmapDataPlanes: nil,
-    pixelsWide: 80,
-    pixelsHigh: 40,
-    bitsPerSample: 8,
-    samplesPerPixel: 4,
-    hasAlpha: true,
-    isPlanar: false,
-    colorSpaceName: .deviceRGB,
-    bytesPerRow: 0,
-    bitsPerPixel: 0
-  ))
-  captured.size = NSSize(width: 40, height: 20)
-  let appearance = NSAppearance(named: .aqua) ?? NSAppearance.currentDrawing()
-  let plain = try #require(ReorderSourceHostingView.compositedDraggingImage(
-    captured: captured, size: captured.size, appearance: appearance
-  ))
-  let selected = try #require(ReorderSourceHostingView.compositedDraggingImage(
-    captured: captured,
-    size: captured.size,
-    appearance: appearance,
-    selectedCapsuleColor: NSColor.systemRed.withAlphaComponent(0.8),
-    selectedCapsuleRect: NSRect(x: 0, y: 4.5, width: 40, height: 11)
-  ))
-  let plainRep = try #require(plain.representations.first as? NSBitmapImageRep)
-  let selectedRep = try #require(selected.representations.first as? NSBitmapImageRep)
-  let plainCenter = try #require(plainRep.colorAt(x: 40, y: 20)?.usingColorSpace(.sRGB))
-  let selectedCenter = try #require(selectedRep.colorAt(x: 40, y: 20)?.usingColorSpace(.sRGB))
-  let plainEdge = try #require(plainRep.colorAt(x: 40, y: 2)?.usingColorSpace(.sRGB))
-  let selectedEdge = try #require(selectedRep.colorAt(x: 40, y: 2)?.usingColorSpace(.sRGB))
+  let size = NSSize(width: 100, height: 37)
+  let capsuleRect = NSRect(x: 12, y: 4.5, width: 76, height: 28)
+  let capsuleColor = NSColor(calibratedRed: 0.9, green: 0.1, blue: 0.2, alpha: 0.8)
+  let foregroundColor = NSColor(calibratedRed: 0.1, green: 0.4, blue: 0.9, alpha: 0.75)
+  for scale in [1, 2] {
+    for appearanceName in [NSAppearance.Name.aqua, .darkAqua] {
+      let captured = try #require(NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: Int(size.width) * scale,
+        pixelsHigh: Int(size.height) * scale,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .calibratedRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+      ))
+      captured.size = size
+      for y in (16 * scale)..<(21 * scale) {
+        for x in (46 * scale)..<(54 * scale) {
+          captured.setColor(foregroundColor, atX: x, y: y)
+        }
+      }
+      let appearance = NSAppearance(named: appearanceName) ?? NSAppearance.currentDrawing()
+      let selected = try #require(ReorderSourceHostingView.compositedDraggingImage(
+        captured: captured,
+        size: size,
+        appearance: appearance,
+        selectedCapsuleColor: capsuleColor,
+        selectedCapsuleRect: capsuleRect
+      ))
+      let selectedRep = try #require(
+        selected.representations.first as? NSBitmapImageRep
+      )
 
-  #expect(selectedCenter.greenComponent < plainCenter.greenComponent)
-  #expect(selectedCenter.blueComponent < plainCenter.blueComponent)
-  #expect(abs(selectedEdge.redComponent - plainEdge.redComponent) < 0.01)
-  #expect(abs(selectedEdge.greenComponent - plainEdge.greenComponent) < 0.01)
-  #expect(abs(selectedEdge.blueComponent - plainEdge.blueComponent) < 0.01)
+      #expect(selectedRep !== captured)
+      #expect(selectedRep.colorSpace == captured.colorSpace)
+      #expect(selectedRep.pixelsWide == captured.pixelsWide)
+      #expect(selectedRep.pixelsHigh == captured.pixelsHigh)
+      #expect(selected.size == size)
+      #expect((captured.colorAt(x: 25 * scale, y: 18 * scale)?.alphaComponent ?? 1) < 0.02)
+      #expect((selectedRep.colorAt(x: 4 * scale, y: 18 * scale)?.alphaComponent ?? 1) < 0.02)
+      #expect((selectedRep.colorAt(x: 13 * scale, y: 5 * scale)?.alphaComponent ?? 1) < 0.02)
+
+      let blankCapsule = try #require(
+        selectedRep.colorAt(x: 25 * scale, y: 18 * scale)?.usingColorSpace(.sRGB)
+      )
+      let foreground = try #require(
+        selectedRep.colorAt(x: 50 * scale, y: 18 * scale)?.usingColorSpace(.sRGB)
+      )
+      let colorSpace = selectedRep.colorSpace
+      let source = try #require(
+        captured.colorAt(x: 50 * scale, y: 18 * scale)?.usingColorSpace(colorSpace)
+      )
+      let backing = try #require(capsuleColor.usingColorSpace(colorSpace))
+      let expectedAlpha = source.alphaComponent
+        + backing.alphaComponent * (1 - source.alphaComponent)
+      let expected = try #require(NSColor(
+        colorSpace: colorSpace,
+        components: [
+          (source.redComponent * source.alphaComponent
+            + backing.redComponent * backing.alphaComponent * (1 - source.alphaComponent))
+            / expectedAlpha,
+          (source.greenComponent * source.alphaComponent
+            + backing.greenComponent * backing.alphaComponent * (1 - source.alphaComponent))
+            / expectedAlpha,
+          (source.blueComponent * source.alphaComponent
+            + backing.blueComponent * backing.alphaComponent * (1 - source.alphaComponent))
+            / expectedAlpha,
+          expectedAlpha,
+        ],
+        count: 4
+      ).usingColorSpace(.sRGB))
+      #expect(abs(blankCapsule.alphaComponent - 0.8) < 0.02)
+      #expect(abs(foreground.redComponent - expected.redComponent) < 0.02)
+      #expect(abs(foreground.greenComponent - expected.greenComponent) < 0.02)
+      #expect(abs(foreground.blueComponent - expected.blueComponent) < 0.02)
+      #expect(abs(foreground.alphaComponent - expected.alphaComponent) < 0.02)
+
+      let fullRect = try #require(ReorderSourceHostingView.compositedDraggingImage(
+        captured: captured,
+        size: size,
+        appearance: appearance,
+        selectedCapsuleColor: capsuleColor
+      ))
+      let fullRectRep = try #require(fullRect.representations.first as? NSBitmapImageRep)
+      #expect((fullRectRep.colorAt(x: 4 * scale, y: 18 * scale)?.alphaComponent ?? 0) > 0.75)
+    }
+  }
 }
