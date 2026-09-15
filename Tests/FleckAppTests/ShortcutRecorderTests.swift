@@ -442,6 +442,26 @@
     #expect(actions.isEmpty)
   }
 
+  @Test @MainActor func modalWindowPassesThroughMatchedShortcutThenResumesHandling() throws {
+    var isModalActive = true
+    var actions: [Shortcut.Action] = []
+    let coordinator = ShortcutMonitor.Coordinator(
+      action: { actions.append($0) },
+      isModalActive: { isModalActive }
+    )
+    coordinator.shortcuts = [
+      Shortcut(action: .togglePanel, key: "n", modifiers: ["command"])
+    ]
+    let event = try shortcutEvent(keyCode: 8, modifierFlags: [.command])
+
+    #expect(coordinator.handle(event) === event)
+    #expect(actions.isEmpty)
+
+    isModalActive = false
+    #expect(coordinator.handle(event) == nil)
+    #expect(actions == [.togglePanel])
+  }
+
   @Test @MainActor func staleRecorderTeardownCannotClearNewCaptureOwner() {
     let first = ShortcutRecorder.CaptureBridge.Coordinator(
       onCapture: { _ in },

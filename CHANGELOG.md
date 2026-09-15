@@ -3,6 +3,18 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.0.11-beta.1] - 2026-09-15
+
+### Changed
+
+- Replaced the attached-file shelf with a compact single-row Add control, filename chips, and
+  overflow count while retaining the existing file actions.
+
+### Fixed
+
+- Presented the native file chooser independently of the transient menu host, suppressed
+  duplicate chooser requests, and passed shortcuts through while a modal window is active.
+
 ## [1.0.10-beta.1] - 2026-09-14
 
 ### Fixed

@@ -4,9 +4,73 @@
 
   @MainActor
   struct NoteFilePicker {
-    let chooseFile: (NSWindow?, @escaping (URL?) -> Void) -> Void
+    enum Result: Equatable {
+      case accepted(URL)
+      case cancelled
+      case aborted
 
-    static let live = NoteFilePicker { window, completion in
+      init(response: NSApplication.ModalResponse, url: URL?) {
+        if response == .OK, let url {
+          self = .accepted(url)
+        } else if response == .cancel {
+          self = .cancelled
+        } else {
+          self = .aborted
+        }
+      }
+    }
+
+    @MainActor
+    final class Presenter {
+      typealias ScheduledWork = @MainActor () -> Void
+
+      private let schedule: (@escaping ScheduledWork) -> Void
+      private let present: () -> Result
+      private(set) var isPresenting = false
+
+      init(
+        schedule: @escaping (@escaping ScheduledWork) -> Void,
+        present: @escaping () -> Result
+      ) {
+        self.schedule = schedule
+        self.present = present
+      }
+
+      @discardableResult
+      func chooseFile(completion: @escaping (Result) -> Void) -> Bool {
+        guard !isPresenting else { return false }
+        isPresenting = true
+        schedule { [self] in
+          let result = self.present()
+          self.isPresenting = false
+          completion(result)
+        }
+        return true
+      }
+    }
+
+    let chooseFile: (@escaping (Result) -> Void) -> Bool
+
+    init(presenter: Presenter) {
+      chooseFile = presenter.chooseFile
+    }
+
+    init(chooseFile: @escaping (@escaping (Result) -> Void) -> Bool) {
+      self.chooseFile = chooseFile
+    }
+
+    static let live = NoteFilePicker(
+      presenter: Presenter(
+        schedule: { work in
+          Task { @MainActor in work() }
+        },
+        present: {
+          presentLive()
+        }
+      )
+    )
+
+    private static func presentLive() -> Result {
       let panel = NSOpenPanel()
       panel.title = "Choose a File"
       panel.prompt = "Choose"
@@ -14,14 +78,10 @@
       panel.canChooseDirectories = false
       panel.allowsMultipleSelection = false
       panel.resolvesAliases = true
-      let finish: (NSApplication.ModalResponse) -> Void = { response in
-        completion(response == .OK ? panel.url : nil)
-      }
-      if let window {
-        panel.beginSheetModal(for: window, completionHandler: finish)
-      } else {
-        panel.begin(completionHandler: finish)
-      }
+      NSApp.activate(ignoringOtherApps: true)
+      let result = Result(response: panel.runModal(), url: panel.url)
+      panel.orderOut(nil)
+      return result
     }
   }
 
@@ -40,7 +100,8 @@
     }
 
     static let spacing: CGFloat = 6
-    private static let overflowWidth: CGFloat = 76
+    private static let addControlWidth: CGFloat = 54
+    private static let overflowWidth: CGFloat = 38
     private static let minimumChipWidth: CGFloat = 132
     private static let maximumChipWidth: CGFloat = 220
 
@@ -48,11 +109,15 @@
       references: [NoteFileReferencePresentation],
       availableWidth: CGFloat
     ) -> Plan {
-      let fullWidthPlan = pack(references, into: max(1, availableWidth))
+      let availableChipWidth = max(
+        1,
+        availableWidth - addControlWidth - spacing
+      )
+      let fullWidthPlan = pack(references, into: availableChipWidth)
       guard !fullWidthPlan.overflow.isEmpty else { return fullWidthPlan }
       return pack(
         references,
-        into: max(1, availableWidth - overflowWidth - spacing)
+        into: max(1, availableChipWidth - overflowWidth - spacing)
       )
     }
 
@@ -60,28 +125,23 @@
       _ references: [NoteFileReferencePresentation],
       into width: CGFloat
     ) -> Plan {
-      var rows = [[Item](), [Item]()]
-      var usedWidths = [CGFloat.zero, .zero]
+      var row: [Item] = []
+      var usedWidth = CGFloat.zero
       var overflow: [NoteFileReferencePresentation] = []
 
-      for reference in references {
+      for (index, reference) in references.enumerated() {
         let itemWidth = min(desiredWidth(for: reference), width)
-        guard let rowIndex = rows.indices.first(where: { index in
-          let gap = rows[index].isEmpty ? 0 : spacing
-          return usedWidths[index] + gap + itemWidth <= width
-        }) else {
-          overflow.append(reference)
-          continue
+        let gap = row.isEmpty ? 0 : spacing
+        guard usedWidth + gap + itemWidth <= width else {
+          overflow.append(contentsOf: references[index...])
+          break
         }
-        if !rows[rowIndex].isEmpty {
-          usedWidths[rowIndex] += spacing
-        }
-        rows[rowIndex].append(Item(reference: reference, width: itemWidth))
-        usedWidths[rowIndex] += itemWidth
+        row.append(Item(reference: reference, width: itemWidth))
+        usedWidth += gap + itemWidth
       }
 
       return Plan(
-        rows: rows.filter { !$0.isEmpty },
+        rows: row.isEmpty ? [] : [row],
         overflow: overflow,
         chipAreaWidth: width
       )
@@ -109,12 +169,12 @@
     }
 
     let references: [NoteFileReferencePresentation]
+    let canAdd: Bool
+    let onAdd: () -> Void
     let onOpen: (UUID) -> Void
     let onReveal: (UUID) -> Void
     let onLocate: (UUID) -> Void
     let onRemove: (UUID) -> Void
-
-    @State private var renderedRowCount = 1
 
     static func actions(
       for reference: NoteFileReferencePresentation
@@ -125,54 +185,41 @@
     }
 
     var body: some View {
-      VStack(alignment: .leading, spacing: 6) {
-        HStack(spacing: 5) {
-          Image(systemName: "paperclip")
-          Text("Files")
-          Text("\(references.count)")
-            .foregroundStyle(.tertiary)
-          Image(systemName: "info.circle")
-            .foregroundStyle(.tertiary)
-            .help("File shortcuts stay on this Mac and aren’t included in exports.")
-            .accessibilityLabel("About file shortcuts")
-        }
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(.secondary)
-        .accessibilityElement(children: .combine)
-
-        GeometryReader { geometry in
-          let plan = NoteFileReferenceLayout.plan(
-            references: references,
-            availableWidth: geometry.size.width
-          )
-          referenceGrid(plan)
-            .onChange(of: plan.rows.count, initial: true) { _, count in
-              renderedRowCount = max(1, count)
-            }
-        }
-        .frame(
-          height: CGFloat(renderedRowCount) * 36
-            + CGFloat(renderedRowCount - 1) * NoteFileReferenceLayout.spacing
+      GeometryReader { geometry in
+        let plan = NoteFileReferenceLayout.plan(
+          references: references,
+          availableWidth: geometry.size.width
         )
+        referenceStrip(plan)
       }
       .padding(.horizontal, 14)
-      .padding(.vertical, 8)
+      .padding(.vertical, 4)
+      .frame(height: 40)
       .frame(maxWidth: .infinity, alignment: .leading)
       .background(.quaternary.opacity(0.16))
       .overlay(alignment: .bottom) { Divider().opacity(0.35) }
     }
 
-    private func referenceGrid(_ plan: NoteFileReferenceLayout.Plan) -> some View {
-      HStack(alignment: .top, spacing: NoteFileReferenceLayout.spacing) {
-        VStack(alignment: .leading, spacing: NoteFileReferenceLayout.spacing) {
-          ForEach(Array(plan.rows.enumerated()), id: \.offset) { _, row in
-            HStack(spacing: NoteFileReferenceLayout.spacing) {
-              ForEach(row) { item in
-                fileChip(item.reference)
-                  .frame(width: item.width, alignment: .leading)
-              }
-            }
-          }
+    private func referenceStrip(_ plan: NoteFileReferenceLayout.Plan) -> some View {
+      HStack(spacing: NoteFileReferenceLayout.spacing) {
+        Button(action: onAdd) {
+          Label("Add", systemImage: "paperclip")
+            .lineLimit(1)
+            .frame(width: 48, height: 30)
+        }
+        .buttonStyle(.plain)
+        .font(.caption.weight(.medium))
+        .foregroundStyle(.primary)
+        .disabled(!canAdd)
+        .accessibilityLabel("Add file shortcut")
+        .accessibilityHint(
+          "File shortcuts stay on this Mac and aren’t included in exports."
+        )
+        .help("Add a file shortcut. Shortcuts stay on this Mac and aren’t included in exports.")
+
+        ForEach(plan.rows.first ?? []) { item in
+          fileChip(item.reference)
+            .frame(width: item.width, alignment: .leading)
         }
         if !plan.overflow.isEmpty {
           overflowMenu(plan.overflow)
@@ -187,17 +234,10 @@
         } label: {
           HStack(spacing: 5) {
             fileIcon(reference)
-            VStack(alignment: .leading, spacing: 0) {
-              Text(reference.filename)
-                .lineLimit(1)
-                .truncationMode(.middle)
-              if !reference.isAvailable {
-                Text("File unavailable")
-                  .font(.caption2)
-                  .foregroundStyle(.tertiary)
-              }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Text(reference.filename)
+              .lineLimit(1)
+              .truncationMode(.middle)
+              .frame(maxWidth: .infinity, alignment: .leading)
           }
         }
         .buttonStyle(.plain)
@@ -223,7 +263,7 @@
       .font(.caption)
       .padding(.leading, 8)
       .padding(.trailing, 3)
-      .frame(height: 34)
+      .frame(height: 30)
       .background(.regularMaterial, in: Capsule())
       .overlay {
         Capsule().stroke(.separator.opacity(0.35), lineWidth: 0.5)
@@ -249,10 +289,10 @@
           }
         }
       } label: {
-        Label("\(references.count) more", systemImage: "ellipsis.circle")
+        Text("+\(references.count)")
           .lineLimit(1)
           .font(.caption)
-          .frame(width: 70, height: 34)
+          .frame(width: 34, height: 30)
       }
       .menuStyle(.borderlessButton)
       .fixedSize()
@@ -281,24 +321,10 @@
 
     @ViewBuilder
     private func fileIcon(_ reference: NoteFileReferencePresentation) -> some View {
-      if let url = reference.url {
-        Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
-          .resizable()
-          .scaledToFit()
-          .frame(width: 16, height: 16)
-          .overlay(alignment: .bottomTrailing) {
-            Image(systemName: "arrow.up.right")
-              .font(.system(size: 6, weight: .bold))
-              .foregroundStyle(.secondary)
-              .padding(1)
-              .background(.regularMaterial, in: Circle())
-              .offset(x: 2, y: 2)
-          }
-      } else {
-        Image(systemName: "doc.badge.ellipsis")
-          .foregroundStyle(.secondary)
-          .frame(width: 16, height: 16)
-      }
+      Image(systemName: reference.isAvailable ? "doc" : "doc.badge.ellipsis")
+        .foregroundStyle(.secondary)
+        .frame(width: 16, height: 16)
+        .accessibilityHidden(true)
     }
   }
 #endif
