@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.0.10-beta.1] - 2026-09-14
+
+### Fixed
+
+- Kept the pinned editor title opaque with adaptive native text color and aligned its text
+  origin with the note body.
+- Aligned checklist circles with native body typography across fonts, sizes, completion states,
+  and nesting.
+
 ## [1.0.9-beta.1] - 2026-09-14
 
 ### Fixed

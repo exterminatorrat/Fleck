@@ -763,14 +763,18 @@
   }
 
   final class NativeEditorDocumentView: NSView {
+    private static let nativeTitleTextInset: CGFloat = 2
+
     let titleField: NSTextField
     let textView: ListAwareTextView
+    var isPinned: Bool
 
     override var isFlipped: Bool { true }
 
-    init(titleField: NSTextField, textView: ListAwareTextView) {
+    init(titleField: NSTextField, textView: ListAwareTextView, isPinned: Bool = false) {
       self.titleField = titleField
       self.textView = textView
+      self.isPinned = isPinned
       super.init(frame: .zero)
       autoresizingMask = [.width]
       addSubview(titleField)
@@ -785,10 +789,11 @@
     func updateLayout(width: CGFloat, minimumHeight: CGFloat) {
       let width = max(0, width)
       let titleHeight = max(24, titleField.fittingSize.height)
+      let leadingCompensation = isPinned ? Self.nativeTitleTextInset : 0
       let titleFrame = NSRect(
-        x: 16,
+        x: 16 - leadingCompensation,
         y: 12,
-        width: max(0, width - 32),
+        width: max(0, width - 32 + leadingCompensation),
         height: titleHeight
       )
       titleField.frame = titleFrame
@@ -858,6 +863,7 @@
     let richTextRTF: Data?
     let title: String
     let titleFontFamily: String
+    let isPinned: Bool
     let onTitleChange: (String) -> Void
     let onTitleFocusChange: (Bool) -> Void
     let onChange: (String, Data?) -> Void
@@ -880,6 +886,7 @@
       richTextRTF: Data?,
       title: String = "",
       titleFontFamily: String? = nil,
+      isPinned: Bool = false,
       onTitleChange: @escaping (String) -> Void = { _ in },
       onTitleFocusChange: @escaping (Bool) -> Void = { _ in },
       onChange: @escaping (String, Data?) -> Void,
@@ -901,6 +908,7 @@
       self.richTextRTF = richTextRTF
       self.title = title
       self.titleFontFamily = titleFontFamily ?? fontFamily
+      self.isPinned = isPinned
       self.onTitleChange = onTitleChange
       self.onTitleFocusChange = onTitleFocusChange
       self.onChange = onChange
@@ -940,6 +948,7 @@
       titleField.drawsBackground = false
       titleField.focusRingType = .none
       titleField.font = EditorTypography.titleNSFont(family: titleFontFamily)
+      titleField.textColor = isPinned ? .textColor : .labelColor
       titleField.usesSingleLineMode = false
       titleField.cell?.wraps = false
       titleField.cell?.isScrollable = true
@@ -983,7 +992,8 @@
       configureNoteLinks(on: textView)
       let documentView = NativeEditorDocumentView(
         titleField: titleField,
-        textView: textView
+        textView: textView,
+        isPinned: isPinned
       )
       scrollView.documentView = documentView
       documentView.autoresizingMask = [.width]
@@ -1047,6 +1057,8 @@
       documentView.titleField.isEnabled = isEnabled
       documentView.titleField.setAccessibilityElement(isEnabled)
       documentView.titleField.font = EditorTypography.titleNSFont(family: titleFontFamily)
+      documentView.titleField.textColor = isPinned ? .textColor : .labelColor
+      documentView.isPinned = isPinned
       if documentView.titleField.stringValue != title {
         documentView.titleField.stringValue = title
       }
@@ -1322,7 +1334,7 @@
     }
   }
 
-  final class ListAwareTextView: NSTextView {
+  final class ListAwareTextView: NSTextView, @MainActor NSLayoutManagerDelegate {
     private static let noteLinkSeparatorMenuTag = 0xF1EC
     private static let noteLinkRequestMenuTag = 0xF1ED
     private static let noteLinkOpenMenuTag = 0xF1EE
@@ -1384,6 +1396,33 @@
     private var pasteOptionsClickMonitor: Any?
     private var isPasteOptionsMenuVisible = false
 
+    override convenience init(frame frameRect: NSRect) {
+      let storage = NSTextStorage()
+      let layoutManager = NSLayoutManager()
+      let textContainer = NSTextContainer(
+        size: NSSize(width: frameRect.width, height: 10_000_000)
+      )
+      textContainer.widthTracksTextView = true
+      textContainer.heightTracksTextView = false
+      storage.addLayoutManager(layoutManager)
+      layoutManager.addTextContainer(textContainer)
+      self.init(frame: frameRect, textContainer: textContainer)
+      isHorizontallyResizable = false
+      isVerticallyResizable = true
+      minSize = frameRect.size
+      maxSize = NSSize(width: frameRect.width, height: 10_000_000)
+    }
+
+    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
+      super.init(frame: frameRect, textContainer: container)
+      layoutManager?.delegate = self
+    }
+
+    required init?(coder: NSCoder) {
+      super.init(coder: coder)
+      layoutManager?.delegate = self
+    }
+
     var hasPasteOptions: Bool { pendingPaste != nil }
 
     var pasteOptionMenuTitles: [String] {
@@ -1392,6 +1431,112 @@
 
     var pasteOptionEnabledStates: [Bool] {
       PasteOption.allCases.map(isPasteOptionEnabled)
+    }
+
+    private func checklistPrefixWidths(in characterRange: NSRange) -> [Int: CGFloat] {
+      let ns = string as NSString
+      guard characterRange.location >= 0,
+        characterRange.location < ns.length,
+        characterRange.length > 0
+      else {
+        return [:]
+      }
+      let boundedRange = NSRange(
+        location: characterRange.location,
+        length: min(characterRange.length, ns.length - characterRange.location)
+      )
+      let paragraphs = ns.paragraphRange(for: boundedRange)
+      var widths: [Int: CGFloat] = [:]
+      var location = paragraphs.location
+      while location < NSMaxRange(paragraphs) {
+        let paragraphRange = ns.paragraphRange(
+          for: NSRange(location: location, length: 0)
+        )
+        if let item = parsedListItem(in: paragraphRange, string: ns),
+          item.parsed.style == .checklist
+        {
+          widths[item.markerRange.location] = ChecklistMarkerDrawing.markerDiameter
+          widths[NSMaxRange(item.markerRange)] = ChecklistMarkerDrawing.minimumContentGap
+        }
+        let nextLocation = NSMaxRange(paragraphRange)
+        guard nextLocation > location else { break }
+        location = nextLocation
+      }
+      return widths
+    }
+
+    private func checklistPrefixWidth(at characterIndex: Int) -> CGFloat? {
+      checklistPrefixWidths(in: NSRange(location: characterIndex, length: 1))[characterIndex]
+    }
+
+    func layoutManager(
+      _ layoutManager: NSLayoutManager,
+      shouldGenerateGlyphs glyphs: UnsafePointer<CGGlyph>,
+      properties props: UnsafePointer<NSLayoutManager.GlyphProperty>,
+      characterIndexes charIndexes: UnsafePointer<Int>,
+      font aFont: NSFont,
+      forGlyphRange glyphRange: NSRange
+    ) -> Int {
+      var outputGlyphs = Array(UnsafeBufferPointer(start: glyphs, count: glyphRange.length))
+      var outputProperties = Array(UnsafeBufferPointer(start: props, count: glyphRange.length))
+      let outputCharacterIndexes = Array(
+        UnsafeBufferPointer(start: charIndexes, count: glyphRange.length)
+      )
+      guard let firstCharacter = outputCharacterIndexes.min(),
+        let lastCharacter = outputCharacterIndexes.max()
+      else {
+        return 0
+      }
+      let prefixWidths = checklistPrefixWidths(
+        in: NSRange(location: firstCharacter, length: lastCharacter - firstCharacter + 1)
+      )
+      var changed = false
+      for index in outputCharacterIndexes.indices
+      where prefixWidths[outputCharacterIndexes[index]] != nil {
+        outputGlyphs[index] = 0
+        outputProperties[index] = .controlCharacter
+        changed = true
+      }
+      guard changed else { return 0 }
+      outputGlyphs.withUnsafeBufferPointer { glyphBuffer in
+        outputProperties.withUnsafeBufferPointer { propertyBuffer in
+          outputCharacterIndexes.withUnsafeBufferPointer { characterBuffer in
+            layoutManager.setGlyphs(
+              glyphBuffer.baseAddress!,
+              properties: propertyBuffer.baseAddress!,
+              characterIndexes: characterBuffer.baseAddress!,
+              font: aFont,
+              forGlyphRange: glyphRange
+            )
+          }
+        }
+      }
+      return glyphRange.length
+    }
+
+    func layoutManager(
+      _ layoutManager: NSLayoutManager,
+      shouldUse action: NSLayoutManager.ControlCharacterAction,
+      forControlCharacterAt charIndex: Int
+    ) -> NSLayoutManager.ControlCharacterAction {
+      checklistPrefixWidth(at: charIndex) == nil ? action : .whitespace
+    }
+
+    func layoutManager(
+      _ layoutManager: NSLayoutManager,
+      boundingBoxForControlGlyphAt glyphIndex: Int,
+      for textContainer: NSTextContainer,
+      proposedLineFragment proposedRect: NSRect,
+      glyphPosition: NSPoint,
+      characterIndex charIndex: Int
+    ) -> NSRect {
+      guard let width = checklistPrefixWidth(at: charIndex) else { return .zero }
+      return NSRect(
+        x: glyphPosition.x,
+        y: proposedRect.minY,
+        width: width,
+        height: proposedRect.height
+      )
     }
 
     static func pasteTextOnly(
