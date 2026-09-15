@@ -99,6 +99,8 @@ func physicalGestureReceiptPreservesPressAndReleaseAcrossQueuedDelivery() async 
   fixture.monitor.emit(.released(.rightOption))
   fixture.clock.advance(by: .seconds(2))
 
+  fixture.handler.completeCurrentTerminal()
+  await fixture.shortcut.waitForTerminalObservation()
   deliveryGate.open()
   await fixture.shortcut.drainEvents()
 
