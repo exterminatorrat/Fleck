@@ -164,6 +164,14 @@ func NotesPanelDoubleBracketPickerInsertsAndDerivesBacklink() async throws {
     let token = NoteLinkFormatter.markdown(label: target.displayTitle, targetNoteID: target.id)
     #expect(state.selectedNote?.body == "Before \(token)")
     #expect(!picker.isPresented)
+    let backlinkDeadline = ContinuousClock.now + .seconds(2)
+    while
+      backlinks.incoming(to: target.id).map(\.sourceNoteID) != [source.id],
+      ContinuousClock.now < backlinkDeadline
+    {
+      host.layoutSubtreeIfNeeded()
+      await Task.yield()
+    }
     #expect(backlinks.incoming(to: target.id).map(\.sourceNoteID) == [source.id])
 
     state.select(target.id)
