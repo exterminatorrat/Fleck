@@ -854,7 +854,7 @@
       .deletingLastPathComponent()
       .deletingLastPathComponent()
       .deletingLastPathComponent()
-    let markDirectory = sourceRoot.appendingPathComponent("website/public", isDirectory: true)
+    let markDirectory = sourceRoot.appendingPathComponent("Assets", isDirectory: true)
     let markLoader: @MainActor () -> NSImage? = {
       guard case .image(let image) = FleckMark.load(
         template: true,

@@ -1404,7 +1404,7 @@
             .disabled(!appState.canAddFileReference(noteID: note.id))
             Divider()
           }
-          Button("Import…", systemImage: "square.and.arrow.down") {
+          Button("Import Text or Markdown…", systemImage: "square.and.arrow.down") {
             isImporting = true
           }
           Divider()
@@ -1927,8 +1927,25 @@
     }
 
     private func chooseFile(for noteID: UUID) {
-      filePicker.chooseFile(editorCommands.textView?.window) { url in
-        Self.completeFileReferenceSelection(url, noteID: noteID, appState: appState)
+      guard appState.canAddFileReference(noteID: noteID) else { return }
+      _ = filePicker.chooseFile { result in
+        handleFilePickerResult(result) { url in
+          Self.completeFileReferenceSelection(url, noteID: noteID, appState: appState)
+        }
+      }
+    }
+
+    private func handleFilePickerResult(
+      _ result: NoteFilePicker.Result,
+      accepted: (URL) -> Void
+    ) {
+      switch result {
+      case let .accepted(url):
+        accepted(url)
+      case .cancelled:
+        break
+      case .aborted:
+        appState.fileReferenceActionFailed("The file chooser could not be opened.")
       }
     }
 
@@ -1973,12 +1990,14 @@
     }
 
     private func locateFileReference(_ referenceID: UUID) {
-      filePicker.chooseFile(editorCommands.textView?.window) { url in
-        Self.completeFileReferenceRelink(
-          url,
-          referenceID: referenceID,
-          appState: appState
-        )
+      _ = filePicker.chooseFile { result in
+        handleFilePickerResult(result) { url in
+          Self.completeFileReferenceRelink(
+            url,
+            referenceID: referenceID,
+            appState: appState
+          )
+        }
       }
     }
 
@@ -2229,6 +2248,8 @@
           if !appState.selectedNoteFileReferences.isEmpty {
             NoteFileReferenceView(
               references: appState.selectedNoteFileReferences,
+              canAdd: appState.canAddFileReference(noteID: note.id),
+              onAdd: { chooseFile(for: note.id) },
               onOpen: openFileReference,
               onReveal: revealFileReference,
               onLocate: locateFileReference,
@@ -2271,6 +2292,8 @@
             commands: editorCommands,
             isVisible: isEditorVisible,
             liveNoteIDs: Set(appState.workspace.notes.map(\.id)),
+            inlineImageStore: appState.inlineNoteImageStore,
+            onInlineImageError: appState.inlineNoteImageImportFailed,
             onRequestNoteLink: { range in
               guard !isBlockingOverlayPresented,
                 let source = visibleSelectedNote,

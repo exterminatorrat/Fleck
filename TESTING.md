@@ -9,7 +9,6 @@ claims require an explicitly launched packaged app in a disposable environment.
 - macOS 14 or later
 - Xcode 26 or later with the full macOS 26 SDK selected
 - Swift 6
-- Node.js 22.12 or later for `website/`
 
 Confirm the selected toolchain without building:
 
@@ -17,8 +16,6 @@ Confirm the selected toolchain without building:
 xcodebuild -version
 xcrun --sdk macosx --show-sdk-version
 swift --version
-node --version
-npm --version
 ```
 
 ## Ordinary automated checks
@@ -171,19 +168,6 @@ deterministic tests, not live model quality, microphone behavior, redistribution
 rights, signing, or release readiness. Model assets require their own reviewed
 fixtures and receipts; do not download or run a model merely to validate an
 ordinary contribution.
-
-## Website
-
-```sh
-cd website
-npm ci
-npm test
-npm run build
-```
-
-`npm ci` must use the committed lockfile. A visual website change also needs
-keyboard, narrow and wide viewport, contrast, and reduced-motion review with
-synthetic content.
 
 ## Reporting a failure
 

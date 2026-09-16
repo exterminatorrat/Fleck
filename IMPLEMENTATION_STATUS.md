@@ -19,7 +19,7 @@ Implemented in the default Swift package graph:
 - optional system Foundation Models cleanup/routing on supported macOS 26 hosts;
 - the local profile-scoped Agent Connector, explicit grants, activity, revision
   checks, idempotent mutations, and Undo;
-- Swift tests, packaging scripts, boundary audits, and a Vite website.
+- Swift tests, packaging scripts, and boundary audits.
 
 The deployment minimum is macOS 14. Building the current source requires Xcode
 26 or later with the full macOS 26 SDK and Swift 6.

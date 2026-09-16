@@ -93,24 +93,12 @@ or downloadable binary.
       npm 12.0.2 against the same source baseline. `npm ci`, full and
       production-only audits with zero reported vulnerabilities, all seven
       website tests, and the production build passed; the lockfile was
-      unchanged. Main CI separately covers the declared Node.js 22.12 baseline.
+      unchanged. At that time, Main CI separately covered the declared Node.js
+      22.12 baseline.
 - [ ] After this documentation update is merged, require green GitHub CI at the
-      exact resulting source commit before an announcement. Repeat the website
-      install, both audits, tests, and production build there; do not force
-      unsupported dependency overrides to obtain that result.
+      exact resulting source commit before an announcement.
 - [ ] Confirm the MPL-2.0 license, notices, third-party attributions, dependency
       pins, and reserved-brand language match the source-preview tree.
-
-## Optional future website deployment
-
-Website deployment and hosting-account configuration do not block the
-source-only preview. Before any future deployment:
-
-- [ ] Configure the intended hosting account outside the source tree; do not
-      commit a project identifier or substitute a dummy identifier.
-- [ ] Confirm the deployed output preserves GSAP's proprietary banner and makes
-      the complete `website/public/THIRD_PARTY_LICENSES.txt` notice artifact
-      available with the site.
 
 ## Future binary distribution
 

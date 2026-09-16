@@ -3,6 +3,32 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.0.13-beta.1] - 2026-09-16
+
+### Changed
+
+- Renamed the Options menu's Import action to "Import Text or Markdown…" to clarify the
+  supported file formats.
+
+## [1.0.12-beta.1] - 2026-09-15
+
+### Added
+
+- Dropped and pasted image files now render inline at their full display height, while saved notes
+  and agent responses retain managed local-file references instead of embedded image data.
+
+## [1.0.11-beta.1] - 2026-09-15
+
+### Changed
+
+- Replaced the attached-file shelf with a compact single-row Add control, filename chips, and
+  overflow count while retaining the existing file actions.
+
+### Fixed
+
+- Presented the native file chooser independently of the transient menu host, suppressed
+  duplicate chooser requests, and passed shortcuts through while a modal window is active.
+
 ## [1.0.10-beta.1] - 2026-09-14
 
 ### Fixed

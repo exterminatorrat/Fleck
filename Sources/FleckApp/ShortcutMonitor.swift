@@ -26,13 +26,19 @@
       coordinator.uninstall()
     }
 
+    @MainActor
     final class Coordinator {
       var action: (Shortcut.Action) -> Void
       var shortcuts: [Shortcut] = []
+      private let isModalActive: () -> Bool
       private var monitor: Any?
 
-      init(action: @escaping (Shortcut.Action) -> Void) {
+      init(
+        action: @escaping (Shortcut.Action) -> Void,
+        isModalActive: @escaping () -> Bool = { NSApp?.modalWindow != nil }
+      ) {
         self.action = action
+        self.isModalActive = isModalActive
       }
 
       func install(shortcuts: [Shortcut]) {
@@ -48,6 +54,7 @@
       }
 
       func handle(_ event: NSEvent) -> NSEvent? {
+        guard !isModalActive() else { return event }
         guard !ShortcutCaptureGate.isActive, !ShortcutCaptureGate.wasConsumed(event) else {
           return event
         }

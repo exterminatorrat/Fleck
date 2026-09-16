@@ -115,7 +115,7 @@ private func makeFakeFixture(
   try fileManager.createDirectory(at: build, withIntermediateDirectories: true)
   try fileManager.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
   try fileManager.createDirectory(
-    at: root.appendingPathComponent("website/public", isDirectory: true),
+    at: root.appendingPathComponent("Assets", isDirectory: true),
     withIntermediateDirectories: true
   )
 
@@ -168,8 +168,8 @@ private func makeFakeFixture(
     to: root.appendingPathComponent("Sources/FleckApp/Info.plist")
   )
   try fileManager.copyItem(
-    at: sourceRoot.appendingPathComponent("website/public/fleck-mark.png"),
-    to: root.appendingPathComponent("website/public/fleck-mark.png")
+    at: sourceRoot.appendingPathComponent("Assets/fleck-mark.png"),
+    to: root.appendingPathComponent("Assets/fleck-mark.png")
   )
   try fileManager.copyItem(
     at: sourceRoot.appendingPathComponent("Sources/FleckApp/Resources/EnhancedModelManifest.json"),
