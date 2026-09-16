@@ -71,6 +71,10 @@ remaining release gates.
 
 ## What is here
 
+![Fleck dark workspace with Project notes, Image notes, and Next steps tabs, a Reference.txt file shortcut, and the native editor](docs/images/fleck-workspace.png)
+
+Development build 1.0.13-beta.1 Build 58 with synthetic notes and a synthetic file shortcut.
+
 The ordinary build contains:
 
 | Area | Current implementation |
@@ -118,8 +122,7 @@ the macOS and architecture requirements listed on its release page instead.
 The deployment target is not a completed compatibility matrix. Current local
 validation is on Apple silicon; native Intel compatibility and a full macOS 14
 native pass have not been verified. Source tests and offscreen component
-captures do not establish live-app or VoiceOver behavior; native checks for
-import-menu visibility and untruncated labels remain open.
+captures do not establish live-app or VoiceOver behavior.
 
 The standalone Command Line Tools are not enough for this source tree. Check the
 active toolchain without building:
