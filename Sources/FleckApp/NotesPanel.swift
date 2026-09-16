@@ -1404,7 +1404,7 @@
             .disabled(!appState.canAddFileReference(noteID: note.id))
             Divider()
           }
-          Button("Import…", systemImage: "square.and.arrow.down") {
+          Button("Import Text or Markdown…", systemImage: "square.and.arrow.down") {
             isImporting = true
           }
           Divider()

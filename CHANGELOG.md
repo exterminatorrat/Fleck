@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.0.13-beta.1] - 2026-09-16
+
+### Changed
+
+- Renamed the Options menu's Import action to "Import Text or Markdown…" to clarify the
+  supported file formats.
+
 ## [1.0.12-beta.1] - 2026-09-15
 
 ### Added
