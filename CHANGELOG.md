@@ -3,6 +3,17 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.0.15-beta.1] - 2026-09-16
+
+### Fixed
+
+- Kept Delete fixed at the trailing edge of the editor toolbar while earlier formatting
+  commands move into measured overflow at narrower widths.
+- Allowed menu-panel resizing and saved menu dimensions to use the current screen's usable
+  bounds instead of an arbitrary 800-point ceiling.
+- Removed forced immediate display and repeated diagonal-cursor creation from live drag updates
+  while preserving synchronous frame adoption and release behavior.
+
 ## [1.0.14-beta.1] - 2026-09-16
 
 ### Added

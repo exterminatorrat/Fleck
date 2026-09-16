@@ -375,7 +375,21 @@ import Testing
   #expect(decoded.pinnedPanelHeight == 540)
 }
 
-@Test func panelDimensionsClampToTheirSupportedMinimumsAndMenuMaximums() {
+@Test func largeFractionalMenuPanelSizesRoundTripWithoutChangingPinnedDimensions() throws {
+  let value = AppPreferences(
+    panelWidth: 1_240.5,
+    panelHeight: 920.25,
+    pinnedPanelWidth: 760,
+    pinnedPanelHeight: 540
+  )
+  let decoded = try JSONDecoder().decode(AppPreferences.self, from: JSONEncoder().encode(value))
+  #expect(decoded.panelWidth == 1_240.5)
+  #expect(decoded.panelHeight == 920.25)
+  #expect(decoded.pinnedPanelWidth == 760)
+  #expect(decoded.pinnedPanelHeight == 540)
+}
+
+@Test func panelDimensionsRejectNonfiniteValuesAndClampOnlyToTheirSupportedMinimums() {
   let value = AppPreferences(
     panelWidth: 12,
     panelHeight: 9_000,
@@ -383,9 +397,13 @@ import Testing
     pinnedPanelHeight: 2
   )
   #expect(value.panelWidth == 380)
-  #expect(value.panelHeight == 800)
+  #expect(value.panelHeight == 9_000)
   #expect(value.pinnedPanelWidth == 480)
   #expect(value.pinnedPanelHeight == 320)
+
+  let nonfinite = AppPreferences(panelWidth: .infinity, panelHeight: .nan)
+  #expect(nonfinite.panelWidth == 380)
+  #expect(nonfinite.panelHeight == 300)
 }
 
 @Test func shortcutsNormalizeAndDetectConflicts() {

@@ -474,6 +474,28 @@
     }
   }
 
+  enum MenuPanelSettingsSizePolicy {
+    static func range(
+      minimum: Double,
+      storedValue: Double,
+      usableDisplayDimensions: [CGFloat]
+    ) -> ClosedRange<Double> {
+      let displayMaximum = usableDisplayDimensions
+        .filter { $0.isFinite && $0 > 0 }
+        .map(Double.init)
+        .max() ?? minimum
+      let storedMaximum = storedValue.isFinite ? storedValue : minimum
+      return minimum...max(minimum, max(storedMaximum, displayMaximum))
+    }
+
+    static func label(for value: Double) -> String {
+      let number = value < 1_000_000
+        ? value.formatted(.number.precision(.fractionLength(0...2)))
+        : value.formatted(.number.notation(.scientific).precision(.significantDigits(4)))
+      return "\(number) pt"
+    }
+  }
+
   struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -693,9 +715,9 @@
           detail: "Set the width of the menu bar notes panel."
         ) {
           Stepper(
-            value: preferenceBinding(\.panelWidth), in: 380...800, step: 20
+            value: preferenceBinding(\.panelWidth), in: menuPanelWidthRange, step: 20
           ) {
-            Text("\(Int(appState.preferences.panelWidth)) pt")
+            Text(MenuPanelSettingsSizePolicy.label(for: appState.preferences.panelWidth))
           }
         }
         SettingsPreferenceRow(
@@ -703,12 +725,28 @@
           detail: "Set the height of the menu bar notes panel."
         ) {
           Stepper(
-            value: preferenceBinding(\.panelHeight), in: 300...800, step: 20
+            value: preferenceBinding(\.panelHeight), in: menuPanelHeightRange, step: 20
           ) {
-            Text("\(Int(appState.preferences.panelHeight)) pt")
+            Text(MenuPanelSettingsSizePolicy.label(for: appState.preferences.panelHeight))
           }
         }
       }
+    }
+
+    private var menuPanelWidthRange: ClosedRange<Double> {
+      MenuPanelSettingsSizePolicy.range(
+        minimum: 380,
+        storedValue: appState.preferences.panelWidth,
+        usableDisplayDimensions: NSScreen.screens.map { $0.visibleFrame.width }
+      )
+    }
+
+    private var menuPanelHeightRange: ClosedRange<Double> {
+      MenuPanelSettingsSizePolicy.range(
+        minimum: 300,
+        storedValue: appState.preferences.panelHeight,
+        usableDisplayDimensions: NSScreen.screens.map { $0.visibleFrame.height }
+      )
     }
 
     private var editing: some View {

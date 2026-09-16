@@ -56,18 +56,19 @@
 
   // Keep the accepted transaction alive independently of drag presentation.
   // Payload authentication and native move completion may arrive in either order.
-  @MainActor final class ReorderDropSession {
+  @MainActor final class ReorderDropSession: ObservableObject {
     let id: UUID
     let type: UTType
     private let sourceID: UUID
     private let noteSource: NoteDropSource?
     private let matches: (Data) -> Bool
     private enum Phase { case dragging, ended, cancelled, committed }
-    private var phase = Phase.dragging
+    @Published private var phase = Phase.dragging
     private var accepted = false
     private var pendingCommit: (() -> Void)?
 
     var canAcceptDrop: Bool { phase == .dragging && !accepted }
+    var isDragging: Bool { phase == .dragging }
 
     init(source: NoteDropSource) {
       id = source.dragSessionID
@@ -731,15 +732,6 @@
     }
   }
 
-  enum FormattingToolbarLayout: Equatable {
-    case full
-    case compact
-
-    static func presentation(availableWidth: CGFloat) -> Self {
-      availableWidth >= 720 ? .full : .compact
-    }
-  }
-
   enum NotesPanelSizing: Equatable {
     case storedPreferences
     case container
@@ -852,6 +844,7 @@
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.menuPanelGeometryStore) private var menuPanelGeometryStore
     @ObservedObject var dictationRuntime: DictationRuntime
     let isPinned: Bool
     let sizing: NotesPanelSizing
@@ -875,6 +868,7 @@
     @State private var reorderDragSession: ReorderDropSession?
     @StateObject private var fluidTabDrag = FluidTabDragController()
     @StateObject private var menuWindowDrop = MenuWindowNoteDropCoordinator()
+    @StateObject private var menuPanelResize = MenuPanelResizeController()
     @State private var tabColorPickerNoteID: UUID?
     @State private var activeFolderID: UUID?
     @State private var bannerDismissalState = NotesPanelBannerDismissalState()
@@ -1001,6 +995,28 @@
         maxWidth: sizing == .container ? .infinity : nil,
         maxHeight: sizing == .container ? .infinity : nil
       )
+      .background {
+        if !isPinned, sizing == .storedPreferences {
+          if let reorderDragSession {
+            ReorderAwareMenuPanelResizeInstaller(
+              dragSession: reorderDragSession,
+              controller: menuPanelResize,
+              geometryStore: menuPanelGeometryStore,
+              preferredSize: preferredMenuPanelSize,
+              canResize: allowsMenuPanelResize,
+              onCommit: saveMenuPanelSize
+            )
+          } else {
+            MenuPanelResizeInstaller(
+              controller: menuPanelResize,
+              geometryStore: menuPanelGeometryStore,
+              preferredSize: preferredMenuPanelSize,
+              canResize: allowsMenuPanelResize,
+              onCommit: saveMenuPanelSize
+            )
+          }
+        }
+      }
       .background {
         if !isPinned {
           Rectangle()
@@ -2020,6 +2036,34 @@
         || isShowingAgentActivity
     }
 
+    private var allowsMenuPanelResize: Bool {
+      !isBlockingOverlayPresented
+        && !isImporting
+        && !isExporting
+        && !isShowingDictationHistory
+        && notePendingAgentShare == nil
+    }
+
+    private var preferredMenuPanelSize: CGSize {
+      CGSize(
+        width: appState.preferences.panelWidth,
+        height: appState.preferences.panelHeight
+      )
+    }
+
+    private func saveMenuPanelSize(_ size: CGSize) {
+      guard size.width.isFinite, size.height.isFinite,
+        size.width >= MenuPanelResizeGeometry.minimumContentSize.width,
+        size.height >= MenuPanelResizeGeometry.minimumContentSize.height,
+        menuPanelResize.initialContentSize != size,
+        preferredMenuPanelSize != size
+      else { return }
+      appState.updatePreferences {
+        $0.panelWidth = size.width
+        $0.panelHeight = size.height
+      }
+    }
+
     private var agentActivitySheetPresentation: Binding<Bool> {
       Binding(
         get: { isPinned && isShowingAgentActivity },
@@ -2184,12 +2228,16 @@
 
     private var storedPanelSize: CGSize? {
       guard sizing == .storedPreferences else { return nil }
-      let preferred = CGSize(
-        width: appState.preferences.panelWidth,
-        height: appState.preferences.panelHeight
-      )
+      if let effectiveContentSize = menuPanelResize.effectiveContentSize {
+        return effectiveContentSize
+      }
+      let preferred = preferredMenuPanelSize
       let screen = editorCommands.textView?.window?.screen
-        ?? NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
+        ?? menuPanelGeometryStore?.statusLabelFrame.flatMap { statusFrame in
+          NSScreen.screens.first {
+            $0.frame.contains(CGPoint(x: statusFrame.midX, y: statusFrame.midY))
+          }
+        }
         ?? NSScreen.main
       guard let available = screen?.visibleFrame.size,
         available.width > 0,
@@ -3299,6 +3347,26 @@
   }
 
   private struct FormattingBar: View {
+    private static let overflowableItems = Array(FormattingToolbarItem.allCases.dropLast())
+
+    private enum PresentedPopover: Identifiable, Equatable {
+      case overflow([FormattingToolbarItem])
+      case font
+      case fontSize
+      case foregroundColor
+      case backgroundColor
+
+      var id: Int {
+        switch self {
+        case .overflow: 0
+        case .font: 1
+        case .fontSize: 2
+        case .foregroundColor: 3
+        case .backgroundColor: 4
+        }
+      }
+    }
+
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var appState: AppState
     @ObservedObject var commands: EditorCommands
@@ -3308,358 +3376,32 @@
     let isTitleFocused: Bool
     let onDelete: () -> Void
     @State private var fontPickerTarget: FontPickerTarget?
-    @State private var isFontPickerPresented = false
     @State private var fontSizeText = ""
     @FocusState private var isFontSizeFocused: Bool
-    @State private var isFontSizePickerPresented = false
     @State private var fontSizePickerNoteID: UUID?
-    @State private var isForegroundColorPickerPresented = false
-    @State private var isBackgroundColorPickerPresented = false
+    @State private var presentedPopover: PresentedPopover?
+    @State private var selectedVisibleCount: Int?
 
     var body: some View {
-      GeometryReader { proxy in
-        let presentation = FormattingToolbarLayout.presentation(
-          availableWidth: proxy.size.width
+      MeasuredTrailingToolbarOverflow(
+        itemCount: Self.overflowableItems.count,
+        minimumTrailingSpacing: 8,
+        onVisibleCountChange: selectedCandidateChanged
+      ) { visibleRange, overflowRange in
+        toolbarCandidate(
+          visibleItems: Array(Self.overflowableItems[visibleRange]),
+          overflowItems: Array(Self.overflowableItems[overflowRange])
         )
-        HStack(spacing: presentation == .full ? 8 : 0) {
-        Menu {
-          Button("Cancel Dictation", role: .destructive) {
-            guard isEditorVisible else { return }
-            Task { await dictationRuntime.cancel() }
-          }
-          .disabled(!dictationRuntime.canCancel)
-        } label: {
-          ToolbarIconLabel(
-            systemImage: dictationRuntime.microphoneSymbol,
-            isActive: dictationRuntime.isListening
-          )
-        } primaryAction: {
-          guard isEditorVisible,
-            dictationRuntime.toolbarPresentation.primaryAction != nil
-          else { return }
-          Task { await dictationRuntime.toggle() }
-        }
-        .accessibilityLabel(dictationRuntime.microphoneHelp)
-        .accessibilityAction(named: Text("Cancel Dictation")) {
-          guard isEditorVisible else { return }
-          Task { await dictationRuntime.cancel() }
-        }
-        .help(dictationRuntime.microphoneHelp)
-        if presentation == .full {
-          Divider().frame(height: 15)
-        }
-        Button {
-          guard isEditorVisible else { return }
-          commands.undo()
-        } label: {
-          ToolbarIconLabel(systemImage: "arrow.uturn.backward")
-        }
-        .accessibilityLabel("Undo")
-        .keyboardShortcut("z", modifiers: .command)
-        Button {
-          guard isEditorVisible else { return }
-          commands.redo()
-        } label: {
-          ToolbarIconLabel(systemImage: "arrow.uturn.forward")
-        }
-        .accessibilityLabel("Redo")
-        .keyboardShortcut("z", modifiers: [.command, .shift])
-        if presentation == .full {
-          Divider().frame(height: 15)
-        }
-        Button {
-          guard isEditorVisible else { return }
-          commands.toggleBold()
-        } label: {
-          ToolbarIconLabel(systemImage: "bold", isActive: commands.isBold)
-        }
-        .accessibilityLabel("Bold")
-        .keyboardShortcut("b", modifiers: .command)
-          .accessibilityValue(commands.isBold ? "On" : "Off")
-        Button {
-          guard isEditorVisible else { return }
-          commands.toggleItalic()
-        } label: {
-          ToolbarIconLabel(systemImage: "italic", isActive: commands.isItalic)
-        }
-        .accessibilityLabel("Italic")
-        .keyboardShortcut("i", modifiers: .command)
-          .accessibilityValue(commands.isItalic ? "On" : "Off")
-        Button {
-          guard isEditorVisible else { return }
-          commands.toggleUnderline()
-        } label: {
-          ToolbarIconLabel(systemImage: "underline", isActive: commands.isUnderlined)
-        }
-        .accessibilityLabel("Underline")
-        .keyboardShortcut("u", modifiers: .command)
-        .accessibilityValue(commands.isUnderlined ? "On" : "Off")
-        if presentation == .full {
-          Button {
-            guard isEditorVisible else { return }
-            commands.toggleStrikethrough()
-          } label: {
-            ToolbarIconLabel(systemImage: "strikethrough")
-          }
-          .accessibilityLabel("Strikethrough")
-        }
-        Button {
-          guard isEditorVisible, let note = appState.selectedNote else { return }
-          fontPickerTarget = FontPickerTarget(note: note, isTitle: isFontTitleTarget, commands: commands)
-          isFontPickerPresented = fontPickerTarget != nil
-        } label: {
-          HStack(spacing: 5) {
-            Text(fontFamilyDisplay).lineLimit(1).truncationMode(.tail)
-            Image(systemName: "chevron.down").font(.system(size: 8))
-          }
-          .frame(width: presentation == .full ? 112 : 64)
-        }
-        .help("Font: \(fontFamilyDisplay)")
-        .accessibilityLabel("Font")
-        .accessibilityValue(fontFamilyDisplay)
-        .popover(isPresented: $isFontPickerPresented, arrowEdge: .bottom) {
-          if let target = fontPickerTarget {
-            FontFamilyPicker(
-              currentFamily: target.isTitle ? target.note.titleFontFamily ?? appState.preferences.fontFamily : commands.currentFontFamily,
-              isMixed: target.isTitle ? false : commands.isFontFamilyMixed,
-              targetLabel: target.label,
-              onCommit: { family in
-                _ = target.apply(family, note: appState.selectedNote, isEditorVisible: isEditorVisible, commands: commands,
-                  titleMutation: { appState.setTitleFontFamily($0, noteID: target.note.id, undoManager: target.undoManager) })
-                isFontPickerPresented = false
-              },
-              onCancel: { isFontPickerPresented = false }
-            )
-            .frame(width: 280, height: 320)
-          }
-        }
-        .onChange(of: isFontPickerPresented) { _, presented in
-          if !presented { fontPickerTarget = nil }
-        }
-        .onChange(of: appState.selectedNote) { _, _ in dismissInvalidFontPicker() }
-        .onChange(of: isEditorVisible) { _, _ in dismissInvalidFontPicker() }
-        if presentation == .full {
-          fontSizeField()
-        }
-        Button {
-          guard isEditorVisible else { return }
-          isForegroundColorPickerPresented = true
-        } label: {
-          ToolbarIconLabel(systemImage: "paintpalette")
-        }
-        .accessibilityLabel("Font Color")
-        .accessibilityValue(
-          colorAccessibilityValue(
-            color: commands.currentForegroundColor,
-            isMixed: commands.isForegroundColorMixed,
-            emptyName: "Automatic"
-          )
-        )
-        .popover(isPresented: $isForegroundColorPickerPresented, arrowEdge: .bottom) {
-          FleckColorPicker(
-            currentHex: commands.isForegroundColorMixed
-              ? nil
-              : FleckColorHex.hex(from: commands.currentForegroundColor),
-            currentLabel: colorAccessibilityValue(
-              color: commands.currentForegroundColor,
-              isMixed: commands.isForegroundColorMixed,
-              emptyName: "Automatic"
-            ),
-            resetTitle: "Automatic",
-            onCommit: { hex in
-              guard isEditorVisible else {
-                isForegroundColorPickerPresented = false
-                return
-              }
-              commands.applyForegroundColor(hex.flatMap { NSColor(hex: $0) })
-              isForegroundColorPickerPresented = false
-            },
-            onCancel: { isForegroundColorPickerPresented = false }
-          )
-        }
-        Button {
-          guard isEditorVisible else { return }
-          isBackgroundColorPickerPresented = true
-        } label: {
-          HighlighterMarkerIcon(
-            backgroundColor: commands.currentBackgroundColor,
-            isMixed: commands.isBackgroundColorMixed
-          )
-        }
-        .accessibilityLabel("Highlight")
-        .accessibilityValue(
-          colorAccessibilityValue(
-            color: commands.currentBackgroundColor,
-            isMixed: commands.isBackgroundColorMixed,
-            emptyName: "No Highlight"
-          )
-        )
-        .popover(isPresented: $isBackgroundColorPickerPresented, arrowEdge: .bottom) {
-          FleckColorPicker(
-            currentHex: commands.isBackgroundColorMixed
-              ? nil
-              : FleckColorHex.hex(from: commands.currentBackgroundColor),
-            currentLabel: colorAccessibilityValue(
-              color: commands.currentBackgroundColor,
-              isMixed: commands.isBackgroundColorMixed,
-              emptyName: "No Highlight"
-            ),
-            resetTitle: "No Highlight",
-            fallbackHex: "#FFD600",
-            onCommit: { hex in
-              guard isEditorVisible else {
-                isBackgroundColorPickerPresented = false
-                return
-              }
-              commands.applyBackgroundColor(hex.flatMap { NSColor(hex: $0) })
-              isBackgroundColorPickerPresented = false
-            },
-            onCancel: { isBackgroundColorPickerPresented = false }
-          )
-        }
-        if presentation == .full {
-          Menu {
-            Button("Disc (•)") {
-              guard isEditorVisible else { return }
-              commands.applyList(.bullet(.disc))
-            }
-            Button("Circle (◦)") {
-              guard isEditorVisible else { return }
-              commands.applyList(.bullet(.circle))
-            }
-            Button("Square (▪)") {
-              guard isEditorVisible else { return }
-              commands.applyList(.bullet(.square))
-            }
-            Button("Dash (–)") {
-              guard isEditorVisible else { return }
-              commands.applyList(.bullet(.dash))
-            }
-          } label: {
-            ToolbarIconLabel(systemImage: "list.bullet")
-          } primaryAction: {
-            guard isEditorVisible else { return }
-            commands.applyAutomaticList(.bullets)
-          }
-          .accessibilityLabel("Bullets")
-          Menu {
-            Button("Decimal (1.)") {
-              guard isEditorVisible else { return }
-              commands.applyList(.number(.decimal))
-            }
-            Button("Alphabetic (a.)") {
-              guard isEditorVisible else { return }
-              commands.applyList(.number(.alphabetic))
-            }
-            Button("Roman (i.)") {
-              guard isEditorVisible else { return }
-              commands.applyList(.number(.roman))
-            }
-          } label: {
-            ToolbarIconLabel(systemImage: "list.number")
-          } primaryAction: {
-            guard isEditorVisible else { return }
-            commands.applyAutomaticList(.numbers)
-          }
-          .accessibilityLabel("Numbers")
-          Button {
-            guard isEditorVisible else { return }
-            commands.applyList(.checklist)
-          } label: {
-            ToolbarIconLabel(systemImage: "checklist")
-          }
-          .accessibilityLabel("Checklist")
-        } else {
-          Menu {
-            Button("Font Size…") {
-              presentFontSizePicker()
-            }
-            Divider()
-            Button("Strikethrough") {
-              guard isEditorVisible else { return }
-              commands.toggleStrikethrough()
-            }
-            Divider()
-            Menu("Bullets") {
-              Button("Bulleted List") {
-                guard isEditorVisible else { return }
-                commands.applyAutomaticList(.bullets)
-              }
-              Divider()
-              Button("Disc (•)") {
-                guard isEditorVisible else { return }
-                commands.applyList(.bullet(.disc))
-              }
-              Button("Circle (◦)") {
-                guard isEditorVisible else { return }
-                commands.applyList(.bullet(.circle))
-              }
-              Button("Square (▪)") {
-                guard isEditorVisible else { return }
-                commands.applyList(.bullet(.square))
-              }
-              Button("Dash (–)") {
-                guard isEditorVisible else { return }
-                commands.applyList(.bullet(.dash))
-              }
-            }
-            Menu("Numbers") {
-              Button("Numbered List") {
-                guard isEditorVisible else { return }
-                commands.applyAutomaticList(.numbers)
-              }
-              Divider()
-              Button("Decimal (1.)") {
-                guard isEditorVisible else { return }
-                commands.applyList(.number(.decimal))
-              }
-              Button("Alphabetic (a.)") {
-                guard isEditorVisible else { return }
-                commands.applyList(.number(.alphabetic))
-              }
-              Button("Roman (i.)") {
-                guard isEditorVisible else { return }
-                commands.applyList(.number(.roman))
-              }
-            }
-            Button("Checklist") {
-              guard isEditorVisible else { return }
-              commands.applyList(.checklist)
-            }
-          } label: {
-            ToolbarIconLabel(systemImage: "ellipsis.circle")
-          }
-          .accessibilityLabel("More formatting")
-          .popover(isPresented: $isFontSizePickerPresented, arrowEdge: .bottom) {
-            if let targetNoteID = fontSizePickerNoteID {
-              HStack(spacing: 8) {
-                fontSizeField(targetNoteID: targetNoteID)
-                Button("Done") {
-                  applyFontSizeText(targetNoteID: targetNoteID)
-                  isFontSizePickerPresented = false
-                }
-              }
-              .padding(12)
-            }
-          }
-        }
-        Spacer(minLength: presentation == .full ? nil : 0)
-        Button(role: .destructive) {
-          guard isEditorVisible else { return }
-          onDelete()
-        } label: {
-          ToolbarIconLabel(systemImage: "trash")
-        }
-        .accessibilityLabel("Delete")
-        .keyboardShortcut("w", modifiers: .command)
-        }
-        .buttonStyle(CrispToolbarButtonStyle(motion: motion))
-        .animation(motion.quick, value: commands.isBold)
-        .animation(motion.quick, value: commands.isItalic)
-        .animation(motion.quick, value: commands.isUnderlined)
-        .padding(.horizontal, presentation == .full ? 16 : 4)
-        .padding(.vertical, 9)
+      } trailing: {
+        directItem(.delete)
       }
+      .buttonStyle(CrispToolbarButtonStyle(motion: motion))
+      .animation(motion.quick, value: commands.isBold)
+      .animation(motion.quick, value: commands.isItalic)
+      .animation(motion.quick, value: commands.isUnderlined)
+      .padding(.horizontal, 16)
+      .padding(.vertical, 9)
+      .frame(maxWidth: .infinity, alignment: .leading)
       .frame(height: 44)
       .frame(maxWidth: .infinity)
       .modifier(FormattingBarSurface(isPinned: isPinned))
@@ -3669,15 +3411,541 @@
       .accessibilityElement(children: .contain)
       .accessibilityLabel("Editor toolbar")
       .accessibilityHidden(!isEditorVisible)
+      .popover(item: $presentedPopover, arrowEdge: .bottom) { popover in
+        popoverContent(popover)
+      }
+      .onAppear(perform: syncFontSizeText)
+      .onChange(of: commands.currentFontSize) { _, _ in syncFontSizeText() }
+      .onChange(of: commands.isFontSizeMixed) { _, _ in syncFontSizeText() }
       .onChange(of: appState.selectedNote) { _, _ in
+        dismissInvalidFontPicker()
         dismissInvalidFontSizePicker()
       }
       .onChange(of: isEditorVisible) { _, _ in
+        dismissInvalidFontPicker()
         dismissInvalidFontSizePicker()
       }
-      .onChange(of: isFontSizePickerPresented) { _, presented in
-        if !presented { fontSizePickerNoteID = nil }
+      .onChange(of: presentedPopover) { oldPopover, newPopover in
+        if oldPopover == .font, newPopover != .font { fontPickerTarget = nil }
+        if oldPopover == .fontSize, newPopover != .fontSize { fontSizePickerNoteID = nil }
       }
+    }
+
+    private func selectedCandidateChanged(_ visibleCount: Int) {
+      guard selectedVisibleCount != visibleCount else { return }
+      selectedVisibleCount = visibleCount
+      if case .overflow = presentedPopover {
+        presentedPopover = nil
+      }
+    }
+
+    private func toolbarCandidate(
+      visibleItems: [FormattingToolbarItem],
+      overflowItems: [FormattingToolbarItem]
+    ) -> some View {
+      HStack(spacing: 8) {
+        ForEach(visibleItems) { item in
+          if item.hasSeparatorBefore {
+            Divider().frame(height: 15)
+          }
+          directItem(item)
+        }
+        if !overflowItems.isEmpty {
+          overflowMenu(items: overflowItems)
+        }
+      }
+    }
+
+    @ViewBuilder
+    private func directItem(_ item: FormattingToolbarItem) -> some View {
+      switch item {
+      case .dictation:
+        dictationButton
+      case .undo:
+        Button {
+          guard isEditorVisible else { return }
+          commands.undo()
+        } label: {
+          ToolbarIconLabel(systemImage: "arrow.uturn.backward")
+        }
+        .accessibilityLabel("Undo")
+        .keyboardShortcut("z", modifiers: .command)
+      case .redo:
+        Button {
+          guard isEditorVisible else { return }
+          commands.redo()
+        } label: {
+          ToolbarIconLabel(systemImage: "arrow.uturn.forward")
+        }
+        .accessibilityLabel("Redo")
+        .keyboardShortcut("z", modifiers: [.command, .shift])
+      case .bold:
+        Button {
+          guard isEditorVisible else { return }
+          commands.toggleBold()
+        } label: {
+          ToolbarIconLabel(systemImage: "bold", isActive: commands.isBold)
+        }
+        .accessibilityLabel("Bold")
+        .accessibilityValue(commands.isBold ? "On" : "Off")
+        .keyboardShortcut("b", modifiers: .command)
+      case .italic:
+        Button {
+          guard isEditorVisible else { return }
+          commands.toggleItalic()
+        } label: {
+          ToolbarIconLabel(systemImage: "italic", isActive: commands.isItalic)
+        }
+        .accessibilityLabel("Italic")
+        .accessibilityValue(commands.isItalic ? "On" : "Off")
+        .keyboardShortcut("i", modifiers: .command)
+      case .underline:
+        Button {
+          guard isEditorVisible else { return }
+          commands.toggleUnderline()
+        } label: {
+          ToolbarIconLabel(systemImage: "underline", isActive: commands.isUnderlined)
+        }
+        .accessibilityLabel("Underline")
+        .accessibilityValue(commands.isUnderlined ? "On" : "Off")
+        .keyboardShortcut("u", modifiers: .command)
+      case .strikethrough:
+        Button {
+          guard isEditorVisible else { return }
+          commands.toggleStrikethrough()
+        } label: {
+          ToolbarIconLabel(systemImage: "strikethrough")
+        }
+        .accessibilityLabel("Strikethrough")
+      case .font:
+        fontButton
+      case .fontSize:
+        fontSizeField()
+      case .fontColor:
+        foregroundColorButton
+      case .highlight:
+        backgroundColorButton
+      case .bullets:
+        bulletsButton
+      case .numbers:
+        numbersButton
+      case .checklist:
+        Button {
+          guard isEditorVisible else { return }
+          commands.applyList(.checklist)
+        } label: {
+          ToolbarIconLabel(systemImage: "checklist")
+        }
+        .accessibilityLabel("Checklist")
+      case .delete:
+        Button(role: .destructive) {
+          guard isEditorVisible else { return }
+          onDelete()
+        } label: {
+          ToolbarIconLabel(systemImage: "trash")
+        }
+        .accessibilityLabel("Delete")
+        .keyboardShortcut("w", modifiers: .command)
+      }
+    }
+
+    private var dictationButton: some View {
+      Menu {
+        Button("Cancel Dictation", role: .destructive) {
+          guard isEditorVisible else { return }
+          Task { await dictationRuntime.cancel() }
+        }
+        .disabled(!dictationRuntime.canCancel)
+      } label: {
+        ToolbarIconLabel(
+          systemImage: dictationRuntime.microphoneSymbol,
+          isActive: dictationRuntime.isListening
+        )
+      } primaryAction: {
+        performDictationPrimaryAction()
+      }
+      .accessibilityLabel(dictationRuntime.microphoneHelp)
+      .accessibilityAction(named: Text("Cancel Dictation")) {
+        guard isEditorVisible else { return }
+        Task { await dictationRuntime.cancel() }
+      }
+      .help(dictationRuntime.microphoneHelp)
+    }
+
+    private var fontButton: some View {
+      Button(action: presentFontPicker) {
+        HStack(spacing: 5) {
+          Text(fontFamilyDisplay).lineLimit(1).truncationMode(.tail)
+          Image(systemName: "chevron.down").font(.system(size: 8))
+        }
+        .frame(width: 112)
+      }
+      .help("Font: \(fontFamilyDisplay)")
+      .accessibilityLabel("Font")
+      .accessibilityValue(fontFamilyDisplay)
+    }
+
+    private var foregroundColorButton: some View {
+      Button {
+        guard isEditorVisible else { return }
+        presentedPopover = .foregroundColor
+      } label: {
+        ToolbarIconLabel(systemImage: "paintpalette")
+      }
+      .accessibilityLabel("Font Color")
+      .accessibilityValue(
+        colorAccessibilityValue(
+          color: commands.currentForegroundColor,
+          isMixed: commands.isForegroundColorMixed,
+          emptyName: "Automatic"
+        )
+      )
+    }
+
+    private var backgroundColorButton: some View {
+      Button {
+        guard isEditorVisible else { return }
+        presentedPopover = .backgroundColor
+      } label: {
+        HighlighterMarkerIcon(
+          backgroundColor: commands.currentBackgroundColor,
+          isMixed: commands.isBackgroundColorMixed
+        )
+      }
+      .accessibilityLabel("Highlight")
+      .accessibilityValue(
+        colorAccessibilityValue(
+          color: commands.currentBackgroundColor,
+          isMixed: commands.isBackgroundColorMixed,
+          emptyName: "No Highlight"
+        )
+      )
+    }
+
+    private var bulletsButton: some View {
+      Menu {
+        bulletMenuItems(includeAutomatic: false)
+      } label: {
+        ToolbarIconLabel(systemImage: "list.bullet")
+      } primaryAction: {
+        guard isEditorVisible else { return }
+        commands.applyAutomaticList(.bullets)
+      }
+      .accessibilityLabel("Bullets")
+    }
+
+    private var numbersButton: some View {
+      Menu {
+        numberMenuItems(includeAutomatic: false)
+      } label: {
+        ToolbarIconLabel(systemImage: "list.number")
+      } primaryAction: {
+        guard isEditorVisible else { return }
+        commands.applyAutomaticList(.numbers)
+      }
+      .accessibilityLabel("Numbers")
+    }
+
+    private func overflowMenu(items: [FormattingToolbarItem]) -> some View {
+      Button {
+        presentedPopover = presentedPopover == .overflow(items) ? nil : .overflow(items)
+      } label: {
+        ToolbarIconLabel(systemImage: "ellipsis.circle")
+      }
+      .accessibilityLabel("More formatting")
+    }
+
+    @ViewBuilder
+    private func popoverContent(_ popover: PresentedPopover) -> some View {
+      switch popover {
+      case .overflow(let items):
+        VStack(alignment: .leading, spacing: 6) {
+          ForEach(items) { item in
+            if item.hasSeparatorBefore, item != items.first {
+              Divider()
+            }
+            overflowItem(item)
+          }
+        }
+        .buttonStyle(.plain)
+        .frame(minWidth: 180, alignment: .leading)
+        .padding(10)
+      case .font:
+        fontPickerContent
+      case .fontSize:
+        fontSizePickerContent
+      case .foregroundColor:
+        foregroundColorPickerContent
+      case .backgroundColor:
+        backgroundColorPickerContent
+      }
+    }
+
+    @ViewBuilder
+    private func overflowItem(_ item: FormattingToolbarItem) -> some View {
+      switch item {
+      case .dictation:
+        Menu("Dictation") {
+          Button(dictationRuntime.microphoneHelp) {
+            presentedPopover = nil
+            performDictationPrimaryAction()
+          }
+            .disabled(dictationRuntime.toolbarPresentation.primaryAction == nil)
+          Button("Cancel Dictation", role: .destructive) {
+            guard isEditorVisible else { return }
+            presentedPopover = nil
+            Task { await dictationRuntime.cancel() }
+          }
+          .disabled(!dictationRuntime.canCancel)
+        }
+      case .undo:
+        Button("Undo") { performOverflowAction { commands.undo() } }
+          .keyboardShortcut("z", modifiers: .command)
+      case .redo:
+        Button("Redo") { performOverflowAction { commands.redo() } }
+          .keyboardShortcut("z", modifiers: [.command, .shift])
+      case .bold:
+        Button("Bold") { performOverflowAction { commands.toggleBold() } }
+          .accessibilityValue(commands.isBold ? "On" : "Off")
+          .keyboardShortcut("b", modifiers: .command)
+      case .italic:
+        Button("Italic") { performOverflowAction { commands.toggleItalic() } }
+          .accessibilityValue(commands.isItalic ? "On" : "Off")
+          .keyboardShortcut("i", modifiers: .command)
+      case .underline:
+        Button("Underline") { performOverflowAction { commands.toggleUnderline() } }
+          .accessibilityValue(commands.isUnderlined ? "On" : "Off")
+          .keyboardShortcut("u", modifiers: .command)
+      case .strikethrough:
+        Button("Strikethrough") {
+          performOverflowAction { commands.toggleStrikethrough() }
+        }
+      case .font:
+        Button("Font…") { presentOverflowPicker(presentFontPicker) }
+          .accessibilityLabel("Font")
+          .accessibilityValue(fontFamilyDisplay)
+      case .fontSize:
+        Button("Font Size…") { presentOverflowPicker(presentFontSizePicker) }
+          .accessibilityLabel("Font Size")
+          .accessibilityValue(commands.isFontSizeMixed ? "Mixed" : fontSizeDisplay)
+      case .fontColor:
+        Button("Font Color…") {
+          presentOverflowPicker { presentedPopover = .foregroundColor }
+        }
+        .accessibilityLabel("Font Color")
+        .accessibilityValue(
+          colorAccessibilityValue(
+            color: commands.currentForegroundColor,
+            isMixed: commands.isForegroundColorMixed,
+            emptyName: "Automatic"
+          )
+        )
+      case .highlight:
+        Button("Highlight…") {
+          presentOverflowPicker { presentedPopover = .backgroundColor }
+        }
+        .accessibilityLabel("Highlight")
+        .accessibilityValue(
+          colorAccessibilityValue(
+            color: commands.currentBackgroundColor,
+            isMixed: commands.isBackgroundColorMixed,
+            emptyName: "No Highlight"
+          )
+        )
+      case .bullets:
+        Menu("Bullets") { bulletMenuItems(includeAutomatic: true) }
+      case .numbers:
+        Menu("Numbers") { numberMenuItems(includeAutomatic: true) }
+      case .checklist:
+        Button("Checklist") {
+          performOverflowAction { commands.applyList(.checklist) }
+        }
+      case .delete:
+        Button("Delete", role: .destructive) {
+          performOverflowAction(onDelete)
+        }
+        .keyboardShortcut("w", modifiers: .command)
+      }
+    }
+
+    @ViewBuilder
+    private func bulletMenuItems(includeAutomatic: Bool) -> some View {
+      if includeAutomatic {
+        Button("Bulleted List") {
+          performListAction(fromOverflow: true) {
+            commands.applyAutomaticList(.bullets)
+          }
+        }
+        Divider()
+      }
+      Button("Disc (•)") {
+        performListAction(fromOverflow: includeAutomatic) { commands.applyList(.bullet(.disc)) }
+      }
+      Button("Circle (◦)") {
+        performListAction(fromOverflow: includeAutomatic) { commands.applyList(.bullet(.circle)) }
+      }
+      Button("Square (▪)") {
+        performListAction(fromOverflow: includeAutomatic) { commands.applyList(.bullet(.square)) }
+      }
+      Button("Dash (–)") {
+        performListAction(fromOverflow: includeAutomatic) { commands.applyList(.bullet(.dash)) }
+      }
+    }
+
+    @ViewBuilder
+    private func numberMenuItems(includeAutomatic: Bool) -> some View {
+      if includeAutomatic {
+        Button("Numbered List") {
+          performListAction(fromOverflow: true) {
+            commands.applyAutomaticList(.numbers)
+          }
+        }
+        Divider()
+      }
+      Button("Decimal (1.)") {
+        performListAction(fromOverflow: includeAutomatic) { commands.applyList(.number(.decimal)) }
+      }
+      Button("Alphabetic (a.)") {
+        performListAction(fromOverflow: includeAutomatic) { commands.applyList(.number(.alphabetic)) }
+      }
+      Button("Roman (i.)") {
+        performListAction(fromOverflow: includeAutomatic) { commands.applyList(.number(.roman)) }
+      }
+    }
+
+    @ViewBuilder
+    private var fontPickerContent: some View {
+      if let target = fontPickerTarget {
+        FontFamilyPicker(
+          currentFamily: target.isTitle
+            ? target.note.titleFontFamily ?? appState.preferences.fontFamily
+            : commands.currentFontFamily,
+          isMixed: target.isTitle ? false : commands.isFontFamilyMixed,
+          targetLabel: target.label,
+          onCommit: { family in
+            _ = target.apply(
+              family,
+              note: appState.selectedNote,
+              isEditorVisible: isEditorVisible,
+              commands: commands,
+              titleMutation: {
+                appState.setTitleFontFamily(
+                  $0,
+                  noteID: target.note.id,
+                  undoManager: target.undoManager
+                )
+              }
+            )
+            presentedPopover = nil
+          },
+          onCancel: { presentedPopover = nil }
+        )
+        .frame(width: 280, height: 320)
+      }
+    }
+
+    private var fontSizePickerContent: some View {
+      Group {
+        if let targetNoteID = fontSizePickerNoteID {
+          HStack(spacing: 8) {
+            fontSizeField(targetNoteID: targetNoteID)
+            Button("Done") {
+              applyFontSizeText(targetNoteID: targetNoteID)
+              presentedPopover = nil
+            }
+          }
+          .padding(12)
+        }
+      }
+    }
+
+    private var foregroundColorPickerContent: some View {
+      FleckColorPicker(
+        currentHex: commands.isForegroundColorMixed
+          ? nil
+          : FleckColorHex.hex(from: commands.currentForegroundColor),
+        currentLabel: colorAccessibilityValue(
+          color: commands.currentForegroundColor,
+          isMixed: commands.isForegroundColorMixed,
+          emptyName: "Automatic"
+        ),
+        resetTitle: "Automatic",
+        onCommit: { hex in
+          guard isEditorVisible else {
+            presentedPopover = nil
+            return
+          }
+          commands.applyForegroundColor(hex.flatMap { NSColor(hex: $0) })
+          presentedPopover = nil
+        },
+        onCancel: { presentedPopover = nil }
+      )
+    }
+
+    private var backgroundColorPickerContent: some View {
+      FleckColorPicker(
+        currentHex: commands.isBackgroundColorMixed
+          ? nil
+          : FleckColorHex.hex(from: commands.currentBackgroundColor),
+        currentLabel: colorAccessibilityValue(
+          color: commands.currentBackgroundColor,
+          isMixed: commands.isBackgroundColorMixed,
+          emptyName: "No Highlight"
+        ),
+        resetTitle: "No Highlight",
+        fallbackHex: "#FFD600",
+        onCommit: { hex in
+          guard isEditorVisible else {
+            presentedPopover = nil
+            return
+          }
+          commands.applyBackgroundColor(hex.flatMap { NSColor(hex: $0) })
+          presentedPopover = nil
+        },
+        onCancel: { presentedPopover = nil }
+      )
+    }
+
+    private func performDictationPrimaryAction() {
+      guard isEditorVisible,
+        dictationRuntime.toolbarPresentation.primaryAction != nil
+      else { return }
+      Task { await dictationRuntime.toggle() }
+    }
+
+    private func performOverflowAction(_ action: () -> Void) {
+      guard isEditorVisible else { return }
+      presentedPopover = nil
+      action()
+    }
+
+    private func performListAction(
+      fromOverflow: Bool,
+      _ action: () -> Void
+    ) {
+      if fromOverflow {
+        performOverflowAction(action)
+      } else if isEditorVisible {
+        action()
+      }
+    }
+
+    private func presentOverflowPicker(
+      _ action: @escaping @MainActor @Sendable () -> Void
+    ) {
+      guard isEditorVisible else { return }
+      presentedPopover = nil
+      DispatchQueue.main.async(execute: action)
+    }
+
+    private func presentFontPicker() {
+      guard isEditorVisible, let note = appState.selectedNote else { return }
+      fontPickerTarget = FontPickerTarget(
+        note: note,
+        isTitle: isFontTitleTarget,
+        commands: commands
+      )
+      if fontPickerTarget != nil { presentedPopover = .font }
     }
 
     private var motion: AppMotion {
@@ -3694,9 +3962,6 @@
         .textFieldStyle(.roundedBorder)
         .frame(width: 48)
         .focused($isFontSizeFocused)
-        .onAppear(perform: syncFontSizeText)
-        .onChange(of: commands.currentFontSize) { _, _ in syncFontSizeText() }
-        .onChange(of: commands.isFontSizeMixed) { _, _ in syncFontSizeText() }
         .onChange(of: isFontSizeFocused) { wasFocused, isFocused in
           if wasFocused && !isFocused { applyFontSizeText(targetNoteID: targetNoteID) }
         }
@@ -3728,7 +3993,7 @@
     private func dismissInvalidFontPicker() {
       guard let target = fontPickerTarget else { return }
       if !target.isValid(note: appState.selectedNote, isEditorVisible: isEditorVisible, commands: commands) {
-        isFontPickerPresented = false
+        presentedPopover = nil
       }
     }
 
@@ -3741,15 +4006,15 @@
       guard isEditorVisible, let noteID = appState.selectedNote?.id else { return }
       fontSizePickerNoteID = noteID
       syncFontSizeText()
-      isFontSizePickerPresented = true
+      presentedPopover = .fontSize
     }
 
     private func dismissInvalidFontSizePicker() {
-      guard isFontSizePickerPresented,
+      guard presentedPopover == .fontSize,
         !isEditorVisible || fontSizePickerNoteID != appState.selectedNote?.id
       else { return }
       isFontSizeFocused = false
-      isFontSizePickerPresented = false
+      presentedPopover = nil
     }
 
     private func applyFontSizeText(targetNoteID: UUID? = nil) {

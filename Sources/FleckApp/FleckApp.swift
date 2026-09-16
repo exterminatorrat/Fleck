@@ -94,6 +94,7 @@
     @StateObject private var appState: AppState
     @StateObject private var dictationRuntime: DictationRuntime
     @StateObject private var onboarding: OnboardingCoordinator
+    @StateObject private var menuPanelGeometry = MenuPanelGeometryStore()
     private let agentRuntime: AgentIPCRuntime
     private let statusItemContextMenuController: StatusItemContextMenuController
 
@@ -177,6 +178,7 @@
           dictationRuntime: dictationRuntime
         )
           .environmentObject(appState)
+          .environment(\.menuPanelGeometryStore, menuPanelGeometry)
           .preferredColorScheme(colorScheme)
       }
       label: {
