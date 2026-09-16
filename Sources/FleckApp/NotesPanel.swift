@@ -3898,9 +3898,25 @@
     let motion: AppMotion
 
     func makeBody(configuration: Configuration) -> some View {
+      CrispToolbarButtonBody(configuration: configuration, motion: motion)
+    }
+  }
+
+  private struct CrispToolbarButtonBody: View {
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovered = false
+    let configuration: ButtonStyleConfiguration
+    let motion: AppMotion
+
+    var body: some View {
       configuration.label
+        .background(
+          isEnabled && isHovered ? Color.primary.opacity(0.10) : .clear,
+          in: RoundedRectangle(cornerRadius: 5)
+        )
         .scaleEffect(configuration.isPressed ? motion.pressScale : 1)
         .animation(motion.quick, value: configuration.isPressed)
+        .onHover { isHovered = $0 }
     }
   }
 
