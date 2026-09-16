@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.0.14-beta.1] - 2026-09-16
+
+### Added
+
+- Added a tint-free top-edge blur to the note editor that ramps in while scrolling and honors
+  Reduce Transparency.
+
 ## [1.0.13-beta.1] - 2026-09-16
 
 ### Changed
