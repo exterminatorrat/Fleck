@@ -3,7 +3,7 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
-## [1.0.15-beta.1] - 2026-09-16
+## [1.0.16-beta.1] - 2026-09-16
 
 ### Fixed
 
@@ -13,6 +13,13 @@ public release log. Packaging unchanged source does not add a changelog entry.
   bounds instead of an arbitrary 800-point ceiling.
 - Removed forced immediate display and repeated diagonal-cursor creation from live drag updates
   while preserving synchronous frame adoption and release behavior.
+
+## [1.0.15-beta.1] - 2026-09-16
+
+### Changed
+
+- Formatting toolbar buttons now show a clear, theme-adaptive hover background across their
+  existing click targets without shifting the layout.
 
 ## [1.0.14-beta.1] - 2026-09-16
 
