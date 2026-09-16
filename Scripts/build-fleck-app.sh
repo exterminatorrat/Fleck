@@ -5,7 +5,7 @@ readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
 readonly build_root="$repo_root/.build"
 readonly info_plist="$repo_root/Sources/FleckApp/Info.plist"
-readonly canonical_mark="$repo_root/website/public/fleck-mark.png"
+readonly canonical_mark="$repo_root/Assets/fleck-mark.png"
 readonly identity_tool="$script_dir/fleck-build-identity.py"
 readonly identity_mode="${FLECK_BUILD_IDENTITY_MODE:-local}"
 

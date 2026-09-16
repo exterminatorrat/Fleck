@@ -46,7 +46,7 @@ readonly fixture_root="$test_root/Fleck Fixture"
 /bin/mkdir -p \
   "$fixture_root/Scripts" \
   "$fixture_root/Sources/FleckApp" \
-  "$fixture_root/website/public"
+  "$fixture_root/Assets"
 if [[ -n "$test_only" && "$test_only" != 'first-run' ]]; then
   /bin/mkdir "$fixture_root/.build"
 fi
@@ -84,7 +84,7 @@ EOF
   <key>CFBundlePackageType</key><string>APPL</string>
 </dict></plist>
 PLIST
-printf '%s\n' 'fixture mark' > "$fixture_root/website/public/fleck-mark.png"
+printf '%s\n' 'fixture mark' > "$fixture_root/Assets/fleck-mark.png"
 /bin/cat > "$fixture_root/Scripts/build-parakeet-test-app.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail

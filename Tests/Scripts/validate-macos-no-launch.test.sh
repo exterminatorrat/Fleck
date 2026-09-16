@@ -142,11 +142,11 @@ run_preservation_fixture() {
 
   /bin/mkdir -p \
     "$fixture_root/Scripts" \
-    "$fixture_root/website/public" \
+    "$fixture_root/Assets" \
     "$tools" \
     "$gate_log"
   /bin/cp "$validator_source" "$fixture_root/Scripts/validate-macos.sh"
-  printf '%s\n' 'fixture mark' > "$fixture_root/website/public/fleck-mark.png"
+  printf '%s\n' 'fixture mark' > "$fixture_root/Assets/fleck-mark.png"
 
   local relative
   for relative in "${sentinel_paths[@]}"; do
@@ -208,7 +208,7 @@ int main(void) { puts("com.harryjin.fleck"); return 0; }
 SOURCE
 /usr/bin/clang -arch arm64 "$repo_root/.build/fixture.c" -o "$app/Contents/MacOS/Fleck"
 /usr/bin/clang -arch arm64 "$repo_root/.build/fixture.c" -o "$app/Contents/SharedSupport/fleck-agent"
-/bin/cp "$repo_root/website/public/fleck-mark.png" "$app/Contents/Resources/fleck-mark.png"
+/bin/cp "$repo_root/Assets/fleck-mark.png" "$app/Contents/Resources/fleck-mark.png"
 /usr/bin/plutil -create xml1 "$plist"
 /usr/bin/plutil -insert CFBundleIdentifier -string com.harryjin.fleck "$plist"
 /usr/bin/plutil -insert CFBundlePackageType -string APPL "$plist"

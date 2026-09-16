@@ -30,7 +30,7 @@ launch_sentinel="$test_root/launched"
 /bin/mkdir -p \
   "$fixture_root/Scripts" \
   "$fixture_root/Sources/FleckApp" \
-  "$fixture_root/website/public" \
+  "$fixture_root/Assets" \
   "$fake_bin"
 /bin/cp "$packager" "$fixture_root/Scripts/build-fleck-app.sh"
 /bin/cp "$identity_tool" "$fixture_root/Scripts/fleck-build-identity.py"
@@ -58,7 +58,7 @@ cat > "$fixture_root/Sources/FleckApp/Info.plist" <<'PLIST'
   <key>CFBundleIdentifier</key><string>test.fleck.packager</string>
 </dict></plist>
 PLIST
-printf 'fixture mark\n' > "$fixture_root/website/public/fleck-mark.png"
+printf 'fixture mark\n' > "$fixture_root/Assets/fleck-mark.png"
 
 cat > "$fake_bin/uname" <<'SCRIPT'
 #!/bin/sh

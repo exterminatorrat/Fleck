@@ -35,11 +35,27 @@ The repository's MPL grant does not apply to these standalone brand assets and
 branded product captures:
 
 - `docs/design/references/fleck-website-approved-direction-2026-08-01.png`
+- `Assets/fleck-mark.png`
+
+The maintainer has confirmed that the project owns or has the rights needed to
+publish these files as part of this repository and permit their unchanged
+redistribution with an unmodified copy for source review. Copyright in
+project-owned material is reserved. This limited permission does not grant
+standalone asset reuse or trademark rights. Some captures may also show
+operating-system or third-party interface elements; this policy grants no
+rights in those elements and makes no ownership claim over them.
+
+## Retained-history assets
+
+The retained Git history also contains these deleted standalone assets:
+
 - `website/design-qa-hero-desktop.png`
 - `website/design-qa-hero-mobile.png`
+- `website/design-qa-hero-comparison.png`
 - `website/design-qa-ideas-comparison.png`
 - `website/design-qa-ideas-desktop.png`
 - `website/design-qa-ideas-mobile.png`
+- `website/public/assets/fleck-brain-hologram.png`
 - `website/public/assets/fleck-ideas-capture.png`
 - `website/public/fleck-mark.png`
 - `website/public/fleck-social-card.png`
@@ -57,21 +73,6 @@ branded product captures:
 - `website/public/hero/fleck-agent-writeback.png`
 - `website/public/hero/fleck-northstar-open.png`
 - `website/public/hero/fleck-northstar-saved.png`
-
-The maintainer has confirmed that the project owns or has the rights needed to
-publish these files as part of this repository and permit their unchanged
-redistribution with an unmodified copy for source review. Copyright in
-project-owned material is reserved. This limited permission does not grant
-standalone asset reuse or trademark rights. Some captures may also show
-operating-system or third-party interface elements; this policy grants no
-rights in those elements and makes no ownership claim over them.
-
-## Retained-history assets
-
-The retained Git history also contains these deleted standalone assets:
-
-- `website/design-qa-hero-comparison.png`
-- `website/public/assets/fleck-brain-hologram.png`
 
 Deleting them from the current tree did not remove their reachable historical
 blobs. The maintainer's source-review publication confirmation and the same

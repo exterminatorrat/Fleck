@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="website/public/fleck-mark.png" alt="Fleck mark" width="96">
+  <img src="Assets/fleck-mark.png" alt="Fleck mark" width="96">
 </p>
 
 <h1 align="center">Fleck</h1>
@@ -57,14 +57,15 @@ Actions artifacts are not supported public releases.
 5. Look for **Fleck in the macOS menu bar** and click its icon to open the
    workspace. Fleck is a menu-bar app, so do not rely on a Dock icon to find it.
 
-A prebuilt app does not require Xcode, Swift, Node.js, or Terminal build commands.
+A prebuilt app does not require Xcode, Swift, or Terminal build commands.
 For the current source-only preview, developers can instead
 [get the source](#get-the-source) and [build and test](#build-and-test).
 Packaged development apps require the maintainer's private build registry;
 those commands are not an end-user installer.
 
-Fleck is under active development. Storage formats and contributor-facing
-interfaces may change during the 0.x public-preview series. See the
+Fleck is under active development. [`VERSION`](VERSION) is the source-version
+authority; beta storage formats and contributor-facing interfaces may change.
+See the
 [release policy and binary-distribution checklist](docs/RELEASES.md) for the
 remaining release gates.
 
@@ -75,11 +76,21 @@ The ordinary build contains:
 | Area | Current implementation |
 | --- | --- |
 | Native workspace | Menu-bar workspace and an independently sized pinned window. |
-| Notes and organization | Local notes, tabs, folders, search, backlinks, file references, import/export, 30-day Trash, and recovery. |
-| Native editor | An AppKit `NSTextView` editor with native undo, formatting, lists, and checklists. |
+| Notes and organization | Local notes, tabs, folders, search, backlinks, 30-day Trash, recovery, text/Markdown import, and plain-text/Markdown/RTF export. |
+| File shortcuts | A native single-file chooser adds local file references; compact rows can open, reveal, relink, or remove them. Shortcuts stay on this Mac and are not included in note exports. |
+| Native editor | An AppKit `NSTextView` editor with native undo, formatting, lists, checklists, and inline display of image files pasted or dropped from Finder. |
 | On-device dictation | Apple on-device speech recognition, optional faithful local cleanup, and Inbox-safe Smart Capture routing. |
 | Agent Connector | A separately packaged local helper with profile-scoped capabilities, explicit note or folder grants, visible activity, revision checks, and Undo. |
 | Local persistence | Readable local storage with atomic replacement and a previous-generation recovery snapshot. |
+
+Inline image import accepts image **file URLs**, such as files copied or dragged
+from Finder; it does not import raw PNG or TIFF bitmap clipboard payloads.
+Fleck copies valid images of up to 100 MiB and 100 million pixels into its local
+image library, keeps the imported original bytes across editor undo and redo,
+and automatically fits the displayed image proportionally to the available
+editor width with a 320-point height cap. Notes, RTF state, exports, and agent
+text retain absolute local-file Markdown references, so image content is not a
+portable or self-contained export.
 
 On macOS 26, Fleck can use Apple's on-device Foundation Models when the system
 reports them available. Failure or ambiguity falls back to the original text or
@@ -103,11 +114,12 @@ the macOS and architecture requirements listed on its release page instead.
 | macOS | 14 as the declared minimum deployment target. |
 | Xcode | 26 or later, with the full macOS 26 SDK selected. |
 | Swift | 6. |
-| Node.js | 22.12 or later, for the website only. |
 
 The deployment target is not a completed compatibility matrix. Current local
 validation is on Apple silicon; native Intel compatibility and a full macOS 14
-native pass have not been verified.
+native pass have not been verified. Source tests and offscreen component
+captures do not establish live-app or VoiceOver behavior; native checks for
+import-menu visibility and untruncated labels remain open.
 
 The standalone Command Line Tools are not enough for this source tree. Check the
 active toolchain without building:
@@ -179,17 +191,6 @@ permissions. Use a disposable macOS test account and synthetic fixtures, never
 personal notes or recordings. The full commands and manual checks are in
 [Testing](TESTING.md).
 
-### Website
-
-The website requires Node.js 22.12 or later:
-
-```sh
-cd website
-npm ci
-npm test
-npm run build
-```
-
 ## Repository map
 
 | Path | Responsibility |
@@ -203,7 +204,6 @@ npm run build
 | `Tests/` | Swift tests and privacy-safe fixtures. |
 | `Scripts/` | Build, validation, audit, and profiling entry points. |
 | `Packages/` | Enhanced candidate dependency package. |
-| `website/` | Vite website. |
 
 ## Project principles
 

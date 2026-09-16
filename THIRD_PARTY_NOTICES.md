@@ -79,10 +79,12 @@ OpenAPI Generator. Swift Crypto's NOTICE identifies Google Wycheproof test
 vectors and derivations from SwiftNIO. Those notices must accompany a
 distribution when they pertain to the shipped payload.
 
-## Website runtime
+## Historical website runtime
 
-The current plain-Vite website runtime graph is separate from its build
-toolchain:
+At public source baseline `18de3403e776ebec3fd7d21c86ae52e8d553f97b`,
+the tracked plain-Vite website runtime graph was separate from its build
+toolchain. These entries document that historical graph; they do not describe
+current files, dependencies, or deployment:
 
 | Component | Version | Terms |
 | --- | --- | --- |
@@ -91,18 +93,20 @@ toolchain:
 | React DOM | `19.2.8` | MIT; exact npm license SHA-256 `da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93`. |
 | Scheduler | `0.27.0` | MIT; exact npm license SHA-256 `da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93`. |
 
-The exact React, React DOM, and Scheduler license files state: “Copyright (c)
+The historical graph's exact React, React DOM, and Scheduler license files
+state: “Copyright (c)
 Meta Platforms, Inc. and affiliates.” Their complete MIT text must accompany a
 distribution that includes copies or substantial portions of those packages.
 
-The build tool is Vite 8.2.2. The Cloudflare Vite plugin, Wrangler
-configuration, and worker used by earlier revisions are not part of the current
-graph; those revisions remain subject to their accompanying terms. The current
-source tree includes the complete npm license compilation at
-`website/public/THIRD_PARTY_LICENSES.txt`. Do not distribute `node_modules`, a
-build image, or tool binaries as though the four-row runtime inventory covers
-them. A future deployment must verify that GSAP's proprietary banner and the
-complete notice artifact survive the deployed output.
+The build tool at that baseline was Vite 8.2.2. The Cloudflare Vite plugin,
+Wrangler configuration, and worker used by earlier revisions were not part of
+that graph; those revisions remain subject to their accompanying terms. The
+baseline's complete npm license compilation remains available in Git history at
+[`website/public/THIRD_PARTY_LICENSES.txt`](https://github.com/exterminatorrat/Fleck/blob/18de3403e776ebec3fd7d21c86ae52e8d553f97b/website/public/THIRD_PARTY_LICENSES.txt).
+Do not distribute `node_modules`, a build image, or tool binaries as though the
+four-row runtime inventory covers them. Any distribution of that historical
+website output must preserve GSAP's proprietary banner and the complete notice
+artifact.
 
 ## FLEURS-derived data
 

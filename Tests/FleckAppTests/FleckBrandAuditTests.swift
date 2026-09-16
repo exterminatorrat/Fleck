@@ -94,7 +94,7 @@ import Testing
     .deletingLastPathComponent()
     .deletingLastPathComponent()
     .deletingLastPathComponent()
-  let canonicalAssetDirectory = root.appendingPathComponent("website/public")
+  let canonicalAssetDirectory = root.appendingPathComponent("Assets")
 
   switch FleckMark.load(
     template: true,
@@ -129,7 +129,7 @@ func fleckMarkRetainsPackagedImageAfterBackingFileDisappears() throws {
     .deletingLastPathComponent()
     .deletingLastPathComponent()
     .deletingLastPathComponent()
-  let canonicalAsset = root.appendingPathComponent("website/public/fleck-mark.png")
+  let canonicalAsset = root.appendingPathComponent("Assets/fleck-mark.png")
   let temporaryDirectory = FileManager.default.temporaryDirectory
     .appendingPathComponent("FleckMarkLifetime-\(UUID().uuidString)", isDirectory: true)
   let markURL = temporaryDirectory.appendingPathComponent("fleck-mark.png")
@@ -240,7 +240,7 @@ func fleckMarkRetainsPackagedImageAfterBackingFileDisappears() throws {
   #expect(buildScript.contains(#"designated => identifier \"$bundle_identifier\""#))
   #expect(buildScript.contains(#"/usr/bin/codesign --verify --deep --strict "$staged_app""#))
   #expect(!buildScript.contains("Built unsigned app bundle"))
-  #expect(buildScript.contains("website/public/fleck-mark.png"))
+  #expect(buildScript.contains("Assets/fleck-mark.png"))
   #expect(buildScript.contains("Contents/Resources/fleck-mark.png"))
   #expect(validationScript.contains("signature identifier does not match bundle identifier"))
   #expect(validationScript.contains("signature uses a build-specific code hash"))

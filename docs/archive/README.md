@@ -11,8 +11,8 @@ nonnormative:
   progress records, and worker reports;
 - [`docs/design/`](../design/) — dated design directions and design plans;
 - [`design-qa.md`](../../design-qa.md) and
-  [`website/design-qa.md`](../../website/design-qa.md) — point-in-time visual
-  QA records.
+  [`website/design-qa.md`](https://github.com/exterminatorrat/fleck/blob/18de3403e776ebec3fd7d21c86ae52e8d553f97b/website/design-qa.md) — point-in-time
+  visual QA records; the website record remains available in Git history.
 
 They remain in the repository because they preserve useful rationale,
 tradeoffs, implementation intent, and evidence limitations. They do not define

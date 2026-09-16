@@ -84,7 +84,7 @@ readonly app_bundle
 readonly app_binary="$app_bundle/Contents/MacOS/Fleck"
 readonly bundled_helper="$app_bundle/Contents/SharedSupport/fleck-agent"
 readonly bundled_mark="$app_bundle/Contents/Resources/fleck-mark.png"
-readonly canonical_mark="$repo_root/website/public/fleck-mark.png"
+readonly canonical_mark="$repo_root/Assets/fleck-mark.png"
 readonly expected_bundle_identifier="com.harryjin.fleck"
 
 bundle_identifier="$(
@@ -106,7 +106,7 @@ if [[ ! -s "$bundled_mark" ]]; then
   exit 1
 fi
 if ! /usr/bin/cmp -s "$canonical_mark" "$bundled_mark"; then
-  printf '%s\n' 'error: bundled Fleck mark differs from website/public/fleck-mark.png' >&2
+  printf '%s\n' 'error: bundled Fleck mark differs from Assets/fleck-mark.png' >&2
   exit 1
 fi
 /usr/bin/codesign --verify --deep --strict "$app_bundle"
