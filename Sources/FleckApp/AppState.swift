@@ -109,6 +109,7 @@
     var isPersistenceBlocked: Bool { startupMigrationError != nil }
 
     private let store: LocalStore
+    let inlineNoteImageStore: InlineNoteImageStore
     private let noteFileReferenceStore: NoteFileReferenceStore?
     private let snapshotWriter: LocalStoreSnapshotWriter
     private let saveOperation: SaveOperation
@@ -180,6 +181,12 @@
       let store = store ?? LocalStore(rootURL: canonicalRoot)
       let agentRoot = store.rootURL
       self.store = store
+      inlineNoteImageStore = InlineNoteImageStore(
+        rootURL: agentRoot.appendingPathComponent(
+          InlineNoteImageStore.directoryName,
+          isDirectory: true
+        )
+      )
       do {
         noteFileReferenceStore = try NoteFileReferenceStore(
           sidecarURL: agentRoot
@@ -406,6 +413,10 @@
 
     func fileReferenceActionFailed(_ message: String) {
       noteFileReferenceError = message
+    }
+
+    func inlineNoteImageImportFailed(_ message: String) {
+      saveError = message
     }
 
     @discardableResult

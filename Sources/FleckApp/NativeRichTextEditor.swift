@@ -3,6 +3,10 @@
   import FleckCore
   import SwiftUI
 
+  private func editorTextExactlyMatches(_ lhs: String, _ rhs: String) -> Bool {
+    lhs.utf16.elementsEqual(rhs.utf16)
+  }
+
   /// The small command surface shared by the SwiftUI toolbar and the AppKit editor.
   /// It deliberately keeps the text system inside AppKit instead of mirroring selection
   /// state through SwiftUI on every keystroke.
@@ -877,6 +881,8 @@
     let commands: EditorCommands
     let isVisible: Bool
     let liveNoteIDs: Set<UUID>
+    let inlineImageStore: InlineNoteImageStore?
+    let onInlineImageError: ((String) -> Void)?
     let onRequestNoteLink: ((NSRange) -> Void)?
     let onOpenNoteLink: ((UUID) -> Void)?
     let onUnavailableNoteLink: (() -> Void)?
@@ -900,6 +906,8 @@
       commands: EditorCommands,
       isVisible: Bool = true,
       liveNoteIDs: Set<UUID> = [],
+      inlineImageStore: InlineNoteImageStore? = nil,
+      onInlineImageError: ((String) -> Void)? = nil,
       onRequestNoteLink: ((NSRange) -> Void)? = nil,
       onOpenNoteLink: ((UUID) -> Void)? = nil,
       onUnavailableNoteLink: (() -> Void)? = nil
@@ -922,6 +930,8 @@
       self.commands = commands
       self.isVisible = isVisible
       self.liveNoteIDs = liveNoteIDs
+      self.inlineImageStore = inlineImageStore
+      self.onInlineImageError = onInlineImageError
       self.onRequestNoteLink = onRequestNoteLink
       self.onOpenNoteLink = onOpenNoteLink
       self.onUnavailableNoteLink = onUnavailableNoteLink
@@ -962,6 +972,8 @@
       textView.delegate = context.coordinator
       textView.isRichText = true
       textView.importsGraphics = false
+      textView.inlineImageStore = inlineImageStore
+      textView.onInlineImageError = onInlineImageError
       textView.allowsUndo = true
       textView.isAutomaticSpellingCorrectionEnabled = true
       textView.isContinuousSpellCheckingEnabled = true
@@ -1024,6 +1036,9 @@
       textView.onOpenNoteLink = nil
       textView.onUnavailableNoteLink = nil
       textView.delegate = nil
+      if textView.layoutManager?.delegate === textView {
+        textView.layoutManager?.delegate = nil
+      }
       let undoManager = textView.undoManager ?? coordinator.undoManager
       undoManager?.removeAllActions(withTarget: textView)
       if let storage = textView.textStorage {
@@ -1094,31 +1109,53 @@
       to textView: NSTextView,
       coordinator: Coordinator
     ) -> Bool {
-      if coordinator.text == text, coordinator.richTextRTF == richTextRTF {
+      if editorTextExactlyMatches(coordinator.text, text),
+        coordinator.richTextRTF == richTextRTF
+      {
         coordinator.lastModelText = text
         coordinator.lastModelRichTextRTF = richTextRTF
         return false
       }
       if coordinator.hasPendingLocalEdit,
-        coordinator.lastModelText == text,
+        editorTextExactlyMatches(coordinator.lastModelText, text),
         coordinator.lastModelRichTextRTF == richTextRTF
       {
         return false
       }
       let modelChanged =
-        coordinator.lastModelText != text
+        !editorTextExactlyMatches(coordinator.lastModelText, text)
         || coordinator.lastModelRichTextRTF != richTextRTF
       if modelChanged, commands.isFocusedDictationActive {
         commands.cancelFocusedDictation()
       }
-      guard !commands.isFocusedDictationActive, modelChanged || textView.string != text else {
+      guard !commands.isFocusedDictationActive,
+        modelChanged || !editorTextExactlyMatches(textView.string, text)
+      else {
         return false
       }
       (textView as? ListAwareTextView)?.cancelPasteOptions()
-      let selection = textView.selectedRange()
+      let current = NSAttributedString(attributedString: textView.textStorage ?? NSTextStorage())
+      let currentSource = InlineNoteImageProjection.expanded(current)
+      let sourceSelection = InlineNoteImageProjection.sourceRange(
+        forDisplayRange: textView.selectedRange(),
+        in: current
+      )
+      let remappedSourceSelection = canonicalTextReplacements(
+        from: currentSource.string,
+        to: text
+      ).map { canonicalSelection(sourceSelection, applying: $0) } ?? sourceSelection
       loadContent(into: textView)
+      let reloaded = NSAttributedString(attributedString: textView.textStorage ?? NSTextStorage())
+      let sourceLocation = min(remappedSourceSelection.location, text.utf16.count)
+      let clampedSourceSelection = NSRange(
+        location: sourceLocation,
+        length: min(remappedSourceSelection.length, text.utf16.count - sourceLocation)
+      )
       textView.setSelectedRange(
-        NSRange(location: min(selection.location, text.utf16.count), length: 0)
+        InlineNoteImageProjection.displayRange(
+          forSourceRange: clampedSourceSelection,
+          in: reloaded
+        )
       )
       coordinator.text = text
       coordinator.richTextRTF = richTextRTF
@@ -1128,19 +1165,112 @@
     }
 
     private func loadContent(into textView: NSTextView) {
+      let source: NSAttributedString
+      let loadedRichText: Bool
       if let richTextRTF,
         let attributed = try? NSAttributedString(
           data: richTextRTF,
           options: [.documentType: NSAttributedString.DocumentType.rtf],
           documentAttributes: nil
-        )
+        ),
+        let canonicalAttributed = canonicalAttributedText(attributed)
       {
-        textView.textStorage?.setAttributedString(attributed)
-        applyTypingFont(to: textView)
-        return
+        source = canonicalAttributed
+        loadedRichText = true
+      } else {
+        source = NSAttributedString(string: text)
+        loadedRichText = false
       }
-      textView.string = text
-      applyDefaultFont(to: textView)
+      if let inlineImageStore {
+        textView.textStorage?.setAttributedString(
+          inlineImageStore.projectedContent(from: source)
+        )
+      } else {
+        textView.textStorage?.setAttributedString(source)
+      }
+      if loadedRichText {
+        applyTypingFont(to: textView)
+      } else {
+        applyDefaultFont(to: textView)
+      }
+    }
+
+    private func canonicalAttributedText(
+      _ attributed: NSAttributedString
+    ) -> NSAttributedString? {
+      guard let replacements = canonicalTextReplacements(
+        from: attributed.string,
+        to: text
+      ) else { return nil }
+      if replacements.isEmpty { return attributed }
+      let result = NSMutableAttributedString(attributedString: attributed)
+      for (range, replacement) in replacements.reversed() {
+        result.replaceCharacters(in: range, with: replacement)
+      }
+      return editorTextExactlyMatches(result.string, text) ? result : nil
+    }
+
+    private func canonicalTextReplacements(
+      from source: String,
+      to target: String
+    ) -> [(range: NSRange, replacement: String)]? {
+      if editorTextExactlyMatches(source, target) { return [] }
+      guard source == target else { return nil }
+      var replacements: [(range: NSRange, replacement: String)] = []
+      var sourceLocation = 0
+      for (sourceCharacter, targetCharacter) in zip(source, target) {
+        let sourceText = String(sourceCharacter)
+        let targetText = String(targetCharacter)
+        let sourceLength = sourceText.utf16.count
+        if !editorTextExactlyMatches(sourceText, targetText) {
+          replacements.append((
+            NSRange(location: sourceLocation, length: sourceLength),
+            targetText
+          ))
+        }
+        sourceLocation += sourceLength
+      }
+      return replacements
+    }
+
+    private func canonicalSelection(
+      _ selection: NSRange,
+      applying replacements: [(range: NSRange, replacement: String)]
+    ) -> NSRange {
+      let start = canonicalLocation(
+        selection.location,
+        applying: replacements,
+        towardEnd: false
+      )
+      guard selection.length > 0 else {
+        return NSRange(location: start, length: 0)
+      }
+      let end = canonicalLocation(
+        NSMaxRange(selection),
+        applying: replacements,
+        towardEnd: true
+      )
+      return NSRange(location: start, length: max(0, end - start))
+    }
+
+    private func canonicalLocation(
+      _ location: Int,
+      applying replacements: [(range: NSRange, replacement: String)],
+      towardEnd: Bool
+    ) -> Int {
+      var delta = 0
+      for (range, replacement) in replacements {
+        let replacementStart = range.location + delta
+        let replacementEnd = replacementStart + replacement.utf16.count
+        if location < range.location { break }
+        if location == range.location { return replacementStart }
+        if location < NSMaxRange(range) {
+          return towardEnd ? replacementEnd : replacementStart
+        }
+        if location == NSMaxRange(range) { return replacementEnd }
+        delta += replacement.utf16.count - range.length
+      }
+      return location + delta
     }
 
     private func configuredFont() -> NSFont {
@@ -1238,7 +1368,8 @@
       var lastModelRichTextRTF: Data?
       private var lastReportedNoteLinkTrigger: (text: String, range: NSRange)?
       var hasPendingLocalEdit: Bool {
-        text != lastModelText || richTextRTF != lastModelRichTextRTF
+        !editorTextExactlyMatches(text, lastModelText)
+          || richTextRTF != lastModelRichTextRTF
       }
       @MainActor
       init(parent: NativeRichTextEditor) {
@@ -1258,7 +1389,10 @@
         }
         (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
         parent.applyColors(to: textView)
-        guard let snapshot = parent.commands.attributedBindingSnapshot(for: textView) else { return }
+        guard let displaySnapshot = parent.commands.attributedBindingSnapshot(for: textView) else {
+          return
+        }
+        let snapshot = InlineNoteImageProjection.expanded(displaySnapshot)
         let updatedRTF = try? snapshot.data(
           from: NSRange(location: 0, length: snapshot.length),
           documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
@@ -1338,12 +1472,17 @@
     private static let noteLinkSeparatorMenuTag = 0xF1EC
     private static let noteLinkRequestMenuTag = 0xF1ED
     private static let noteLinkOpenMenuTag = 0xF1EE
+    private static let legacyFilenamesPasteboardType = NSPasteboard.PasteboardType(
+      "NSFilenamesPboardType"
+    )
 
     var automaticLists = true
     var liveNoteIDs: Set<UUID> = []
     var onRequestNoteLink: ((NSRange) -> Void)?
     var onOpenNoteLink: ((UUID) -> Void)?
     var onUnavailableNoteLink: (() -> Void)?
+    var inlineImageStore: InlineNoteImageStore?
+    var onInlineImageError: ((String) -> Void)?
     var checklistAccentColor = NSColor.controlAccentColor {
       didSet { needsDisplay = true }
     }
@@ -1371,6 +1510,7 @@
     private var checklistTrackingArea: NSTrackingArea?
     private var hoveredChecklistMarkerRange: NSRange?
     private var checklistPresentationNeedsRefresh = true
+    private var isPerformingNativeDrop = false
     private struct PendingPaste {
       let range: NSRange
       let nativeText: NSAttributedString
@@ -1467,6 +1607,47 @@
 
     private func checklistPrefixWidth(at characterIndex: Int) -> CGFloat? {
       checklistPrefixWidths(in: NSRange(location: characterIndex, length: 1))[characterIndex]
+    }
+
+    func layoutManager(
+      _ layoutManager: NSLayoutManager,
+      shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<NSRect>,
+      lineFragmentUsedRect: UnsafeMutablePointer<NSRect>,
+      baselineOffset: UnsafeMutablePointer<CGFloat>,
+      in textContainer: NSTextContainer,
+      forGlyphRange glyphRange: NSRange
+    ) -> Bool {
+      guard let storage = layoutManager.textStorage else { return false }
+      let characterRange = layoutManager.characterRange(
+        forGlyphRange: glyphRange,
+        actualGlyphRange: nil
+      )
+      var maximumImageExtent: CGFloat = 0
+      storage.enumerateAttributes(in: characterRange) { attributes, range, _ in
+        guard let attachment = attributes[.attachment] as? InlineNoteImageAttachment else {
+          return
+        }
+        let bounds = attachment.attachmentBounds(
+          for: textContainer,
+          proposedLineFragment: lineFragmentRect.pointee,
+          glyphPosition: .zero,
+          characterIndex: range.location
+        )
+        let baselineShift = CGFloat(
+          (attributes[.baselineOffset] as? NSNumber)?.doubleValue ?? 0
+        )
+        maximumImageExtent = max(
+          maximumImageExtent,
+          bounds.maxY + max(0, baselineShift)
+        )
+      }
+      guard maximumImageExtent > 0 else { return false }
+      let extraHeight = max(0, maximumImageExtent - baselineOffset.pointee)
+      guard extraHeight > 0 else { return false }
+      lineFragmentRect.pointee.size.height += extraHeight
+      lineFragmentUsedRect.pointee.size.height += extraHeight
+      baselineOffset.pointee += extraHeight
+      return true
     }
 
     func layoutManager(
@@ -2033,6 +2214,7 @@
     override func insertBacktab(_ sender: Any?) { indentSelectedLines(removing: true) }
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
+      clearInlineImageTypingAttributes()
       let effectiveRange =
         replacementRange.location == NSNotFound ? selectedRange() : replacementRange
       if automaticLists,
@@ -2060,6 +2242,223 @@
         }
       }
       super.insertText(insertString, replacementRange: replacementRange)
+    }
+
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+      [.fileURL] + super.readablePasteboardTypes.filter { $0 != .fileURL }
+    }
+
+    override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+      [.fileURL] + super.acceptableDragTypes.filter { $0 != .fileURL }
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+      let previous = isPerformingNativeDrop
+      isPerformingNativeDrop = true
+      defer { isPerformingNativeDrop = previous }
+      return super.performDragOperation(sender)
+    }
+
+    override func readSelection(from pasteboard: NSPasteboard) -> Bool {
+      if let inlineImageStore,
+        let type = preferredPasteboardType(
+          from: pasteboard.types ?? [],
+          restrictedToTypesFrom: readablePasteboardTypes
+        ),
+        let projected = projectedManagedReferencePaste(
+          from: pasteboard,
+          type: type,
+          store: inlineImageStore
+        )
+      {
+        return insertProjectedPaste(projected)
+          || super.readSelection(from: pasteboard)
+      }
+      return super.readSelection(from: pasteboard)
+    }
+
+    override func readSelection(
+      from pasteboard: NSPasteboard,
+      type: NSPasteboard.PasteboardType
+    ) -> Bool {
+      if let inlineImageStore,
+        let projected = projectedManagedReferencePaste(
+          from: pasteboard,
+          type: type,
+          store: inlineImageStore
+        )
+      {
+        return insertProjectedPaste(projected)
+          || super.readSelection(from: pasteboard, type: type)
+      }
+      guard type == .fileURL else {
+        return super.readSelection(from: pasteboard, type: type)
+      }
+      guard let inlineImageStore else { return fallbackFileURLRead(from: pasteboard) }
+      let urls = (pasteboard.readObjects(
+        forClasses: [NSURL.self],
+        options: [.urlReadingFileURLsOnly: true]
+      ) as? [URL]) ?? []
+      guard !urls.isEmpty,
+        urls.allSatisfy(inlineImageStore.isDeclaredImageFile)
+      else {
+        return fallbackFileURLRead(from: pasteboard)
+      }
+
+      let imported: [InlineNoteImageImport]
+      do {
+        imported = try urls.map(inlineImageStore.importImage)
+      } catch let error as InlineNoteImageError {
+        onInlineImageError?(error.message)
+        return fallbackFileURLRead(from: pasteboard)
+      } catch {
+        onInlineImageError?(InlineNoteImageError.importFailed.message)
+        return fallbackFileURLRead(from: pasteboard)
+      }
+
+      var attributes = pasteDestinationAttributes(for: selectedRange())
+      attributes.removeValue(forKey: .attachment)
+      attributes.removeValue(forKey: .link)
+      let insertion = NSMutableAttributedString()
+      for (index, item) in imported.enumerated() {
+        if index > 0 {
+          insertion.append(NSAttributedString(string: "\n", attributes: attributes))
+        }
+        let reference = NSAttributedString(string: item.reference, attributes: attributes)
+        guard let attachment = inlineImageStore.projectedAttachment(for: reference) else {
+          onInlineImageError?(InlineNoteImageError.unsupportedImage.message)
+          return fallbackFileURLRead(from: pasteboard)
+        }
+        insertion.append(attachment)
+      }
+      let range = selectedRange()
+      var inserted = false
+      performUndoGroup {
+        inserted = replaceAttributedText(
+          in: range,
+          with: insertion,
+          selecting: NSRange(location: range.location + insertion.length, length: 0)
+        )
+        if inserted {
+          undoManager?.setActionName(imported.count == 1 ? "Insert Image" : "Insert Images")
+        }
+      }
+      return inserted || fallbackFileURLRead(from: pasteboard)
+    }
+
+    private func fallbackFileURLRead(from pasteboard: NSPasteboard) -> Bool {
+      if isPerformingNativeDrop,
+        pasteboard.types?.contains(Self.legacyFilenamesPasteboardType) == true
+      {
+        return super.readSelection(
+          from: pasteboard,
+          type: Self.legacyFilenamesPasteboardType
+        )
+      }
+      return super.readSelection(from: pasteboard, type: .fileURL)
+    }
+
+    private func projectedManagedReferencePaste(
+      from pasteboard: NSPasteboard,
+      type: NSPasteboard.PasteboardType,
+      store: InlineNoteImageStore
+    ) -> NSAttributedString? {
+      let source: NSAttributedString
+      if type == .rtf || type.rawValue == "NeXT Rich Text Format v1.0 pasteboard type" {
+        guard let data = pasteboard.data(forType: type) ?? pasteboard.data(forType: .rtf),
+          let decoded = try? NSAttributedString(
+            data: data,
+            options: [.documentType: NSAttributedString.DocumentType.rtf],
+            documentAttributes: nil
+          ),
+          !Self.containsAttachment(in: decoded)
+        else { return nil }
+        source = decoded
+      } else if type == .string || type.rawValue == "NSStringPboardType" {
+        guard let text = pasteboard.string(forType: type) ?? pasteboard.string(forType: .string)
+        else { return nil }
+        source = NSAttributedString(
+          string: text,
+          attributes: pasteDestinationAttributes(for: selectedRange())
+        )
+      } else {
+        return nil
+      }
+      let projected = store.projectedContent(from: source)
+      return Self.containsInlineImage(in: projected) ? projected : nil
+    }
+
+    private func insertProjectedPaste(_ insertion: NSAttributedString) -> Bool {
+      let range = selectedRange()
+      var inserted = false
+      performUndoGroup {
+        inserted = replaceAttributedText(
+          in: range,
+          with: insertion,
+          selecting: NSRange(location: range.location + insertion.length, length: 0)
+        )
+        if inserted { undoManager?.setActionName("Paste") }
+      }
+      return inserted
+    }
+
+    private static func containsInlineImage(in text: NSAttributedString) -> Bool {
+      var found = false
+      text.enumerateAttribute(
+        .attachment,
+        in: NSRange(location: 0, length: text.length)
+      ) { value, _, stop in
+        guard value is InlineNoteImageAttachment else { return }
+        found = true
+        stop.pointee = true
+      }
+      return found
+    }
+
+    override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
+      containsInlineImage(in: selectedRange()) ? [.rtf, .string] : super.writablePasteboardTypes
+    }
+
+    override func writeSelection(
+      to pasteboard: NSPasteboard,
+      type: NSPasteboard.PasteboardType
+    ) -> Bool {
+      guard containsInlineImage(in: selectedRange()),
+        let storage = textStorage
+      else {
+        return super.writeSelection(to: pasteboard, type: type)
+      }
+      let source = InlineNoteImageProjection.expanded(
+        storage.attributedSubstring(from: selectedRange())
+      )
+      switch type {
+      case .string:
+        return pasteboard.setString(source.string, forType: .string)
+      case .rtf:
+        guard let data = try? source.data(
+          from: NSRange(location: 0, length: source.length),
+          documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+        ) else { return false }
+        return pasteboard.setData(data, forType: .rtf)
+      default:
+        return false
+      }
+    }
+
+    private func containsInlineImage(in range: NSRange) -> Bool {
+      guard let storage = textStorage,
+        range.location != NSNotFound,
+        range.location >= 0,
+        NSMaxRange(range) <= storage.length,
+        range.length > 0
+      else { return false }
+      var found = false
+      storage.enumerateAttribute(.attachment, in: range) { value, _, stop in
+        guard value is InlineNoteImageAttachment else { return }
+        found = true
+        stop.pointee = true
+      }
+      return found
     }
 
     override func paste(_ sender: Any?) {
@@ -2261,13 +2660,16 @@
     private func pasteDestinationAttributes(
       for range: NSRange
     ) -> [NSAttributedString.Key: Any] {
+      let attributes: [NSAttributedString.Key: Any]
       if range.length > 0,
         let storage = textStorage,
         range.location < storage.length
       {
-        return storage.attributes(at: range.location, effectiveRange: nil)
+        attributes = storage.attributes(at: range.location, effectiveRange: nil)
+      } else {
+        attributes = typingAttributes
       }
-      return typingAttributes
+      return withoutInlineImageAttachment(attributes)
     }
 
     private func showPasteOptions() {
@@ -2548,6 +2950,7 @@
     override func setSelectedRange(_ range: NSRange) {
       let changed = range != selectedRange()
       super.setSelectedRange(range)
+      clearInlineImageTypingAttributes()
       if changed, !isApplyingPasteOption { cancelPasteOptions() }
     }
 
@@ -2558,12 +2961,18 @@
     ) {
       let previousRanges = selectedRanges
       super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: flag)
+      clearInlineImageTypingAttributes()
       guard !isApplyingPasteOption else { return }
       let currentRanges = selectedRanges
       guard previousRanges.count != currentRanges.count
         || zip(previousRanges, currentRanges).contains(where: { !$0.isEqual(to: $1) })
       else { return }
       cancelPasteOptions()
+    }
+
+    private func clearInlineImageTypingAttributes() {
+      guard typingAttributes[.attachment] is InlineNoteImageAttachment else { return }
+      typingAttributes.removeValue(forKey: .attachment)
     }
 
     override func cancelOperation(_ sender: Any?) {
@@ -2909,10 +3318,11 @@
           sourceLocation + sourcePrefixLength,
           max(0, source.length - 1)
         )
-        let attributes =
+        let sourceAttributes =
           source.length > 0
           ? source.attributes(at: attributesLocation, effectiveRange: nil)
           : typingAttributes
+        let attributes = withoutInlineImageAttachment(sourceAttributes)
         let replacementNSString = replacementLine as NSString
         let replacementPrefix = replacementNSString.substring(
           with: NSRange(location: 0, length: replacementPrefixLength)
@@ -2931,14 +3341,24 @@
         }
         sourceLocation += sourceLength
         if index < sourceLines.index(before: sourceLines.endIndex) {
-          let newlineAttributes =
+          let sourceNewlineAttributes =
             sourceLocation < source.length
             ? source.attributes(at: sourceLocation, effectiveRange: nil)
             : attributes
+          let newlineAttributes = withoutInlineImageAttachment(sourceNewlineAttributes)
           result.append(NSAttributedString(string: "\n", attributes: newlineAttributes))
           sourceLocation += 1
         }
       }
+      return result
+    }
+
+    private func withoutInlineImageAttachment(
+      _ attributes: [NSAttributedString.Key: Any]
+    ) -> [NSAttributedString.Key: Any] {
+      guard attributes[.attachment] is InlineNoteImageAttachment else { return attributes }
+      var result = attributes
+      result.removeValue(forKey: .attachment)
       return result
     }
 

@@ -2292,6 +2292,8 @@
             commands: editorCommands,
             isVisible: isEditorVisible,
             liveNoteIDs: Set(appState.workspace.notes.map(\.id)),
+            inlineImageStore: appState.inlineNoteImageStore,
+            onInlineImageError: appState.inlineNoteImageImportFailed,
             onRequestNoteLink: { range in
               guard !isBlockingOverlayPresented,
                 let source = visibleSelectedNote,

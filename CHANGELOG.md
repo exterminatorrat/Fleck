@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.0.12-beta.1] - 2026-09-15
+
+### Added
+
+- Dropped and pasted image files now render inline at their full display height, while saved notes
+  and agent responses retain managed local-file references instead of embedded image data.
+
 ## [1.0.11-beta.1] - 2026-09-15
 
 ### Changed
