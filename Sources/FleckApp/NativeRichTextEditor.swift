@@ -1,5 +1,6 @@
 #if os(macOS)
   import AppKit
+  import CoreImage
   import FleckCore
   import SwiftUI
 
@@ -833,14 +834,73 @@
     }
   }
 
-  fileprivate final class NativeEditorScrollView: NSScrollView {
+  final class EditorScrollEdgeBlurView: NSView {
+    let blurRadius: CGFloat = 2
+
+    override var isOpaque: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+  }
+
+  final class NativeEditorScrollView: NSScrollView {
+    private static let scrollEdgeHeight: CGFloat = 20
+    private static let scrollEdgeRampDistance: CGFloat = 16
+    private static let scrollEdgeMask: NSImage = {
+      let height = Int(scrollEdgeHeight)
+      let image = NSImage(size: NSSize(width: 1, height: height))
+      guard
+        let representation = NSBitmapImageRep(
+          bitmapDataPlanes: nil,
+          pixelsWide: 1,
+          pixelsHigh: height,
+          bitsPerSample: 8,
+          samplesPerPixel: 4,
+          hasAlpha: true,
+          isPlanar: false,
+          colorSpaceName: .deviceRGB,
+          bitmapFormat: .alphaNonpremultiplied,
+          bytesPerRow: 0,
+          bitsPerPixel: 0
+        )
+      else { return image }
+      guard let bitmapData = representation.bitmapData else { return image }
+      for y in 0..<height {
+        let progress = CGFloat(height - 1 - y) / CGFloat(height - 1)
+        let alpha = progress * progress * (3 - 2 * progress)
+        let row = bitmapData.advanced(by: y * representation.bytesPerRow)
+        row[0] = 255
+        row[1] = 255
+        row[2] = 255
+        row[3] = UInt8((alpha * 255).rounded())
+      }
+      image.addRepresentation(representation)
+      image.resizingMode = .stretch
+      return image
+    }()
+
     private var isLayingOutDocument = false
+    private let scrollEdgeBlurView = EditorScrollEdgeBlurView()
+    var reduceTransparency = false {
+      didSet { updateScrollEdgeEffect() }
+    }
+
+    override init(frame frameRect: NSRect) {
+      super.init(frame: frameRect)
+      configureScrollEdgeEffect()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+      fatalError("init(coder:) has not been implemented")
+    }
 
     override func layout() {
       super.layout()
       guard !isLayingOutDocument,
         let documentView = documentView as? NativeEditorDocumentView
-      else { return }
+      else {
+        updateScrollEdgeEffect()
+        return
+      }
       isLayingOutDocument = true
       defer { isLayingOutDocument = false }
       let contentOrigin = contentView.bounds.origin
@@ -852,16 +912,76 @@
       reflectScrolledClipView(contentView)
       scrollerStyle = .overlay
       verticalScroller?.controlSize = .mini
+      updateScrollEdgeEffect()
+    }
+
+    override func reflectScrolledClipView(_ cView: NSClipView) {
+      super.reflectScrolledClipView(cView)
+      if cView === contentView {
+        updateScrollEdgeEffect()
+      }
     }
 
     func relayoutDocument() {
       needsLayout = true
       layoutSubtreeIfNeeded()
     }
+
+    private func configureScrollEdgeEffect() {
+      guard
+        let blurFilter = CIFilter(
+          name: "CIGaussianBlur",
+          parameters: [kCIInputRadiusKey: scrollEdgeBlurView.blurRadius]
+        )
+      else { return }
+      scrollEdgeBlurView.wantsLayer = true
+      scrollEdgeBlurView.layer?.masksToBounds = true
+      scrollEdgeBlurView.backgroundFilters = [blurFilter]
+      var maskRect = NSRect(origin: .zero, size: Self.scrollEdgeMask.size)
+      guard
+        let maskImage = Self.scrollEdgeMask.cgImage(
+          forProposedRect: &maskRect,
+          context: nil,
+          hints: nil
+        )
+      else { return }
+      let maskLayer = CALayer()
+      maskLayer.contents = maskImage
+      maskLayer.contentsGravity = .resize
+      scrollEdgeBlurView.layer?.mask = maskLayer
+      scrollEdgeBlurView.isHidden = true
+      scrollEdgeBlurView.setAccessibilityElement(false)
+      scrollEdgeBlurView.setAccessibilityHidden(true)
+      addSubview(scrollEdgeBlurView, positioned: .above, relativeTo: contentView)
+      updateScrollEdgeEffect()
+    }
+
+    private func updateScrollEdgeEffect() {
+      let viewportFrame = contentView.frame
+      let height = min(Self.scrollEdgeHeight, viewportFrame.height)
+      scrollEdgeBlurView.frame = NSRect(
+        x: viewportFrame.minX,
+        y: viewportFrame.minY,
+        width: viewportFrame.width,
+        height: height
+      )
+      scrollEdgeBlurView.layer?.mask?.frame = scrollEdgeBlurView.bounds
+
+      let documentRect = contentView.documentRect
+      let scrollOffset = max(0, contentView.bounds.minY - documentRect.minY)
+      let progress = min(1, scrollOffset / Self.scrollEdgeRampDistance)
+      let easedProgress = progress * progress * (3 - 2 * progress)
+      let isVisible = !reduceTransparency
+        && documentRect.height > contentView.bounds.height + 0.5
+        && easedProgress > 0
+      scrollEdgeBlurView.alphaValue = isVisible ? easedProgress : 0
+      scrollEdgeBlurView.isHidden = !isVisible
+    }
   }
 
   struct NativeRichTextEditor: NSViewRepresentable {
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     let text: String
     let richTextRTF: Data?
@@ -944,6 +1064,7 @@
       scrollView.hasVerticalScroller = true
       scrollView.drawsBackground = false
       scrollView.autohidesScrollers = true
+      scrollView.reduceTransparency = reduceTransparency
 
       let titleField = NSTextField()
       let titleCell = NoteTitleCell(textCell: "")
@@ -1058,6 +1179,7 @@
       let textView = documentView.textView
       context.coordinator.parent = self
       context.coordinator.scrollView = scrollView
+      scrollView.reduceTransparency = reduceTransparency
       if let undoManager = textView.undoManager {
         context.coordinator.undoManager = undoManager
       }
