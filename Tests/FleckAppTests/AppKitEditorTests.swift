@@ -2791,14 +2791,36 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     "Text", "Paragraph", "Tools",
   ]
   let fullLabels = leadingLabels + ["Delete"]
-  func expectControlFramesWithinWindow(_ labels: [String], panelWidth: CGFloat) throws {
+  func accessibilitySnapshot() -> [String: [NSObject]] {
+    let labelSelector = NSSelectorFromString("accessibilityLabel")
+    let childrenSelector = NSSelectorFromString("accessibilityChildren")
+    var elementsByLabel: [String: [NSObject]] = [:]
+    func collect(_ value: Any) {
+      guard let element = value as? NSObject else { return }
+      if element.responds(to: labelSelector),
+        let label = element.perform(labelSelector)?.takeUnretainedValue() as? String
+      {
+        elementsByLabel[label, default: []].append(element)
+      }
+      let children = element.responds(to: childrenSelector)
+        ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+      for child in children ?? [] { collect(child) }
+    }
+    collect(host)
+    return elementsByLabel
+  }
+  func expectControlFramesWithinWindow(
+    _ labels: [String],
+    panelWidth: CGFloat,
+    snapshot: [String: [NSObject]]
+  ) throws {
     let contentView = try #require(window.contentView)
     let contentFrame = window.convertToScreen(contentView.convert(contentView.bounds, to: nil))
       .insetBy(dx: -1, dy: -1)
     let hostFrame = window.convertToScreen(host.convert(host.bounds, to: nil))
       .insetBy(dx: -1, dy: -1)
     for label in labels {
-      let controls = fontPickerAccessibilityElements(host, label: label)
+      let controls = snapshot[label] ?? []
       #expect(controls.count == 1)
       let control = try #require(controls.first)
       let frame = try #require(
@@ -2810,7 +2832,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
       #expect(hostFrame.contains(frame))
     }
     if labels.contains("Font") {
-      let font = try #require(fontPickerAccessibilityElement(host, label: "Font"))
+      let font = try #require(snapshot["Font"]?.first)
       let value = font.perform(NSSelectorFromString("accessibilityValue"))?
         .takeUnretainedValue() as? String
       #expect(value == "Avenir Next")
@@ -2822,11 +2844,16 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     state.updatePreferences { $0.panelWidth = panelWidth }
     window.setContentSize(NSSize(width: panelWidth, height: 430))
     await settleHostedView(host)
-    try expectControlFramesWithinWindow(fullLabels, panelWidth: panelWidth)
-    #expect(fontPickerAccessibilityElement(host, label: "More formatting") == nil)
+    let snapshot = accessibilitySnapshot()
+    try expectControlFramesWithinWindow(
+      fullLabels,
+      panelWidth: panelWidth,
+      snapshot: snapshot
+    )
+    #expect((snapshot["More formatting"] ?? []).isEmpty)
     let contentView = try #require(window.contentView)
     let contentFrame = window.convertToScreen(contentView.convert(contentView.bounds, to: nil))
-    let deletes = fontPickerAccessibilityElements(host, label: "Delete")
+    let deletes = snapshot["Delete"] ?? []
     #expect(deletes.count == 1)
     let delete = try #require(deletes.first)
     let deleteFrame = try #require(
@@ -2845,24 +2872,26 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     state.updatePreferences { $0.panelWidth = panelWidth }
     window.setContentSize(NSSize(width: panelWidth, height: 430))
     await settleHostedView(host)
+    let snapshot = accessibilitySnapshot()
     let visible = leadingLabels.prefix {
-      fontPickerAccessibilityElement(host, label: $0) != nil
+      !(snapshot[$0] ?? []).isEmpty
     }
     let visibleCount = visible.count
     countsByWidth.append((panelWidth, visibleCount))
     #expect(leadingLabels.dropFirst(visibleCount).allSatisfy {
-      fontPickerAccessibilityElement(host, label: $0) == nil
+      (snapshot[$0] ?? []).isEmpty
     })
     let overflowLabels = visibleCount == leadingLabels.count ? [] : ["More formatting"]
     #expect(
-      (fontPickerAccessibilityElement(host, label: "More formatting") != nil)
+      !(snapshot["More formatting"] ?? []).isEmpty
         == !overflowLabels.isEmpty
     )
-    let deletes = fontPickerAccessibilityElements(host, label: "Delete")
+    let deletes = snapshot["Delete"] ?? []
     #expect(deletes.count == 1)
     try expectControlFramesWithinWindow(
       Array(leadingLabels.prefix(visibleCount)) + overflowLabels + ["Delete"],
-      panelWidth: panelWidth
+      panelWidth: panelWidth,
+      snapshot: snapshot
     )
     let contentView = try #require(window.contentView)
     let contentFrame = window.convertToScreen(contentView.convert(contentView.bounds, to: nil))
@@ -2873,7 +2902,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     #expect(abs(contentFrame.maxX - deleteFrame.maxX - (deleteTrailingInset ?? 0)) <= 0.5)
     var visibleFrames: [CGRect] = []
     for label in Array(leadingLabels.prefix(visibleCount)) + overflowLabels {
-      let element = try #require(fontPickerAccessibilityElement(host, label: label))
+      let element = try #require(snapshot[label]?.first)
       visibleFrames.append(try #require(
         element.value(forKey: "accessibilityFrame") as? NSValue
       ).rectValue)

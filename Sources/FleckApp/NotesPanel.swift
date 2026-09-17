@@ -2049,8 +2049,9 @@
     }
 
     private var isNonPickerBlockingOverlayPresented: Bool {
-      searchController.isPresented || notePendingDeletion != nil
-        || folderPendingDeletion != nil || isShowingTrash || isShowingAgentActivity
+      searchController.isPresented
+        || notePendingDeletion != nil || folderPendingDeletion != nil || isShowingTrash
+        || isShowingAgentActivity
     }
 
     private var allowsMenuPanelResize: Bool {
