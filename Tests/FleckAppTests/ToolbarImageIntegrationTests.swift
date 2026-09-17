@@ -41,6 +41,44 @@ func toolbarUnicodeCaseAcrossProjectedImagePreservesReferenceAndSelection() thro
 }
 
 @Test @MainActor
+func sentenceCaseIgnoresCanonicalImageReferencePunctuation() throws {
+  let fixture = try ToolbarImageFixture()
+  defer { fixture.remove() }
+  let unavailableReference = "![alt](file:///missing/Photo.PNG)"
+  let rawCases = [
+    (
+      "hELLO \(unavailableReference) wORLD",
+      "Hello \(unavailableReference) world"
+    ),
+    (
+      "hELLO. \(unavailableReference) wORLD",
+      "Hello. \(unavailableReference) World"
+    ),
+  ]
+
+  for (source, expected) in rawCases {
+    let editor = fixture.editor(canonical: NSAttributedString(string: source))
+    let commands = fixture.commands(for: editor)
+    editor.setSelectedRange(NSRange(location: 0, length: editor.string.utf16.count))
+    #expect(commands.transformCase(.sentence))
+    #expect(editor.string == expected)
+  }
+
+  let projectedReference = try fixture.importImage(named: "sentence-case.png")
+  let projectedSource = "hELLO \(projectedReference) wORLD"
+  let projectedEditor = fixture.editor(canonical: NSAttributedString(string: projectedSource))
+  let projectedCommands = fixture.commands(for: projectedEditor)
+  projectedEditor.setSelectedRange(
+    NSRange(location: 0, length: projectedEditor.string.utf16.count)
+  )
+  #expect(projectedCommands.transformCase(.sentence))
+  #expect(
+    InlineNoteImageProjection.expanded(try #require(projectedEditor.textStorage)).string
+      == "Hello \(projectedReference) world"
+  )
+}
+
+@Test @MainActor
 func toolbarClearAndFormatPainterPreserveProjectedAttachmentReferenceAndLink() throws {
   let fixture = try ToolbarImageFixture()
   defer { fixture.remove() }

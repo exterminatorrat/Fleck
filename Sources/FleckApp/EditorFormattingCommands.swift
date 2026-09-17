@@ -950,14 +950,17 @@
       while location < ns.length {
         let composed = ns.rangeOfComposedCharacterSequence(at: location)
         let fragment = ns.substring(with: composed)
+        let isProtected = protected.intersects(
+          integersIn: composed.location..<NSMaxRange(composed)
+        )
         if needsCapital,
-          !protected.intersects(integersIn: composed.location..<NSMaxRange(composed)),
+          !isProtected,
           isCased(fragment)
         {
           result.insert(composed.location)
           needsCapital = false
         }
-        if terminalPattern?.firstMatch(
+        if !isProtected, terminalPattern?.firstMatch(
           in: fragment,
           range: NSRange(location: 0, length: (fragment as NSString).length)
         ) != nil {

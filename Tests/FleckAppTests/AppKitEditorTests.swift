@@ -3102,8 +3102,14 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   expectOneReachableFormattingActionAcrossVisibleWindows(owner: window)
   #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
 
-  await setWidth(800)
+  await setWidth(1_600)
   #expect(fontPickerAccessibilityElement(host, label: "More formatting") == nil)
+  expectOneReachableFormattingActionAcrossVisibleWindows(owner: window)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
+
+  await setWidth(800)
+  #expect(fontPickerAccessibilityElement(host, label: "More formatting") != nil)
+  #expect(visibleFormattingActionCount(labels: ["Tools / Insert"], owner: window) == 0)
   expectOneReachableFormattingActionAcrossVisibleWindows(owner: window)
   #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
 
@@ -3581,9 +3587,12 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   )
   editor.setSelectedRange(NSRange(location: 0, length: 4))
   commands.refreshFormattingState()
-  #expect(commands.isBold)
-  #expect(commands.isItalic)
+  #expect(!commands.isBold)
+  #expect(commands.isBoldMixed)
+  #expect(!commands.isItalic)
+  #expect(commands.isItalicMixed)
   #expect(commands.isUnderlined)
+  #expect(!commands.isUnderlineMixed)
   #expect(commands.isFontFamilyMixed)
   #expect(commands.isFontSizeMixed)
   #expect(commands.isForegroundColorMixed)
@@ -3593,7 +3602,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   _ = more.perform(NSSelectorFromString("accessibilityPerformPress"))
   await settleHostedView(host)
   let expectedValues = [
-    "Bold": "On", "Italic": "On", "Underline": "On", "Font": "Mixed fonts",
+    "Bold": "Mixed", "Italic": "Mixed", "Underline": "On", "Font": "Mixed fonts",
     "Font Size": "Mixed", "Font Color": "Mixed", "Highlight": "Mixed",
   ]
   for (label, expectedValue) in expectedValues {
