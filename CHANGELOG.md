@@ -10,6 +10,19 @@ public release log. Packaging unchanged source does not add a changelog entry.
 - Made the Agent Activity scrollbar track transparent while keeping the complete native thumb
   draggable and positioned five points inside the panel edge.
 
+## [1.0.18-beta.1] - 2026-09-16
+
+### Changed
+
+- Polished the font picker with neutral full-row hover and selection feedback, a trackless
+  native scrollbar aligned to the popover edge, and a compact layout that remains usable at
+  narrow widths.
+
+### Fixed
+
+- Aligned font names and previews to a shared row baseline and reserved a consistent trailing
+  preview column in the font picker.
+
 ## [1.0.17-beta.1] - 2026-09-16
 
 ### Changed

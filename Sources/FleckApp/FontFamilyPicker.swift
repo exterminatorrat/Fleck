@@ -107,16 +107,18 @@
       preferredContentSize = view.frame.size
       searchField.placeholderString = "Search fonts"
       searchField.setAccessibilityLabel("Search fonts")
+      searchField.setAccessibilityHelp("Choose a font for \(targetLabel)")
       searchField.delegate = self
       searchField.sendsSearchStringImmediately = true
-      let context = NSTextField(labelWithString: "Applying to \(targetLabel)")
-      context.font = .systemFont(ofSize: 11)
-      context.textColor = .secondaryLabelColor
       let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("family"))
-      column.width = 250
+      column.resizingMask = .autoresizingMask
       table.addTableColumn(column)
       table.headerView = nil
       table.rowHeight = 30
+      table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+      table.autoresizingMask = [.width]
+      table.backgroundColor = .clear
+      table.selectionHighlightStyle = .none
       table.dataSource = self
       table.delegate = self
       table.target = self
@@ -126,6 +128,8 @@
       let scroll = NSScrollView()
       scroll.documentView = table
       scroll.hasVerticalScroller = true
+      scroll.verticalScroller = FontFamilyScroller()
+      scroll.scrollerStyle = .overlay
       scroll.drawsBackground = false
       clearButton.target = self
       clearButton.action = #selector(clearSearch)
@@ -142,18 +146,30 @@
         scroll.topAnchor.constraint(equalTo: list.topAnchor), scroll.bottomAnchor.constraint(equalTo: list.bottomAnchor),
         empty.centerXAnchor.constraint(equalTo: list.centerXAnchor), empty.centerYAnchor.constraint(equalTo: list.centerYAnchor),
       ])
-      let stack = NSStackView(views: [searchField, context, list])
-      stack.orientation = .vertical
-      stack.alignment = .leading
-      stack.spacing = 8
-      stack.translatesAutoresizingMaskIntoConstraints = false
-      view.addSubview(stack)
+      for child in [searchField, list] {
+        child.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(child)
+      }
       NSLayoutConstraint.activate([
-        stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12), stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
-        stack.topAnchor.constraint(equalTo: view.topAnchor, constant: 12), stack.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8),
-        searchField.widthAnchor.constraint(equalTo: stack.widthAnchor), list.widthAnchor.constraint(equalTo: stack.widthAnchor),
+        searchField.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+        searchField.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+        searchField.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
+        list.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+        list.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        list.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
+        list.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8),
       ])
       reloadRows()
+    }
+
+    override func viewDidLayout() {
+      super.viewDidLayout()
+      guard let scroll = table.enclosingScrollView else { return }
+      let width = scroll.contentSize.width
+      if table.frame.width != width {
+        table.frame.size.width = width
+        table.tableColumns.first?.width = width
+      }
     }
 
     override func viewDidAppear() {
@@ -189,13 +205,30 @@
       sample.font = EditorTypography.bodyFont(family: family, size: 17)
       let selected = !isMixed && (currentFamily == family || (family == ".AppleSystemUIFont" && currentFamily?.hasPrefix(".") == true))
       let check = NSTextField(labelWithString: selected ? "✓" : "")
-      check.widthAnchor.constraint(equalToConstant: 14).isActive = true
-      let cell = NSStackView(views: [check, name, sample])
-      cell.spacing = 6
+      let cell = NSView()
+      for child in [check, name, sample] {
+        child.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(child)
+      }
+      NSLayoutConstraint.activate([
+        check.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 10),
+        check.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+        check.widthAnchor.constraint(equalToConstant: 14),
+        name.leadingAnchor.constraint(equalTo: check.trailingAnchor, constant: 6),
+        name.trailingAnchor.constraint(equalTo: sample.leadingAnchor, constant: -6),
+        name.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+        sample.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -24),
+        sample.widthAnchor.constraint(equalToConstant: 38),
+        sample.firstBaselineAnchor.constraint(equalTo: name.firstBaselineAnchor),
+      ])
       cell.setAccessibilityElement(true)
       cell.setAccessibilityLabel(Self.displayName(family))
       cell.setAccessibilityValue(selected ? "Current font" : "")
       return cell
+    }
+
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+      FontFamilyRowView()
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
@@ -235,6 +268,89 @@
         super.keyDown(with: event)
       }
     }
+  }
+
+  private final class FontFamilyRowView: NSTableRowView {
+    private var isHovered = false
+    private var hoverTrackingArea: NSTrackingArea?
+
+    override var isSelected: Bool {
+      didSet { needsDisplay = true }
+    }
+
+    override func updateTrackingAreas() {
+      super.updateTrackingAreas()
+      if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+      let trackingArea = NSTrackingArea(
+        rect: .zero,
+        options: [.activeInKeyWindow, .mouseEnteredAndExited, .inVisibleRect],
+        owner: self,
+        userInfo: nil
+      )
+      addTrackingArea(trackingArea)
+      hoverTrackingArea = trackingArea
+      reconcileHover()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+      reconcileHover(at: event.locationInWindow)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+      setHovered(false)
+    }
+
+    override func viewDidMoveToSuperview() {
+      super.viewDidMoveToSuperview()
+      if superview == nil { setHovered(false) }
+    }
+
+    private func reconcileHover(at locationInWindow: NSPoint? = nil) {
+      guard let window, let contentView = window.contentView else {
+        setHovered(false)
+        return
+      }
+      let location = locationInWindow ?? window.mouseLocationOutsideOfEventStream
+      var hit = contentView.hitTest(contentView.convert(location, from: nil))
+      while let candidate = hit {
+        if candidate is NSScroller {
+          setHovered(false)
+          return
+        }
+        hit = candidate.superview
+      }
+      var ancestor = superview
+      while ancestor != nil, !(ancestor is NSTableView) { ancestor = ancestor?.superview }
+      guard let table = ancestor as? NSTableView else {
+        setHovered(false)
+        return
+      }
+      let row = table.row(at: table.convert(location, from: nil))
+      setHovered(row >= 0 && table.rowView(atRow: row, makeIfNecessary: false) === self)
+    }
+
+    private func setHovered(_ hovered: Bool) {
+      guard isHovered != hovered else { return }
+      isHovered = hovered
+      needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+      super.draw(dirtyRect)
+      guard isSelected || isHovered else { return }
+      NSColor.labelColor.withAlphaComponent(isSelected ? 0.16 : 0.10).setFill()
+      NSBezierPath(
+        roundedRect: bounds.insetBy(dx: 4, dy: 2),
+        xRadius: 5,
+        yRadius: 5
+      ).fill()
+    }
+  }
+
+  private final class FontFamilyScroller: NSScroller {
+    override class var isCompatibleWithOverlayScrollers: Bool { true }
+
+    override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {}
   }
 
 #endif
