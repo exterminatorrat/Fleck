@@ -74,8 +74,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     self.editorBackgroundHex = editorBackgroundHex
     self.panelOpacity = panelOpacity
     self.theme = theme
-    self.panelWidth = Self.clampedPanelDimension(panelWidth, minimum: 380, maximum: 800)
-    self.panelHeight = Self.clampedPanelDimension(panelHeight, minimum: 300, maximum: 800)
+    self.panelWidth = Self.clampedPanelDimension(panelWidth, minimum: 380)
+    self.panelHeight = Self.clampedPanelDimension(panelHeight, minimum: 300)
     self.panelSizingVersion = panelSizingVersion
     self.pinnedPanelWidth = Self.clampedPanelDimension(pinnedPanelWidth, minimum: 480)
     self.pinnedPanelHeight = Self.clampedPanelDimension(pinnedPanelHeight, minimum: 320)
@@ -238,12 +238,10 @@ public struct AppPreferences: Codable, Equatable, Sendable {
 
   private static func clampedPanelDimension(
     _ value: Double,
-    minimum: Double,
-    maximum: Double? = nil
+    minimum: Double
   ) -> Double {
     guard value.isFinite else { return minimum }
-    let clamped = max(value, minimum)
-    return maximum.map { min(clamped, $0) } ?? clamped
+    return max(value, minimum)
   }
 
   private static func decodedSizingField<T: Decodable>(

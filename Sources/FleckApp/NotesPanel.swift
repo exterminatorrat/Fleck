@@ -56,18 +56,19 @@
 
   // Keep the accepted transaction alive independently of drag presentation.
   // Payload authentication and native move completion may arrive in either order.
-  @MainActor final class ReorderDropSession {
+  @MainActor final class ReorderDropSession: ObservableObject {
     let id: UUID
     let type: UTType
     private let sourceID: UUID
     private let noteSource: NoteDropSource?
     private let matches: (Data) -> Bool
     private enum Phase { case dragging, ended, cancelled, committed }
-    private var phase = Phase.dragging
+    @Published private var phase = Phase.dragging
     private var accepted = false
     private var pendingCommit: (() -> Void)?
 
     var canAcceptDrop: Bool { phase == .dragging && !accepted }
+    var isDragging: Bool { phase == .dragging }
 
     init(source: NoteDropSource) {
       id = source.dragSessionID
@@ -731,15 +732,6 @@
     }
   }
 
-  enum FormattingToolbarLayout: Equatable {
-    case full
-    case compact
-
-    static func presentation(availableWidth: CGFloat) -> Self {
-      availableWidth >= 720 ? .full : .compact
-    }
-  }
-
   enum NotesPanelSizing: Equatable {
     case storedPreferences
     case container
@@ -852,6 +844,7 @@
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.menuPanelGeometryStore) private var menuPanelGeometryStore
     @ObservedObject var dictationRuntime: DictationRuntime
     let isPinned: Bool
     let sizing: NotesPanelSizing
@@ -875,6 +868,7 @@
     @State private var reorderDragSession: ReorderDropSession?
     @StateObject private var fluidTabDrag = FluidTabDragController()
     @StateObject private var menuWindowDrop = MenuWindowNoteDropCoordinator()
+    @StateObject private var menuPanelResize = MenuPanelResizeController()
     @State private var tabColorPickerNoteID: UUID?
     @State private var activeFolderID: UUID?
     @State private var bannerDismissalState = NotesPanelBannerDismissalState()
@@ -1001,6 +995,28 @@
         maxWidth: sizing == .container ? .infinity : nil,
         maxHeight: sizing == .container ? .infinity : nil
       )
+      .background {
+        if !isPinned, sizing == .storedPreferences {
+          if let reorderDragSession {
+            ReorderAwareMenuPanelResizeInstaller(
+              dragSession: reorderDragSession,
+              controller: menuPanelResize,
+              geometryStore: menuPanelGeometryStore,
+              preferredSize: preferredMenuPanelSize,
+              canResize: allowsMenuPanelResize,
+              onCommit: saveMenuPanelSize
+            )
+          } else {
+            MenuPanelResizeInstaller(
+              controller: menuPanelResize,
+              geometryStore: menuPanelGeometryStore,
+              preferredSize: preferredMenuPanelSize,
+              canResize: allowsMenuPanelResize,
+              onCommit: saveMenuPanelSize
+            )
+          }
+        }
+      }
       .background {
         if !isPinned {
           Rectangle()
@@ -2020,6 +2036,34 @@
         || isShowingAgentActivity
     }
 
+    private var allowsMenuPanelResize: Bool {
+      !isBlockingOverlayPresented
+        && !isImporting
+        && !isExporting
+        && !isShowingDictationHistory
+        && notePendingAgentShare == nil
+    }
+
+    private var preferredMenuPanelSize: CGSize {
+      CGSize(
+        width: appState.preferences.panelWidth,
+        height: appState.preferences.panelHeight
+      )
+    }
+
+    private func saveMenuPanelSize(_ size: CGSize) {
+      guard size.width.isFinite, size.height.isFinite,
+        size.width >= MenuPanelResizeGeometry.minimumContentSize.width,
+        size.height >= MenuPanelResizeGeometry.minimumContentSize.height,
+        menuPanelResize.initialContentSize != size,
+        preferredMenuPanelSize != size
+      else { return }
+      appState.updatePreferences {
+        $0.panelWidth = size.width
+        $0.panelHeight = size.height
+      }
+    }
+
     private var agentActivitySheetPresentation: Binding<Bool> {
       Binding(
         get: { isPinned && isShowingAgentActivity },
@@ -2184,12 +2228,16 @@
 
     private var storedPanelSize: CGSize? {
       guard sizing == .storedPreferences else { return nil }
-      let preferred = CGSize(
-        width: appState.preferences.panelWidth,
-        height: appState.preferences.panelHeight
-      )
+      if let effectiveContentSize = menuPanelResize.effectiveContentSize {
+        return effectiveContentSize
+      }
+      let preferred = preferredMenuPanelSize
       let screen = editorCommands.textView?.window?.screen
-        ?? NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
+        ?? menuPanelGeometryStore?.statusLabelFrame.flatMap { statusFrame in
+          NSScreen.screens.first {
+            $0.frame.contains(CGPoint(x: statusFrame.midX, y: statusFrame.midY))
+          }
+        }
         ?? NSScreen.main
       guard let available = screen?.visibleFrame.size,
         available.width > 0,
@@ -2373,6 +2421,54 @@
     }
   }
 
+  struct FolderNavigatorOverflowPresentation: Equatable {
+    static let railWidth: CGFloat = 56
+
+    let contentWidth: CGFloat
+    let referenceWidth: CGFloat
+
+    var overflows: Bool {
+      contentWidth > referenceWidth
+    }
+
+    var railWidth: CGFloat {
+      overflows ? Self.railWidth : 0
+    }
+  }
+
+  struct FolderNavigatorOcclusionPresentation: Equatable {
+    let composerLeadingX: CGFloat
+
+    func covers(_ frame: CGRect?) -> Bool {
+      guard let frame else { return true }
+      return frame.maxX > composerLeadingX
+    }
+  }
+
+  struct FolderNavigatorMaskPresentation: Equatable {
+    static let preferredComposerWidth: CGFloat = 340
+    static let preferredFadeWidth: CGFloat = 12
+
+    let bandWidth: CGFloat
+
+    var composerWidth: CGFloat {
+      min(Self.preferredComposerWidth, max(0, bandWidth))
+    }
+
+    var leadingWidth: CGFloat {
+      max(0, bandWidth - composerWidth)
+    }
+
+    var fadeWidth: CGFloat {
+      min(Self.preferredFadeWidth, leadingWidth)
+    }
+
+    var opaqueWidth: CGFloat {
+      leadingWidth - fadeWidth
+    }
+
+  }
+
   private struct FolderNavigator: View {
     private enum FocusedRow: Hashable {
       case unfiled
@@ -2381,7 +2477,7 @@
       case newFolder
     }
 
-    private enum NoteDropTarget: Equatable {
+    private enum NoteDropTarget: Hashable {
       case unfiled
       case folder(UUID)
 
@@ -2406,7 +2502,45 @@
     @State private var folderReorder: ReorderInteraction?
     @State private var isUnfiledHovered = false
     @State private var unfiledInteractionSource: AppInteractionSource = .keyboard
+    @State private var folderContentWidth: CGFloat = 0
+    @State private var preTrashBandWidth: CGFloat = 0
+    @State private var frozenOverflow: Bool?
+    @State private var frozenUnfiledDisclosure: Bool?
+    @State private var rowFrames: [NoteDropTarget: CGRect] = [:]
+    @State private var folderCreationSource: AppInteractionSource = .keyboard
+    @State private var isNewFolderTextEditing = false
+    @State private var focusedRowBeforeComposition: FocusedRow?
+    @State private var wasUnfiledDisclosureFocusedBeforeComposition = false
     private let folderNavigatorMaxHeight: CGFloat = 32
+
+    private enum FolderScrollTarget {
+      case leading
+      case trailing
+    }
+
+    private struct FolderContentWidthKey: PreferenceKey {
+      static let defaultValue: CGFloat = 0
+      static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+      }
+    }
+
+    private struct FolderBandWidthKey: PreferenceKey {
+      static let defaultValue: CGFloat = 0
+      static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+      }
+    }
+
+    private struct FolderRowFrameKey: PreferenceKey {
+      static let defaultValue: [NoteDropTarget: CGRect] = [:]
+      static func reduce(
+        value: inout [NoteDropTarget: CGRect],
+        nextValue: () -> [NoteDropTarget: CGRect]
+      ) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+      }
+    }
 
     let menuWindowDrop: MenuWindowNoteDropCoordinator?
     let activeFolderID: UUID?
@@ -2433,71 +2567,55 @@
     }
 
     var body: some View {
-      VStack(spacing: 3) {
-        if isCreatingFolder {
-          folderEditor(label: "New folder", focus: .newFolder)
-        }
-
-        HStack(spacing: 4) {
-          rootRow
-
-          ScrollView(.horizontal, showsIndicators: false) {
-            LazyHStack(spacing: 3) {
-              ForEach(appState.workspace.folders, id: \.id) { folder in
-                folderRow(folder)
-              }
-            }
-            .background(ReorderDragLifecycle(active: folderReorder != nil,
-              hasTarget: folderReorder?.targetID != nil
-                && folderReorder?.originalIDs == appState.workspace.folders.map(\.id),
-              cancel: { folderReorder = nil }))
-          }
+      HStack(spacing: 4) {
+        folderNavigationLayer
           .frame(maxWidth: .infinity)
-          .frame(maxHeight: folderNavigatorMaxHeight)
-          .accessibilityElement(children: .contain)
-          .accessibilityLabel("Folders")
-
-          Button {
-            beginNewFolder()
-          } label: {
-            Image(systemName: "folder.badge.plus")
-              .frame(width: 24, height: 24)
+          .frame(height: folderNavigatorMaxHeight)
+          .mask(alignment: .leading) {
+            if isCreatingFolder {
+              HStack(spacing: 0) {
+                Color.white.frame(width: maskPresentation.opaqueWidth)
+                LinearGradient(
+                  colors: [.white, .clear],
+                  startPoint: .leading,
+                  endPoint: .trailing
+                )
+                .frame(width: maskPresentation.fadeWidth)
+                Color.clear.frame(width: maskPresentation.composerWidth)
+              }
+            } else {
+              Color.white
+            }
           }
-          .buttonStyle(.plain)
-          .accessibilityLabel("New folder")
-
-          Divider()
-            .frame(height: 20)
-
-          Button {
-            onOpenTrash()
-          } label: {
-            rowLabel(
-              name: "Trash",
-              systemImage: "trash",
-              count: appState.trashedNotes.count,
-              isSelected: false,
-              isEmpty: appState.trashedNotes.isEmpty
-            )
+          .overlay(alignment: .trailing) {
+            folderComposer
+              .frame(
+                width: isCreatingFolder ? maskPresentation.composerWidth : 24,
+                alignment: .leading
+              )
           }
-          .fixedSize(horizontal: true, vertical: false)
-          .buttonStyle(.plain)
-          .focused($focusedRow, equals: .trash)
-          .focusable()
-          .accessibilityLabel("Trash")
-          .accessibilityIdentifier("folder-trash")
-          .accessibilityValue(
-            appState.trashedNotes.isEmpty
-              ? "Empty"
-              : "\(appState.trashedNotes.count) notes"
-          )
-        }
-        .animation(
-          motion.allowsSpatialMotion(for: unfiledInteractionSource) ? folderMorphAnimation : nil,
-          value: isUnfiledCompact
-        )
+          .background {
+            GeometryReader { band in
+              Color.clear.preference(key: FolderBandWidthKey.self, value: band.size.width)
+            }
+          }
+
+        Divider()
+          .frame(height: 20)
+
+        trashRow
       }
-      .animation(folderMorphAnimation, value: isCreatingFolder)
+      .coordinateSpace(name: "folder-navigator-band")
+      .onPreferenceChange(FolderContentWidthKey.self) { folderContentWidth = $0 }
+      .onPreferenceChange(FolderBandWidthKey.self) { preTrashBandWidth = $0 }
+      .onPreferenceChange(FolderRowFrameKey.self) { rowFrames = $0 }
+      .onChange(of: isUnfiledCompact) { _, _ in
+        if isCreatingFolder { frozenUnfiledDisclosure = nil }
+      }
+      .animation(
+        motion.allowsSpatialMotion(for: unfiledInteractionSource) ? folderMorphAnimation : nil,
+        value: isUnfiledCompact
+      )
       .onChange(of: draggedSource) { oldValue, newValue in
         if oldValue != newValue {
           noteDropTarget = nil
@@ -2506,10 +2624,13 @@
       .padding(.horizontal, 12)
       .padding(.vertical, 5)
       .onMoveCommand { direction in
+        guard !isFolderTextInputActive else { return }
         moveFocus(direction)
       }
       .onDeleteCommand {
+        guard !isFolderTextInputActive else { return }
         guard case .folder(let id) = focusedRow,
+          !isCovered(.folder(id)),
           let folder = appState.workspace.folders.first(where: { $0.id == id })
         else { return }
         onDelete(folder)
@@ -2519,17 +2640,334 @@
       }
       .onDisappear { folderReorder = nil }
       .onExitCommand {
+        guard !isFolderTextInputActive else { return }
         folderReorder = nil
         cancelFolderEditing()
       }
       .onKeyPress(phases: .down) { press in
+        guard !isFolderTextInputActive else { return .ignored }
         guard isF2(press), beginRename() else { return .ignored }
         return .handled
       }
       .onKeyPress(keys: [.return, .space], phases: .down) { _ in
+        guard !isFolderTextInputActive else { return .ignored }
         activateFocusedRow()
         return .handled
       }
+    }
+
+    private var folderNavigationLayer: some View {
+      HStack(spacing: 4) {
+        rootRow
+          .background(rowFrameReader(for: .unfiled))
+
+        ScrollViewReader { scrollProxy in
+          HStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+              HStack(spacing: 0) {
+                Color.clear
+                  .frame(width: 0, height: 0)
+                  .id(FolderScrollTarget.leading)
+                HStack(spacing: 3) {
+                  ForEach(appState.workspace.folders, id: \.id) { folder in
+                    folderRow(folder)
+                      .background(rowFrameReader(for: .folder(folder.id)))
+                  }
+                }
+                .background {
+                  GeometryReader { content in
+                    Color.clear.preference(
+                      key: FolderContentWidthKey.self,
+                      value: content.size.width
+                    )
+                  }
+                }
+                .background(ReorderDragLifecycle(active: folderReorder != nil,
+                  hasTarget: folderReorder?.targetID != nil
+                    && folderReorder?.originalIDs == appState.workspace.folders.map(\.id),
+                  cancel: { folderReorder = nil }))
+                Color.clear
+                  .frame(width: 0, height: 0)
+                  .id(FolderScrollTarget.trailing)
+              }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(maxHeight: folderNavigatorMaxHeight)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Folders")
+
+            Group {
+              if showsOverflowRail {
+                overflowControls(scrollProxy: scrollProxy)
+                  .opacity(isCreatingFolder ? 0 : 1)
+                  .disabled(isCreatingFolder)
+                  .allowsHitTesting(!isCreatingFolder)
+                  .accessibilityHidden(isCreatingFolder)
+              }
+            }
+            .frame(width: reservedRailWidth)
+          }
+          .onChange(of: showsOverflowRail) { wasOverflowing, isOverflowing in
+            if wasOverflowing && !isOverflowing {
+              scrollProxy.scrollTo(FolderScrollTarget.leading, anchor: .leading)
+            }
+          }
+        }
+        .frame(maxWidth: .infinity)
+
+        Color.clear.frame(width: 24, height: 24)
+      }
+    }
+
+    private func overflowControls(scrollProxy: ScrollViewProxy) -> some View {
+      HStack(spacing: 0) {
+        Button {
+          scrollProxy.scrollTo(FolderScrollTarget.leading, anchor: .leading)
+        } label: {
+          Image(systemName: "chevron.left")
+            .font(.caption)
+            .frame(width: 28, height: 28)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Reveal earlier folders")
+        .help("Show earlier folders")
+
+        Button {
+          scrollProxy.scrollTo(FolderScrollTarget.trailing, anchor: .trailing)
+        } label: {
+          Image(systemName: "chevron.right")
+            .font(.caption)
+            .frame(width: 28, height: 28)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Reveal later folders")
+        .help("Show later folders")
+      }
+    }
+
+    @ViewBuilder
+    private var folderComposer: some View {
+      HStack(spacing: 5) {
+        Button {
+          beginNewFolder(source: currentInteractionSource)
+        } label: {
+          Image(systemName: "folder.badge.plus")
+            .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("New folder")
+        .accessibilityIdentifier("folder-new")
+
+        if isCreatingFolder {
+          HStack(spacing: 5) {
+            NativeFolderNameField(
+              text: $folderNameDraft,
+              isEditing: $isNewFolderTextEditing,
+              onSubmit: { commitFolderEditing(source: .keyboard) },
+              onCancel: { cancelFolderEditing(source: .keyboard) }
+            )
+              .overlay(alignment: .bottom) {
+                Rectangle().fill(.secondary.opacity(0.7)).frame(height: 1)
+              }
+
+            Button {
+              commitFolderEditing(source: currentInteractionSource)
+            } label: {
+              Image(systemName: "checkmark")
+                .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .disabled(trimmedFolderName.isEmpty)
+            .accessibilityLabel("Create folder")
+
+            Button {
+              cancelFolderEditing(source: currentInteractionSource)
+            } label: {
+              Image(systemName: "xmark")
+                .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cancel new folder")
+          }
+          .transition(composerTransition)
+        }
+      }
+    }
+
+    private struct NativeFolderNameField: NSViewRepresentable {
+      @Binding var text: String
+      @Binding var isEditing: Bool
+      let onSubmit: () -> Void
+      let onCancel: () -> Void
+
+      func makeCoordinator() -> Coordinator {
+        Coordinator(
+          text: $text,
+          isEditing: $isEditing,
+          onSubmit: onSubmit,
+          onCancel: onCancel
+        )
+      }
+
+      func makeNSView(context: Context) -> OwnershipReportingTextField {
+        let field = OwnershipReportingTextField(string: text)
+        field.placeholderString = "New folder"
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.setAccessibilityIdentifier("folder-new-name")
+        field.delegate = context.coordinator
+        field.onOwnershipChange = { [weak coordinator = context.coordinator] ownsEditor in
+          coordinator?.setEditingOwnership(ownsEditor)
+        }
+        context.coordinator.requestFocus(for: field)
+        return field
+      }
+
+      func updateNSView(_ field: OwnershipReportingTextField, context: Context) {
+        context.coordinator.text = $text
+        context.coordinator.isEditing = $isEditing
+        context.coordinator.onSubmit = onSubmit
+        context.coordinator.onCancel = onCancel
+        if (field.currentEditor() as? NSTextView)?.hasMarkedText() != true,
+          field.stringValue != text
+        {
+          field.stringValue = text
+        }
+        context.coordinator.requestFocus(for: field)
+      }
+
+      static func dismantleNSView(
+        _ field: OwnershipReportingTextField,
+        coordinator: Coordinator
+      ) {
+        coordinator.isActive = false
+        coordinator.focusGeneration &+= 1
+        field.onOwnershipChange = nil
+      }
+
+      @MainActor
+      final class OwnershipReportingTextField: NSTextField {
+        var onOwnershipChange: ((Bool) -> Void)?
+
+        override func becomeFirstResponder() -> Bool {
+          let becameFirstResponder = super.becomeFirstResponder()
+          if becameFirstResponder { reportOwnershipAfterResponderTransition() }
+          return becameFirstResponder
+        }
+
+        override func resignFirstResponder() -> Bool {
+          let resignedFirstResponder = super.resignFirstResponder()
+          if resignedFirstResponder { reportOwnershipAfterResponderTransition() }
+          return resignedFirstResponder
+        }
+
+        func reportOwnershipAfterResponderTransition() {
+          DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let editor = currentEditor()
+            onOwnershipChange?(editor != nil && window?.firstResponder === editor)
+          }
+        }
+      }
+
+      @MainActor
+      final class Coordinator: NSObject, NSTextFieldDelegate {
+        var text: Binding<String>
+        var isEditing: Binding<Bool>
+        var onSubmit: () -> Void
+        var onCancel: () -> Void
+        var isActive = true
+        var hasFocused = false
+        var focusGeneration: UInt64 = 0
+
+        init(
+          text: Binding<String>,
+          isEditing: Binding<Bool>,
+          onSubmit: @escaping () -> Void,
+          onCancel: @escaping () -> Void
+        ) {
+          self.text = text
+          self.isEditing = isEditing
+          self.onSubmit = onSubmit
+          self.onCancel = onCancel
+        }
+
+        func requestFocus(for field: OwnershipReportingTextField) {
+          guard !hasFocused else { return }
+          focusGeneration &+= 1
+          let generation = focusGeneration
+          DispatchQueue.main.async {
+            guard self.isActive, self.focusGeneration == generation, field.window != nil else { return }
+            self.hasFocused = field.window?.makeFirstResponder(field) == true
+            field.reportOwnershipAfterResponderTransition()
+          }
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+          guard let field = notification.object as? NSTextField else { return }
+          text.wrappedValue = field.stringValue
+        }
+
+        func controlTextDidBeginEditing(_ notification: Notification) {
+          setEditingOwnership(true)
+        }
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+          setEditingOwnership(false)
+        }
+
+        func setEditingOwnership(_ ownsEditor: Bool) {
+          guard isActive, isEditing.wrappedValue != ownsEditor else { return }
+          isEditing.wrappedValue = ownsEditor
+        }
+
+        func control(
+          _ control: NSControl,
+          textView: NSTextView,
+          doCommandBy commandSelector: Selector
+        ) -> Bool {
+          switch commandSelector {
+          case #selector(NSResponder.insertNewline(_:)):
+            guard !textView.hasMarkedText() else { return false }
+            onSubmit()
+            return true
+          case #selector(NSResponder.cancelOperation(_:)):
+            guard !textView.hasMarkedText() else { return false }
+            onCancel()
+            return true
+          default:
+            return false
+          }
+        }
+      }
+    }
+
+    private var trashRow: some View {
+      Button {
+        onOpenTrash()
+      } label: {
+        rowLabel(
+          name: "Trash",
+          systemImage: "trash",
+          count: appState.trashedNotes.count,
+          isSelected: false,
+          isEmpty: appState.trashedNotes.isEmpty
+        )
+      }
+      .fixedSize(horizontal: true, vertical: false)
+      .buttonStyle(.plain)
+      .focused($focusedRow, equals: .trash)
+      .focusable()
+      .accessibilityLabel("Trash")
+      .accessibilityIdentifier("folder-trash")
+      .accessibilityValue(
+        appState.trashedNotes.isEmpty
+          ? "Empty"
+          : "\(appState.trashedNotes.count) notes"
+      )
     }
 
     private var rootRow: some View {
@@ -2591,7 +3029,10 @@
           return .handled
         }
         .opacity(showsUnfiledDisclosure ? 1 : 0)
-        .frame(width: showsUnfiledDisclosure ? 28 : 0, alignment: .leading)
+        .frame(
+          width: (frozenUnfiledDisclosure ?? showsUnfiledDisclosure) ? 28 : 0,
+          alignment: .leading
+        )
         .clipped()
         .allowsHitTesting(showsUnfiledDisclosure)
         .accessibilityHidden(!showsUnfiledDisclosure)
@@ -2604,6 +3045,9 @@
         of: [FolderDragPayload.noteType],
         delegate: noteDropDelegate(.unfiled)
       )
+      .disabled(isCovered(.unfiled))
+      .allowsHitTesting(!isCovered(.unfiled))
+      .accessibilityHidden(isCovered(.unfiled))
     }
 
     @ViewBuilder
@@ -2640,7 +3084,7 @@
           session: $dragSession,
           currentIDs: { appState.workspace.folders.map(\.id) },
           currentPinnedIDs: { [] },
-          accepts: { true },
+          accepts: { !isCovered(.folder(folder.id)) },
           finish: {},
           move: { id, destination in try? appState.reorderFolder(id: id, to: destination) },
           noteDrop: noteDropDelegate(.folder(folder.id))
@@ -2678,6 +3122,9 @@
             + (isNoteDropTarget(.folder(folder.id)) ? ", Drop target" : "")
         )
         .accessibilityAddTraits(activeFolderID == folder.id ? .isSelected : [])
+        .disabled(isCovered(.folder(folder.id)))
+        .allowsHitTesting(!isCovered(.folder(folder.id)))
+        .accessibilityHidden(isCovered(.folder(folder.id)))
       }
     }
 
@@ -2844,7 +3291,7 @@
             )
           },
           setHovered: { hovered in
-            if hovered {
+            if hovered && !isCovered(target) {
               noteDropTarget = target
             } else if noteDropTarget == target {
               noteDropTarget = nil
@@ -2867,6 +3314,8 @@
       expectedSource: NoteDropSource,
       targetFolderID: UUID?
     ) -> Bool {
+      let target = targetFolderID.map(NoteDropTarget.folder) ?? .unfiled
+      guard !isCovered(target) else { return false }
       guard draggedSource == expectedSource, dragSession?.id == expectedSource.dragSessionID,
         dragSession?.canAcceptDrop == true else { return false }
       return NoteDropPresentation.isValidTarget(
@@ -2908,15 +3357,82 @@
       AppMotion(reduceMotion: reduceMotion)
     }
 
+    private var overflowPresentation: FolderNavigatorOverflowPresentation {
+      FolderNavigatorOverflowPresentation(
+        contentWidth: folderContentWidth,
+        referenceWidth: max(preTrashBandWidth - (rowFrames[.unfiled]?.width ?? 0) - 32, 0)
+      )
+    }
+
+    private var showsOverflowRail: Bool {
+      frozenOverflow ?? overflowPresentation.overflows
+    }
+
+    private var reservedRailWidth: CGFloat {
+      showsOverflowRail ? FolderNavigatorOverflowPresentation.railWidth : 0
+    }
+
+    private var trimmedFolderName: String {
+      folderNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var maskPresentation: FolderNavigatorMaskPresentation {
+      FolderNavigatorMaskPresentation(bandWidth: preTrashBandWidth)
+    }
+
+    private var composerLeadingX: CGFloat {
+      maskPresentation.leadingWidth
+    }
+
+    private var isFolderTextInputActive: Bool {
+      if isCreatingFolder { return isNewFolderTextEditing }
+      guard let editingFolderID else { return false }
+      return focusedRow == .folder(editingFolderID)
+    }
+
+    private var currentInteractionSource: AppInteractionSource {
+      guard let event = NSApp.currentEvent,
+        [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp].contains(event.type)
+      else { return .keyboard }
+      return .pointer
+    }
+
+    private var composerTransition: AnyTransition {
+      guard folderCreationSource == .pointer else { return .identity }
+      if reduceMotion { return .opacity.animation(motion.state) }
+      return .opacity.combined(with: .offset(x: motion.offset))
+    }
+
+    private func folderCreationAnimation(for source: AppInteractionSource) -> Animation? {
+      switch source {
+      case .keyboard:
+        return nil
+      case .pointer:
+        return reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0)
+      case .programmatic:
+        return reduceMotion ? nil : motion.state
+      }
+    }
+
     private var folderMorphAnimation: Animation? {
       reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0)
     }
 
-    private func beginNewFolder() {
+    private func beginNewFolder(source: AppInteractionSource) {
+      guard !isCreatingFolder else { return }
       editingFolderID = nil
-      isCreatingFolder = true
       folderNameDraft = ""
-      focusedRow = .newFolder
+      folderCreationSource = source
+      frozenOverflow = overflowPresentation.overflows
+      frozenUnfiledDisclosure = showsUnfiledDisclosure
+      focusedRowBeforeComposition = focusedRow
+      wasUnfiledDisclosureFocusedBeforeComposition = isUnfiledDisclosureFocused
+      noteDropTarget = nil
+      folderReorder = nil
+      withAnimation(folderCreationAnimation(for: source)) {
+        isCreatingFolder = true
+        focusedRow = .newFolder
+      }
     }
 
     private func beginRename(folderID: UUID? = nil) -> Bool {
@@ -2929,33 +3445,74 @@
         id = nil
       }
       guard let id,
+        !isCovered(.folder(id)),
         let folder = appState.workspace.folders.first(where: { $0.id == id })
       else { return false }
       isCreatingFolder = false
+      isNewFolderTextEditing = false
+      frozenOverflow = nil
+      frozenUnfiledDisclosure = nil
+      focusedRowBeforeComposition = nil
+      wasUnfiledDisclosureFocusedBeforeComposition = false
       editingFolderID = id
       folderNameDraft = folder.name
       focusedRow = .folder(id)
       return true
     }
 
-    private func commitFolderEditing() {
+    private func commitFolderEditing(source: AppInteractionSource = .keyboard) {
+      guard !trimmedFolderName.isEmpty else { return }
       do {
         if isCreatingFolder {
           _ = try appState.createFolder(named: folderNameDraft)
         } else if let editingFolderID {
           try appState.renameFolder(id: editingFolderID, name: folderNameDraft)
         }
-        cancelFolderEditing()
+        cancelFolderEditing(source: source)
       } catch {
         appState.saveError = "Could not update folder: \(String(describing: error))"
       }
     }
 
-    private func cancelFolderEditing() {
+    private func cancelFolderEditing(source: AppInteractionSource = .keyboard) {
       editingFolderID = nil
-      isCreatingFolder = false
-      folderNameDraft = ""
-      focusedRow = nil
+      guard isCreatingFolder else {
+        folderNameDraft = ""
+        focusedRow = nil
+        return
+      }
+      folderCreationSource = source
+      isNewFolderTextEditing = false
+      withAnimation(
+        folderCreationAnimation(for: source),
+        completionCriteria: .logicallyComplete
+      ) {
+        isCreatingFolder = false
+        folderNameDraft = ""
+        focusedRow = focusedRowBeforeComposition
+        isUnfiledDisclosureFocused = wasUnfiledDisclosureFocusedBeforeComposition
+      } completion: {
+        guard !isCreatingFolder else { return }
+        frozenOverflow = nil
+        frozenUnfiledDisclosure = nil
+        focusedRowBeforeComposition = nil
+        wasUnfiledDisclosureFocusedBeforeComposition = false
+      }
+    }
+
+    private func rowFrameReader(for target: NoteDropTarget) -> some View {
+      GeometryReader { row in
+        Color.clear.preference(
+          key: FolderRowFrameKey.self,
+          value: [target: row.frame(in: .named("folder-navigator-band"))]
+        )
+      }
+    }
+
+    private func isCovered(_ target: NoteDropTarget) -> Bool {
+      guard isCreatingFolder else { return false }
+      return FolderNavigatorOcclusionPresentation(composerLeadingX: composerLeadingX)
+        .covers(rowFrames[target])
     }
 
     private func updateFocusedRow(_ row: FocusedRow, isFocused: Bool) {
@@ -2969,8 +3526,10 @@
     private func activateFocusedRow() {
       switch focusedRow {
       case .unfiled:
+        guard !isCovered(.unfiled) else { return }
         onSelect(nil)
       case .folder(let id):
+        guard !isCovered(.folder(id)) else { return }
         onSelect(id)
       case .trash:
         onOpenTrash()
@@ -2980,9 +3539,15 @@
     }
 
     private func moveFocus(_ direction: MoveCommandDirection) {
-      let rows: [FocusedRow] = [.unfiled]
-        + appState.workspace.folders.map { .folder($0.id) }
-        + [.trash]
+      let rows: [FocusedRow] = ([FocusedRow.unfiled]
+        + appState.workspace.folders.map { .folder($0.id) })
+        .filter {
+          switch $0 {
+          case .unfiled: !isCovered(.unfiled)
+          case .folder(let id): !isCovered(.folder(id))
+          case .trash, .newFolder: true
+          }
+        } + [.trash]
       guard !rows.isEmpty else { return }
       let currentIndex = focusedRow.flatMap { rows.firstIndex(of: $0) } ?? 0
       focusedRow = rows[
@@ -3004,6 +3569,8 @@
       expectedSource: NoteDropSource
     ) -> Bool {
       noteDropTarget = nil
+      let target = targetFolderID.map(NoteDropTarget.folder) ?? .unfiled
+      guard !isCovered(target) else { return false }
       defer { if draggedSource == expectedSource { draggedSource = nil } }
       guard draggedSource == expectedSource, let dragSession,
         dragSession.id == expectedSource.dragSessionID
@@ -3025,6 +3592,8 @@
       expectedSource: NoteDropSource
     ) -> Bool {
       noteDropTarget = nil
+      let target = targetFolderID.map(NoteDropTarget.folder) ?? .unfiled
+      guard !isCovered(target) else { return false }
       defer { if draggedSource == expectedSource { draggedSource = nil } }
       guard draggedSource == expectedSource, let dragSession,
         dragSession.id == expectedSource.dragSessionID
@@ -3299,6 +3868,26 @@
   }
 
   private struct FormattingBar: View {
+    private static let overflowableItems = Array(FormattingToolbarItem.allCases.dropLast())
+
+    private enum PresentedPopover: Identifiable, Equatable {
+      case overflow([FormattingToolbarItem])
+      case font
+      case fontSize
+      case foregroundColor
+      case backgroundColor
+
+      var id: Int {
+        switch self {
+        case .overflow: 0
+        case .font: 1
+        case .fontSize: 2
+        case .foregroundColor: 3
+        case .backgroundColor: 4
+        }
+      }
+    }
+
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var appState: AppState
     @ObservedObject var commands: EditorCommands
@@ -3308,358 +3897,32 @@
     let isTitleFocused: Bool
     let onDelete: () -> Void
     @State private var fontPickerTarget: FontPickerTarget?
-    @State private var isFontPickerPresented = false
     @State private var fontSizeText = ""
     @FocusState private var isFontSizeFocused: Bool
-    @State private var isFontSizePickerPresented = false
     @State private var fontSizePickerNoteID: UUID?
-    @State private var isForegroundColorPickerPresented = false
-    @State private var isBackgroundColorPickerPresented = false
+    @State private var presentedPopover: PresentedPopover?
+    @State private var selectedVisibleCount: Int?
 
     var body: some View {
-      GeometryReader { proxy in
-        let presentation = FormattingToolbarLayout.presentation(
-          availableWidth: proxy.size.width
+      MeasuredTrailingToolbarOverflow(
+        itemCount: Self.overflowableItems.count,
+        minimumTrailingSpacing: 8,
+        onVisibleCountChange: selectedCandidateChanged
+      ) { visibleRange, overflowRange in
+        toolbarCandidate(
+          visibleItems: Array(Self.overflowableItems[visibleRange]),
+          overflowItems: Array(Self.overflowableItems[overflowRange])
         )
-        HStack(spacing: presentation == .full ? 8 : 0) {
-        Menu {
-          Button("Cancel Dictation", role: .destructive) {
-            guard isEditorVisible else { return }
-            Task { await dictationRuntime.cancel() }
-          }
-          .disabled(!dictationRuntime.canCancel)
-        } label: {
-          ToolbarIconLabel(
-            systemImage: dictationRuntime.microphoneSymbol,
-            isActive: dictationRuntime.isListening
-          )
-        } primaryAction: {
-          guard isEditorVisible,
-            dictationRuntime.toolbarPresentation.primaryAction != nil
-          else { return }
-          Task { await dictationRuntime.toggle() }
-        }
-        .accessibilityLabel(dictationRuntime.microphoneHelp)
-        .accessibilityAction(named: Text("Cancel Dictation")) {
-          guard isEditorVisible else { return }
-          Task { await dictationRuntime.cancel() }
-        }
-        .help(dictationRuntime.microphoneHelp)
-        if presentation == .full {
-          Divider().frame(height: 15)
-        }
-        Button {
-          guard isEditorVisible else { return }
-          commands.undo()
-        } label: {
-          ToolbarIconLabel(systemImage: "arrow.uturn.backward")
-        }
-        .accessibilityLabel("Undo")
-        .keyboardShortcut("z", modifiers: .command)
-        Button {
-          guard isEditorVisible else { return }
-          commands.redo()
-        } label: {
-          ToolbarIconLabel(systemImage: "arrow.uturn.forward")
-        }
-        .accessibilityLabel("Redo")
-        .keyboardShortcut("z", modifiers: [.command, .shift])
-        if presentation == .full {
-          Divider().frame(height: 15)
-        }
-        Button {
-          guard isEditorVisible else { return }
-          commands.toggleBold()
-        } label: {
-          ToolbarIconLabel(systemImage: "bold", isActive: commands.isBold)
-        }
-        .accessibilityLabel("Bold")
-        .keyboardShortcut("b", modifiers: .command)
-          .accessibilityValue(commands.isBold ? "On" : "Off")
-        Button {
-          guard isEditorVisible else { return }
-          commands.toggleItalic()
-        } label: {
-          ToolbarIconLabel(systemImage: "italic", isActive: commands.isItalic)
-        }
-        .accessibilityLabel("Italic")
-        .keyboardShortcut("i", modifiers: .command)
-          .accessibilityValue(commands.isItalic ? "On" : "Off")
-        Button {
-          guard isEditorVisible else { return }
-          commands.toggleUnderline()
-        } label: {
-          ToolbarIconLabel(systemImage: "underline", isActive: commands.isUnderlined)
-        }
-        .accessibilityLabel("Underline")
-        .keyboardShortcut("u", modifiers: .command)
-        .accessibilityValue(commands.isUnderlined ? "On" : "Off")
-        if presentation == .full {
-          Button {
-            guard isEditorVisible else { return }
-            commands.toggleStrikethrough()
-          } label: {
-            ToolbarIconLabel(systemImage: "strikethrough")
-          }
-          .accessibilityLabel("Strikethrough")
-        }
-        Button {
-          guard isEditorVisible, let note = appState.selectedNote else { return }
-          fontPickerTarget = FontPickerTarget(note: note, isTitle: isFontTitleTarget, commands: commands)
-          isFontPickerPresented = fontPickerTarget != nil
-        } label: {
-          HStack(spacing: 5) {
-            Text(fontFamilyDisplay).lineLimit(1).truncationMode(.tail)
-            Image(systemName: "chevron.down").font(.system(size: 8))
-          }
-          .frame(width: presentation == .full ? 112 : 64)
-        }
-        .help("Font: \(fontFamilyDisplay)")
-        .accessibilityLabel("Font")
-        .accessibilityValue(fontFamilyDisplay)
-        .popover(isPresented: $isFontPickerPresented, arrowEdge: .bottom) {
-          if let target = fontPickerTarget {
-            FontFamilyPicker(
-              currentFamily: target.isTitle ? target.note.titleFontFamily ?? appState.preferences.fontFamily : commands.currentFontFamily,
-              isMixed: target.isTitle ? false : commands.isFontFamilyMixed,
-              targetLabel: target.label,
-              onCommit: { family in
-                _ = target.apply(family, note: appState.selectedNote, isEditorVisible: isEditorVisible, commands: commands,
-                  titleMutation: { appState.setTitleFontFamily($0, noteID: target.note.id, undoManager: target.undoManager) })
-                isFontPickerPresented = false
-              },
-              onCancel: { isFontPickerPresented = false }
-            )
-            .frame(width: 280, height: 320)
-          }
-        }
-        .onChange(of: isFontPickerPresented) { _, presented in
-          if !presented { fontPickerTarget = nil }
-        }
-        .onChange(of: appState.selectedNote) { _, _ in dismissInvalidFontPicker() }
-        .onChange(of: isEditorVisible) { _, _ in dismissInvalidFontPicker() }
-        if presentation == .full {
-          fontSizeField()
-        }
-        Button {
-          guard isEditorVisible else { return }
-          isForegroundColorPickerPresented = true
-        } label: {
-          ToolbarIconLabel(systemImage: "paintpalette")
-        }
-        .accessibilityLabel("Font Color")
-        .accessibilityValue(
-          colorAccessibilityValue(
-            color: commands.currentForegroundColor,
-            isMixed: commands.isForegroundColorMixed,
-            emptyName: "Automatic"
-          )
-        )
-        .popover(isPresented: $isForegroundColorPickerPresented, arrowEdge: .bottom) {
-          FleckColorPicker(
-            currentHex: commands.isForegroundColorMixed
-              ? nil
-              : FleckColorHex.hex(from: commands.currentForegroundColor),
-            currentLabel: colorAccessibilityValue(
-              color: commands.currentForegroundColor,
-              isMixed: commands.isForegroundColorMixed,
-              emptyName: "Automatic"
-            ),
-            resetTitle: "Automatic",
-            onCommit: { hex in
-              guard isEditorVisible else {
-                isForegroundColorPickerPresented = false
-                return
-              }
-              commands.applyForegroundColor(hex.flatMap { NSColor(hex: $0) })
-              isForegroundColorPickerPresented = false
-            },
-            onCancel: { isForegroundColorPickerPresented = false }
-          )
-        }
-        Button {
-          guard isEditorVisible else { return }
-          isBackgroundColorPickerPresented = true
-        } label: {
-          HighlighterMarkerIcon(
-            backgroundColor: commands.currentBackgroundColor,
-            isMixed: commands.isBackgroundColorMixed
-          )
-        }
-        .accessibilityLabel("Highlight")
-        .accessibilityValue(
-          colorAccessibilityValue(
-            color: commands.currentBackgroundColor,
-            isMixed: commands.isBackgroundColorMixed,
-            emptyName: "No Highlight"
-          )
-        )
-        .popover(isPresented: $isBackgroundColorPickerPresented, arrowEdge: .bottom) {
-          FleckColorPicker(
-            currentHex: commands.isBackgroundColorMixed
-              ? nil
-              : FleckColorHex.hex(from: commands.currentBackgroundColor),
-            currentLabel: colorAccessibilityValue(
-              color: commands.currentBackgroundColor,
-              isMixed: commands.isBackgroundColorMixed,
-              emptyName: "No Highlight"
-            ),
-            resetTitle: "No Highlight",
-            fallbackHex: "#FFD600",
-            onCommit: { hex in
-              guard isEditorVisible else {
-                isBackgroundColorPickerPresented = false
-                return
-              }
-              commands.applyBackgroundColor(hex.flatMap { NSColor(hex: $0) })
-              isBackgroundColorPickerPresented = false
-            },
-            onCancel: { isBackgroundColorPickerPresented = false }
-          )
-        }
-        if presentation == .full {
-          Menu {
-            Button("Disc (•)") {
-              guard isEditorVisible else { return }
-              commands.applyList(.bullet(.disc))
-            }
-            Button("Circle (◦)") {
-              guard isEditorVisible else { return }
-              commands.applyList(.bullet(.circle))
-            }
-            Button("Square (▪)") {
-              guard isEditorVisible else { return }
-              commands.applyList(.bullet(.square))
-            }
-            Button("Dash (–)") {
-              guard isEditorVisible else { return }
-              commands.applyList(.bullet(.dash))
-            }
-          } label: {
-            ToolbarIconLabel(systemImage: "list.bullet")
-          } primaryAction: {
-            guard isEditorVisible else { return }
-            commands.applyAutomaticList(.bullets)
-          }
-          .accessibilityLabel("Bullets")
-          Menu {
-            Button("Decimal (1.)") {
-              guard isEditorVisible else { return }
-              commands.applyList(.number(.decimal))
-            }
-            Button("Alphabetic (a.)") {
-              guard isEditorVisible else { return }
-              commands.applyList(.number(.alphabetic))
-            }
-            Button("Roman (i.)") {
-              guard isEditorVisible else { return }
-              commands.applyList(.number(.roman))
-            }
-          } label: {
-            ToolbarIconLabel(systemImage: "list.number")
-          } primaryAction: {
-            guard isEditorVisible else { return }
-            commands.applyAutomaticList(.numbers)
-          }
-          .accessibilityLabel("Numbers")
-          Button {
-            guard isEditorVisible else { return }
-            commands.applyList(.checklist)
-          } label: {
-            ToolbarIconLabel(systemImage: "checklist")
-          }
-          .accessibilityLabel("Checklist")
-        } else {
-          Menu {
-            Button("Font Size…") {
-              presentFontSizePicker()
-            }
-            Divider()
-            Button("Strikethrough") {
-              guard isEditorVisible else { return }
-              commands.toggleStrikethrough()
-            }
-            Divider()
-            Menu("Bullets") {
-              Button("Bulleted List") {
-                guard isEditorVisible else { return }
-                commands.applyAutomaticList(.bullets)
-              }
-              Divider()
-              Button("Disc (•)") {
-                guard isEditorVisible else { return }
-                commands.applyList(.bullet(.disc))
-              }
-              Button("Circle (◦)") {
-                guard isEditorVisible else { return }
-                commands.applyList(.bullet(.circle))
-              }
-              Button("Square (▪)") {
-                guard isEditorVisible else { return }
-                commands.applyList(.bullet(.square))
-              }
-              Button("Dash (–)") {
-                guard isEditorVisible else { return }
-                commands.applyList(.bullet(.dash))
-              }
-            }
-            Menu("Numbers") {
-              Button("Numbered List") {
-                guard isEditorVisible else { return }
-                commands.applyAutomaticList(.numbers)
-              }
-              Divider()
-              Button("Decimal (1.)") {
-                guard isEditorVisible else { return }
-                commands.applyList(.number(.decimal))
-              }
-              Button("Alphabetic (a.)") {
-                guard isEditorVisible else { return }
-                commands.applyList(.number(.alphabetic))
-              }
-              Button("Roman (i.)") {
-                guard isEditorVisible else { return }
-                commands.applyList(.number(.roman))
-              }
-            }
-            Button("Checklist") {
-              guard isEditorVisible else { return }
-              commands.applyList(.checklist)
-            }
-          } label: {
-            ToolbarIconLabel(systemImage: "ellipsis.circle")
-          }
-          .accessibilityLabel("More formatting")
-          .popover(isPresented: $isFontSizePickerPresented, arrowEdge: .bottom) {
-            if let targetNoteID = fontSizePickerNoteID {
-              HStack(spacing: 8) {
-                fontSizeField(targetNoteID: targetNoteID)
-                Button("Done") {
-                  applyFontSizeText(targetNoteID: targetNoteID)
-                  isFontSizePickerPresented = false
-                }
-              }
-              .padding(12)
-            }
-          }
-        }
-        Spacer(minLength: presentation == .full ? nil : 0)
-        Button(role: .destructive) {
-          guard isEditorVisible else { return }
-          onDelete()
-        } label: {
-          ToolbarIconLabel(systemImage: "trash")
-        }
-        .accessibilityLabel("Delete")
-        .keyboardShortcut("w", modifiers: .command)
-        }
-        .buttonStyle(CrispToolbarButtonStyle(motion: motion))
-        .animation(motion.quick, value: commands.isBold)
-        .animation(motion.quick, value: commands.isItalic)
-        .animation(motion.quick, value: commands.isUnderlined)
-        .padding(.horizontal, presentation == .full ? 16 : 4)
-        .padding(.vertical, 9)
+      } trailing: {
+        directItem(.delete)
       }
+      .buttonStyle(CrispToolbarButtonStyle(motion: motion))
+      .animation(motion.quick, value: commands.isBold)
+      .animation(motion.quick, value: commands.isItalic)
+      .animation(motion.quick, value: commands.isUnderlined)
+      .padding(.horizontal, 16)
+      .padding(.vertical, 9)
+      .frame(maxWidth: .infinity, alignment: .leading)
       .frame(height: 44)
       .frame(maxWidth: .infinity)
       .modifier(FormattingBarSurface(isPinned: isPinned))
@@ -3669,15 +3932,541 @@
       .accessibilityElement(children: .contain)
       .accessibilityLabel("Editor toolbar")
       .accessibilityHidden(!isEditorVisible)
+      .popover(item: $presentedPopover, arrowEdge: .bottom) { popover in
+        popoverContent(popover)
+      }
+      .onAppear(perform: syncFontSizeText)
+      .onChange(of: commands.currentFontSize) { _, _ in syncFontSizeText() }
+      .onChange(of: commands.isFontSizeMixed) { _, _ in syncFontSizeText() }
       .onChange(of: appState.selectedNote) { _, _ in
+        dismissInvalidFontPicker()
         dismissInvalidFontSizePicker()
       }
       .onChange(of: isEditorVisible) { _, _ in
+        dismissInvalidFontPicker()
         dismissInvalidFontSizePicker()
       }
-      .onChange(of: isFontSizePickerPresented) { _, presented in
-        if !presented { fontSizePickerNoteID = nil }
+      .onChange(of: presentedPopover) { oldPopover, newPopover in
+        if oldPopover == .font, newPopover != .font { fontPickerTarget = nil }
+        if oldPopover == .fontSize, newPopover != .fontSize { fontSizePickerNoteID = nil }
       }
+    }
+
+    private func selectedCandidateChanged(_ visibleCount: Int) {
+      guard selectedVisibleCount != visibleCount else { return }
+      selectedVisibleCount = visibleCount
+      if case .overflow = presentedPopover {
+        presentedPopover = nil
+      }
+    }
+
+    private func toolbarCandidate(
+      visibleItems: [FormattingToolbarItem],
+      overflowItems: [FormattingToolbarItem]
+    ) -> some View {
+      HStack(spacing: 8) {
+        ForEach(visibleItems) { item in
+          if item.hasSeparatorBefore {
+            Divider().frame(height: 15)
+          }
+          directItem(item)
+        }
+        if !overflowItems.isEmpty {
+          overflowMenu(items: overflowItems)
+        }
+      }
+    }
+
+    @ViewBuilder
+    private func directItem(_ item: FormattingToolbarItem) -> some View {
+      switch item {
+      case .dictation:
+        dictationButton
+      case .undo:
+        Button {
+          guard isEditorVisible else { return }
+          commands.undo()
+        } label: {
+          ToolbarIconLabel(systemImage: "arrow.uturn.backward")
+        }
+        .accessibilityLabel("Undo")
+        .keyboardShortcut("z", modifiers: .command)
+      case .redo:
+        Button {
+          guard isEditorVisible else { return }
+          commands.redo()
+        } label: {
+          ToolbarIconLabel(systemImage: "arrow.uturn.forward")
+        }
+        .accessibilityLabel("Redo")
+        .keyboardShortcut("z", modifiers: [.command, .shift])
+      case .bold:
+        Button {
+          guard isEditorVisible else { return }
+          commands.toggleBold()
+        } label: {
+          ToolbarIconLabel(systemImage: "bold", isActive: commands.isBold)
+        }
+        .accessibilityLabel("Bold")
+        .accessibilityValue(commands.isBold ? "On" : "Off")
+        .keyboardShortcut("b", modifiers: .command)
+      case .italic:
+        Button {
+          guard isEditorVisible else { return }
+          commands.toggleItalic()
+        } label: {
+          ToolbarIconLabel(systemImage: "italic", isActive: commands.isItalic)
+        }
+        .accessibilityLabel("Italic")
+        .accessibilityValue(commands.isItalic ? "On" : "Off")
+        .keyboardShortcut("i", modifiers: .command)
+      case .underline:
+        Button {
+          guard isEditorVisible else { return }
+          commands.toggleUnderline()
+        } label: {
+          ToolbarIconLabel(systemImage: "underline", isActive: commands.isUnderlined)
+        }
+        .accessibilityLabel("Underline")
+        .accessibilityValue(commands.isUnderlined ? "On" : "Off")
+        .keyboardShortcut("u", modifiers: .command)
+      case .strikethrough:
+        Button {
+          guard isEditorVisible else { return }
+          commands.toggleStrikethrough()
+        } label: {
+          ToolbarIconLabel(systemImage: "strikethrough")
+        }
+        .accessibilityLabel("Strikethrough")
+      case .font:
+        fontButton
+      case .fontSize:
+        fontSizeField()
+      case .fontColor:
+        foregroundColorButton
+      case .highlight:
+        backgroundColorButton
+      case .bullets:
+        bulletsButton
+      case .numbers:
+        numbersButton
+      case .checklist:
+        Button {
+          guard isEditorVisible else { return }
+          commands.applyList(.checklist)
+        } label: {
+          ToolbarIconLabel(systemImage: "checklist")
+        }
+        .accessibilityLabel("Checklist")
+      case .delete:
+        Button(role: .destructive) {
+          guard isEditorVisible else { return }
+          onDelete()
+        } label: {
+          ToolbarIconLabel(systemImage: "trash")
+        }
+        .accessibilityLabel("Delete")
+        .keyboardShortcut("w", modifiers: .command)
+      }
+    }
+
+    private var dictationButton: some View {
+      Menu {
+        Button("Cancel Dictation", role: .destructive) {
+          guard isEditorVisible else { return }
+          Task { await dictationRuntime.cancel() }
+        }
+        .disabled(!dictationRuntime.canCancel)
+      } label: {
+        ToolbarIconLabel(
+          systemImage: dictationRuntime.microphoneSymbol,
+          isActive: dictationRuntime.isListening
+        )
+      } primaryAction: {
+        performDictationPrimaryAction()
+      }
+      .accessibilityLabel(dictationRuntime.microphoneHelp)
+      .accessibilityAction(named: Text("Cancel Dictation")) {
+        guard isEditorVisible else { return }
+        Task { await dictationRuntime.cancel() }
+      }
+      .help(dictationRuntime.microphoneHelp)
+    }
+
+    private var fontButton: some View {
+      Button(action: presentFontPicker) {
+        HStack(spacing: 5) {
+          Text(fontFamilyDisplay).lineLimit(1).truncationMode(.tail)
+          Image(systemName: "chevron.down").font(.system(size: 8))
+        }
+        .frame(width: 112)
+      }
+      .help("Font: \(fontFamilyDisplay)")
+      .accessibilityLabel("Font")
+      .accessibilityValue(fontFamilyDisplay)
+    }
+
+    private var foregroundColorButton: some View {
+      Button {
+        guard isEditorVisible else { return }
+        presentedPopover = .foregroundColor
+      } label: {
+        ToolbarIconLabel(systemImage: "paintpalette")
+      }
+      .accessibilityLabel("Font Color")
+      .accessibilityValue(
+        colorAccessibilityValue(
+          color: commands.currentForegroundColor,
+          isMixed: commands.isForegroundColorMixed,
+          emptyName: "Automatic"
+        )
+      )
+    }
+
+    private var backgroundColorButton: some View {
+      Button {
+        guard isEditorVisible else { return }
+        presentedPopover = .backgroundColor
+      } label: {
+        HighlighterMarkerIcon(
+          backgroundColor: commands.currentBackgroundColor,
+          isMixed: commands.isBackgroundColorMixed
+        )
+      }
+      .accessibilityLabel("Highlight")
+      .accessibilityValue(
+        colorAccessibilityValue(
+          color: commands.currentBackgroundColor,
+          isMixed: commands.isBackgroundColorMixed,
+          emptyName: "No Highlight"
+        )
+      )
+    }
+
+    private var bulletsButton: some View {
+      Menu {
+        bulletMenuItems(includeAutomatic: false)
+      } label: {
+        ToolbarIconLabel(systemImage: "list.bullet")
+      } primaryAction: {
+        guard isEditorVisible else { return }
+        commands.applyAutomaticList(.bullets)
+      }
+      .accessibilityLabel("Bullets")
+    }
+
+    private var numbersButton: some View {
+      Menu {
+        numberMenuItems(includeAutomatic: false)
+      } label: {
+        ToolbarIconLabel(systemImage: "list.number")
+      } primaryAction: {
+        guard isEditorVisible else { return }
+        commands.applyAutomaticList(.numbers)
+      }
+      .accessibilityLabel("Numbers")
+    }
+
+    private func overflowMenu(items: [FormattingToolbarItem]) -> some View {
+      Button {
+        presentedPopover = presentedPopover == .overflow(items) ? nil : .overflow(items)
+      } label: {
+        ToolbarIconLabel(systemImage: "ellipsis.circle")
+      }
+      .accessibilityLabel("More formatting")
+    }
+
+    @ViewBuilder
+    private func popoverContent(_ popover: PresentedPopover) -> some View {
+      switch popover {
+      case .overflow(let items):
+        VStack(alignment: .leading, spacing: 6) {
+          ForEach(items) { item in
+            if item.hasSeparatorBefore, item != items.first {
+              Divider()
+            }
+            overflowItem(item)
+          }
+        }
+        .buttonStyle(.plain)
+        .frame(minWidth: 180, alignment: .leading)
+        .padding(10)
+      case .font:
+        fontPickerContent
+      case .fontSize:
+        fontSizePickerContent
+      case .foregroundColor:
+        foregroundColorPickerContent
+      case .backgroundColor:
+        backgroundColorPickerContent
+      }
+    }
+
+    @ViewBuilder
+    private func overflowItem(_ item: FormattingToolbarItem) -> some View {
+      switch item {
+      case .dictation:
+        Menu("Dictation") {
+          Button(dictationRuntime.microphoneHelp) {
+            presentedPopover = nil
+            performDictationPrimaryAction()
+          }
+            .disabled(dictationRuntime.toolbarPresentation.primaryAction == nil)
+          Button("Cancel Dictation", role: .destructive) {
+            guard isEditorVisible else { return }
+            presentedPopover = nil
+            Task { await dictationRuntime.cancel() }
+          }
+          .disabled(!dictationRuntime.canCancel)
+        }
+      case .undo:
+        Button("Undo") { performOverflowAction { commands.undo() } }
+          .keyboardShortcut("z", modifiers: .command)
+      case .redo:
+        Button("Redo") { performOverflowAction { commands.redo() } }
+          .keyboardShortcut("z", modifiers: [.command, .shift])
+      case .bold:
+        Button("Bold") { performOverflowAction { commands.toggleBold() } }
+          .accessibilityValue(commands.isBold ? "On" : "Off")
+          .keyboardShortcut("b", modifiers: .command)
+      case .italic:
+        Button("Italic") { performOverflowAction { commands.toggleItalic() } }
+          .accessibilityValue(commands.isItalic ? "On" : "Off")
+          .keyboardShortcut("i", modifiers: .command)
+      case .underline:
+        Button("Underline") { performOverflowAction { commands.toggleUnderline() } }
+          .accessibilityValue(commands.isUnderlined ? "On" : "Off")
+          .keyboardShortcut("u", modifiers: .command)
+      case .strikethrough:
+        Button("Strikethrough") {
+          performOverflowAction { commands.toggleStrikethrough() }
+        }
+      case .font:
+        Button("Font…") { presentOverflowPicker(presentFontPicker) }
+          .accessibilityLabel("Font")
+          .accessibilityValue(fontFamilyDisplay)
+      case .fontSize:
+        Button("Font Size…") { presentOverflowPicker(presentFontSizePicker) }
+          .accessibilityLabel("Font Size")
+          .accessibilityValue(commands.isFontSizeMixed ? "Mixed" : fontSizeDisplay)
+      case .fontColor:
+        Button("Font Color…") {
+          presentOverflowPicker { presentedPopover = .foregroundColor }
+        }
+        .accessibilityLabel("Font Color")
+        .accessibilityValue(
+          colorAccessibilityValue(
+            color: commands.currentForegroundColor,
+            isMixed: commands.isForegroundColorMixed,
+            emptyName: "Automatic"
+          )
+        )
+      case .highlight:
+        Button("Highlight…") {
+          presentOverflowPicker { presentedPopover = .backgroundColor }
+        }
+        .accessibilityLabel("Highlight")
+        .accessibilityValue(
+          colorAccessibilityValue(
+            color: commands.currentBackgroundColor,
+            isMixed: commands.isBackgroundColorMixed,
+            emptyName: "No Highlight"
+          )
+        )
+      case .bullets:
+        Menu("Bullets") { bulletMenuItems(includeAutomatic: true) }
+      case .numbers:
+        Menu("Numbers") { numberMenuItems(includeAutomatic: true) }
+      case .checklist:
+        Button("Checklist") {
+          performOverflowAction { commands.applyList(.checklist) }
+        }
+      case .delete:
+        Button("Delete", role: .destructive) {
+          performOverflowAction(onDelete)
+        }
+        .keyboardShortcut("w", modifiers: .command)
+      }
+    }
+
+    @ViewBuilder
+    private func bulletMenuItems(includeAutomatic: Bool) -> some View {
+      if includeAutomatic {
+        Button("Bulleted List") {
+          performListAction(fromOverflow: true) {
+            commands.applyAutomaticList(.bullets)
+          }
+        }
+        Divider()
+      }
+      Button("Disc (•)") {
+        performListAction(fromOverflow: includeAutomatic) { commands.applyList(.bullet(.disc)) }
+      }
+      Button("Circle (◦)") {
+        performListAction(fromOverflow: includeAutomatic) { commands.applyList(.bullet(.circle)) }
+      }
+      Button("Square (▪)") {
+        performListAction(fromOverflow: includeAutomatic) { commands.applyList(.bullet(.square)) }
+      }
+      Button("Dash (–)") {
+        performListAction(fromOverflow: includeAutomatic) { commands.applyList(.bullet(.dash)) }
+      }
+    }
+
+    @ViewBuilder
+    private func numberMenuItems(includeAutomatic: Bool) -> some View {
+      if includeAutomatic {
+        Button("Numbered List") {
+          performListAction(fromOverflow: true) {
+            commands.applyAutomaticList(.numbers)
+          }
+        }
+        Divider()
+      }
+      Button("Decimal (1.)") {
+        performListAction(fromOverflow: includeAutomatic) { commands.applyList(.number(.decimal)) }
+      }
+      Button("Alphabetic (a.)") {
+        performListAction(fromOverflow: includeAutomatic) { commands.applyList(.number(.alphabetic)) }
+      }
+      Button("Roman (i.)") {
+        performListAction(fromOverflow: includeAutomatic) { commands.applyList(.number(.roman)) }
+      }
+    }
+
+    @ViewBuilder
+    private var fontPickerContent: some View {
+      if let target = fontPickerTarget {
+        FontFamilyPicker(
+          currentFamily: target.isTitle
+            ? target.note.titleFontFamily ?? appState.preferences.fontFamily
+            : commands.currentFontFamily,
+          isMixed: target.isTitle ? false : commands.isFontFamilyMixed,
+          targetLabel: target.label,
+          onCommit: { family in
+            _ = target.apply(
+              family,
+              note: appState.selectedNote,
+              isEditorVisible: isEditorVisible,
+              commands: commands,
+              titleMutation: {
+                appState.setTitleFontFamily(
+                  $0,
+                  noteID: target.note.id,
+                  undoManager: target.undoManager
+                )
+              }
+            )
+            presentedPopover = nil
+          },
+          onCancel: { presentedPopover = nil }
+        )
+        .frame(width: 280, height: 320)
+      }
+    }
+
+    private var fontSizePickerContent: some View {
+      Group {
+        if let targetNoteID = fontSizePickerNoteID {
+          HStack(spacing: 8) {
+            fontSizeField(targetNoteID: targetNoteID)
+            Button("Done") {
+              applyFontSizeText(targetNoteID: targetNoteID)
+              presentedPopover = nil
+            }
+          }
+          .padding(12)
+        }
+      }
+    }
+
+    private var foregroundColorPickerContent: some View {
+      FleckColorPicker(
+        currentHex: commands.isForegroundColorMixed
+          ? nil
+          : FleckColorHex.hex(from: commands.currentForegroundColor),
+        currentLabel: colorAccessibilityValue(
+          color: commands.currentForegroundColor,
+          isMixed: commands.isForegroundColorMixed,
+          emptyName: "Automatic"
+        ),
+        resetTitle: "Automatic",
+        onCommit: { hex in
+          guard isEditorVisible else {
+            presentedPopover = nil
+            return
+          }
+          commands.applyForegroundColor(hex.flatMap { NSColor(hex: $0) })
+          presentedPopover = nil
+        },
+        onCancel: { presentedPopover = nil }
+      )
+    }
+
+    private var backgroundColorPickerContent: some View {
+      FleckColorPicker(
+        currentHex: commands.isBackgroundColorMixed
+          ? nil
+          : FleckColorHex.hex(from: commands.currentBackgroundColor),
+        currentLabel: colorAccessibilityValue(
+          color: commands.currentBackgroundColor,
+          isMixed: commands.isBackgroundColorMixed,
+          emptyName: "No Highlight"
+        ),
+        resetTitle: "No Highlight",
+        fallbackHex: "#FFD600",
+        onCommit: { hex in
+          guard isEditorVisible else {
+            presentedPopover = nil
+            return
+          }
+          commands.applyBackgroundColor(hex.flatMap { NSColor(hex: $0) })
+          presentedPopover = nil
+        },
+        onCancel: { presentedPopover = nil }
+      )
+    }
+
+    private func performDictationPrimaryAction() {
+      guard isEditorVisible,
+        dictationRuntime.toolbarPresentation.primaryAction != nil
+      else { return }
+      Task { await dictationRuntime.toggle() }
+    }
+
+    private func performOverflowAction(_ action: () -> Void) {
+      guard isEditorVisible else { return }
+      presentedPopover = nil
+      action()
+    }
+
+    private func performListAction(
+      fromOverflow: Bool,
+      _ action: () -> Void
+    ) {
+      if fromOverflow {
+        performOverflowAction(action)
+      } else if isEditorVisible {
+        action()
+      }
+    }
+
+    private func presentOverflowPicker(
+      _ action: @escaping @MainActor @Sendable () -> Void
+    ) {
+      guard isEditorVisible else { return }
+      presentedPopover = nil
+      DispatchQueue.main.async(execute: action)
+    }
+
+    private func presentFontPicker() {
+      guard isEditorVisible, let note = appState.selectedNote else { return }
+      fontPickerTarget = FontPickerTarget(
+        note: note,
+        isTitle: isFontTitleTarget,
+        commands: commands
+      )
+      if fontPickerTarget != nil { presentedPopover = .font }
     }
 
     private var motion: AppMotion {
@@ -3694,9 +4483,6 @@
         .textFieldStyle(.roundedBorder)
         .frame(width: 48)
         .focused($isFontSizeFocused)
-        .onAppear(perform: syncFontSizeText)
-        .onChange(of: commands.currentFontSize) { _, _ in syncFontSizeText() }
-        .onChange(of: commands.isFontSizeMixed) { _, _ in syncFontSizeText() }
         .onChange(of: isFontSizeFocused) { wasFocused, isFocused in
           if wasFocused && !isFocused { applyFontSizeText(targetNoteID: targetNoteID) }
         }
@@ -3728,7 +4514,7 @@
     private func dismissInvalidFontPicker() {
       guard let target = fontPickerTarget else { return }
       if !target.isValid(note: appState.selectedNote, isEditorVisible: isEditorVisible, commands: commands) {
-        isFontPickerPresented = false
+        presentedPopover = nil
       }
     }
 
@@ -3741,15 +4527,15 @@
       guard isEditorVisible, let noteID = appState.selectedNote?.id else { return }
       fontSizePickerNoteID = noteID
       syncFontSizeText()
-      isFontSizePickerPresented = true
+      presentedPopover = .fontSize
     }
 
     private func dismissInvalidFontSizePicker() {
-      guard isFontSizePickerPresented,
+      guard presentedPopover == .fontSize,
         !isEditorVisible || fontSizePickerNoteID != appState.selectedNote?.id
       else { return }
       isFontSizeFocused = false
-      isFontSizePickerPresented = false
+      presentedPopover = nil
     }
 
     private func applyFontSizeText(targetNoteID: UUID? = nil) {

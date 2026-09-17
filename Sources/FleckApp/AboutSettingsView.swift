@@ -63,6 +63,7 @@
             .padding(.top, 6)
             .accessibilityLabel("Full build metadata")
         }
+        .disclosureGroupStyle(SettingsDisclosureGroupStyle())
 
         HStack(spacing: 10) {
           Button("Copy Build Info", systemImage: "doc.on.doc") {

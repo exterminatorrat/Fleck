@@ -2293,9 +2293,9 @@ private final class EditorChangeRecorder: NSObject, NSTextViewDelegate {
   let source = try notesPanelSource()
   let fontTrigger = try #require(
     source
-      .components(separatedBy: "fontPickerTarget = FontPickerTarget")
+      .components(separatedBy: "private var fontButton: some View")
       .last?
-      .components(separatedBy: ".help(\"Font:")
+      .components(separatedBy: "private var foregroundColorButton")
       .first
   )
 
@@ -2309,10 +2309,11 @@ private final class EditorChangeRecorder: NSObject, NSTextViewDelegate {
   #expect(!source.contains("Font Size Presets"))
   #expect(fontTrigger.contains("Text(fontFamilyDisplay)"))
   #expect(!fontTrigger.contains("Text(\"Aa\")"))
-  #expect(!fontTrigger.contains("if presentation == .full"))
-  #expect(fontTrigger.contains(".frame(width: presentation == .full ? 112 : 64)"))
-  #expect(source.contains("HStack(spacing: presentation == .full ? 8 : 0)"))
-  #expect(source.contains(".padding(.horizontal, presentation == .full ? 16 : 4)"))
+  #expect(fontTrigger.contains(".frame(width: 112)"))
+  #expect(source.contains("MeasuredTrailingToolbarOverflow"))
+  #expect(source.contains("HStack(spacing: 8)"))
+  #expect(source.contains(".padding(.horizontal, 16)"))
+  #expect(!source.contains("FormattingToolbarLayout"))
 }
 
 @Test func highlighterMarkerShapeUsesUprightBodyAndDistinctLowerChiselInk() throws {
@@ -2529,11 +2530,6 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
 }
 
 @Test @MainActor func formattingBarAdaptsOneReachableCommandSurfaceAtSupportedWidths() async throws {
-  #expect(FormattingToolbarLayout.presentation(availableWidth: 780) == .full)
-  #expect(FormattingToolbarLayout.presentation(availableWidth: 360) == .compact)
-  #expect(FormattingToolbarLayout.presentation(availableWidth: 719) == .compact)
-  #expect(FormattingToolbarLayout.presentation(availableWidth: 720) == .full)
-  #expect(FormattingToolbarLayout.presentation(availableWidth: 721) == .full)
   #expect(
     NotesPanelSizing.storedSize(
       preferred: CGSize(width: 800, height: 430),
@@ -2565,65 +2561,700 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   window.setContentSize(NSSize(width: 800, height: 430))
   await settleHostedView(host)
 
-  let fullLabels = [
+  let leadingLabels = [
     "Start Dictation", "Undo", "Redo", "Bold", "Italic", "Underline", "Strikethrough", "Font",
-    "Font size", "Font Color", "Highlight", "Bullets", "Numbers", "Checklist", "Delete",
+    "Font size", "Font Color", "Highlight", "Bullets", "Numbers", "Checklist",
   ]
-  let compactLabels = [
-    "Start Dictation", "Undo", "Redo", "Bold", "Italic", "Underline", "Font",
-    "Font Color", "Highlight", "More formatting", "Delete",
-  ]
-
+  let fullLabels = leadingLabels + ["Delete"]
   func expectControlFramesWithinWindow(_ labels: [String], panelWidth: CGFloat) throws {
     let contentView = try #require(window.contentView)
     let contentFrame = window.convertToScreen(contentView.convert(contentView.bounds, to: nil))
       .insetBy(dx: -1, dy: -1)
     let hostFrame = window.convertToScreen(host.convert(host.bounds, to: nil))
       .insetBy(dx: -1, dy: -1)
-    print("Toolbar geometry width=\(panelWidth) content=\(contentFrame) host=\(hostFrame)")
     for label in labels {
-      let control = try #require(fontPickerAccessibilityElement(host, label: label))
+      let controls = fontPickerAccessibilityElements(host, label: label)
+      #expect(controls.count == 1)
+      let control = try #require(controls.first)
       let frame = try #require(
         control.value(forKey: "accessibilityFrame") as? NSValue
       ).rectValue
-      print("Toolbar control width=\(panelWidth) label=\(label) frame=\(frame)")
       #expect(frame.width > 0)
       #expect(frame.height > 0)
       #expect(contentFrame.contains(frame))
       #expect(hostFrame.contains(frame))
     }
-    let font = try #require(fontPickerAccessibilityElement(host, label: "Font"))
-    let value = font.perform(NSSelectorFromString("accessibilityValue"))?
-      .takeUnretainedValue() as? String
-    #expect(value == "Avenir Next")
+    if labels.contains("Font") {
+      let font = try #require(fontPickerAccessibilityElement(host, label: "Font"))
+      let value = font.perform(NSSelectorFromString("accessibilityValue"))?
+        .takeUnretainedValue() as? String
+      #expect(value == "Avenir Next")
+    }
   }
 
-  try expectControlFramesWithinWindow(fullLabels, panelWidth: 800)
-  #expect(fontPickerAccessibilityElement(host, label: "More formatting") == nil)
-
-  for panelWidth in [739.0, 740.0, 741.0] {
+  var deleteTrailingInset: CGFloat?
+  for panelWidth in [CGFloat(1_200), 1_000, 800] {
     state.updatePreferences { $0.panelWidth = panelWidth }
     window.setContentSize(NSSize(width: panelWidth, height: 430))
     await settleHostedView(host)
-    let more = fontPickerAccessibilityElement(host, label: "More formatting")
-    if panelWidth < 740 {
-      #expect(more != nil)
-      try expectControlFramesWithinWindow(compactLabels, panelWidth: panelWidth)
-      #expect(fontPickerAccessibilityElement(host, label: "Font size") == nil)
+    try expectControlFramesWithinWindow(fullLabels, panelWidth: panelWidth)
+    #expect(fontPickerAccessibilityElement(host, label: "More formatting") == nil)
+    let contentView = try #require(window.contentView)
+    let contentFrame = window.convertToScreen(contentView.convert(contentView.bounds, to: nil))
+    let deletes = fontPickerAccessibilityElements(host, label: "Delete")
+    #expect(deletes.count == 1)
+    let delete = try #require(deletes.first)
+    let deleteFrame = try #require(
+      delete.value(forKey: "accessibilityFrame") as? NSValue
+    ).rectValue
+    let inset = contentFrame.maxX - deleteFrame.maxX
+    if let deleteTrailingInset {
+      #expect(abs(inset - deleteTrailingInset) <= 0.5)
     } else {
-      #expect(more == nil)
-      try expectControlFramesWithinWindow(fullLabels, panelWidth: panelWidth)
+      deleteTrailingInset = inset
     }
   }
+
+  var countsByWidth: [(width: CGFloat, visibleCount: Int)] = []
+  for panelWidth in stride(from: CGFloat(799), through: 380, by: -1) {
+    state.updatePreferences { $0.panelWidth = panelWidth }
+    window.setContentSize(NSSize(width: panelWidth, height: 430))
+    await settleHostedView(host)
+    let visible = leadingLabels.prefix {
+      fontPickerAccessibilityElement(host, label: $0) != nil
+    }
+    let visibleCount = visible.count
+    countsByWidth.append((panelWidth, visibleCount))
+    #expect(leadingLabels.dropFirst(visibleCount).allSatisfy {
+      fontPickerAccessibilityElement(host, label: $0) == nil
+    })
+    let overflowLabels = visibleCount == leadingLabels.count ? [] : ["More formatting"]
+    #expect(
+      (fontPickerAccessibilityElement(host, label: "More formatting") != nil)
+        == !overflowLabels.isEmpty
+    )
+    let deletes = fontPickerAccessibilityElements(host, label: "Delete")
+    #expect(deletes.count == 1)
+    try expectControlFramesWithinWindow(
+      Array(leadingLabels.prefix(visibleCount)) + overflowLabels + ["Delete"],
+      panelWidth: panelWidth
+    )
+    let contentView = try #require(window.contentView)
+    let contentFrame = window.convertToScreen(contentView.convert(contentView.bounds, to: nil))
+    let delete = try #require(deletes.first)
+    let deleteFrame = try #require(
+      delete.value(forKey: "accessibilityFrame") as? NSValue
+    ).rectValue
+    #expect(abs(contentFrame.maxX - deleteFrame.maxX - (deleteTrailingInset ?? 0)) <= 0.5)
+    var visibleFrames: [CGRect] = []
+    for label in Array(leadingLabels.prefix(visibleCount)) + overflowLabels {
+      let element = try #require(fontPickerAccessibilityElement(host, label: label))
+      visibleFrames.append(try #require(
+        element.value(forKey: "accessibilityFrame") as? NSValue
+      ).rectValue)
+    }
+    #expect(visibleFrames.allSatisfy { $0.maxX < deleteFrame.minX })
+  }
+
+  #expect(countsByWidth.last?.visibleCount ?? leadingLabels.count < leadingLabels.count)
+  #expect(Set(countsByWidth.map(\.visibleCount)).count > 3)
+  #expect(zip(countsByWidth, countsByWidth.dropFirst()).allSatisfy {
+    $1.visibleCount <= $0.visibleCount
+  })
+  let transitions = zip(countsByWidth, countsByWidth.dropFirst()).filter {
+    $0.visibleCount != $1.visibleCount
+  }
+  #expect(transitions.allSatisfy { $0.width - $1.width == 1 })
+  // Keyboard dispatch requires a key application, which this hosted xctest process cannot
+  // provide. The native-app acceptance pass verifies shortcuts in direct and overflow forms.
+}
+
+@Test @MainActor func toolbarOverflowPreservesPickerActionsAndFormattingStateAcrossWidths() async throws {
+  NSApplication.shared.accessibilitySetValue(
+    true,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Overflow actions", body: "Body")
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  state.updatePreferences { $0.panelWidth = 380 }
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  defer { window.orderOut(nil) }
+  window.setContentSize(NSSize(width: 380, height: 430))
+  await settleHostedView(host)
+  let editor = try #require(hostedPanelEditor(in: host))
+  editor.setSelectedRange(NSRange(location: 0, length: editor.string.utf16.count))
+  commands.refreshFormattingState()
+
+  try await pressHostedToolbarAction("Font Size", in: host)
+  let done = try #require(visibleAccessibilityElement(label: "Done", owner: window))
+  _ = done.perform(NSSelectorFromString("accessibilityPerformPress"))
+  await settleHostedView(host)
+
+  try await pressHostedToolbarAction("Font Color", in: host)
+  let red = try #require(visibleAccessibilityElement(label: "Red", owner: window))
+  _ = red.perform(NSSelectorFromString("accessibilityPerformPress"))
+  await settleHostedView(host)
+  #expect(
+    FleckColorHex.hex(
+      from: editor.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil)
+        as? NSColor
+    ) == "#FF4245"
+  )
+  #expect(editor.selectedRange() == NSRange(location: 0, length: 4))
+
+  state.updatePreferences { $0.panelWidth = 800 }
+  window.setContentSize(NSSize(width: 800, height: 430))
+  await settleHostedView(host)
+  #expect(fontPickerAccessibilityElement(host, label: "More formatting") == nil)
+  let fontColor = try #require(fontPickerAccessibilityElement(host, label: "Font Color"))
+  let colorValue = fontColor.perform(NSSelectorFromString("accessibilityValue"))?
+    .takeUnretainedValue() as? String
+  #expect(colorValue == "Red")
+  #expect(editor.selectedRange() == NSRange(location: 0, length: 4))
 
   state.updatePreferences { $0.panelWidth = 380 }
   window.setContentSize(NSSize(width: 380, height: 430))
   await settleHostedView(host)
+  #expect(fontPickerAccessibilityElement(host, label: "More formatting") != nil)
+  #expect(fontPickerAccessibilityElement(host, label: "Font Color") == nil)
+  #expect(editor.string == "Body")
+}
 
-  try expectControlFramesWithinWindow(compactLabels, panelWidth: 380)
-  #expect(fontPickerAccessibilityElement(host, label: "Font size") == nil)
-  // Keyboard dispatch requires a key application, which this hosted xctest process cannot
-  // provide. The native-app acceptance pass verifies shortcuts in both toolbar variants.
+@Test @MainActor func toolbarOverflowDismissesWhenMeasuredSuffixChangesAndReopensComplete() async throws {
+  NSApplication.shared.accessibilitySetValue(
+    true,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Overflow lifecycle", body: "Body")
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  defer { window.orderOut(nil) }
+  func setWidth(_ width: CGFloat) async {
+    state.updatePreferences { $0.panelWidth = width }
+    window.setContentSize(NSSize(width: width, height: 430))
+    await settleHostedView(host)
+  }
+  func openOverflow() async throws {
+    let more = try #require(fontPickerAccessibilityElement(host, label: "More formatting"))
+    _ = more.perform(NSSelectorFromString("accessibilityPerformPress"))
+    await settleHostedView(host)
+  }
+
+  await setWidth(380)
+  try await openOverflow()
+  expectOneReachableFormattingActionAcrossVisibleWindows(owner: window)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
+
+  await setWidth(800)
+  #expect(fontPickerAccessibilityElement(host, label: "More formatting") == nil)
+  expectOneReachableFormattingActionAcrossVisibleWindows(owner: window)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
+
+  await setWidth(650)
+  try await openOverflow()
+  expectOneReachableFormattingActionAcrossVisibleWindows(owner: window)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
+
+  await setWidth(380)
+  #expect(fontPickerAccessibilityElement(host, label: "More formatting") != nil)
+  #expect(visibleFormattingActionCount(labels: ["Font"], owner: window) == 0)
+  #expect(visibleFormattingActionCount(labels: ["Checklist"], owner: window) == 0)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
+
+  try await openOverflow()
+  expectOneReachableFormattingActionAcrossVisibleWindows(owner: window)
+  #expect(visibleFormattingActionCount(labels: ["Checklist"], owner: window) == 1)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
+  let more = try #require(fontPickerAccessibilityElement(host, label: "More formatting"))
+  _ = more.perform(NSSelectorFromString("accessibilityPerformPress"))
+  await settleHostedView(host)
+  #expect(visibleFormattingActionCount(labels: ["Checklist"], owner: window) == 0)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
+}
+
+@Test @MainActor func toolbarOverflowStaysOpenWithinTheSameMeasuredPrefix() async throws {
+  NSApplication.shared.accessibilitySetValue(
+    true,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Stable overflow", body: "Body")
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  defer { window.orderOut(nil) }
+  let directLabels = [
+    "Start Dictation", "Undo", "Redo", "Bold", "Italic", "Underline", "Strikethrough",
+    "Font", "Font size", "Font Color", "Highlight", "Bullets", "Numbers", "Checklist",
+    "Delete",
+  ]
+  func setWidth(_ width: CGFloat) async {
+    state.updatePreferences { $0.panelWidth = width }
+    window.setContentSize(NSSize(width: width, height: 430))
+    await settleHostedView(host)
+  }
+  func visibleCount() -> Int {
+    directLabels.prefix { fontPickerAccessibilityElement(host, label: $0) != nil }.count
+  }
+
+  await setWidth(650)
+  let initialCount = visibleCount()
+  var samePrefixWidth: CGFloat?
+  for width in [CGFloat(649), 651, 648, 652] {
+    await setWidth(width)
+    if visibleCount() == initialCount,
+      fontPickerAccessibilityElement(host, label: "More formatting") != nil
+    {
+      samePrefixWidth = width
+      break
+    }
+  }
+  let stableWidth = try #require(samePrefixWidth)
+  await setWidth(650)
+  let more = try #require(fontPickerAccessibilityElement(host, label: "More formatting"))
+  _ = more.perform(NSSelectorFromString("accessibilityPerformPress"))
+  await settleHostedView(host)
+  expectOneReachableFormattingActionAcrossVisibleWindows(owner: window)
+  await settleHostedView(host)
+  #expect(visibleFormattingActionCount(labels: ["Checklist"], owner: window) == 1)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
+
+  await setWidth(stableWidth)
+  #expect(visibleCount() == initialCount)
+  expectOneReachableFormattingActionAcrossVisibleWindows(owner: window)
+  #expect(visibleFormattingActionCount(labels: ["Checklist"], owner: window) == 1)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
+
+  let stableMore = try #require(
+    fontPickerAccessibilityElement(host, label: "More formatting")
+  )
+  _ = stableMore.perform(NSSelectorFromString("accessibilityPerformPress"))
+  await settleHostedView(host)
+  #expect(visibleFormattingActionCount(labels: ["Checklist"], owner: window) == 0)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
+}
+
+@Test @MainActor func toolbarDirectPickersAndPendingSizeSurviveMeasuredPrefixTransition() async throws {
+  NSApplication.shared.accessibilitySetValue(
+    true,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Direct picker transition", body: "Body")
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  state.updatePreferences { $0.panelWidth = 799 }
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  defer { window.orderOut(nil) }
+  let labels = [
+    "Start Dictation", "Undo", "Redo", "Bold", "Italic", "Underline", "Strikethrough",
+    "Font", "Font size", "Font Color", "Highlight", "Bullets", "Numbers", "Checklist",
+    "Delete",
+  ]
+  func setWidth(_ width: CGFloat) async {
+    state.updatePreferences { $0.panelWidth = width }
+    window.setContentSize(NSSize(width: width, height: 430))
+    await settleHostedView(host)
+  }
+  func visibleCount() -> Int {
+    labels.prefix { fontPickerAccessibilityElement(host, label: $0) != nil }.count
+  }
+
+  var probeWidth = CGFloat(799)
+  await setWidth(probeWidth)
+  let editor = try #require(hostedPanelEditor(in: host))
+  while probeWidth > 380,
+    fontPickerAccessibilityElement(host, label: "More formatting") == nil
+  {
+    probeWidth -= 1
+    await setWidth(probeWidth)
+  }
+  _ = try #require(fontPickerAccessibilityElement(host, label: "More formatting"))
+  let startingWidth = try #require(window.contentView?.bounds.width)
+  let startingCount = visibleCount()
+  var transition: (upper: CGFloat, lower: CGFloat)?
+  var previousWidth = startingWidth
+  var previousCount = startingCount
+  var width = startingWidth - 1
+  while width >= 380 {
+    await setWidth(width)
+    let count = visibleCount()
+    if count < previousCount, count >= 11 {
+      transition = (previousWidth, width)
+      break
+    }
+    previousWidth = width
+    previousCount = count
+    width -= 1
+  }
+  let measuredTransition = try #require(transition)
+  await setWidth(measuredTransition.upper)
+  let measuredUpperCount = visibleCount()
+  await setWidth(measuredTransition.lower)
+  let measuredLowerCount = visibleCount()
+  #expect(measuredLowerCount < measuredUpperCount)
+  await setWidth(measuredTransition.upper)
+  for label in ["Font", "Font size", "Font Color", "Highlight", "More formatting"] {
+    #expect(fontPickerAccessibilityElements(host, label: label).count == 1)
+  }
+  editor.setSelectedRange(NSRange(location: 0, length: 4))
+  #expect(window.makeFirstResponder(editor))
+  commands.refreshFormattingState()
+  #expect(commands.textView === editor)
+
+  await setWidth(measuredTransition.upper)
+  let directFont = try #require(fontPickerAccessibilityElement(host, label: "Font"))
+  try sendHostedAccessibilityPress(directFont, to: window)
+  try await Task.sleep(for: .milliseconds(150))
+  await settleHostedView(host)
+  let initialSearches = visibleHostedTextFields(
+    label: "Search fonts",
+    as: NSSearchField.self,
+    owner: window
+  )
+  #expect(initialSearches.count == 1)
+  let fontSearch = try #require(initialSearches.first)
+  fontSearch.stringValue = "Menlo"
+  fontSearch.delegate?.controlTextDidChange?(
+    Notification(name: NSControl.textDidChangeNotification, object: fontSearch)
+  )
+  await setWidth(measuredTransition.lower)
+  let transitionedSearches = visibleHostedTextFields(
+    label: "Search fonts",
+    as: NSSearchField.self,
+    owner: window
+  )
+  #expect(transitionedSearches.count == 1)
+  #expect(transitionedSearches.first?.stringValue == "Menlo")
+  #expect(fontPickerAccessibilityElement(host, label: "Font") != nil)
+  #expect(fontPickerAccessibilityElement(host, label: "More formatting") != nil)
+  if let search = transitionedSearches.first,
+    let picker = search.delegate as? FontFamilyPickerController
+  {
+    picker.cancelOperation(nil)
+  }
+  await settleHostedView(host)
+
+  for (label, draft) in [("Font Color", "#123456"), ("Highlight", "#654321")] {
+    await setWidth(measuredTransition.upper)
+    let direct = try #require(fontPickerAccessibilityElement(host, label: label))
+    try sendHostedAccessibilityPress(direct, to: window)
+    try await Task.sleep(for: .milliseconds(150))
+    await settleHostedView(host)
+    let fields = visibleHostedTextFields(
+      label: "#RRGGBB",
+      as: NSTextField.self,
+      owner: window
+    )
+    #expect(fields.count == 1)
+    let field = try #require(fields.first)
+    field.stringValue = draft
+    field.delegate?.controlTextDidChange?(
+      Notification(name: NSControl.textDidChangeNotification, object: field)
+    )
+    await setWidth(measuredTransition.lower)
+    let transitionedFields = visibleHostedTextFields(
+      label: "#RRGGBB",
+      as: NSTextField.self,
+      owner: window
+    )
+    #expect(transitionedFields.count == 1)
+    #expect(transitionedFields.first?.stringValue == draft)
+    #expect(fontPickerAccessibilityElement(host, label: label) != nil)
+    #expect(fontPickerAccessibilityElement(host, label: "More formatting") != nil)
+    _ = visibleAccessibilityElement(label: "Cancel", owner: window)?
+      .perform(NSSelectorFromString("accessibilityPerformPress"))
+    await settleHostedView(host)
+  }
+
+  await setWidth(measuredTransition.upper)
+  let directSize = try #require(
+    hostedDescendants(in: host, as: NSTextField.self).first {
+      $0.accessibilityLabel() == "Font size"
+    }
+  )
+  #expect(window.makeFirstResponder(directSize))
+  directSize.stringValue = "123"
+  directSize.delegate?.controlTextDidChange?(
+    Notification(name: NSControl.textDidChangeNotification, object: directSize)
+  )
+  await settleHostedView(host)
+  await setWidth(measuredTransition.lower)
+  let transitionedSize = try #require(
+    hostedDescendants(in: host, as: NSTextField.self).first {
+      $0.accessibilityLabel() == "Font size"
+    }
+  )
+  #expect(transitionedSize.stringValue == "123")
+  #expect(editor.selectedRange() == NSRange(location: 0, length: 4))
+}
+
+@Test @MainActor func toolbarHiddenUniformFontSizeSelectionSyncsBeforeFirstFieldReveal() async throws {
+  NSApplication.shared.accessibilitySetValue(
+    true,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let attributedText = NSMutableAttributedString(
+    string: "SmallLarge",
+    attributes: [.font: NSFont.systemFont(ofSize: 14)]
+  )
+  attributedText.addAttribute(
+    .font,
+    value: NSFont.systemFont(ofSize: 28),
+    range: NSRange(location: 5, length: 5)
+  )
+  let rtf = try attributedText.data(
+    from: NSRange(location: 0, length: attributedText.length),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+  let note = Note(
+    title: "Hidden uniform font size",
+    body: "SmallLarge",
+    richTextRTF: rtf
+  )
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  state.updatePreferences { $0.panelWidth = 380 }
+  let commands = EditorCommands()
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let host = NSHostingView(
+    rootView: NotesPanel(dictationRuntime: runtime, editorCommands: commands)
+      .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 380, height: 430),
+    styleMask: [.titled], backing: .buffered, defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  defer {
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+  await settleHostedView(host)
+  #expect(window.contentView?.bounds.width == 380)
+  #expect(hostedDescendants(in: host, as: NSTextField.self).allSatisfy {
+    $0.accessibilityLabel() != "Font size" && $0.placeholderString != "Font size"
+  })
+
+  let editor = try #require(hostedPanelEditor(in: host))
+  let storage = try #require(editor.textStorage)
+  #expect(window.makeFirstResponder(editor))
+  editor.setSelectedRange(NSRange(location: 0, length: 5))
+  commands.refreshFormattingState()
+  #expect(commands.currentFontSize == 14)
+  state.updatePreferences { $0.panelWidth = 380 }
+  window.setContentSize(NSSize(width: 380, height: 430))
+  await settleHostedView(host)
+  editor.setSelectedRange(NSRange(location: 5, length: 5))
+  commands.refreshFormattingState()
+  #expect(commands.currentFontSize == 28)
+
+  state.updatePreferences { $0.panelWidth = 800 }
+  window.setContentSize(NSSize(width: 800, height: 430))
+  try await Task.sleep(for: .milliseconds(150))
+  await settleHostedView(host)
+  #expect(window.contentView?.bounds.width == 800)
+  let field = try #require(
+    hostedDescendants(in: host, as: NSTextField.self).first {
+      $0.accessibilityLabel() == "Font size" || $0.placeholderString == "Font size"
+    }
+  )
+  #expect(field.stringValue == "28")
+  #expect(window.makeFirstResponder(field))
+  await settleHostedView(host)
+  #expect(window.makeFirstResponder(editor))
+  await settleHostedView(host)
+  #expect(editor.selectedRange() == NSRange(location: 5, length: 5))
+  #expect(
+    (storage.attribute(.font, at: 5, effectiveRange: nil) as? NSFont)?.pointSize == 28
+  )
+  await runtime.shutdown()
+}
+
+@Test @MainActor func toolbarHiddenMixedFontSizeSelectionSyncsBeforeFirstFieldReveal() async throws {
+  NSApplication.shared.accessibilitySetValue(
+    true,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let attributedText = NSMutableAttributedString(
+    string: "SmallLarge",
+    attributes: [.font: NSFont.systemFont(ofSize: 14)]
+  )
+  attributedText.addAttribute(
+    .font,
+    value: NSFont.systemFont(ofSize: 28),
+    range: NSRange(location: 5, length: 5)
+  )
+  let rtf = try attributedText.data(
+    from: NSRange(location: 0, length: attributedText.length),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+  let note = Note(
+    title: "Hidden mixed font size",
+    body: "SmallLarge",
+    richTextRTF: rtf
+  )
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  state.updatePreferences { $0.panelWidth = 380 }
+  let commands = EditorCommands()
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let host = NSHostingView(
+    rootView: NotesPanel(dictationRuntime: runtime, editorCommands: commands)
+      .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 380, height: 430),
+    styleMask: [.titled], backing: .buffered, defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  defer {
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+  await settleHostedView(host)
+  #expect(window.contentView?.bounds.width == 380)
+  #expect(hostedDescendants(in: host, as: NSTextField.self).allSatisfy {
+    $0.accessibilityLabel() != "Font size" && $0.placeholderString != "Font size"
+  })
+
+  let editor = try #require(hostedPanelEditor(in: host))
+  let storage = try #require(editor.textStorage)
+  #expect(window.makeFirstResponder(editor))
+  editor.setSelectedRange(NSRange(location: 0, length: 5))
+  commands.refreshFormattingState()
+  #expect(commands.currentFontSize == 14)
+  state.updatePreferences { $0.panelWidth = 380 }
+  window.setContentSize(NSSize(width: 380, height: 430))
+  await settleHostedView(host)
+  editor.setSelectedRange(NSRange(location: 0, length: 10))
+  commands.refreshFormattingState()
+  #expect(commands.currentFontSize == nil)
+  #expect(commands.isFontSizeMixed)
+
+  state.updatePreferences { $0.panelWidth = 800 }
+  window.setContentSize(NSSize(width: 800, height: 430))
+  try await Task.sleep(for: .milliseconds(150))
+  await settleHostedView(host)
+  #expect(window.contentView?.bounds.width == 800)
+  let field = try #require(
+    hostedDescendants(in: host, as: NSTextField.self).first {
+      $0.accessibilityLabel() == "Font size" || $0.placeholderString == "Font size"
+    }
+  )
+  #expect(field.stringValue.isEmpty)
+  let accessibilityElement = try #require(
+    fontPickerAccessibilityElement(host, label: "Font size")
+  )
+  #expect(hostedAccessibilityValue(accessibilityElement) == "Mixed")
+  #expect(window.makeFirstResponder(field))
+  await settleHostedView(host)
+  #expect(window.makeFirstResponder(editor))
+  await settleHostedView(host)
+  #expect(editor.selectedRange() == NSRange(location: 0, length: 10))
+  #expect(
+    (storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize == 14
+  )
+  #expect(
+    (storage.attribute(.font, at: 5, effectiveRange: nil) as? NSFont)?.pointSize == 28
+  )
+  await runtime.shutdown()
+}
+
+@Test @MainActor func toolbarOverflowRowsExposeCurrentAndMixedFormattingAccessibilityValues() async throws {
+  NSApplication.shared.accessibilitySetValue(
+    true,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Overflow AX", body: "Body")
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  state.updatePreferences { $0.panelWidth = 380 }
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  defer { window.orderOut(nil) }
+  window.setContentSize(NSSize(width: 380, height: 430))
+  await settleHostedView(host)
+  let editor = try #require(hostedPanelEditor(in: host))
+  let storage = try #require(editor.textStorage)
+  let firstFont = NSFontManager.shared.convert(
+    NSFont.systemFont(ofSize: 14),
+    toHaveTrait: [.boldFontMask, .italicFontMask]
+  )
+  let secondFont = NSFont(name: "Courier", size: 18) ?? NSFont.systemFont(ofSize: 18)
+  storage.addAttributes(
+    [
+      .font: firstFont,
+      .underlineStyle: NSUnderlineStyle.single.rawValue,
+      .foregroundColor: NSColor.systemRed,
+      .backgroundColor: NSColor.systemYellow,
+    ],
+    range: NSRange(location: 0, length: 2)
+  )
+  storage.addAttributes(
+    [
+      .font: secondFont,
+      .underlineStyle: NSUnderlineStyle.single.rawValue,
+      .foregroundColor: NSColor.systemBlue,
+      .backgroundColor: NSColor.systemGreen,
+    ],
+    range: NSRange(location: 2, length: 2)
+  )
+  editor.setSelectedRange(NSRange(location: 0, length: 4))
+  commands.refreshFormattingState()
+  #expect(commands.isBold)
+  #expect(commands.isItalic)
+  #expect(commands.isUnderlined)
+  #expect(commands.isFontFamilyMixed)
+  #expect(commands.isFontSizeMixed)
+  #expect(commands.isForegroundColorMixed)
+  #expect(commands.isBackgroundColorMixed)
+
+  let more = try #require(fontPickerAccessibilityElement(host, label: "More formatting"))
+  _ = more.perform(NSSelectorFromString("accessibilityPerformPress"))
+  await settleHostedView(host)
+  let expectedValues = [
+    "Bold": "On", "Italic": "On", "Underline": "On", "Font": "Mixed fonts",
+    "Font Size": "Mixed", "Font Color": "Mixed", "Highlight": "Mixed",
+  ]
+  for (label, expectedValue) in expectedValues {
+    let row = try #require(visibleAccessibilityElement(label: label, owner: window))
+    #expect(hostedAccessibilityValue(row) == expectedValue)
+  }
 }
 
 @Test func formattingBarCanAlwaysBeCollapsedAndRestoredFromTheHeader() throws {
@@ -2743,7 +3374,10 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
       "private var folderMorphAnimation: Animation? { reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0) }"
     )
   )
-  #expect(body.contains(".animation(folderMorphAnimation, value: isCreatingFolder)"))
+  #expect(navigator.contains("folderCreationAnimation(for: source)"))
+  #expect(navigator.contains(".smooth(duration: 0.22, extraBounce: 0)"))
+  #expect(navigator.contains("folderCreationSource == .pointer"))
+  #expect(navigator.contains("if reduceMotion { return .opacity.animation(motion.state) }"))
   #expect(!body.contains(".animation(motion.spatial, value: isCreatingFolder)"))
 
   #expect(editor.contains("let accent = Color(hex: appState.preferences.accentHex) ?? .accentColor"))
@@ -4338,6 +4972,16 @@ private func hostedDescendant<T: NSView>(in view: NSView, as type: T.Type) -> T?
 }
 
 @MainActor
+private func hostedDescendants<T: NSView>(in view: NSView, as type: T.Type) -> [T] {
+  var matches: [T] = []
+  if let match = view as? T { matches.append(match) }
+  for subview in view.subviews {
+    matches.append(contentsOf: hostedDescendants(in: subview, as: type))
+  }
+  return matches
+}
+
+@MainActor
 private func hostedNavigatorKeyViewFrames(in view: NSView) -> [CGRect] {
   hostedNavigatorKeyViews(in: view).map { $0.convert($0.bounds, to: view) }
 }
@@ -4666,6 +5310,30 @@ private func sendHostedClick(
 }
 
 @MainActor
+private func sendHostedAccessibilityPress(_ element: NSObject, to window: NSWindow) throws {
+  let frame = try #require(element.value(forKey: "accessibilityFrame") as? NSValue).rectValue
+  let location = window.convertPoint(
+    fromScreen: CGPoint(x: frame.midX, y: frame.midY)
+  )
+  for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+    let event = try #require(
+      NSEvent.mouseEvent(
+        with: eventType,
+        location: location,
+        modifierFlags: [],
+        timestamp: 0,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: 0,
+        clickCount: 1,
+        pressure: eventType == .leftMouseDown ? 1 : 0
+      )
+    )
+    window.sendEvent(event)
+  }
+}
+
+@MainActor
 private func sendHostedKeyDown(
   _ characters: String,
   keyCode: UInt16,
@@ -4775,6 +5443,206 @@ private func sendHostedKeyDown(
   return nil
 }
 
+@MainActor private func fontPickerAccessibilityElements(_ value: Any, label: String) -> [NSObject] {
+  guard let element = value as? NSObject else { return [] }
+  let labelSelector = NSSelectorFromString("accessibilityLabel")
+  let name = element.responds(to: labelSelector)
+    ? element.perform(labelSelector)?.takeUnretainedValue() as? String : nil
+  var matches = name == label ? [element] : []
+  let childrenSelector = NSSelectorFromString("accessibilityChildren")
+  let children = element.responds(to: childrenSelector)
+    ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+  for child in children ?? [] {
+    matches.append(contentsOf: fontPickerAccessibilityElements(child, label: label))
+  }
+  return matches
+}
+
+@MainActor
+private func pressHostedToolbarAction(_ label: String, in host: NSView) async throws {
+  if let direct = fontPickerAccessibilityElement(host, label: label) {
+    _ = direct.perform(NSSelectorFromString("accessibilityPerformPress"))
+    return
+  }
+  let owner = try #require(host.window)
+  let more = try #require(fontPickerAccessibilityElement(host, label: "More formatting"))
+  _ = more.perform(NSSelectorFromString("accessibilityPerformPress"))
+  await settleHostedView(host)
+  let item = visibleAccessibilityElement(label: "\(label)…", owner: owner)
+    ?? visibleAccessibilityElement(label: label, owner: owner)
+  _ = try #require(item).perform(NSSelectorFromString("accessibilityPerformPress"))
+  await settleHostedView(host)
+}
+
+@MainActor
+private func ownedWindowTree(_ owner: NSWindow) -> [NSWindow] {
+  var windows: [NSWindow] = []
+  var visited: Set<ObjectIdentifier> = []
+  func collect(_ window: NSWindow) {
+    guard visited.insert(ObjectIdentifier(window)).inserted else { return }
+    windows.append(window)
+    for child in window.childWindows ?? [] { collect(child) }
+  }
+  collect(owner)
+  return windows
+}
+
+@MainActor
+private func visibleAccessibilityElement(label: String, owner: NSWindow) -> NSObject? {
+  ownedWindowTree(owner).lazy
+    .filter(\.isVisible)
+    .compactMap(\.contentView)
+    .compactMap { fontPickerAccessibilityElement($0, label: label) }
+    .first
+}
+
+@MainActor
+private func visibleFormattingActionCount(labels: [String], owner: NSWindow) -> Int {
+  ownedWindowTree(owner)
+    .filter(\.isVisible)
+    .compactMap(\.contentView)
+    .reduce(into: 0) { count, contentView in
+      for label in labels {
+        count += fontPickerAccessibilityElements(contentView, label: label).count
+      }
+    }
+}
+
+@MainActor
+private func expectOneReachableFormattingActionAcrossVisibleWindows(owner: NSWindow) {
+  let actions = [
+    ["Start Dictation"], ["Undo"], ["Redo"], ["Bold"], ["Italic"], ["Underline"],
+    ["Strikethrough"], ["Font"], ["Font size", "Font Size"], ["Font Color"],
+    ["Highlight"], ["Bullets"], ["Numbers"], ["Checklist"], ["Delete"],
+  ]
+  for labels in actions {
+    #expect(visibleFormattingActionCount(labels: labels, owner: owner) == 1)
+  }
+}
+
+@MainActor
+private func visibleHostedTextFields<T: NSTextField>(
+  label: String,
+  as type: T.Type,
+  owner: NSWindow
+) -> [T] {
+  ownedWindowTree(owner)
+    .filter(\.isVisible)
+    .compactMap(\.contentView)
+    .flatMap { hostedDescendants(in: $0, as: type) }
+    .filter { $0.accessibilityLabel() == label || $0.placeholderString == label }
+}
+
+@MainActor
+private func hostedAccessibilityValue(_ element: NSObject) -> String? {
+  let selector = NSSelectorFromString("accessibilityValue")
+  guard element.responds(to: selector) else { return nil }
+  return element.perform(selector)?.takeUnretainedValue() as? String
+}
+
+@Test @MainActor func fontPickerOverflowTargetsOwningPanelWhenWideDecoyIsVisible() async throws {
+  NSApplication.shared.accessibilitySetValue(
+    true,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+  let decoyRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  let targetRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer {
+    try? FileManager.default.removeItem(at: decoyRoot)
+    try? FileManager.default.removeItem(at: targetRoot)
+  }
+
+  let decoyNote = Note(
+    title: "Wide decoy",
+    body: "Decoy body",
+    richTextRTF: try hostedPanelRTF(text: "Decoy body")
+  )
+  let decoyState = await hostedPanelState(
+    root: decoyRoot,
+    workspace: Workspace(notes: [decoyNote], selectedNoteID: decoyNote.id, folders: [])
+  )
+  decoyState.updatePreferences { $0.panelWidth = 800 }
+  let decoyCommands = EditorCommands()
+  let (decoyWindow, decoyHost) = hostedPanel(
+    root: decoyRoot,
+    state: decoyState,
+    commands: decoyCommands
+  )
+  defer {
+    decoyWindow.contentView = nil
+    decoyWindow.orderOut(nil)
+  }
+  decoyWindow.setContentSize(NSSize(width: 800, height: 430))
+  await settleHostedView(decoyHost)
+  let decoyEditor = try #require(hostedPanelEditor(in: decoyHost))
+  let decoyBefore = try #require(decoyState.selectedNote)
+  let decoyBodyBefore = NSAttributedString(attributedString: try #require(decoyEditor.textStorage))
+  let decoyTypingFontBefore = try #require(decoyEditor.typingAttributes[.font] as? NSFont)
+  #expect(fontPickerAccessibilityElement(decoyHost, label: "Font") != nil)
+
+  let targetNote = Note(
+    title: "Narrow target",
+    body: "Target body",
+    richTextRTF: try hostedPanelRTF(text: "Target body")
+  )
+  let targetState = await hostedPanelState(
+    root: targetRoot,
+    workspace: Workspace(notes: [targetNote], selectedNoteID: targetNote.id, folders: [])
+  )
+  targetState.updatePreferences { $0.panelWidth = 380 }
+  let targetCommands = EditorCommands()
+  let (targetWindow, targetHost) = hostedPanel(
+    root: targetRoot,
+    state: targetState,
+    commands: targetCommands
+  )
+  defer {
+    targetWindow.contentView = nil
+    targetWindow.orderOut(nil)
+  }
+  targetWindow.setContentSize(NSSize(width: 380, height: 430))
+  await settleHostedView(targetHost)
+  let targetEditor = try #require(hostedPanelEditor(in: targetHost))
+  #expect(targetWindow.makeFirstResponder(targetEditor))
+  targetEditor.setSelectedRange(NSRange(location: 0, length: targetEditor.string.utf16.count))
+  targetCommands.refreshFormattingState()
+  #expect(fontPickerAccessibilityElement(targetHost, label: "Font") == nil)
+  #expect(fontPickerAccessibilityElement(targetHost, label: "More formatting") != nil)
+
+  try await pressHostedToolbarAction("Font", in: targetHost)
+  let targetSearchFields = visibleHostedTextFields(
+    label: "Search fonts",
+    as: NSSearchField.self,
+    owner: targetWindow
+  )
+  let search = try #require(targetSearchFields.count == 1 ? targetSearchFields[0] : nil)
+  let picker = try #require(search.delegate as? FontFamilyPickerController)
+  let pickerWindow = try #require(picker.view.window)
+  #expect(pickerWindow.parent === targetWindow)
+  #expect(pickerWindow.parent !== decoyWindow)
+  #expect(
+    visibleHostedTextFields(
+      label: "Search fonts",
+      as: NSSearchField.self,
+      owner: decoyWindow
+    ).isEmpty
+  )
+
+  search.stringValue = "Menlo"
+  picker.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
+  picker.commitSelection()
+  await settleHostedView(targetHost)
+
+  #expect(
+    (targetEditor.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.familyName
+      == "Menlo"
+  )
+  #expect(targetEditor.selectedRange() == NSRange(location: 0, length: 11))
+  #expect(decoyState.selectedNote == decoyBefore)
+  #expect(decoyEditor.textStorage?.isEqual(to: decoyBodyBefore) == true)
+  #expect((decoyEditor.typingAttributes[.font] as? NSFont) == decoyTypingFontBefore)
+}
+
 @Test @MainActor func fontPickerHostedToolbarRetainsTitleAndBodyTargets() async throws {
   NSApplication.shared.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
   for isTitle in [true, false] {
@@ -4782,6 +5650,7 @@ private func sendHostedKeyDown(
     defer { try? FileManager.default.removeItem(at: root) }
     let note = Note(title: "Font picker fixture", body: "Body selection", richTextRTF: try hostedPanelRTF(text: "Body selection"), titleFontFamily: "Avenir Next")
     let state = await hostedPanelState(root: root, workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: []))
+    if !isTitle { state.updatePreferences { $0.panelWidth = 390 } }
     let commands = EditorCommands()
     let (window, host) = hostedPanel(root: root, state: state, commands: commands, isPinned: isTitle)
     defer { window.orderOut(nil) }
@@ -4797,18 +5666,20 @@ private func sendHostedKeyDown(
     }
     await settleHostedView(host)
     let before = try #require(state.selectedNote)
-    let button = try #require(fontPickerAccessibilityElement(host, label: "Font"))
     if isTitle {
-      let value = button.perform(NSSelectorFromString("accessibilityValue"))?.takeUnretainedValue() as? String
+      let directButton = try #require(fontPickerAccessibilityElement(host, label: "Font"))
+      let value = directButton.perform(NSSelectorFromString("accessibilityValue"))?
+        .takeUnretainedValue() as? String
       #expect(value == "Avenir Next")
     }
-    _ = button.perform(NSSelectorFromString("accessibilityPerformPress"))
+    try await pressHostedToolbarAction("Font", in: host)
     await settleHostedView(host)
-    let searchFields: [NSSearchField] = NSApplication.shared.windows.filter(\.isVisible).compactMap { window -> NSSearchField? in
-      guard let content = window.contentView else { return nil }
-      return hostedDescendant(in: content, as: NSSearchField.self)
-    }
-    let search = try #require(searchFields.first(where: { $0.placeholderString == "Search fonts" }))
+    let searchFields = visibleHostedTextFields(
+      label: "Search fonts",
+      as: NSSearchField.self,
+      owner: window
+    )
+    let search = try #require(searchFields.count == 1 ? searchFields[0] : nil)
     let picker = try #require(search.delegate as? FontFamilyPickerController)
     search.stringValue = "Menlo"
     picker.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
@@ -4830,15 +5701,16 @@ private func sendHostedKeyDown(
       #expect(body.selectedRange() == NSRange(location: 0, length: 4))
     }
     let updated = try #require(state.selectedNote)
-    _ = button.perform(NSSelectorFromString("accessibilityPerformPress"))
+    try await pressHostedToolbarAction("Font", in: host)
     await settleHostedView(host)
-    let reopenedPickers: [FontFamilyPickerController] = NSApplication.shared.windows.filter(\.isVisible).compactMap { window in
-      guard let content = window.contentView,
-        let search = hostedDescendant(in: content, as: NSSearchField.self)
-      else { return nil }
-      return search.delegate as? FontFamilyPickerController
-    }
-    let reopenedPicker = try #require(reopenedPickers.first)
+    let reopenedPickers = visibleHostedTextFields(
+      label: "Search fonts",
+      as: NSSearchField.self,
+      owner: window
+    ).compactMap { $0.delegate as? FontFamilyPickerController }
+    let reopenedPicker = try #require(
+      reopenedPickers.count == 1 ? reopenedPickers[0] : nil
+    )
     let other = Note(title: "Other note", body: "Unchanged")
     state.workspace.notes.append(other)
     state.workspace.selectedNoteID = other.id
@@ -4863,23 +5735,23 @@ private func sendHostedKeyDown(
       root: root,
       workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
     )
-    state.updatePreferences { $0.fontFamily = "Avenir Next" }
+    state.updatePreferences {
+      $0.fontFamily = "Avenir Next"
+      $0.panelWidth = width
+    }
     let commands = EditorCommands()
     let (window, host) = hostedPanel(root: root, state: state, commands: commands)
     window.setContentSize(NSSize(width: width, height: 430))
     await settleHostedView(host)
     let editor = try #require(hostedPanelEditor(in: host))
-    let font = try #require(fontPickerAccessibilityElement(host, label: "Font"))
-    _ = font.perform(NSSelectorFromString("accessibilityPerformPress"))
+    try await pressHostedToolbarAction("Font", in: host)
     await settleHostedView(host)
-    let searchFields: [NSSearchField] = NSApplication.shared.windows
-      .filter(\.isVisible)
-      .compactMap { window in
-        window.contentView.flatMap { hostedDescendant(in: $0, as: NSSearchField.self) }
-      }
-    let search = try #require(
-      searchFields.first(where: { $0.placeholderString == "Search fonts" })
+    let searchFields = visibleHostedTextFields(
+      label: "Search fonts",
+      as: NSSearchField.self,
+      owner: window
     )
+    let search = try #require(searchFields.count == 1 ? searchFields[0] : nil)
 
     state.updatePreferences { $0.showFormattingBar = false }
     try await Task.sleep(for: .milliseconds(150))
@@ -4891,10 +5763,26 @@ private func sendHostedKeyDown(
     state.updatePreferences { $0.showFormattingBar = true }
     try await Task.sleep(for: .milliseconds(150))
     await settleHostedView(host)
-    let restoredFont = try #require(fontPickerAccessibilityElement(host, label: "Font"))
-    let value = restoredFont.perform(NSSelectorFromString("accessibilityValue"))?
-      .takeUnretainedValue() as? String
-    #expect(value == "Avenir Next")
+    if width == 800 {
+      let restoredFont = try #require(fontPickerAccessibilityElement(host, label: "Font"))
+      let value = restoredFont.perform(NSSelectorFromString("accessibilityValue"))?
+        .takeUnretainedValue() as? String
+      #expect(value == "Avenir Next")
+    } else {
+      #expect(fontPickerAccessibilityElement(host, label: "Font") == nil)
+      let more = try #require(
+        fontPickerAccessibilityElement(host, label: "More formatting")
+      )
+      _ = more.perform(NSSelectorFromString("accessibilityPerformPress"))
+      await settleHostedView(host)
+      let restoredFont = try #require(
+        visibleAccessibilityElement(label: "Font", owner: window)
+      )
+      #expect(hostedAccessibilityValue(restoredFont) == "Avenir Next")
+      _ = more.perform(NSSelectorFromString("accessibilityPerformPress"))
+      await settleHostedView(host)
+      #expect(visibleAccessibilityElement(label: "Font", owner: window) == nil)
+    }
     #expect(commands.textView === editor)
     window.orderOut(nil)
   }
