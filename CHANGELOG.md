@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.0.17-beta.1] - 2026-09-16
+
+### Changed
+
+- Folder creation now stays within the folder navigation row, and paired folder navigation
+  controls appear only when measured folder content exceeds the available viewport.
+
 ## [1.0.16-beta.1] - 2026-09-16
 
 ### Fixed
