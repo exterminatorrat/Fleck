@@ -1883,6 +1883,7 @@ import Testing
 
 @Test @MainActor func menuPanelHostedFirstPlacementAndReopenAlignActualButtonBorders() async throws {
   let screen = try #require(NSScreen.main)
+  let initialWidth = min(CGFloat(600), screen.visibleFrame.width / 2)
   let buttonFrame = CGRect(
     x: screen.visibleFrame.midX - 17,
     y: screen.visibleFrame.maxY + 2,
@@ -1894,7 +1895,7 @@ import Testing
     let initialFrame = CGRect(
       x: screen.visibleFrame.midX - 420,
       y: screen.visibleFrame.midY - 215,
-      width: 600,
+      width: initialWidth,
       height: 430
     )
     let window = NSWindow(
@@ -1982,6 +1983,7 @@ import Testing
 
 @Test @MainActor func menuPanelHostedHiddenAttachObservesLiveVisibilityAtAcquisition() async throws {
   let screen = try #require(NSScreen.main)
+  let initialWidth = min(CGFloat(600), screen.visibleFrame.width / 2)
   let buttonFrame = CGRect(
     x: screen.visibleFrame.midX - 17,
     y: screen.visibleFrame.maxY + 2,
@@ -1989,9 +1991,9 @@ import Testing
     height: 22
   )
   let initialFrame = CGRect(
-    x: buttonFrame.maxX - 540,
+    x: buttonFrame.maxX - initialWidth + 60,
     y: screen.visibleFrame.midY - 215,
-    width: 600,
+    width: initialWidth,
     height: 430
   )
   let window = NSWindow(
@@ -2689,6 +2691,7 @@ import Testing
 
 @Test @MainActor func menuPanelHostedFlipReleaseAppliesMinimumBeforeOneCommitAndForwardsEvents() async throws {
   let screen = try #require(NSScreen.main)
+  let initialWidth = min(CGFloat(600), screen.visibleFrame.width / 2)
   let buttonFrame = CGRect(
     x: screen.visibleFrame.midX - 17,
     y: screen.visibleFrame.maxY + 2,
@@ -2698,7 +2701,7 @@ import Testing
   let initialFrame = CGRect(
     x: buttonFrame.minX,
     y: screen.visibleFrame.midY - 215,
-    width: 600,
+    width: initialWidth,
     height: 430
   )
   let window = NSWindow(
@@ -2734,7 +2737,12 @@ import Testing
   #expect(receiver.received == [.leftMouseDown, .leftMouseUp])
   receiver.received.removeAll()
 
-  sendResizeMouseEvent(.leftMouseDown, at: CGPoint(x: 599, y: 200), to: window, number: 72)
+  sendResizeMouseEvent(
+    .leftMouseDown,
+    at: CGPoint(x: host.bounds.maxX - 1, y: host.bounds.midY),
+    to: window,
+    number: 72
+  )
   let rightFlipScreenPoint = window.convertPoint(toScreen: CGPoint(x: 10, y: 200))
   sendResizeMouseEvent(.leftMouseDragged, atScreen: rightFlipScreenPoint, to: window, number: 73)
   #expect(window.frame.minX == buttonFrame.minX)
@@ -2969,6 +2977,7 @@ import Testing
 
 @Test @MainActor func menuPanelHostedRejectedFinalFrameRestoresWithoutCommit() async throws {
   let screen = try #require(NSScreen.main)
+  let initialWidth = min(CGFloat(600), screen.visibleFrame.width / 2)
   let buttonFrame = CGRect(
     x: screen.visibleFrame.midX - 17,
     y: screen.visibleFrame.maxY + 2,
@@ -2978,7 +2987,7 @@ import Testing
   let initialFrame = CGRect(
     x: buttonFrame.minX,
     y: screen.visibleFrame.midY - 215,
-    width: 600,
+    width: initialWidth,
     height: 430
   )
   let window = FinalFrameRejectingWindow(
@@ -3005,7 +3014,12 @@ import Testing
   await settleResizeHost(host)
 
   let bandPoint = CGPoint(x: buttonFrame.minX + 10, y: initialFrame.minY + 200)
-  sendResizeMouseEvent(.leftMouseDown, at: CGPoint(x: 599, y: 200), to: window, number: 83)
+  sendResizeMouseEvent(
+    .leftMouseDown,
+    at: CGPoint(x: host.bounds.maxX - 1, y: host.bounds.midY),
+    to: window,
+    number: 83
+  )
   sendResizeMouseEvent(.leftMouseDragged, atScreen: bandPoint, to: window, number: 84)
   window.rejectedFrame = CGRect(
     x: buttonFrame.maxX - 380,

@@ -2692,12 +2692,12 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   commands.refreshFormattingState()
 
   try await pressHostedToolbarAction("Font Size", in: host)
-  let done = try #require(visibleAccessibilityElement(label: "Done"))
+  let done = try #require(visibleAccessibilityElement(label: "Done", owner: window))
   _ = done.perform(NSSelectorFromString("accessibilityPerformPress"))
   await settleHostedView(host)
 
   try await pressHostedToolbarAction("Font Color", in: host)
-  let red = try #require(visibleAccessibilityElement(label: "Red"))
+  let red = try #require(visibleAccessibilityElement(label: "Red", owner: window))
   _ = red.perform(NSSelectorFromString("accessibilityPerformPress"))
   await settleHostedView(host)
   #expect(
@@ -2754,34 +2754,34 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
 
   await setWidth(380)
   try await openOverflow()
-  expectOneReachableFormattingActionAcrossVisibleWindows()
-  #expect(visibleFormattingActionCount(labels: ["Delete"]) == 1)
+  expectOneReachableFormattingActionAcrossVisibleWindows(owner: window)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
 
   await setWidth(800)
   #expect(fontPickerAccessibilityElement(host, label: "More formatting") == nil)
-  expectOneReachableFormattingActionAcrossVisibleWindows()
-  #expect(visibleFormattingActionCount(labels: ["Delete"]) == 1)
+  expectOneReachableFormattingActionAcrossVisibleWindows(owner: window)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
 
   await setWidth(650)
   try await openOverflow()
-  expectOneReachableFormattingActionAcrossVisibleWindows()
-  #expect(visibleFormattingActionCount(labels: ["Delete"]) == 1)
+  expectOneReachableFormattingActionAcrossVisibleWindows(owner: window)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
 
   await setWidth(380)
   #expect(fontPickerAccessibilityElement(host, label: "More formatting") != nil)
-  #expect(visibleFormattingActionCount(labels: ["Font"]) == 0)
-  #expect(visibleFormattingActionCount(labels: ["Checklist"]) == 0)
-  #expect(visibleFormattingActionCount(labels: ["Delete"]) == 1)
+  #expect(visibleFormattingActionCount(labels: ["Font"], owner: window) == 0)
+  #expect(visibleFormattingActionCount(labels: ["Checklist"], owner: window) == 0)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
 
   try await openOverflow()
-  expectOneReachableFormattingActionAcrossVisibleWindows()
-  #expect(visibleFormattingActionCount(labels: ["Checklist"]) == 1)
-  #expect(visibleFormattingActionCount(labels: ["Delete"]) == 1)
+  expectOneReachableFormattingActionAcrossVisibleWindows(owner: window)
+  #expect(visibleFormattingActionCount(labels: ["Checklist"], owner: window) == 1)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
   let more = try #require(fontPickerAccessibilityElement(host, label: "More formatting"))
   _ = more.perform(NSSelectorFromString("accessibilityPerformPress"))
   await settleHostedView(host)
-  #expect(visibleFormattingActionCount(labels: ["Checklist"]) == 0)
-  #expect(visibleFormattingActionCount(labels: ["Delete"]) == 1)
+  #expect(visibleFormattingActionCount(labels: ["Checklist"], owner: window) == 0)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
 }
 
 @Test @MainActor func toolbarOverflowStaysOpenWithinTheSameMeasuredPrefix() async throws {
@@ -2830,24 +2830,24 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   let more = try #require(fontPickerAccessibilityElement(host, label: "More formatting"))
   _ = more.perform(NSSelectorFromString("accessibilityPerformPress"))
   await settleHostedView(host)
-  expectOneReachableFormattingActionAcrossVisibleWindows()
+  expectOneReachableFormattingActionAcrossVisibleWindows(owner: window)
   await settleHostedView(host)
-  #expect(visibleFormattingActionCount(labels: ["Checklist"]) == 1)
-  #expect(visibleFormattingActionCount(labels: ["Delete"]) == 1)
+  #expect(visibleFormattingActionCount(labels: ["Checklist"], owner: window) == 1)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
 
   await setWidth(stableWidth)
   #expect(visibleCount() == initialCount)
-  expectOneReachableFormattingActionAcrossVisibleWindows()
-  #expect(visibleFormattingActionCount(labels: ["Checklist"]) == 1)
-  #expect(visibleFormattingActionCount(labels: ["Delete"]) == 1)
+  expectOneReachableFormattingActionAcrossVisibleWindows(owner: window)
+  #expect(visibleFormattingActionCount(labels: ["Checklist"], owner: window) == 1)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
 
   let stableMore = try #require(
     fontPickerAccessibilityElement(host, label: "More formatting")
   )
   _ = stableMore.perform(NSSelectorFromString("accessibilityPerformPress"))
   await settleHostedView(host)
-  #expect(visibleFormattingActionCount(labels: ["Checklist"]) == 0)
-  #expect(visibleFormattingActionCount(labels: ["Delete"]) == 1)
+  #expect(visibleFormattingActionCount(labels: ["Checklist"], owner: window) == 0)
+  #expect(visibleFormattingActionCount(labels: ["Delete"], owner: window) == 1)
 }
 
 @Test @MainActor func toolbarDirectPickersAndPendingSizeSurviveMeasuredPrefixTransition() async throws {
@@ -2927,7 +2927,11 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   try sendHostedAccessibilityPress(directFont, to: window)
   try await Task.sleep(for: .milliseconds(150))
   await settleHostedView(host)
-  let initialSearches = visibleHostedTextFields(label: "Search fonts", as: NSSearchField.self)
+  let initialSearches = visibleHostedTextFields(
+    label: "Search fonts",
+    as: NSSearchField.self,
+    owner: window
+  )
   #expect(initialSearches.count == 1)
   let fontSearch = try #require(initialSearches.first)
   fontSearch.stringValue = "Menlo"
@@ -2935,7 +2939,11 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     Notification(name: NSControl.textDidChangeNotification, object: fontSearch)
   )
   await setWidth(measuredTransition.lower)
-  let transitionedSearches = visibleHostedTextFields(label: "Search fonts", as: NSSearchField.self)
+  let transitionedSearches = visibleHostedTextFields(
+    label: "Search fonts",
+    as: NSSearchField.self,
+    owner: window
+  )
   #expect(transitionedSearches.count == 1)
   #expect(transitionedSearches.first?.stringValue == "Menlo")
   #expect(fontPickerAccessibilityElement(host, label: "Font") != nil)
@@ -2953,7 +2961,11 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     try sendHostedAccessibilityPress(direct, to: window)
     try await Task.sleep(for: .milliseconds(150))
     await settleHostedView(host)
-    let fields = visibleHostedTextFields(label: "#RRGGBB", as: NSTextField.self)
+    let fields = visibleHostedTextFields(
+      label: "#RRGGBB",
+      as: NSTextField.self,
+      owner: window
+    )
     #expect(fields.count == 1)
     let field = try #require(fields.first)
     field.stringValue = draft
@@ -2961,12 +2973,16 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
       Notification(name: NSControl.textDidChangeNotification, object: field)
     )
     await setWidth(measuredTransition.lower)
-    let transitionedFields = visibleHostedTextFields(label: "#RRGGBB", as: NSTextField.self)
+    let transitionedFields = visibleHostedTextFields(
+      label: "#RRGGBB",
+      as: NSTextField.self,
+      owner: window
+    )
     #expect(transitionedFields.count == 1)
     #expect(transitionedFields.first?.stringValue == draft)
     #expect(fontPickerAccessibilityElement(host, label: label) != nil)
     #expect(fontPickerAccessibilityElement(host, label: "More formatting") != nil)
-    _ = visibleAccessibilityElement(label: "Cancel")?
+    _ = visibleAccessibilityElement(label: "Cancel", owner: window)?
       .perform(NSSelectorFromString("accessibilityPerformPress"))
     await settleHostedView(host)
   }
@@ -3236,7 +3252,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     "Font Size": "Mixed", "Font Color": "Mixed", "Highlight": "Mixed",
   ]
   for (label, expectedValue) in expectedValues {
-    let row = try #require(visibleAccessibilityElement(label: label))
+    let row = try #require(visibleAccessibilityElement(label: label, owner: window))
     #expect(hostedAccessibilityValue(row) == expectedValue)
   }
 }
@@ -5448,18 +5464,32 @@ private func pressHostedToolbarAction(_ label: String, in host: NSView) async th
     _ = direct.perform(NSSelectorFromString("accessibilityPerformPress"))
     return
   }
+  let owner = try #require(host.window)
   let more = try #require(fontPickerAccessibilityElement(host, label: "More formatting"))
   _ = more.perform(NSSelectorFromString("accessibilityPerformPress"))
   await settleHostedView(host)
-  let item = visibleAccessibilityElement(label: "\(label)…")
-    ?? visibleAccessibilityElement(label: label)
+  let item = visibleAccessibilityElement(label: "\(label)…", owner: owner)
+    ?? visibleAccessibilityElement(label: label, owner: owner)
   _ = try #require(item).perform(NSSelectorFromString("accessibilityPerformPress"))
   await settleHostedView(host)
 }
 
 @MainActor
-private func visibleAccessibilityElement(label: String) -> NSObject? {
-  NSApplication.shared.windows.lazy
+private func ownedWindowTree(_ owner: NSWindow) -> [NSWindow] {
+  var windows: [NSWindow] = []
+  var visited: Set<ObjectIdentifier> = []
+  func collect(_ window: NSWindow) {
+    guard visited.insert(ObjectIdentifier(window)).inserted else { return }
+    windows.append(window)
+    for child in window.childWindows ?? [] { collect(child) }
+  }
+  collect(owner)
+  return windows
+}
+
+@MainActor
+private func visibleAccessibilityElement(label: String, owner: NSWindow) -> NSObject? {
+  ownedWindowTree(owner).lazy
     .filter(\.isVisible)
     .compactMap(\.contentView)
     .compactMap { fontPickerAccessibilityElement($0, label: label) }
@@ -5467,8 +5497,8 @@ private func visibleAccessibilityElement(label: String) -> NSObject? {
 }
 
 @MainActor
-private func visibleFormattingActionCount(labels: [String]) -> Int {
-  NSApplication.shared.windows
+private func visibleFormattingActionCount(labels: [String], owner: NSWindow) -> Int {
+  ownedWindowTree(owner)
     .filter(\.isVisible)
     .compactMap(\.contentView)
     .reduce(into: 0) { count, contentView in
@@ -5479,23 +5509,24 @@ private func visibleFormattingActionCount(labels: [String]) -> Int {
 }
 
 @MainActor
-private func expectOneReachableFormattingActionAcrossVisibleWindows() {
+private func expectOneReachableFormattingActionAcrossVisibleWindows(owner: NSWindow) {
   let actions = [
     ["Start Dictation"], ["Undo"], ["Redo"], ["Bold"], ["Italic"], ["Underline"],
     ["Strikethrough"], ["Font"], ["Font size", "Font Size"], ["Font Color"],
     ["Highlight"], ["Bullets"], ["Numbers"], ["Checklist"], ["Delete"],
   ]
   for labels in actions {
-    #expect(visibleFormattingActionCount(labels: labels) == 1)
+    #expect(visibleFormattingActionCount(labels: labels, owner: owner) == 1)
   }
 }
 
 @MainActor
 private func visibleHostedTextFields<T: NSTextField>(
   label: String,
-  as type: T.Type
+  as type: T.Type,
+  owner: NSWindow
 ) -> [T] {
-  NSApplication.shared.windows
+  ownedWindowTree(owner)
     .filter(\.isVisible)
     .compactMap(\.contentView)
     .flatMap { hostedDescendants(in: $0, as: type) }
@@ -5507,6 +5538,109 @@ private func hostedAccessibilityValue(_ element: NSObject) -> String? {
   let selector = NSSelectorFromString("accessibilityValue")
   guard element.responds(to: selector) else { return nil }
   return element.perform(selector)?.takeUnretainedValue() as? String
+}
+
+@Test @MainActor func fontPickerOverflowTargetsOwningPanelWhenWideDecoyIsVisible() async throws {
+  NSApplication.shared.accessibilitySetValue(
+    true,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+  let decoyRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  let targetRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer {
+    try? FileManager.default.removeItem(at: decoyRoot)
+    try? FileManager.default.removeItem(at: targetRoot)
+  }
+
+  let decoyNote = Note(
+    title: "Wide decoy",
+    body: "Decoy body",
+    richTextRTF: try hostedPanelRTF(text: "Decoy body")
+  )
+  let decoyState = await hostedPanelState(
+    root: decoyRoot,
+    workspace: Workspace(notes: [decoyNote], selectedNoteID: decoyNote.id, folders: [])
+  )
+  decoyState.updatePreferences { $0.panelWidth = 800 }
+  let decoyCommands = EditorCommands()
+  let (decoyWindow, decoyHost) = hostedPanel(
+    root: decoyRoot,
+    state: decoyState,
+    commands: decoyCommands
+  )
+  defer {
+    decoyWindow.contentView = nil
+    decoyWindow.orderOut(nil)
+  }
+  decoyWindow.setContentSize(NSSize(width: 800, height: 430))
+  await settleHostedView(decoyHost)
+  let decoyEditor = try #require(hostedPanelEditor(in: decoyHost))
+  let decoyBefore = try #require(decoyState.selectedNote)
+  let decoyBodyBefore = NSAttributedString(attributedString: try #require(decoyEditor.textStorage))
+  let decoyTypingFontBefore = try #require(decoyEditor.typingAttributes[.font] as? NSFont)
+  #expect(fontPickerAccessibilityElement(decoyHost, label: "Font") != nil)
+
+  let targetNote = Note(
+    title: "Narrow target",
+    body: "Target body",
+    richTextRTF: try hostedPanelRTF(text: "Target body")
+  )
+  let targetState = await hostedPanelState(
+    root: targetRoot,
+    workspace: Workspace(notes: [targetNote], selectedNoteID: targetNote.id, folders: [])
+  )
+  targetState.updatePreferences { $0.panelWidth = 380 }
+  let targetCommands = EditorCommands()
+  let (targetWindow, targetHost) = hostedPanel(
+    root: targetRoot,
+    state: targetState,
+    commands: targetCommands
+  )
+  defer {
+    targetWindow.contentView = nil
+    targetWindow.orderOut(nil)
+  }
+  targetWindow.setContentSize(NSSize(width: 380, height: 430))
+  await settleHostedView(targetHost)
+  let targetEditor = try #require(hostedPanelEditor(in: targetHost))
+  #expect(targetWindow.makeFirstResponder(targetEditor))
+  targetEditor.setSelectedRange(NSRange(location: 0, length: targetEditor.string.utf16.count))
+  targetCommands.refreshFormattingState()
+  #expect(fontPickerAccessibilityElement(targetHost, label: "Font") == nil)
+  #expect(fontPickerAccessibilityElement(targetHost, label: "More formatting") != nil)
+
+  try await pressHostedToolbarAction("Font", in: targetHost)
+  let targetSearchFields = visibleHostedTextFields(
+    label: "Search fonts",
+    as: NSSearchField.self,
+    owner: targetWindow
+  )
+  let search = try #require(targetSearchFields.count == 1 ? targetSearchFields[0] : nil)
+  let picker = try #require(search.delegate as? FontFamilyPickerController)
+  let pickerWindow = try #require(picker.view.window)
+  #expect(pickerWindow.parent === targetWindow)
+  #expect(pickerWindow.parent !== decoyWindow)
+  #expect(
+    visibleHostedTextFields(
+      label: "Search fonts",
+      as: NSSearchField.self,
+      owner: decoyWindow
+    ).isEmpty
+  )
+
+  search.stringValue = "Menlo"
+  picker.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
+  picker.commitSelection()
+  await settleHostedView(targetHost)
+
+  #expect(
+    (targetEditor.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.familyName
+      == "Menlo"
+  )
+  #expect(targetEditor.selectedRange() == NSRange(location: 0, length: 11))
+  #expect(decoyState.selectedNote == decoyBefore)
+  #expect(decoyEditor.textStorage?.isEqual(to: decoyBodyBefore) == true)
+  #expect((decoyEditor.typingAttributes[.font] as? NSFont) == decoyTypingFontBefore)
 }
 
 @Test @MainActor func fontPickerHostedToolbarRetainsTitleAndBodyTargets() async throws {
@@ -5540,11 +5674,12 @@ private func hostedAccessibilityValue(_ element: NSObject) -> String? {
     }
     try await pressHostedToolbarAction("Font", in: host)
     await settleHostedView(host)
-    let searchFields: [NSSearchField] = NSApplication.shared.windows.filter(\.isVisible).compactMap { window -> NSSearchField? in
-      guard let content = window.contentView else { return nil }
-      return hostedDescendant(in: content, as: NSSearchField.self)
-    }
-    let search = try #require(searchFields.first(where: { $0.placeholderString == "Search fonts" }))
+    let searchFields = visibleHostedTextFields(
+      label: "Search fonts",
+      as: NSSearchField.self,
+      owner: window
+    )
+    let search = try #require(searchFields.count == 1 ? searchFields[0] : nil)
     let picker = try #require(search.delegate as? FontFamilyPickerController)
     search.stringValue = "Menlo"
     picker.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
@@ -5568,13 +5703,14 @@ private func hostedAccessibilityValue(_ element: NSObject) -> String? {
     let updated = try #require(state.selectedNote)
     try await pressHostedToolbarAction("Font", in: host)
     await settleHostedView(host)
-    let reopenedPickers: [FontFamilyPickerController] = NSApplication.shared.windows.filter(\.isVisible).compactMap { window in
-      guard let content = window.contentView,
-        let search = hostedDescendant(in: content, as: NSSearchField.self)
-      else { return nil }
-      return search.delegate as? FontFamilyPickerController
-    }
-    let reopenedPicker = try #require(reopenedPickers.first)
+    let reopenedPickers = visibleHostedTextFields(
+      label: "Search fonts",
+      as: NSSearchField.self,
+      owner: window
+    ).compactMap { $0.delegate as? FontFamilyPickerController }
+    let reopenedPicker = try #require(
+      reopenedPickers.count == 1 ? reopenedPickers[0] : nil
+    )
     let other = Note(title: "Other note", body: "Unchanged")
     state.workspace.notes.append(other)
     state.workspace.selectedNoteID = other.id
@@ -5610,14 +5746,12 @@ private func hostedAccessibilityValue(_ element: NSObject) -> String? {
     let editor = try #require(hostedPanelEditor(in: host))
     try await pressHostedToolbarAction("Font", in: host)
     await settleHostedView(host)
-    let searchFields: [NSSearchField] = NSApplication.shared.windows
-      .filter(\.isVisible)
-      .compactMap { window in
-        window.contentView.flatMap { hostedDescendant(in: $0, as: NSSearchField.self) }
-      }
-    let search = try #require(
-      searchFields.first(where: { $0.placeholderString == "Search fonts" })
+    let searchFields = visibleHostedTextFields(
+      label: "Search fonts",
+      as: NSSearchField.self,
+      owner: window
     )
+    let search = try #require(searchFields.count == 1 ? searchFields[0] : nil)
 
     state.updatePreferences { $0.showFormattingBar = false }
     try await Task.sleep(for: .milliseconds(150))
@@ -5641,11 +5775,13 @@ private func hostedAccessibilityValue(_ element: NSObject) -> String? {
       )
       _ = more.perform(NSSelectorFromString("accessibilityPerformPress"))
       await settleHostedView(host)
-      let restoredFont = try #require(visibleAccessibilityElement(label: "Font"))
+      let restoredFont = try #require(
+        visibleAccessibilityElement(label: "Font", owner: window)
+      )
       #expect(hostedAccessibilityValue(restoredFont) == "Avenir Next")
       _ = more.perform(NSSelectorFromString("accessibilityPerformPress"))
       await settleHostedView(host)
-      #expect(visibleAccessibilityElement(label: "Font") == nil)
+      #expect(visibleAccessibilityElement(label: "Font", owner: window) == nil)
     }
     #expect(commands.textView === editor)
     window.orderOut(nil)
