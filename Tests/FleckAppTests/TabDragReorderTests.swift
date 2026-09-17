@@ -578,6 +578,33 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
     source.components(separatedBy: "private struct FolderNavigator").last?
       .components(separatedBy: "private struct DeleteConfirmationOverlay").first
   )
+  let body = try #require(
+    navigator.components(separatedBy: "var body: some View").dropFirst().first?
+      .components(separatedBy: "private var folderNavigationLayer").first
+  )
+  let navigationLayer = try #require(
+    navigator.components(separatedBy: "private var folderNavigationLayer").last?
+      .components(separatedBy: "private func overflowControls").first
+  )
+  let preservesComposedOrder: (String, String) -> Bool = { body, navigationLayer in
+    guard let layer = body.range(of: "folderNavigationLayer"),
+      let divider = body.range(of: "Divider()"),
+      let trash = body.range(of: "trashRow"),
+      let root = navigationLayer.range(of: "rootRow"),
+      let scroll = navigationLayer.range(of: "ScrollViewReader")
+    else { return false }
+    return layer.lowerBound < divider.lowerBound
+      && divider.lowerBound < trash.lowerBound
+      && root.lowerBound < scroll.lowerBound
+  }
+  let reversedBody = body
+    .replacingOccurrences(of: "folderNavigationLayer", with: "__folderNavigationLayer__")
+    .replacingOccurrences(of: "trashRow", with: "folderNavigationLayer")
+    .replacingOccurrences(of: "__folderNavigationLayer__", with: "trashRow")
+  let reversedNavigationLayer = navigationLayer
+    .replacingOccurrences(of: "rootRow", with: "__rootRow__")
+    .replacingOccurrences(of: "ScrollViewReader", with: "rootRow")
+    .replacingOccurrences(of: "__rootRow__", with: "ScrollViewReader")
 
   #expect(source.contains("com.harryjin.fleck.local-note"))
   #expect(source.contains("com.harryjin.fleck.local-folder"))
@@ -590,8 +617,9 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
   #expect(navigator.contains("NSF2FunctionKey"))
   #expect(navigator.contains("name: \"Unfiled\""))
   #expect(navigator.contains("name: \"Trash\""))
-  #expect(navigator.range(of: "rootRow")!.lowerBound < navigator.range(of: "Divider()")!.lowerBound)
-  #expect(navigator.range(of: "Divider()")!.lowerBound < navigator.range(of: "name: \"Trash\"")!.lowerBound)
+  #expect(preservesComposedOrder(body, navigationLayer))
+  #expect(!preservesComposedOrder(reversedBody, navigationLayer))
+  #expect(!preservesComposedOrder(body, reversedNavigationLayer))
   #expect(!navigator.contains("All Notes"))
   #expect(!navigator.contains("Inbox"))
 }

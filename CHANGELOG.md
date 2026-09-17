@@ -10,6 +10,33 @@ public release log. Packaging unchanged source does not add a changelog entry.
 - Made the full padded header row activate Dictation Privacy, Agent Activity, Agent Access,
   and Full build metadata disclosures while keeping their content controls independent.
 
+## [1.0.19-beta.1] - 2026-09-17
+
+### Fixed
+
+- Made the Agent Activity scrollbar track transparent while keeping the complete native thumb
+  draggable and positioned five points inside the panel edge.
+
+## [1.0.18-beta.1] - 2026-09-16
+
+### Changed
+
+- Polished the font picker with neutral full-row hover and selection feedback, a trackless
+  native scrollbar aligned to the popover edge, and a compact layout that remains usable at
+  narrow widths.
+
+### Fixed
+
+- Aligned font names and previews to a shared row baseline and reserved a consistent trailing
+  preview column in the font picker.
+
+## [1.0.17-beta.1] - 2026-09-16
+
+### Changed
+
+- Folder creation now stays within the folder navigation row, and paired folder navigation
+  controls appear only when measured folder content exceeds the available viewport.
+
 ## [1.0.16-beta.1] - 2026-09-16
 
 ### Fixed

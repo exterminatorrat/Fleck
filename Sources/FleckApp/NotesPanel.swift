@@ -2421,6 +2421,54 @@
     }
   }
 
+  struct FolderNavigatorOverflowPresentation: Equatable {
+    static let railWidth: CGFloat = 56
+
+    let contentWidth: CGFloat
+    let referenceWidth: CGFloat
+
+    var overflows: Bool {
+      contentWidth > referenceWidth
+    }
+
+    var railWidth: CGFloat {
+      overflows ? Self.railWidth : 0
+    }
+  }
+
+  struct FolderNavigatorOcclusionPresentation: Equatable {
+    let composerLeadingX: CGFloat
+
+    func covers(_ frame: CGRect?) -> Bool {
+      guard let frame else { return true }
+      return frame.maxX > composerLeadingX
+    }
+  }
+
+  struct FolderNavigatorMaskPresentation: Equatable {
+    static let preferredComposerWidth: CGFloat = 340
+    static let preferredFadeWidth: CGFloat = 12
+
+    let bandWidth: CGFloat
+
+    var composerWidth: CGFloat {
+      min(Self.preferredComposerWidth, max(0, bandWidth))
+    }
+
+    var leadingWidth: CGFloat {
+      max(0, bandWidth - composerWidth)
+    }
+
+    var fadeWidth: CGFloat {
+      min(Self.preferredFadeWidth, leadingWidth)
+    }
+
+    var opaqueWidth: CGFloat {
+      leadingWidth - fadeWidth
+    }
+
+  }
+
   private struct FolderNavigator: View {
     private enum FocusedRow: Hashable {
       case unfiled
@@ -2429,7 +2477,7 @@
       case newFolder
     }
 
-    private enum NoteDropTarget: Equatable {
+    private enum NoteDropTarget: Hashable {
       case unfiled
       case folder(UUID)
 
@@ -2454,7 +2502,45 @@
     @State private var folderReorder: ReorderInteraction?
     @State private var isUnfiledHovered = false
     @State private var unfiledInteractionSource: AppInteractionSource = .keyboard
+    @State private var folderContentWidth: CGFloat = 0
+    @State private var preTrashBandWidth: CGFloat = 0
+    @State private var frozenOverflow: Bool?
+    @State private var frozenUnfiledDisclosure: Bool?
+    @State private var rowFrames: [NoteDropTarget: CGRect] = [:]
+    @State private var folderCreationSource: AppInteractionSource = .keyboard
+    @State private var isNewFolderTextEditing = false
+    @State private var focusedRowBeforeComposition: FocusedRow?
+    @State private var wasUnfiledDisclosureFocusedBeforeComposition = false
     private let folderNavigatorMaxHeight: CGFloat = 32
+
+    private enum FolderScrollTarget {
+      case leading
+      case trailing
+    }
+
+    private struct FolderContentWidthKey: PreferenceKey {
+      static let defaultValue: CGFloat = 0
+      static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+      }
+    }
+
+    private struct FolderBandWidthKey: PreferenceKey {
+      static let defaultValue: CGFloat = 0
+      static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+      }
+    }
+
+    private struct FolderRowFrameKey: PreferenceKey {
+      static let defaultValue: [NoteDropTarget: CGRect] = [:]
+      static func reduce(
+        value: inout [NoteDropTarget: CGRect],
+        nextValue: () -> [NoteDropTarget: CGRect]
+      ) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+      }
+    }
 
     let menuWindowDrop: MenuWindowNoteDropCoordinator?
     let activeFolderID: UUID?
@@ -2481,71 +2567,55 @@
     }
 
     var body: some View {
-      VStack(spacing: 3) {
-        if isCreatingFolder {
-          folderEditor(label: "New folder", focus: .newFolder)
-        }
-
-        HStack(spacing: 4) {
-          rootRow
-
-          ScrollView(.horizontal, showsIndicators: false) {
-            LazyHStack(spacing: 3) {
-              ForEach(appState.workspace.folders, id: \.id) { folder in
-                folderRow(folder)
-              }
-            }
-            .background(ReorderDragLifecycle(active: folderReorder != nil,
-              hasTarget: folderReorder?.targetID != nil
-                && folderReorder?.originalIDs == appState.workspace.folders.map(\.id),
-              cancel: { folderReorder = nil }))
-          }
+      HStack(spacing: 4) {
+        folderNavigationLayer
           .frame(maxWidth: .infinity)
-          .frame(maxHeight: folderNavigatorMaxHeight)
-          .accessibilityElement(children: .contain)
-          .accessibilityLabel("Folders")
-
-          Button {
-            beginNewFolder()
-          } label: {
-            Image(systemName: "folder.badge.plus")
-              .frame(width: 24, height: 24)
+          .frame(height: folderNavigatorMaxHeight)
+          .mask(alignment: .leading) {
+            if isCreatingFolder {
+              HStack(spacing: 0) {
+                Color.white.frame(width: maskPresentation.opaqueWidth)
+                LinearGradient(
+                  colors: [.white, .clear],
+                  startPoint: .leading,
+                  endPoint: .trailing
+                )
+                .frame(width: maskPresentation.fadeWidth)
+                Color.clear.frame(width: maskPresentation.composerWidth)
+              }
+            } else {
+              Color.white
+            }
           }
-          .buttonStyle(.plain)
-          .accessibilityLabel("New folder")
-
-          Divider()
-            .frame(height: 20)
-
-          Button {
-            onOpenTrash()
-          } label: {
-            rowLabel(
-              name: "Trash",
-              systemImage: "trash",
-              count: appState.trashedNotes.count,
-              isSelected: false,
-              isEmpty: appState.trashedNotes.isEmpty
-            )
+          .overlay(alignment: .trailing) {
+            folderComposer
+              .frame(
+                width: isCreatingFolder ? maskPresentation.composerWidth : 24,
+                alignment: .leading
+              )
           }
-          .fixedSize(horizontal: true, vertical: false)
-          .buttonStyle(.plain)
-          .focused($focusedRow, equals: .trash)
-          .focusable()
-          .accessibilityLabel("Trash")
-          .accessibilityIdentifier("folder-trash")
-          .accessibilityValue(
-            appState.trashedNotes.isEmpty
-              ? "Empty"
-              : "\(appState.trashedNotes.count) notes"
-          )
-        }
-        .animation(
-          motion.allowsSpatialMotion(for: unfiledInteractionSource) ? folderMorphAnimation : nil,
-          value: isUnfiledCompact
-        )
+          .background {
+            GeometryReader { band in
+              Color.clear.preference(key: FolderBandWidthKey.self, value: band.size.width)
+            }
+          }
+
+        Divider()
+          .frame(height: 20)
+
+        trashRow
       }
-      .animation(folderMorphAnimation, value: isCreatingFolder)
+      .coordinateSpace(name: "folder-navigator-band")
+      .onPreferenceChange(FolderContentWidthKey.self) { folderContentWidth = $0 }
+      .onPreferenceChange(FolderBandWidthKey.self) { preTrashBandWidth = $0 }
+      .onPreferenceChange(FolderRowFrameKey.self) { rowFrames = $0 }
+      .onChange(of: isUnfiledCompact) { _, _ in
+        if isCreatingFolder { frozenUnfiledDisclosure = nil }
+      }
+      .animation(
+        motion.allowsSpatialMotion(for: unfiledInteractionSource) ? folderMorphAnimation : nil,
+        value: isUnfiledCompact
+      )
       .onChange(of: draggedSource) { oldValue, newValue in
         if oldValue != newValue {
           noteDropTarget = nil
@@ -2554,10 +2624,13 @@
       .padding(.horizontal, 12)
       .padding(.vertical, 5)
       .onMoveCommand { direction in
+        guard !isFolderTextInputActive else { return }
         moveFocus(direction)
       }
       .onDeleteCommand {
+        guard !isFolderTextInputActive else { return }
         guard case .folder(let id) = focusedRow,
+          !isCovered(.folder(id)),
           let folder = appState.workspace.folders.first(where: { $0.id == id })
         else { return }
         onDelete(folder)
@@ -2567,17 +2640,334 @@
       }
       .onDisappear { folderReorder = nil }
       .onExitCommand {
+        guard !isFolderTextInputActive else { return }
         folderReorder = nil
         cancelFolderEditing()
       }
       .onKeyPress(phases: .down) { press in
+        guard !isFolderTextInputActive else { return .ignored }
         guard isF2(press), beginRename() else { return .ignored }
         return .handled
       }
       .onKeyPress(keys: [.return, .space], phases: .down) { _ in
+        guard !isFolderTextInputActive else { return .ignored }
         activateFocusedRow()
         return .handled
       }
+    }
+
+    private var folderNavigationLayer: some View {
+      HStack(spacing: 4) {
+        rootRow
+          .background(rowFrameReader(for: .unfiled))
+
+        ScrollViewReader { scrollProxy in
+          HStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+              HStack(spacing: 0) {
+                Color.clear
+                  .frame(width: 0, height: 0)
+                  .id(FolderScrollTarget.leading)
+                HStack(spacing: 3) {
+                  ForEach(appState.workspace.folders, id: \.id) { folder in
+                    folderRow(folder)
+                      .background(rowFrameReader(for: .folder(folder.id)))
+                  }
+                }
+                .background {
+                  GeometryReader { content in
+                    Color.clear.preference(
+                      key: FolderContentWidthKey.self,
+                      value: content.size.width
+                    )
+                  }
+                }
+                .background(ReorderDragLifecycle(active: folderReorder != nil,
+                  hasTarget: folderReorder?.targetID != nil
+                    && folderReorder?.originalIDs == appState.workspace.folders.map(\.id),
+                  cancel: { folderReorder = nil }))
+                Color.clear
+                  .frame(width: 0, height: 0)
+                  .id(FolderScrollTarget.trailing)
+              }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(maxHeight: folderNavigatorMaxHeight)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Folders")
+
+            Group {
+              if showsOverflowRail {
+                overflowControls(scrollProxy: scrollProxy)
+                  .opacity(isCreatingFolder ? 0 : 1)
+                  .disabled(isCreatingFolder)
+                  .allowsHitTesting(!isCreatingFolder)
+                  .accessibilityHidden(isCreatingFolder)
+              }
+            }
+            .frame(width: reservedRailWidth)
+          }
+          .onChange(of: showsOverflowRail) { wasOverflowing, isOverflowing in
+            if wasOverflowing && !isOverflowing {
+              scrollProxy.scrollTo(FolderScrollTarget.leading, anchor: .leading)
+            }
+          }
+        }
+        .frame(maxWidth: .infinity)
+
+        Color.clear.frame(width: 24, height: 24)
+      }
+    }
+
+    private func overflowControls(scrollProxy: ScrollViewProxy) -> some View {
+      HStack(spacing: 0) {
+        Button {
+          scrollProxy.scrollTo(FolderScrollTarget.leading, anchor: .leading)
+        } label: {
+          Image(systemName: "chevron.left")
+            .font(.caption)
+            .frame(width: 28, height: 28)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Reveal earlier folders")
+        .help("Show earlier folders")
+
+        Button {
+          scrollProxy.scrollTo(FolderScrollTarget.trailing, anchor: .trailing)
+        } label: {
+          Image(systemName: "chevron.right")
+            .font(.caption)
+            .frame(width: 28, height: 28)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Reveal later folders")
+        .help("Show later folders")
+      }
+    }
+
+    @ViewBuilder
+    private var folderComposer: some View {
+      HStack(spacing: 5) {
+        Button {
+          beginNewFolder(source: currentInteractionSource)
+        } label: {
+          Image(systemName: "folder.badge.plus")
+            .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("New folder")
+        .accessibilityIdentifier("folder-new")
+
+        if isCreatingFolder {
+          HStack(spacing: 5) {
+            NativeFolderNameField(
+              text: $folderNameDraft,
+              isEditing: $isNewFolderTextEditing,
+              onSubmit: { commitFolderEditing(source: .keyboard) },
+              onCancel: { cancelFolderEditing(source: .keyboard) }
+            )
+              .overlay(alignment: .bottom) {
+                Rectangle().fill(.secondary.opacity(0.7)).frame(height: 1)
+              }
+
+            Button {
+              commitFolderEditing(source: currentInteractionSource)
+            } label: {
+              Image(systemName: "checkmark")
+                .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .disabled(trimmedFolderName.isEmpty)
+            .accessibilityLabel("Create folder")
+
+            Button {
+              cancelFolderEditing(source: currentInteractionSource)
+            } label: {
+              Image(systemName: "xmark")
+                .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cancel new folder")
+          }
+          .transition(composerTransition)
+        }
+      }
+    }
+
+    private struct NativeFolderNameField: NSViewRepresentable {
+      @Binding var text: String
+      @Binding var isEditing: Bool
+      let onSubmit: () -> Void
+      let onCancel: () -> Void
+
+      func makeCoordinator() -> Coordinator {
+        Coordinator(
+          text: $text,
+          isEditing: $isEditing,
+          onSubmit: onSubmit,
+          onCancel: onCancel
+        )
+      }
+
+      func makeNSView(context: Context) -> OwnershipReportingTextField {
+        let field = OwnershipReportingTextField(string: text)
+        field.placeholderString = "New folder"
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.setAccessibilityIdentifier("folder-new-name")
+        field.delegate = context.coordinator
+        field.onOwnershipChange = { [weak coordinator = context.coordinator] ownsEditor in
+          coordinator?.setEditingOwnership(ownsEditor)
+        }
+        context.coordinator.requestFocus(for: field)
+        return field
+      }
+
+      func updateNSView(_ field: OwnershipReportingTextField, context: Context) {
+        context.coordinator.text = $text
+        context.coordinator.isEditing = $isEditing
+        context.coordinator.onSubmit = onSubmit
+        context.coordinator.onCancel = onCancel
+        if (field.currentEditor() as? NSTextView)?.hasMarkedText() != true,
+          field.stringValue != text
+        {
+          field.stringValue = text
+        }
+        context.coordinator.requestFocus(for: field)
+      }
+
+      static func dismantleNSView(
+        _ field: OwnershipReportingTextField,
+        coordinator: Coordinator
+      ) {
+        coordinator.isActive = false
+        coordinator.focusGeneration &+= 1
+        field.onOwnershipChange = nil
+      }
+
+      @MainActor
+      final class OwnershipReportingTextField: NSTextField {
+        var onOwnershipChange: ((Bool) -> Void)?
+
+        override func becomeFirstResponder() -> Bool {
+          let becameFirstResponder = super.becomeFirstResponder()
+          if becameFirstResponder { reportOwnershipAfterResponderTransition() }
+          return becameFirstResponder
+        }
+
+        override func resignFirstResponder() -> Bool {
+          let resignedFirstResponder = super.resignFirstResponder()
+          if resignedFirstResponder { reportOwnershipAfterResponderTransition() }
+          return resignedFirstResponder
+        }
+
+        func reportOwnershipAfterResponderTransition() {
+          DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let editor = currentEditor()
+            onOwnershipChange?(editor != nil && window?.firstResponder === editor)
+          }
+        }
+      }
+
+      @MainActor
+      final class Coordinator: NSObject, NSTextFieldDelegate {
+        var text: Binding<String>
+        var isEditing: Binding<Bool>
+        var onSubmit: () -> Void
+        var onCancel: () -> Void
+        var isActive = true
+        var hasFocused = false
+        var focusGeneration: UInt64 = 0
+
+        init(
+          text: Binding<String>,
+          isEditing: Binding<Bool>,
+          onSubmit: @escaping () -> Void,
+          onCancel: @escaping () -> Void
+        ) {
+          self.text = text
+          self.isEditing = isEditing
+          self.onSubmit = onSubmit
+          self.onCancel = onCancel
+        }
+
+        func requestFocus(for field: OwnershipReportingTextField) {
+          guard !hasFocused else { return }
+          focusGeneration &+= 1
+          let generation = focusGeneration
+          DispatchQueue.main.async {
+            guard self.isActive, self.focusGeneration == generation, field.window != nil else { return }
+            self.hasFocused = field.window?.makeFirstResponder(field) == true
+            field.reportOwnershipAfterResponderTransition()
+          }
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+          guard let field = notification.object as? NSTextField else { return }
+          text.wrappedValue = field.stringValue
+        }
+
+        func controlTextDidBeginEditing(_ notification: Notification) {
+          setEditingOwnership(true)
+        }
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+          setEditingOwnership(false)
+        }
+
+        func setEditingOwnership(_ ownsEditor: Bool) {
+          guard isActive, isEditing.wrappedValue != ownsEditor else { return }
+          isEditing.wrappedValue = ownsEditor
+        }
+
+        func control(
+          _ control: NSControl,
+          textView: NSTextView,
+          doCommandBy commandSelector: Selector
+        ) -> Bool {
+          switch commandSelector {
+          case #selector(NSResponder.insertNewline(_:)):
+            guard !textView.hasMarkedText() else { return false }
+            onSubmit()
+            return true
+          case #selector(NSResponder.cancelOperation(_:)):
+            guard !textView.hasMarkedText() else { return false }
+            onCancel()
+            return true
+          default:
+            return false
+          }
+        }
+      }
+    }
+
+    private var trashRow: some View {
+      Button {
+        onOpenTrash()
+      } label: {
+        rowLabel(
+          name: "Trash",
+          systemImage: "trash",
+          count: appState.trashedNotes.count,
+          isSelected: false,
+          isEmpty: appState.trashedNotes.isEmpty
+        )
+      }
+      .fixedSize(horizontal: true, vertical: false)
+      .buttonStyle(.plain)
+      .focused($focusedRow, equals: .trash)
+      .focusable()
+      .accessibilityLabel("Trash")
+      .accessibilityIdentifier("folder-trash")
+      .accessibilityValue(
+        appState.trashedNotes.isEmpty
+          ? "Empty"
+          : "\(appState.trashedNotes.count) notes"
+      )
     }
 
     private var rootRow: some View {
@@ -2639,7 +3029,10 @@
           return .handled
         }
         .opacity(showsUnfiledDisclosure ? 1 : 0)
-        .frame(width: showsUnfiledDisclosure ? 28 : 0, alignment: .leading)
+        .frame(
+          width: (frozenUnfiledDisclosure ?? showsUnfiledDisclosure) ? 28 : 0,
+          alignment: .leading
+        )
         .clipped()
         .allowsHitTesting(showsUnfiledDisclosure)
         .accessibilityHidden(!showsUnfiledDisclosure)
@@ -2652,6 +3045,9 @@
         of: [FolderDragPayload.noteType],
         delegate: noteDropDelegate(.unfiled)
       )
+      .disabled(isCovered(.unfiled))
+      .allowsHitTesting(!isCovered(.unfiled))
+      .accessibilityHidden(isCovered(.unfiled))
     }
 
     @ViewBuilder
@@ -2688,7 +3084,7 @@
           session: $dragSession,
           currentIDs: { appState.workspace.folders.map(\.id) },
           currentPinnedIDs: { [] },
-          accepts: { true },
+          accepts: { !isCovered(.folder(folder.id)) },
           finish: {},
           move: { id, destination in try? appState.reorderFolder(id: id, to: destination) },
           noteDrop: noteDropDelegate(.folder(folder.id))
@@ -2726,6 +3122,9 @@
             + (isNoteDropTarget(.folder(folder.id)) ? ", Drop target" : "")
         )
         .accessibilityAddTraits(activeFolderID == folder.id ? .isSelected : [])
+        .disabled(isCovered(.folder(folder.id)))
+        .allowsHitTesting(!isCovered(.folder(folder.id)))
+        .accessibilityHidden(isCovered(.folder(folder.id)))
       }
     }
 
@@ -2892,7 +3291,7 @@
             )
           },
           setHovered: { hovered in
-            if hovered {
+            if hovered && !isCovered(target) {
               noteDropTarget = target
             } else if noteDropTarget == target {
               noteDropTarget = nil
@@ -2915,6 +3314,8 @@
       expectedSource: NoteDropSource,
       targetFolderID: UUID?
     ) -> Bool {
+      let target = targetFolderID.map(NoteDropTarget.folder) ?? .unfiled
+      guard !isCovered(target) else { return false }
       guard draggedSource == expectedSource, dragSession?.id == expectedSource.dragSessionID,
         dragSession?.canAcceptDrop == true else { return false }
       return NoteDropPresentation.isValidTarget(
@@ -2956,15 +3357,82 @@
       AppMotion(reduceMotion: reduceMotion)
     }
 
+    private var overflowPresentation: FolderNavigatorOverflowPresentation {
+      FolderNavigatorOverflowPresentation(
+        contentWidth: folderContentWidth,
+        referenceWidth: max(preTrashBandWidth - (rowFrames[.unfiled]?.width ?? 0) - 32, 0)
+      )
+    }
+
+    private var showsOverflowRail: Bool {
+      frozenOverflow ?? overflowPresentation.overflows
+    }
+
+    private var reservedRailWidth: CGFloat {
+      showsOverflowRail ? FolderNavigatorOverflowPresentation.railWidth : 0
+    }
+
+    private var trimmedFolderName: String {
+      folderNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var maskPresentation: FolderNavigatorMaskPresentation {
+      FolderNavigatorMaskPresentation(bandWidth: preTrashBandWidth)
+    }
+
+    private var composerLeadingX: CGFloat {
+      maskPresentation.leadingWidth
+    }
+
+    private var isFolderTextInputActive: Bool {
+      if isCreatingFolder { return isNewFolderTextEditing }
+      guard let editingFolderID else { return false }
+      return focusedRow == .folder(editingFolderID)
+    }
+
+    private var currentInteractionSource: AppInteractionSource {
+      guard let event = NSApp.currentEvent,
+        [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp].contains(event.type)
+      else { return .keyboard }
+      return .pointer
+    }
+
+    private var composerTransition: AnyTransition {
+      guard folderCreationSource == .pointer else { return .identity }
+      if reduceMotion { return .opacity.animation(motion.state) }
+      return .opacity.combined(with: .offset(x: motion.offset))
+    }
+
+    private func folderCreationAnimation(for source: AppInteractionSource) -> Animation? {
+      switch source {
+      case .keyboard:
+        return nil
+      case .pointer:
+        return reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0)
+      case .programmatic:
+        return reduceMotion ? nil : motion.state
+      }
+    }
+
     private var folderMorphAnimation: Animation? {
       reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0)
     }
 
-    private func beginNewFolder() {
+    private func beginNewFolder(source: AppInteractionSource) {
+      guard !isCreatingFolder else { return }
       editingFolderID = nil
-      isCreatingFolder = true
       folderNameDraft = ""
-      focusedRow = .newFolder
+      folderCreationSource = source
+      frozenOverflow = overflowPresentation.overflows
+      frozenUnfiledDisclosure = showsUnfiledDisclosure
+      focusedRowBeforeComposition = focusedRow
+      wasUnfiledDisclosureFocusedBeforeComposition = isUnfiledDisclosureFocused
+      noteDropTarget = nil
+      folderReorder = nil
+      withAnimation(folderCreationAnimation(for: source)) {
+        isCreatingFolder = true
+        focusedRow = .newFolder
+      }
     }
 
     private func beginRename(folderID: UUID? = nil) -> Bool {
@@ -2977,33 +3445,74 @@
         id = nil
       }
       guard let id,
+        !isCovered(.folder(id)),
         let folder = appState.workspace.folders.first(where: { $0.id == id })
       else { return false }
       isCreatingFolder = false
+      isNewFolderTextEditing = false
+      frozenOverflow = nil
+      frozenUnfiledDisclosure = nil
+      focusedRowBeforeComposition = nil
+      wasUnfiledDisclosureFocusedBeforeComposition = false
       editingFolderID = id
       folderNameDraft = folder.name
       focusedRow = .folder(id)
       return true
     }
 
-    private func commitFolderEditing() {
+    private func commitFolderEditing(source: AppInteractionSource = .keyboard) {
+      guard !trimmedFolderName.isEmpty else { return }
       do {
         if isCreatingFolder {
           _ = try appState.createFolder(named: folderNameDraft)
         } else if let editingFolderID {
           try appState.renameFolder(id: editingFolderID, name: folderNameDraft)
         }
-        cancelFolderEditing()
+        cancelFolderEditing(source: source)
       } catch {
         appState.saveError = "Could not update folder: \(String(describing: error))"
       }
     }
 
-    private func cancelFolderEditing() {
+    private func cancelFolderEditing(source: AppInteractionSource = .keyboard) {
       editingFolderID = nil
-      isCreatingFolder = false
-      folderNameDraft = ""
-      focusedRow = nil
+      guard isCreatingFolder else {
+        folderNameDraft = ""
+        focusedRow = nil
+        return
+      }
+      folderCreationSource = source
+      isNewFolderTextEditing = false
+      withAnimation(
+        folderCreationAnimation(for: source),
+        completionCriteria: .logicallyComplete
+      ) {
+        isCreatingFolder = false
+        folderNameDraft = ""
+        focusedRow = focusedRowBeforeComposition
+        isUnfiledDisclosureFocused = wasUnfiledDisclosureFocusedBeforeComposition
+      } completion: {
+        guard !isCreatingFolder else { return }
+        frozenOverflow = nil
+        frozenUnfiledDisclosure = nil
+        focusedRowBeforeComposition = nil
+        wasUnfiledDisclosureFocusedBeforeComposition = false
+      }
+    }
+
+    private func rowFrameReader(for target: NoteDropTarget) -> some View {
+      GeometryReader { row in
+        Color.clear.preference(
+          key: FolderRowFrameKey.self,
+          value: [target: row.frame(in: .named("folder-navigator-band"))]
+        )
+      }
+    }
+
+    private func isCovered(_ target: NoteDropTarget) -> Bool {
+      guard isCreatingFolder else { return false }
+      return FolderNavigatorOcclusionPresentation(composerLeadingX: composerLeadingX)
+        .covers(rowFrames[target])
     }
 
     private func updateFocusedRow(_ row: FocusedRow, isFocused: Bool) {
@@ -3017,8 +3526,10 @@
     private func activateFocusedRow() {
       switch focusedRow {
       case .unfiled:
+        guard !isCovered(.unfiled) else { return }
         onSelect(nil)
       case .folder(let id):
+        guard !isCovered(.folder(id)) else { return }
         onSelect(id)
       case .trash:
         onOpenTrash()
@@ -3028,9 +3539,15 @@
     }
 
     private func moveFocus(_ direction: MoveCommandDirection) {
-      let rows: [FocusedRow] = [.unfiled]
-        + appState.workspace.folders.map { .folder($0.id) }
-        + [.trash]
+      let rows: [FocusedRow] = ([FocusedRow.unfiled]
+        + appState.workspace.folders.map { .folder($0.id) })
+        .filter {
+          switch $0 {
+          case .unfiled: !isCovered(.unfiled)
+          case .folder(let id): !isCovered(.folder(id))
+          case .trash, .newFolder: true
+          }
+        } + [.trash]
       guard !rows.isEmpty else { return }
       let currentIndex = focusedRow.flatMap { rows.firstIndex(of: $0) } ?? 0
       focusedRow = rows[
@@ -3052,6 +3569,8 @@
       expectedSource: NoteDropSource
     ) -> Bool {
       noteDropTarget = nil
+      let target = targetFolderID.map(NoteDropTarget.folder) ?? .unfiled
+      guard !isCovered(target) else { return false }
       defer { if draggedSource == expectedSource { draggedSource = nil } }
       guard draggedSource == expectedSource, let dragSession,
         dragSession.id == expectedSource.dragSessionID
@@ -3073,6 +3592,8 @@
       expectedSource: NoteDropSource
     ) -> Bool {
       noteDropTarget = nil
+      let target = targetFolderID.map(NoteDropTarget.folder) ?? .unfiled
+      guard !isCovered(target) else { return false }
       defer { if draggedSource == expectedSource { draggedSource = nil } }
       guard draggedSource == expectedSource, let dragSession,
         dragSession.id == expectedSource.dragSessionID

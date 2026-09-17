@@ -3374,7 +3374,10 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
       "private var folderMorphAnimation: Animation? { reduceMotion ? nil : .smooth(duration: 0.22, extraBounce: 0) }"
     )
   )
-  #expect(body.contains(".animation(folderMorphAnimation, value: isCreatingFolder)"))
+  #expect(navigator.contains("folderCreationAnimation(for: source)"))
+  #expect(navigator.contains(".smooth(duration: 0.22, extraBounce: 0)"))
+  #expect(navigator.contains("folderCreationSource == .pointer"))
+  #expect(navigator.contains("if reduceMotion { return .opacity.animation(motion.state) }"))
   #expect(!body.contains(".animation(motion.spatial, value: isCreatingFolder)"))
 
   #expect(editor.contains("let accent = Color(hex: appState.preferences.accentHex) ?? .accentColor"))
