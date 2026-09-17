@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.0.19-beta.1] - 2026-09-17
+
+### Fixed
+
+- Made the Agent Activity scrollbar track transparent while keeping the complete native thumb
+  draggable and positioned five points inside the panel edge.
+
 ## [1.0.17-beta.1] - 2026-09-16
 
 ### Changed

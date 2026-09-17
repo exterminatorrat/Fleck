@@ -40,6 +40,54 @@
     static let requiresConfirmation = true
   }
 
+  final class AgentActivityScroller: NSScroller {
+    override class var isCompatibleWithOverlayScrollers: Bool { true }
+
+    override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {}
+  }
+
+  struct AgentActivityScrollViewConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> AgentActivityScrollViewConfigurationView {
+      AgentActivityScrollViewConfigurationView()
+    }
+
+    func updateNSView(_ view: AgentActivityScrollViewConfigurationView, context: Context) {
+      view.configureScrollView()
+    }
+  }
+
+  final class AgentActivityScrollViewConfigurationView: NSView {
+    override func viewDidMoveToSuperview() {
+      super.viewDidMoveToSuperview()
+      configureScrollView()
+    }
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      configureScrollView()
+    }
+
+    override func layout() {
+      super.layout()
+      configureScrollView()
+    }
+
+    func configureScrollView() {
+      guard let scrollView = enclosingScrollView else { return }
+      scrollView.drawsBackground = false
+      scrollView.hasVerticalScroller = true
+      scrollView.autohidesScrollers = true
+      scrollView.scrollerStyle = .overlay
+      var scrollerInsets = scrollView.scrollerInsets
+      scrollerInsets.right = 2
+      scrollView.scrollerInsets = scrollerInsets
+      if !(scrollView.verticalScroller is AgentActivityScroller) {
+        scrollView.verticalScroller = AgentActivityScroller()
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+      }
+    }
+  }
+
   struct AgentActivityRowPresentation: Identifiable {
     let record: AgentActivityRecord
     let integrationName: String
@@ -120,6 +168,7 @@
           .keyboardShortcut(.cancelAction)
           .accessibilityLabel("Close Agent Activity")
         }
+        .padding(.horizontal, 18)
 
         if appState.agentActivity.isEmpty {
           ContentUnavailableView(
@@ -128,6 +177,8 @@
             description: Text("Changes made by authorized integrations appear here.")
           )
           .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .padding(.horizontal, 18)
+          .padding(.bottom, 18)
         } else {
           ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
@@ -135,10 +186,13 @@
                 activityRow(row)
               }
             }
+            .padding(.horizontal, 18)
+            .background(AgentActivityScrollViewConfigurator())
           }
+          .padding(.bottom, 18)
         }
       }
-      .padding(18)
+      .padding(.top, 18)
       .task { appState.refreshAgentActivity() }
       .confirmationDialog(
         "Clear Agent Activity?",
