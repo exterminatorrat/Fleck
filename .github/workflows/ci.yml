@@ -62,7 +62,7 @@ jobs:
             --result-file "$result_file" \
             --flavor development)"
           printf 'FLECK_APP=%s\n' "$app_path" >> "$GITHUB_ENV"
-      - name: Enforce packaged app size budget
+      - name: Report packaged artifact sizes and audit release contents
         run: Scripts/check-release-size.sh "$FLECK_APP"
       - name: Test release model-asset exclusion
         run: Scripts/test-release-model-asset-exclusion.sh

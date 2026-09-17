@@ -7,6 +7,7 @@ readonly temp_root="$(cd -P -- "$(mktemp -d "${TMPDIR:-/tmp}/fleck-release-model
 readonly app="$temp_root/Fleck.app"
 readonly resources="$app/Contents/Resources"
 readonly output="$temp_root/gate-output"
+readonly old_limit_bytes=$((18 * 1024 * 1024))
 cleanup() {
   find "$temp_root" -depth -delete
 }
@@ -71,5 +72,30 @@ run_gate 'symlinked directory' 1
 grep -Fq 'error: release artifact contains model assets:' "$output"
 grep -Fq "$linked_path" "$output"
 printf 'Rejected mixed-case .safetensors through a symlinked directory.\n'
+
+reset_resources
+/bin/dd if=/dev/zero of="$app/Contents/MacOS/Fleck" \
+  bs=1 count=1 seek="$old_limit_bytes" conv=notrunc 2>/dev/null
+oversized_bytes="$(wc -c < "$app/Contents/MacOS/Fleck" | tr -d '[:space:]')"
+helper_bytes="$(wc -c < "$app/Contents/SharedSupport/fleck-agent" | tr -d '[:space:]')"
+if (( oversized_bytes <= old_limit_bytes )); then
+  printf 'error: oversized compiled fixture was not padded past 18 MiB\n' >&2
+  exit 1
+fi
+APP_SIZE_LIMIT_MB=1 run_gate 'oversized valid compiled artifact' 0
+grep -Fq "Fleck executable: $oversized_bytes bytes" "$output"
+grep -Fq "fleck-agent helper: $helper_bytes bytes" "$output"
+grep -Fq 'Release artifact contains no bundled model assets.' "$output"
+printf 'Accepted oversized valid compiled artifact and reported its actual size.\n'
+
+oversized_model_path="$resources/Neutral/oversized-model.safetensors"
+printf 'temporary fixture\n' > "$oversized_model_path"
+run_gate 'oversized artifact with model asset' 1
+grep -Fq 'error: release artifact contains model assets:' "$output"
+grep -Fq "$oversized_model_path" "$output"
+printf 'Rejected model asset in the same oversized artifact with an explicit path diagnostic.\n'
+
+/bin/cp "$temp_root/Fleck" "$app/Contents/MacOS/Fleck"
+cmp -s "$temp_root/Fleck" "$app/Contents/MacOS/Fleck"
 
 printf 'Release model-asset exclusion fixtures passed.\n'

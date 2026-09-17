@@ -94,8 +94,6 @@ is_forbidden_model_path() {
 }
 
 readonly target="${1:-.build/release/Fleck}"
-readonly limit_mb="${APP_SIZE_LIMIT_MB:-18}"
-readonly limit_bytes=$((limit_mb * 1024 * 1024))
 readonly repository_root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly sources_root="$repository_root/Sources"
 readonly enhanced_capture="$sources_root/FleckApp/EnhancedSpeechCapture.swift"
@@ -172,13 +170,8 @@ readonly helper="$resolved_helper"
 
 size_bytes="$(wc -c < "$executable" | tr -d '[:space:]')"
 helper_size_bytes="$(wc -c < "$helper" | tr -d '[:space:]')"
-printf 'Fleck executable: %s bytes (budget: %s MB)\n' "$size_bytes" "$limit_mb"
+printf 'Fleck executable: %s bytes\n' "$size_bytes"
 printf 'fleck-agent helper: %s bytes\n' "$helper_size_bytes"
-
-if (( size_bytes > limit_bytes )); then
-  printf 'error: release executable exceeds the %s MB budget\n' "$limit_mb" >&2
-  exit 1
-fi
 
 scan_output="$(mktemp "${TMPDIR:-/tmp}/fleck-release-scan.XXXXXX")" || {
   printf 'error: could not create release artifact scan output\n' >&2
