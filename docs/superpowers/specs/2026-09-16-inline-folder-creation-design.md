@@ -169,13 +169,21 @@ parent. The product version becomes `1.0.17-beta.1`, following the bottom's
 remains authoritative.
 
 The root integrator then authorized local feature checkpoints and an ordinary
-merge of the bottom owner's test-isolation fix. The current exact PR 51 base is
+merge of the bottom owner's test-isolation fix. That intermediate PR 51 base is
 `f7fdd32e51b4e99f7a9eae166684c979c0ee5019`, tree
 `e84f20d3236765acbba1d9a9e6c5da1254fecd9e`, on the same bottom branch. The top
 branch is `capy/inline-folder-creation-pr`; it preserves both bottom fixture
 files, without changing bottom production code or version. Root owns publication
 and the serialized native-fixture verification slot. No bottom branch rewrite or
 historical feature-parent import is part of this reconciliation.
+
+The final current PR 51 base is
+`173f29aa6f852518a119dd990c3375f97de4d264`, tree
+`5af9a085544563952ab5d65925eb894d0d56a4ac`. The bottom owner changed only the
+ordinary macOS CI timeout from 30 to 60 minutes, without removing a gate or
+changing any source, test, version, or package blob. A root-authorized ordinary
+merge preserves the completed native and non-native receipts by exact blob
+comparison; it does not require another native run or imply a green CI result.
 
 The root integrator separately authorized one directly obsolete composition
 audit in `Tests/FleckAppTests/TabDragReorderTests.swift`, making the final scope

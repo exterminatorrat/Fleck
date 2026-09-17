@@ -264,7 +264,7 @@ The publication stack is public `main` at
 (`capy/menu-panel-resize-public-pr`), then this feature. After the initial
 verification, the root integrator authorized local checkpoint commits on
 `capy/inline-folder-creation-pr` and an ordinary merge of the coordinated bottom
-fix. The current exact bottom is
+fix. The first coordinated bottom was
 `f7fdd32e51b4e99f7a9eae166684c979c0ee5019`, tree
 `e84f20d3236765acbba1d9a9e6c5da1254fecd9e`. That bottom update changes only
 AppKit editor and menu-resize fixtures; it changes no production code or version.
@@ -272,6 +272,20 @@ The merge preserves those test-isolation fixes, and the top's diff against this
 bottom remains the eight-file feature scope below. Publication and stack linking
 remain root-owned. This source task does not write the bottom branch, rebase it,
 or import the original feature's parent history.
+
+The final current bottom is
+`173f29aa6f852518a119dd990c3375f97de4d264`, tree
+`5af9a085544563952ab5d65925eb894d0d56a4ac`, on the same PR 51 branch. Its only
+change from `f7fdd32` is the ordinary macOS CI job's time budget from 30 to 60
+minutes in `.github/workflows/ci.yml`; no gate is removed. The bottom owner
+reported that the prior job exhausted its time budget during the validator's
+second full suite. The root integrator authorized another ordinary merge, not a
+rebase or bottom-branch rewrite. Source, tests, version, and package files are
+byte-identical across that update, so the completed 19 + 175 + 1 native checks,
+26 identity-policy tests, and Debug/Release build receipts remain applicable
+through explicit blob comparison. No additional native slot or capture runs as
+part of this workflow-only reconciliation, and no green GitHub CI result is
+inferred from the local receipts.
 
 ### Authorized eight-file scope and integration audit
 
