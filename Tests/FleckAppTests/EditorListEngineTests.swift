@@ -12,6 +12,37 @@ import Testing
   #expect(EditorListEngine.automaticNumber(depth: 2) == .roman)
 }
 
+@Test func toolbarIndentPreservesConcreteStylesAtEveryDepth() {
+  #expect(
+    EditorListEngine.indentPreservingStyle(
+      "i. Roman",
+      removing: false,
+      preferredNumberStyle: .roman
+    ) == "    i. Roman"
+  )
+  #expect(
+    EditorListEngine.indentPreservingStyle(
+      "▪ Square",
+      removing: false
+    ) == "    ▪ Square"
+  )
+  #expect(
+    EditorListEngine.indentPreservingStyle(
+      "1. Decimal",
+      removing: false,
+      preferredNumberStyle: .decimal
+    ) == "    1. Decimal"
+  )
+  #expect(
+    EditorListEngine.indentPreservingStyle(
+      "● Complete",
+      removing: false
+    ) == "    ● Complete"
+  )
+  #expect(EditorListEngine.indentPreservingStyle("- Legacy", removing: false) == "    - Legacy")
+  #expect(EditorListEngine.indentPreservingStyle("1) Legacy", removing: false) == "    1) Legacy")
+}
+
 @Test func parserRecognizesSupportedMarkers() {
   #expect(EditorListEngine.parse("• Item")?.style == .bullet(.disc))
   #expect(EditorListEngine.parse("    ◦ Child")?.depth == 1)

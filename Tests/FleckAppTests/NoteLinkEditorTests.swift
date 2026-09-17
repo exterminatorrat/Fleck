@@ -627,15 +627,20 @@ import Testing
   )
   controller.setQuery(target.title, in: [source, target])
   await settleNoteLinkPicker()
+  var wasPresentedDuringActivation = true
   #expect(
     controller.activateResult(
       target.id,
       currentNoteIDs: Set([source.id, target.id]),
       currentSourceNoteID: source.id,
       currentSourceRevision: source.revision + 1,
-      activate: { activations.append(($0, $1)) }
+      activate: {
+        wasPresentedDuringActivation = controller.isPresented
+        activations.append(($0, $1))
+      }
     )
   )
+  #expect(!wasPresentedDuringActivation)
   #expect(activations.count == 1)
   #expect(activations.first?.0 == target.id)
   #expect(activations.first?.1 == replacementRange)

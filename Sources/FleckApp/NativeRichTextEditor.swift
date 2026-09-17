@@ -43,9 +43,29 @@
     @Published private(set) var currentBackgroundColor: NSColor?
     @Published private(set) var isForegroundColorMixed = false
     @Published private(set) var isBackgroundColorMixed = false
+    @Published private(set) var isBoldMixed = false
+    @Published private(set) var isItalicMixed = false
+    @Published private(set) var isUnderlineMixed = false
+    @Published private(set) var isStrikethrough = false
+    @Published private(set) var isStrikethroughMixed = false
+    @Published var canPasteFormatting = false
+    @Published var currentTextStyle: EditorTextStyle?
+    @Published var isTextStyleMixed = false
+    @Published var currentAlignment: NSTextAlignment?
+    @Published var isAlignmentMixed = false
+    @Published var currentLineSpacing: EditorLineSpacing?
+    @Published var currentParagraphSpacingBefore: CGFloat?
+    @Published var currentParagraphSpacingAfter: CGFloat?
+    @Published var currentBaseline: EditorBaseline?
 
     weak var textView: NSTextView? {
       didSet {
+        if textView !== oldValue {
+          editorSessionGeneration &+= 1
+          hideFindInterface(in: oldValue)
+          copiedFormatting = nil
+          if canPasteFormatting { canPasteFormatting = false }
+        }
         guard focusedDictation != nil else { return }
         guard let origin = focusedDictationTextView else {
           clearFocusedDictation()
@@ -63,8 +83,52 @@
     private var focusedDictationStorageID: ObjectIdentifier?
     private var focusedDictationEditObserver: NSObjectProtocol?
     private var isApplyingFocusedDictationEdit = false
+    var bodyFontFamily = ".AppleSystemUIFont"
+    var bodyFontSize: CGFloat = 17
+    var copiedFormatting: [NSAttributedString.Key: Any]?
+    @Published var areBodyCommandsBlocked = false {
+      didSet {
+        guard areBodyCommandsBlocked != oldValue else { return }
+        editorSessionGeneration &+= 1
+        if areBodyCommandsBlocked {
+          cancelCopiedFormatting()
+          hideFindInterface(in: textView)
+        }
+      }
+    }
+    @Published var isBodyCommandContextBlocked = false {
+      didSet {
+        guard isBodyCommandContextBlocked != oldValue else { return }
+        if isBodyCommandContextBlocked {
+          editorSessionGeneration &+= 1
+          cancelCopiedFormatting()
+          hideFindInterface(in: textView)
+        }
+      }
+    }
+    private(set) var editorSessionGeneration: UInt64 = 0
 
     var isFocusedDictationActive: Bool { focusedDictation != nil }
+
+    private func hideFindInterface(in textView: NSTextView?) {
+      guard textView?.usesFindBar == true else { return }
+      let sender = NSMenuItem()
+      sender.tag = NSTextFinder.Action.hideFindInterface.rawValue
+      textView?.performTextFinderAction(sender)
+      textView?.enclosingScrollView?.isFindBarVisible = false
+    }
+
+    func invalidateEditorSession() {
+      editorSessionGeneration &+= 1
+      cancelCopiedFormatting()
+      hideFindInterface(in: textView)
+    }
+
+    var canPerformEditorHistoryCommand: Bool {
+      guard let textView else { return false }
+      return textView.isEditable && textView.isSelectable
+        && !areBodyCommandsBlocked && !isFocusedDictationActive
+    }
 
     func toggleBold() {
       toggleFontTrait(.boldFontMask)
@@ -83,6 +147,7 @@
 
     func toggleStrikethrough() {
       toggleAttribute(.strikethroughStyle, enabledValue: NSUnderlineStyle.single.rawValue)
+      refreshFormattingState()
     }
 
     var isTitleEditing: Bool {
@@ -93,7 +158,7 @@
     }
 
     func applyFontFamily(_ family: String) {
-      guard let textView else { return }
+      guard canPerformBodyCommand, let textView else { return }
       mutateSelection(defaultValue: NSFont.systemFont(ofSize: textView.font?.pointSize ?? 14)) {
         font, _ in
         NSFontManager.shared.convert(font, toFamily: family)
@@ -111,7 +176,8 @@
 
     @discardableResult
     func applyFontSize(_ size: CGFloat) -> Bool {
-      guard size.isFinite, (1...512).contains(size), let textView else { return false }
+      guard canPerformBodyCommand, size.isFinite, (1...512).contains(size), let textView
+      else { return false }
       mutateSelection(defaultValue: NSFont.systemFont(ofSize: textView.font?.pointSize ?? 14)) {
         font, _ in
         NSFontManager.shared.convert(font, toSize: size)
@@ -121,10 +187,12 @@
     }
 
     func applyList(_ style: EditorListStyle) {
+      guard canPerformBodyCommand else { return }
       (textView as? ListAwareTextView)?.toggleList(style)
     }
 
     func applyAutomaticList(_ family: EditorListFamily) {
+      guard canPerformBodyCommand else { return }
       (textView as? ListAwareTextView)?.toggleAutomaticList(family)
     }
 
@@ -137,16 +205,28 @@
       return textView?.undoManager ?? textView?.window?.undoManager
     }
 
-    func undo() { activeUndoManager?.undo() }
-    func redo() { activeUndoManager?.redo() }
+    func undo() {
+      guard canPerformEditorHistoryCommand else { return }
+      activeUndoManager?.undo()
+    }
+
+    func redo() {
+      guard canPerformEditorHistoryCommand else { return }
+      activeUndoManager?.redo()
+    }
 
     @discardableResult
     func insertNoteLink(
       replacing range: NSRange,
       label: String,
-      targetNoteID: UUID
+      targetNoteID: UUID,
+      expectedTextView: NSTextView? = nil,
+      expectedStorage: NSTextStorage? = nil
     ) -> Bool {
-      guard let textView,
+      guard canPerformBodyCommand,
+        let textView,
+        expectedTextView == nil || textView === expectedTextView,
+        expectedStorage == nil || textView.textStorage === expectedStorage,
         range.location != NSNotFound,
         range.location >= 0,
         NSMaxRange(range) <= (textView.string as NSString).length
@@ -183,10 +263,16 @@
     }
 
     func refreshFormattingState() {
+      defer { refreshExpandedFormattingState() }
       guard let textView else {
         isBold = false
         isItalic = false
         isUnderlined = false
+        isStrikethrough = false
+        isBoldMixed = false
+        isItalicMixed = false
+        isUnderlineMixed = false
+        isStrikethroughMixed = false
         currentFontFamily = nil
         currentFontSize = nil
         isFontFamilyMixed = false
@@ -214,6 +300,11 @@
       isBold = traits.contains(.boldFontMask)
       isItalic = traits.contains(.italicFontMask)
       isUnderlined = (attributes[.underlineStyle] as? Int ?? 0) != 0
+      isStrikethrough = (attributes[.strikethroughStyle] as? Int ?? 0) != 0
+      isBoldMixed = false
+      isItalicMixed = false
+      isUnderlineMixed = false
+      isStrikethroughMixed = false
 
       guard range.length > 0, let storage = textView.textStorage, storage.length > 0 else {
         currentFontFamily = font?.familyName
@@ -237,6 +328,10 @@
       var backgroundWasSet = false
       var foregroundMixed = false
       var backgroundMixed = false
+      var boldValues = Set<Bool>()
+      var italicValues = Set<Bool>()
+      var underlineValues = Set<Bool>()
+      var strikethroughValues = Set<Bool>()
       storage.enumerateAttributes(in: range) { attributes, _, _ in
         let runFont = attributes[.font] as? NSFont
         let runFamily = runFont?.familyName
@@ -265,6 +360,11 @@
         } else if !colorsMatch(background, runBackground) {
           backgroundMixed = true
         }
+        let runTraits = runFont.map { NSFontManager.shared.traits(of: $0) } ?? []
+        boldValues.insert(runTraits.contains(.boldFontMask))
+        italicValues.insert(runTraits.contains(.italicFontMask))
+        underlineValues.insert((attributes[.underlineStyle] as? Int ?? 0) != 0)
+        strikethroughValues.insert((attributes[.strikethroughStyle] as? Int ?? 0) != 0)
       }
       currentFontFamily = familyMixed ? nil : family
       currentFontSize = sizeMixed ? nil : size
@@ -274,6 +374,14 @@
       currentBackgroundColor = backgroundMixed ? nil : background
       isForegroundColorMixed = foregroundMixed
       isBackgroundColorMixed = backgroundMixed
+      isBoldMixed = boldValues.count > 1
+      isItalicMixed = italicValues.count > 1
+      isUnderlineMixed = underlineValues.count > 1
+      isStrikethroughMixed = strikethroughValues.count > 1
+      isBold = boldValues == [true]
+      isItalic = italicValues == [true]
+      isUnderlined = underlineValues == [true]
+      isStrikethrough = strikethroughValues == [true]
     }
 
     private func colorsMatch(_ lhs: NSColor?, _ rhs: NSColor?) -> Bool {
@@ -295,15 +403,29 @@
     }
 
     private func toggleFontTrait(_ trait: NSFontTraitMask) {
-      guard let textView else { return }
+      guard canPerformBodyCommand, let textView else { return }
       let manager = NSFontManager.shared
+      let selection = textView.selectedRange()
+      var shouldEnable = true
+      if selection.length > 0, let storage = textView.textStorage {
+        shouldEnable = false
+        storage.enumerateAttribute(.font, in: selection) { value, _, stop in
+          guard let font = value as? NSFont,
+            manager.traits(of: font).contains(trait)
+          else {
+            shouldEnable = true
+            stop.pointee = true
+            return
+          }
+        }
+      } else if let font = textView.typingAttributes[.font] as? NSFont {
+        shouldEnable = !manager.traits(of: font).contains(trait)
+      }
       mutateSelection(defaultValue: NSFont.systemFont(ofSize: textView.font?.pointSize ?? 14)) {
         font, attributes in
-        let existing = manager.traits(of: font)
-        if existing.contains(trait) {
-          return manager.convert(font, toNotHaveTrait: trait)
-        }
-        return manager.convert(font, toHaveTrait: trait)
+        shouldEnable
+          ? manager.convert(font, toHaveTrait: trait)
+          : manager.convert(font, toNotHaveTrait: trait)
       }
     }
 
@@ -332,7 +454,7 @@
     }
 
     private func applyColor(_ color: NSColor?, key: NSAttributedString.Key) {
-      guard let textView else { return }
+      guard canPerformBodyCommand, let textView else { return }
       (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       let range = textView.selectedRange()
       if range.length == 0 {
@@ -371,7 +493,7 @@
     }
 
     private func toggleAttribute(_ key: NSAttributedString.Key, enabledValue: Int) {
-      guard let textView else { return }
+      guard canPerformBodyCommand, let textView else { return }
       (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       let range = textView.selectedRange()
       if range.length == 0 {
@@ -379,11 +501,20 @@
         textView.typingAttributes[key] = isEnabled ? 0 : enabledValue
         return
       }
-      let isEnabled =
-        (textView.textStorage?.attribute(key, at: range.location, effectiveRange: nil) as? Int ?? 0)
-        != 0
-      textView.textStorage?.addAttribute(key, value: isEnabled ? 0 : enabledValue, range: range)
+      var shouldEnable = false
+      textView.textStorage?.enumerateAttribute(key, in: range) { value, _, stop in
+        if (value as? Int ?? 0) == 0 {
+          shouldEnable = true
+          stop.pointee = true
+        }
+      }
+      textView.textStorage?.addAttribute(
+        key,
+        value: shouldEnable ? enabledValue : 0,
+        range: range
+      )
       textView.didChangeText()
+      refreshFormattingState()
     }
 
     func attributedBindingSnapshot(for textView: NSTextView) -> NSAttributedString? {
@@ -540,6 +671,8 @@
       focusedDictationTextViewID = ObjectIdentifier(textView)
       focusedDictationStorageID = ObjectIdentifier(storage)
       observeFocusedDictationEdits(in: storage)
+      editorSessionGeneration &+= 1
+      hideFindInterface(in: textView)
       return true
     }
 
@@ -1092,12 +1225,16 @@
       let textView = ListAwareTextView(frame: .zero)
       textView.delegate = context.coordinator
       textView.isRichText = true
+      textView.isEditable = isEnabled
+      textView.isSelectable = isEnabled
       textView.importsGraphics = false
       textView.inlineImageStore = inlineImageStore
       textView.onInlineImageError = onInlineImageError
       textView.allowsUndo = true
       textView.isAutomaticSpellingCorrectionEnabled = true
       textView.isContinuousSpellCheckingEnabled = true
+      textView.usesFindBar = true
+      textView.isIncrementalSearchingEnabled = true
       textView.drawsBackground = false
       textView.textContainerInset = NSSize(width: 16, height: 8)
       textView.textContainer?.lineFragmentPadding = 0
@@ -1135,6 +1272,7 @@
         context.coordinator.undoManager = undoManager
       }
       if isVisible {
+        commands.configureBodyDefaults(family: fontFamily, size: fontSize)
         commands.textView = textView
         commands.refreshFormattingState()
       }
@@ -1184,9 +1322,12 @@
         context.coordinator.undoManager = undoManager
       }
       if isVisible {
+        commands.configureBodyDefaults(family: fontFamily, size: fontSize)
         commands.textView = textView
       }
       textView.automaticLists = automaticLists
+      textView.isEditable = isEnabled
+      textView.isSelectable = isEnabled
       textView.checklistAccentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
       textView.reduceMotion = reduceMotion
       (documentView.titleField.cell as? NoteTitleCell)?.accentColor =
@@ -2962,6 +3103,132 @@
           around: NSRange(location: range.location, length: changed.utf16.count)
         )
       }
+    }
+
+    var selectionContainsListParagraph: Bool {
+      guard let range = selectedParagraphRange() else { return false }
+      let ns = string as NSString
+      var location = range.location
+      while location < NSMaxRange(range) {
+        var start = 0
+        var end = 0
+        var contentsEnd = 0
+        ns.getParagraphStart(
+          &start,
+          end: &end,
+          contentsEnd: &contentsEnd,
+          for: NSRange(location: location, length: 0)
+        )
+        if EditorListEngine.parse(
+          ns.substring(with: NSRange(location: start, length: contentsEnd - start))
+        ) != nil {
+          return true
+        }
+        location = end
+      }
+      return false
+    }
+
+    @discardableResult
+    func adjustSelectedParagraphIndent(removing: Bool) -> Bool {
+      guard isEditable, let storage = textStorage,
+        let range = selectedParagraphRange()
+      else { return false }
+      let source = storage.attributedSubstring(from: range)
+      let sourceNSString = source.string as NSString
+      let replacement = NSMutableAttributedString()
+      var relativeLocation = 0
+      while relativeLocation < source.length {
+        var start = 0
+        var end = 0
+        var contentsEnd = 0
+        sourceNSString.getParagraphStart(
+          &start,
+          end: &end,
+          contentsEnd: &contentsEnd,
+          for: NSRange(location: relativeLocation, length: 0)
+        )
+        let lineLength = contentsEnd - start
+        let segmentLength = end - start
+        let line = sourceNSString.substring(
+          with: NSRange(location: start, length: lineLength)
+        )
+        let segment = NSMutableAttributedString(
+          attributedString: source.attributedSubstring(
+            from: NSRange(location: start, length: segmentLength)
+          )
+        )
+        let preferredNumberStyle = numberStyleMetadata(at: range.location + start)
+        if EditorListEngine.parse(line, preferredNumberStyle: preferredNumberStyle) != nil {
+          let changed = EditorListEngine.indentPreservingStyle(
+            line,
+            removing: removing,
+            preferredNumberStyle: preferredNumberStyle
+          )
+          let whitespaceDelta = changed.utf16.count - lineLength
+          if whitespaceDelta > 0 {
+            let attributes = segment.length > 0
+              ? segment.attributes(at: 0, effectiveRange: nil)
+              : typingAttributes
+            segment.insert(
+              NSAttributedString(
+                string: String(repeating: " ", count: whitespaceDelta),
+                attributes: attributes
+              ),
+              at: 0
+            )
+          } else if whitespaceDelta < 0 {
+            segment.deleteCharacters(
+              in: NSRange(location: 0, length: -whitespaceDelta)
+            )
+          }
+        } else if segment.length > 0 {
+          let style = ((segment.attribute(
+            .paragraphStyle,
+            at: 0,
+            effectiveRange: nil
+          ) as? NSParagraphStyle) ?? .default).mutableCopy() as! NSMutableParagraphStyle
+          let delta: CGFloat = removing ? -24 : 24
+          style.headIndent = min(max(style.headIndent + delta, 0), 240)
+          style.firstLineHeadIndent = min(max(style.firstLineHeadIndent + delta, 0), 240)
+          segment.addAttribute(
+            .paragraphStyle,
+            value: style,
+            range: NSRange(location: 0, length: segment.length)
+          )
+        }
+        replacement.append(segment)
+        relativeLocation = end
+      }
+
+      guard !replacement.isEqual(to: source) else { return false }
+      performUndoGroup {
+        _ = replaceAttributedText(
+          in: range,
+          with: replacement,
+          selecting: NSRange(location: range.location, length: replacement.length)
+        )
+      }
+      return true
+    }
+
+    private func selectedParagraphRange() -> NSRange? {
+      let ns = string as NSString
+      let selection = selectedRange()
+      guard ns.length > 0, selection.location != NSNotFound,
+        selection.location >= 0, NSMaxRange(selection) <= ns.length
+      else { return nil }
+      if selection.length == 0, selection.location == ns.length {
+        return ns.paragraphRange(for: selection)
+      }
+      let start = min(selection.location, ns.length - 1)
+      let end = selection.length > 0
+        ? min(max(start, NSMaxRange(selection) - 1), ns.length - 1)
+        : start
+      return NSUnionRange(
+        ns.paragraphRange(for: NSRange(location: start, length: 0)),
+        ns.paragraphRange(for: NSRange(location: end, length: 0))
+      )
     }
 
     @objc func requestNoteLinkFromMenu(_ sender: Any?) {

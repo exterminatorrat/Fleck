@@ -13,6 +13,14 @@ import Testing
   }
 }
 
+@MainActor private final class HostedRecordingFinderTextView: NSTextView {
+  var finderActionTags: [Int] = []
+
+  override func performTextFinderAction(_ sender: Any?) {
+    finderActionTags.append((sender as? NSMenuItem)?.tag ?? -1)
+  }
+}
+
 @Test @MainActor func pasteOptionTitlesMatchWordOrder() {
   #expect(
     PasteOption.allCases.map(\.title) == [
@@ -2529,6 +2537,222 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   #expect(source.contains("accessibilityHint(\"Enter a size from 1 through 512 points.\")"))
 }
 
+@Test @MainActor func formattingBarUsesApprovedInlineMenuIconsAndTextualOverflowMenus() throws {
+  let source = try notesPanelSource()
+  let formattingBar = try #require(
+    source.components(separatedBy: "private struct FormattingBar: View").last?
+      .components(separatedBy: "private struct EditorFindShortcutRouter").first
+  )
+  let directItems = try #require(
+    source.components(separatedBy: "private func directItem(_ item:").last?
+      .components(separatedBy: "private var dictationButton").first
+  )
+  let overflowItems = try #require(
+    source.components(separatedBy: "private func overflowItem(_ item:").last?
+      .components(separatedBy: "private func bulletMenuItems").first
+  )
+  let iconLabel = try #require(
+    source.components(separatedBy: "private struct FormattingMenuIconLabel: View").last?
+      .components(separatedBy: "struct FormattingOverflowLabel: View").first
+  )
+
+  for symbol in ["textformat.alt", "arrow.up.and.down.text.horizontal", "wrench.adjustable"] {
+    #expect(NSImage(systemSymbolName: symbol, accessibilityDescription: nil) != nil)
+  }
+  #expect(directItems.contains("textMenu(iconOnly: true)"))
+  #expect(directItems.contains("paragraphMenu(iconOnly: true)"))
+  #expect(directItems.contains("toolsInsertMenu(title: \"Tools\", iconOnly: true)"))
+  #expect(overflowItems.contains("textMenu(iconOnly: false)"))
+  #expect(overflowItems.contains("paragraphMenu(iconOnly: false)"))
+  #expect(overflowItems.contains("toolsInsertMenu(title: \"Tools / Insert\", iconOnly: false)"))
+  #expect(source.contains("FormattingMenuIconLabel(systemImage: \"textformat.alt\")"))
+  #expect(source.contains("FormattingMenuIconLabel(systemImage: \"arrow.up.and.down.text.horizontal\")"))
+  #expect(source.contains("FormattingMenuIconLabel(systemImage: \"wrench.adjustable\")"))
+  #expect(source.components(separatedBy: "FormattingMenuIconLabel(systemImage:").count - 1 == 3)
+  #expect(iconLabel.contains("ToolbarIconLabel(systemImage: systemImage)"))
+  #expect(iconLabel.components(separatedBy: "Image(systemName: \"chevron.down\")").count - 1 == 1)
+  #expect(iconLabel.contains(".font(.system(size: 8, weight: .semibold))"))
+  #expect(iconLabel.contains(".accessibilityHidden(true)"))
+  #expect(iconLabel.contains(".contentShape(Rectangle())"))
+  #expect(!iconLabel.contains(".frame(width:"))
+  #expect(source.contains(".frame(width: 28, height: 26)"))
+  #expect(source.components(separatedBy: ".menuIndicator(iconOnly ? .hidden : .automatic)").count - 1 == 3)
+  #expect(source.contains("Text(\"Text\")"))
+  #expect(source.contains("Text(\"Paragraph\")"))
+  #expect(source.contains("Text(title)"))
+  #expect(source.contains(".accessibilityLabel(\"Text\")"))
+  #expect(source.contains(".accessibilityLabel(\"Paragraph\")"))
+  #expect(source.contains(".accessibilityLabel(title)"))
+  #expect(source.contains(".help(\"Text formatting\")"))
+  #expect(source.contains(".help(\"Paragraph formatting\")"))
+  #expect(source.contains(".help(\"Links and find tools\")"))
+  #expect(source.contains("FormattingOverflowLabel()"))
+  #expect(source.contains("Image(systemName: \"ellipsis\")"))
+  #expect(source.contains(".font(.system(size: 17, weight: .bold))"))
+  #expect(!formattingBar.contains("ellipsis.circle"))
+  #expect(formattingBar.components(separatedBy: ".popover(item: $presentedPopover").count - 1 == 1)
+  #expect(!formattingBar.contains(".popover(isPresented:"))
+  #expect(formattingBar.contains("case webLink"))
+  #expect(formattingBar.contains("case .webLink:"))
+
+  for commandRoute in [
+    "commands.clearTextFormatting()",
+    "commands.copyFormatting()",
+    "commands.pasteFormatting()",
+    "commands.cancelCopiedFormatting()",
+    "commands.applyAlignment(alignment)",
+    "commands.increaseIndent()",
+    "commands.decreaseIndent()",
+    "commands.performFind(.showFind)",
+    "commands.performFind(.showReplace)",
+    "commands.performFind(.nextMatch)",
+    "commands.performFind(.previousMatch)",
+  ] {
+    #expect(source.contains(commandRoute))
+  }
+  let shortcutRouter = try #require(
+    source.components(separatedBy: "private struct EditorFindShortcutRouter").last?
+      .components(separatedBy: "private struct PinnedNavigationChromeSurface").first
+  )
+  #expect(!formattingBar.contains("EditorFindShortcutRouter"))
+  #expect(source.components(separatedBy: "EditorFindShortcutRouter(commands: editorCommands)").count - 1 == 1)
+  #expect(shortcutRouter.contains("event.charactersIgnoringModifiers?.lowercased()"))
+  #expect(shortcutRouter.contains("modifiers == [.command, .option]"))
+  #expect(shortcutRouter.contains("modifiers == [.command, .option, .shift]"))
+  #expect(shortcutRouter.contains("modifiers == [.command]"))
+  #expect(shortcutRouter.contains("modifiers == [.command, .shift]"))
+  for action in ["showFind", "showReplace", "nextMatch", "previousMatch"] {
+    #expect(shortcutRouter.components(separatedBy: "action = .\(action)").count - 1 == 1)
+  }
+}
+
+@Test @MainActor func formattingBarIconMenusHaveUniqueAccessibleHitFramesAcrossProfiles() async throws {
+  NSApplication.shared.accessibilitySetValue(
+    true,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+  let profiles: [(
+    label: String,
+    appearance: NSAppearance.Name,
+    colorScheme: ColorScheme,
+    reduceTransparency: Bool
+  )] = [
+    ("light", .aqua, .light, false),
+    ("dark", .darkAqua, .dark, false),
+    ("high-contrast", .accessibilityHighContrastAqua, .light, false),
+    ("reduced-transparency", .darkAqua, .dark, true),
+  ]
+  let iconMenus = [
+    (label: "Text Style", minimumWidth: CGFloat(28)),
+    (label: "Text", minimumWidth: CGFloat(40)),
+    (label: "Paragraph", minimumWidth: CGFloat(40)),
+    (label: "Tools", minimumWidth: CGFloat(40)),
+  ]
+
+  for profile in profiles {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let note = Note(title: "Icon menu fixture", body: "Body")
+    let state = await hostedPanelState(
+      root: root,
+      workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+    )
+    let commands = EditorCommands()
+    let (window, host) = hostedPanel(
+      root: root,
+      state: state,
+      commands: commands,
+      isPinned: true
+    )
+    defer { window.orderOut(nil) }
+    window.appearance = NSAppearance(named: profile.appearance)
+    host.rootView = AnyView(
+      host.rootView
+        .environment(\.colorScheme, profile.colorScheme)
+        .environment(\._accessibilityReduceTransparency, profile.reduceTransparency)
+    )
+
+    func captureOwnedWindow(width: CGFloat) throws {
+      guard ProcessInfo.processInfo.environment["FLECK_TOOLBAR_WINDOW_CAPTURE"] == "1" else {
+        return
+      }
+      try #require(CGPreflightScreenCaptureAccess())
+      let windowNumber = window.windowNumber
+      try #require(windowNumber > 0)
+      try #require(window.contentView === host)
+      let windowInfo = try #require(
+        CGWindowListCopyWindowInfo(
+          [.optionIncludingWindow],
+          CGWindowID(windowNumber)
+        ) as? [[String: Any]]
+      )
+      let matchingWindow = try #require(windowInfo.first { info in
+        (info[kCGWindowNumber as String] as? NSNumber)?.intValue == windowNumber
+      })
+      let ownerPID = try #require(
+        (matchingWindow[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
+      )
+      try #require(ownerPID == ProcessInfo.processInfo.processIdentifier)
+      let destination = try fontPickerEvidenceDirectory().appendingPathComponent(
+        "toolbar-icon-menus-\(profile.label)-\(Int(width)).png"
+      )
+      try #require(!FileManager.default.fileExists(atPath: destination.path))
+      let process = Process()
+      let output = Pipe()
+      process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+      process.arguments = ["-x", "-o", "-l", String(windowNumber), destination.path]
+      process.standardOutput = output
+      process.standardError = output
+      try process.run()
+      process.waitUntilExit()
+      let message = String(
+        data: output.fileHandleForReading.readDataToEndOfFile(),
+        encoding: .utf8
+      ) ?? ""
+      guard process.terminationStatus == 0 else {
+        Issue.record("Owned toolbar capture failed (\(process.terminationStatus)): \(message)")
+        throw CocoaError(.fileWriteUnknown)
+      }
+      try #require(FileManager.default.fileExists(atPath: destination.path))
+    }
+
+    for width in [CGFloat(380), 800, 1_600] {
+      state.updatePreferences { $0.panelWidth = width }
+      window.setContentSize(NSSize(width: width, height: 430))
+      await settleHostedView(host)
+      var frames: [CGRect] = []
+      var visibleCount = 0
+      for menu in iconMenus {
+        let elements = fontPickerAccessibilityElements(host, label: menu.label)
+        #expect(elements.count <= 1)
+        if let element = elements.first {
+          visibleCount += 1
+          let frame = try #require(
+            element.value(forKey: "accessibilityFrame") as? NSValue
+          ).rectValue
+          #expect(frame.width >= menu.minimumWidth)
+          #expect(frame.height >= 26)
+          #expect(frames.allSatisfy { !$0.intersects(frame) })
+          frames.append(frame)
+        }
+      }
+      #expect(iconMenus.prefix(visibleCount).allSatisfy {
+        fontPickerAccessibilityElements(host, label: $0.label).count == 1
+      })
+      #expect(iconMenus.dropFirst(visibleCount).allSatisfy {
+        fontPickerAccessibilityElements(host, label: $0.label).isEmpty
+      })
+      if width == 1_600 {
+        #expect(visibleCount == iconMenus.count)
+        #expect(fontPickerAccessibilityElements(host, label: "More formatting").isEmpty)
+      } else {
+        #expect(fontPickerAccessibilityElements(host, label: "More formatting").count == 1)
+      }
+      try captureOwnedWindow(width: width)
+    }
+  }
+}
+
 @Test @MainActor func formattingBarAdaptsOneReachableCommandSurfaceAtSupportedWidths() async throws {
   #expect(
     NotesPanelSizing.storedSize(
@@ -2563,7 +2787,8 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
 
   let leadingLabels = [
     "Start Dictation", "Undo", "Redo", "Bold", "Italic", "Underline", "Strikethrough", "Font",
-    "Font size", "Font Color", "Highlight", "Bullets", "Numbers", "Checklist",
+    "Font size", "Font Color", "Highlight", "Bullets", "Numbers", "Checklist", "Text Style",
+    "Text", "Paragraph", "Tools",
   ]
   let fullLabels = leadingLabels + ["Delete"]
   func expectControlFramesWithinWindow(_ labels: [String], panelWidth: CGFloat) throws {
@@ -2593,7 +2818,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   }
 
   var deleteTrailingInset: CGFloat?
-  for panelWidth in [CGFloat(1_200), 1_000, 800] {
+  for panelWidth in [CGFloat(1_600), 1_200, 1_000] {
     state.updatePreferences { $0.panelWidth = panelWidth }
     window.setContentSize(NSSize(width: panelWidth, height: 430))
     await settleHostedView(host)
@@ -2616,7 +2841,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   }
 
   var countsByWidth: [(width: CGFloat, visibleCount: Int)] = []
-  for panelWidth in stride(from: CGFloat(799), through: 380, by: -1) {
+  for panelWidth in stride(from: CGFloat(999), through: 380, by: -1) {
     state.updatePreferences { $0.panelWidth = panelWidth }
     window.setContentSize(NSSize(width: panelWidth, height: 430))
     await settleHostedView(host)
@@ -2665,8 +2890,128 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     $0.visibleCount != $1.visibleCount
   }
   #expect(transitions.allSatisfy { $0.width - $1.width == 1 })
-  // Keyboard dispatch requires a key application, which this hosted xctest process cannot
-  // provide. The native-app acceptance pass verifies shortcuts in direct and overflow forms.
+  // Owned-window key-equivalent dispatch is covered separately from fitting transitions.
+}
+
+@Test @MainActor
+func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() async throws {
+  NSApplication.shared.accessibilitySetValue(
+    true,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+  let expectedTags = [
+    NSTextFinder.Action.showFindInterface.rawValue,
+    NSTextFinder.Action.showReplaceInterface.rawValue,
+    NSTextFinder.Action.nextMatch.rawValue,
+    NSTextFinder.Action.previousMatch.rawValue,
+  ]
+
+  for width in [CGFloat(380), 800, 1_600] {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let folder = try Folder(id: UUID(), name: "Hidden")
+    let note = Note(title: "Find shortcuts", body: "Find this body")
+    let state = await hostedPanelState(
+      root: root,
+      workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [folder])
+    )
+    state.updatePreferences { $0.panelWidth = width }
+    let commands = EditorCommands()
+    let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+    defer { window.orderOut(nil) }
+    window.setContentSize(NSSize(width: width, height: 430))
+    await settleHostedView(host)
+    let editor = try #require(hostedPanelEditor(in: host))
+    let title = try #require(hostedPanelTitleField(with: note.title, in: host))
+    let sink = HostedRecordingFinderTextView(frame: .zero)
+    sink.string = "Find this body"
+    sink.isEditable = true
+    sink.isSelectable = true
+    sink.usesFindBar = true
+    #expect(
+      fontPickerAccessibilityElements(host, label: "More formatting").count
+        == (width < 1_600 ? 1 : 0)
+    )
+
+    func dispatchAll() throws -> [Bool] {
+      [
+        try sendHostedKeyEquivalent(
+          "f", keyCode: 3, modifiers: [.command, .option], to: window
+        ),
+        try sendHostedKeyEquivalent(
+          "f", keyCode: 3, modifiers: [.command, .option, .shift], to: window
+        ),
+        try sendHostedKeyEquivalent("g", keyCode: 5, modifiers: [.command], to: window),
+        try sendHostedKeyEquivalent(
+          "g", keyCode: 5, modifiers: [.command, .shift], to: window
+        ),
+      ]
+    }
+
+    #expect(window.makeFirstResponder(editor))
+    commands.textView = sink
+    #expect(try dispatchAll().allSatisfy { $0 })
+    #expect(sink.finderActionTags == expectedTags)
+
+    commands.textView = editor
+    #expect(window.makeFirstResponder(title))
+    let fieldEditor = try #require(window.fieldEditor(false, for: title) as? NSTextView)
+    #expect(window.firstResponder === fieldEditor)
+    await settleHostedView(host)
+    commands.isBodyCommandContextBlocked = true
+    commands.textView = sink
+    let beforeTitle = sink.finderActionTags
+    _ = try dispatchAll()
+    #expect(sink.finderActionTags == beforeTitle)
+    commands.isBodyCommandContextBlocked = false
+
+    commands.textView = editor
+    #expect(window.makeFirstResponder(editor))
+    await settleHostedView(host)
+    commands.textView = sink
+    commands.areBodyCommandsBlocked = true
+    let beforeOverlay = sink.finderActionTags
+    _ = try dispatchAll()
+    #expect(sink.finderActionTags == beforeOverlay)
+    commands.areBodyCommandsBlocked = false
+
+    #expect(commands.beginFocusedDictation())
+    let beforeDictation = sink.finderActionTags
+    _ = try dispatchAll()
+    #expect(sink.finderActionTags == beforeDictation)
+    commands.cancelFocusedDictation()
+
+    commands.textView = editor
+    setHostedPanelNoteFolder(state, noteID: note.id, folderID: folder.id)
+    await settleHostedView(host)
+    #expect(commands.textView == nil)
+    commands.textView = sink
+    let beforeHidden = sink.finderActionTags
+    _ = try dispatchAll()
+    #expect(sink.finderActionTags == beforeHidden)
+
+    setHostedPanelNoteFolder(state, noteID: note.id, folderID: nil)
+    await settleHostedView(host)
+    state.updatePreferences { $0.showFormattingBar = false }
+    await settleHostedView(host)
+    #expect(fontPickerAccessibilityElements(host, label: "Editor toolbar").isEmpty)
+    #expect(window.makeFirstResponder(editor))
+    commands.textView = sink
+    let beforeHiddenToolbar = sink.finderActionTags
+    #expect(try dispatchAll().allSatisfy { $0 })
+    #expect(Array(sink.finderActionTags.dropFirst(beforeHiddenToolbar.count)) == expectedTags)
+
+    let beforeWorkspaceSearch = sink.finderActionTags
+    sink.usesFindBar = false
+    #expect(try sendHostedKeyEquivalent("f", keyCode: 3, modifiers: [.command], to: window))
+    await settleHostedView(host)
+    #expect(sink.finderActionTags == beforeWorkspaceSearch)
+    #expect(
+      hostedDescendants(in: host, as: NSTextField.self)
+        .contains { $0.placeholderString == "Search notes" }
+    )
+  }
 }
 
 @Test @MainActor func toolbarOverflowPreservesPickerActionsAndFormattingStateAcrossWidths() async throws {
@@ -2711,7 +3056,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   state.updatePreferences { $0.panelWidth = 800 }
   window.setContentSize(NSSize(width: 800, height: 430))
   await settleHostedView(host)
-  #expect(fontPickerAccessibilityElement(host, label: "More formatting") == nil)
+  #expect(fontPickerAccessibilityElement(host, label: "More formatting") != nil)
   let fontColor = try #require(fontPickerAccessibilityElement(host, label: "Font Color"))
   let colorValue = fontColor.perform(NSSelectorFromString("accessibilityValue"))?
     .takeUnretainedValue() as? String
@@ -2802,7 +3147,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   let directLabels = [
     "Start Dictation", "Undo", "Redo", "Bold", "Italic", "Underline", "Strikethrough",
     "Font", "Font size", "Font Color", "Highlight", "Bullets", "Numbers", "Checklist",
-    "Delete",
+    "Text Style", "Text", "Paragraph", "Tools", "Delete",
   ]
   func setWidth(_ width: CGFloat) async {
     state.updatePreferences { $0.panelWidth = width }
@@ -2869,7 +3214,7 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   let labels = [
     "Start Dictation", "Undo", "Redo", "Bold", "Italic", "Underline", "Strikethrough",
     "Font", "Font size", "Font Color", "Highlight", "Bullets", "Numbers", "Checklist",
-    "Delete",
+    "Text Style", "Text", "Paragraph", "Tools", "Delete",
   ]
   func setWidth(_ width: CGFloat) async {
     state.updatePreferences { $0.panelWidth = width }
@@ -5261,12 +5606,13 @@ private func setHostedPanelSelectedNote(_ state: AppState, noteID: UUID) {
 }
 
 @MainActor
+@discardableResult
 private func sendHostedKeyEquivalent(
   _ characters: String,
   keyCode: UInt16,
   modifiers: NSEvent.ModifierFlags,
   to window: NSWindow
-) throws {
+) throws -> Bool {
   let event = try #require(
     NSEvent.keyEvent(
       with: .keyDown,
@@ -5281,7 +5627,7 @@ private func sendHostedKeyEquivalent(
       keyCode: keyCode
     )
   )
-  _ = window.performKeyEquivalent(with: event)
+  return window.performKeyEquivalent(with: event)
 }
 
 @MainActor

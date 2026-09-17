@@ -239,6 +239,20 @@
       }.joined(separator: "\n")
     }
 
+    static func indentPreservingStyle(
+      _ line: String,
+      removing: Bool,
+      preferredNumberStyle: EditorNumberStyle? = nil
+    ) -> String {
+      guard let parsed = parse(line, preferredNumberStyle: preferredNumberStyle) else {
+        return line
+      }
+      let newDepth = removing ? max(0, parsed.depth - 1) : parsed.depth + 1
+      guard newDepth != parsed.depth else { return line }
+      return String(repeating: indentation, count: newDepth)
+        + line.dropFirst(parsed.depth * indentation.count)
+    }
+
     static func renumber(
       _ text: String,
       preferredNumberStyle: EditorNumberStyle? = nil

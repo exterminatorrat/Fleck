@@ -231,6 +231,10 @@
       let fileURL: URL
     }
 
+    static func referenceRanges(in text: String) -> [NSRange] {
+      referenceMatches(in: text).map(\.range)
+    }
+
     private static func referenceMatches(in text: String) -> [ReferenceMatch] {
       let range = NSRange(location: 0, length: (text as NSString).length)
       return referenceExpression.matches(in: text, range: range).compactMap { match in
