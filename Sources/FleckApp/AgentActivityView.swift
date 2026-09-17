@@ -41,9 +41,67 @@
   }
 
   final class AgentActivityScroller: NSScroller {
+    static let visualKnobWidth: CGFloat = 4
+    static let visualMinimumKnobLength: CGFloat = 24
+    static let visualTrailingInset: CGFloat = 3
+    static let visualTrackInset: CGFloat = 3
+
+    private var heldVisualKnobLength: CGFloat?
+
     override class var isCompatibleWithOverlayScrollers: Bool { true }
 
+    var visualKnobRect: NSRect {
+      let width = min(Self.visualKnobWidth, bounds.width)
+      let trackInset = min(Self.visualTrackInset, bounds.height / 2)
+      let track = bounds.insetBy(dx: 0, dy: trackInset)
+      guard width > 0, track.height > 0 else { return .zero }
+
+      let proportion = min(max(knobProportion, 0), 1)
+      let naturalLength = track.height * proportion
+      let length = min(
+        track.height,
+        heldVisualKnobLength ?? floor(max(Self.visualMinimumKnobLength, naturalLength))
+      )
+      let position = min(max(CGFloat(doubleValue), 0), 1)
+      let travel = track.height - length
+      let y = floor(isFlipped
+        ? track.minY + travel * position
+        : track.maxY - length - travel * position)
+      let trailingInset = min(Self.visualTrailingInset, bounds.width - width)
+      return NSRect(
+        x: bounds.maxX - trailingInset - width,
+        y: y,
+        width: width,
+        height: length
+      )
+    }
+
+    override func drawKnob() {
+      let rect = visualKnobRect
+      guard !rect.isEmpty else { return }
+      NSColor.secondaryLabelColor.setFill()
+      NSBezierPath(
+        roundedRect: rect,
+        xRadius: Self.visualKnobWidth / 2,
+        yRadius: Self.visualKnobWidth / 2
+      ).fill()
+    }
+
     override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {}
+
+    override func mouseDown(with event: NSEvent) {
+      guard testPart(event.locationInWindow) == .knob else {
+        super.mouseDown(with: event)
+        return
+      }
+
+      heldVisualKnobLength = visualKnobRect.height
+      defer {
+        heldVisualKnobLength = nil
+        needsDisplay = true
+      }
+      super.mouseDown(with: event)
+    }
   }
 
   struct AgentActivityScrollViewConfigurator: NSViewRepresentable {

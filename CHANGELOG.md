@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.0.21-beta.1] - 2026-09-17
+
+### Fixed
+
+- Replaced the Agent Activity scrollbar's adaptive thumb paint with a stable four-point capsule
+  that keeps its size while hovered or dragged without changing native scrolling behavior.
+
 ## [1.0.20-beta.1] - 2026-09-17
 
 ### Changed
