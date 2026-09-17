@@ -835,6 +835,7 @@
           .foregroundStyle(.secondary)
           .padding(.top, 4)
         }
+        .disclosureGroupStyle(SettingsDisclosureGroupStyle())
       }
     }
 

@@ -122,6 +122,7 @@
           }
           .padding(.top, 4)
         }
+        .disclosureGroupStyle(SettingsDisclosureGroupStyle())
         DisclosureGroup("Access") {
           Text(
             "Only notes with explicit capability grants can be read or edited by authorized integrations. This protects against cooperative tools, not malicious software already running as your macOS user."
@@ -130,6 +131,7 @@
           .foregroundStyle(.secondary)
           .padding(.top, 4)
         }
+        .disclosureGroupStyle(SettingsDisclosureGroupStyle())
       }
       .sheet(item: $profileForCapabilities) { profile in
         if let capabilities = appState.capabilityProfile(profile.id) {
