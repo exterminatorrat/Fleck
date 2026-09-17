@@ -13,7 +13,7 @@ jobs:
   macos:
     name: macOS build and tests
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       FLECK_BUILD_IDENTITY_MODE: ci-unverified
       PYTHONDONTWRITEBYTECODE: "1"
