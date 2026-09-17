@@ -160,13 +160,22 @@ and do not treat the historical Inbox failure as an expected port failure.
 
 The reviewed feature delta was committed as
 `957172c29442e037ded80d159aab8c2ec7b25cc1`, whose parent is the development
-source `baf7f7885b64fcde4d3caec23dbbad7ca361b586`. This publication port replays
-only that seven-path delta onto public-bottom commit
+source `baf7f7885b64fcde4d3caec23dbbad7ca361b586`. This publication port initially
+replayed only that seven-path delta onto public-bottom commit
 `1f44352184d0b82d0a763fc1a60c6e19c4314da9`, tree
 `206224959f64fb5f6c5e41a6b45e2caff88b383f`, without importing the historical
 parent. The product version becomes `1.0.17-beta.1`, following the bottom's
 `1.0.16-beta.1`, while public-bottom behavior outside the owned navigator scope
 remains authoritative.
+
+The root integrator then authorized local feature checkpoints and an ordinary
+merge of the bottom owner's test-isolation fix. The current exact PR 51 base is
+`f7fdd32e51b4e99f7a9eae166684c979c0ee5019`, tree
+`e84f20d3236765acbba1d9a9e6c5da1254fecd9e`, on the same bottom branch. The top
+branch is `capy/inline-folder-creation-pr`; it preserves both bottom fixture
+files, without changing bottom production code or version. Root owns publication
+and the serialized native-fixture verification slot. No bottom branch rewrite or
+historical feature-parent import is part of this reconciliation.
 
 The root integrator separately authorized one directly obsolete composition
 audit in `Tests/FleckAppTests/TabDragReorderTests.swift`, making the final scope

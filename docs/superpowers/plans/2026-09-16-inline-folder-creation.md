@@ -252,7 +252,7 @@ handoff is owned by the root agent under its applicable user authorization.
 The reviewed feature delta was committed as
 `957172c29442e037ded80d159aab8c2ec7b25cc1`, whose parent is the development
 source `baf7f7885b64fcde4d3caec23dbbad7ca361b586`. Its seven-path patch was
-replayed without its historical parent onto public-bottom commit
+initially replayed without its historical parent onto public-bottom commit
 `1f44352184d0b82d0a763fc1a60c6e19c4314da9`, tree
 `206224959f64fb5f6c5e41a6b45e2caff88b383f`. The port retains the original
 feature behavior and tests while preserving the public-bottom changes outside
@@ -261,9 +261,17 @@ the navigator; its version is `1.0.17-beta.1`, following the bottom's
 
 The publication stack is public `main` at
 `d5f35ae24bc4bb78612aa348542b3c6a694776a7`, then PR 51
-(`capy/menu-panel-resize-public-pr`), then this feature. Publication and stack
-linking remain root-owned; this source task leaves its changes uncommitted and
-does not write the bottom branch or import the original feature's parent history.
+(`capy/menu-panel-resize-public-pr`), then this feature. After the initial
+verification, the root integrator authorized local checkpoint commits on
+`capy/inline-folder-creation-pr` and an ordinary merge of the coordinated bottom
+fix. The current exact bottom is
+`f7fdd32e51b4e99f7a9eae166684c979c0ee5019`, tree
+`e84f20d3236765acbba1d9a9e6c5da1254fecd9e`. That bottom update changes only
+AppKit editor and menu-resize fixtures; it changes no production code or version.
+The merge preserves those test-isolation fixes, and the top's diff against this
+bottom remains the eight-file feature scope below. Publication and stack linking
+remain root-owned. This source task does not write the bottom branch, rebase it,
+or import the original feature's parent history.
 
 ### Authorized eight-file scope and integration audit
 
@@ -296,6 +304,9 @@ It covers 175 existing tests across folder reorder, tab appearance/reorder/
 selection, pinned chrome, panel action lifecycle, related AppKit editor audits
 and hosted fixtures, all 63 menu-panel resize tests, and all three measured
 formatting-toolbar overflow tests. The 19 original feature tests run separately.
+After the coordinated bottom merge, also run the exact new bottom regression
+`FleckAppTests.fontPickerOverflowTargetsOwningPanelWhenWideDecoyIsVisible()`.
+Native fixture execution is serialized through the root-owned fixture slot.
 The initial failure, the audit's isolated red/green logs, exact selectors,
 independent reruns, and current synthetic captures are retained outside Git.
 
@@ -305,6 +316,8 @@ swift test list --disable-automatic-resolution
 Scripts/run-nonempty-swift-tests.sh \
   '^FleckAppTests\.FolderNavigatorPresentationTests/.*\(.*\)$'
 Scripts/run-nonempty-swift-tests.sh "$ANCHORED_INTEGRATION_IDENTIFIERS"
+Scripts/run-nonempty-swift-tests.sh \
+  '^FleckAppTests\.fontPickerOverflowTargetsOwningPanelWhenWideDecoyIsVisible\(\)$'
 python3 -B -m unittest discover -s Tests/Scripts -p test_build_identity.py
 python3 -B Scripts/fleck-build-identity.py check
 swift build -c debug --product Fleck --disable-automatic-resolution
