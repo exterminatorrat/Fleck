@@ -1,9 +1,12 @@
 # Implementation status
 
-Fleck is a **Developer Preview**. The repository has substantial native
-implementation and automated coverage, but it does not yet publish a supported,
-signed release. This file is the current lightweight roadmap; architecture and
-test detail live elsewhere.
+Fleck is a **Developer Preview**: the first public preview, `1.1.2-beta.2`, is
+prepared and published as a preview. The repository has substantial native
+implementation and automated coverage, but the preview carries no support
+promise and the community-facing gates (signing/notarization where applicable,
+release screenshots, announcement) are completed as part of that release. This
+file is the current lightweight roadmap; architecture and test detail live
+elsewhere.
 
 ## Ordinary graph
 
@@ -35,27 +38,27 @@ It is not enabled in the ordinary graph, not accepted for release builds, and
 not approved for distribution. Candidate model quality, license/attribution,
 artifact integrity, resource use, and device coverage remain release gates.
 
-## Before a public Developer Preview
+## Release status
 
-- choose and publish verified private reporting routes for vulnerabilities and
-  Code of Conduct incidents;
-- make the intended repository public only after the reporting and moderation
-  paths are ready;
-- run the ordinary non-launching macOS validator and obtain clean CI from the
-  exact release commit;
-- complete disposable-account native, privacy, accessibility, and resource
-  checks with synthetic fixtures;
-- establish signing identity, hardened runtime/entitlements as needed,
-  notarization, and Gatekeeper verification;
-- publish current screenshots from the accepted candidate with synthetic
-  content and useful alt text;
-- tag and describe the first 0.x release without implying production support.
+- First public Developer Preview: `1.1.2-beta.2`. Release notes and first-launch
+  onboarding:
+  [`docs/release-notes/1.1.2-beta.2.md`](docs/release-notes/1.1.2-beta.2.md).
+- Completed: verified private reporting routes, public repository, clean CI at
+  the release source (2,543 ordinary tests in 37 suites plus the 2,754-test
+  Enhanced Local graph and the packaging/audit chain).
+- Pending as of preparation: signing identity, notarization, and Gatekeeper
+  verification where the release asset applies them; release-candidate
+  screenshots; the annotated tag and GitHub Release with checksums.
+- The release is titled 1.1.2-beta.2 Developer Preview and does not imply
+  production support; see the progression ladder in
+  [`docs/RELEASES.md`](docs/RELEASES.md) for how versions advance.
 
 See [Releases](docs/RELEASES.md) for the maintainer checklist.
 
 ## Not promised
 
-There is no supported binary, release history, cloud sync, account service,
+There is no supported (non-preview) binary, cloud sync, account service,
 real-time collaboration, plug-in marketplace, or distribution-ready Enhanced
-Local model in this preview. Those are not implied by source experiments or
-tests.
+Local model in this preview. Release history begins with the 1.1.2-beta.2
+Developer Preview; those other promises are not implied by source experiments
+or tests.

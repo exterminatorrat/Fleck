@@ -1,28 +1,50 @@
 # Releases
 
-Fleck has no published binary release. Public source visibility is a source
-preview, not an app release. Any future public build will be a Developer
-Preview in the 0.x series.
+## First public Developer Preview: 1.1.2-beta.2
 
-The repository's `1.0.3-beta.1` local development identity records accumulated
-development and packaging provenance only. It is not a public release and does
-not supersede the 0.x public-preview policy; changing that policy requires an
-explicit owner decision. Do not create retroactive releases from local builds
-or development changelog entries.
+On 2026-09-18 the owner decided to publish the first public **Developer Preview**
+as version `1.1.2-beta.2`, built from the newest reviewed source: the
+editor-toolbar integration, the stabilized Agent Activity scrollbar, and the CI
+verification fixes, together with the accumulated development history below.
+This decision supersedes the earlier 0.x public-preview series guidance in this
+file.
 
-## 0.x strategy
+- The release notes and first-launch onboarding (in-app onboarding is not
+  packaged) live in
+  [`release-notes/1.1.2-beta.2.md`](release-notes/1.1.2-beta.2.md).
+- The `1.x` line is both the development identity series and the public preview
+  series. `1.1.2-beta.1` remains the internal development record; the first
+  public preview advances to `1.1.2-beta.2` so no published build is ever
+  mistaken for an internal one or for a stable release.
+- A preview label stays visible until compatibility and support promises are
+  ready for an official release.
 
-- Minor versions may change storage, UI, and contributor-facing interfaces while
-  the product is still stabilizing.
-- Patch versions should contain compatible fixes and documentation corrections.
-- Every published version must come from an annotated source tag and a GitHub
-  Release that states the supported macOS versions, known limitations, upgrade
-  risks, and exact artifact checksums.
-- A preview label must remain visible until compatibility and support promises
-  are ready for a stable release.
+## Version progression ladder
+
+Every published build follows `VERSION` (see [`build-identity.md`](build-identity.md)),
+an annotated `v<version>` tag, and a GitHub **Pre-release** with artifacts,
+checksums, and release notes. One release-notes file lives per version at
+`docs/release-notes/<version>.md`.
+
+1. **Preview fixes and corrections** — increment the PATCH and keep the
+   prerelease suffix counting: `1.1.2-beta.2` → `1.1.2-beta.3` → `1.1.2-beta.4`.
+2. **Substantial new feature work** — a human MINOR decision bumps the MINOR
+   and resets the suffix: `1.1.2-beta.N` → `1.2.0-beta.1`. Small features stay
+   in the current PATCH line.
+3. **First official release** — an explicit owner decision removes the
+   prerelease suffix only when compatibility and support promises are ready:
+   `1.2.0-beta.N` → `1.2.0` (stable label, no Pre-release flag).
 
 Do not create retroactive release entries or imply that an untagged development
 bundle was publicly shipped.
+
+Do not create retroactive release entries or imply that an untagged development
+bundle was publicly shipped.
+
+### Source preview phase (archived)
+
+The repository was public as a source preview before 1.1.2. That phase is
+complete; the checklist below is the historical record of its gates.
 
 ## Source preview checklist
 
@@ -100,7 +122,7 @@ or downloadable binary.
 - [ ] Confirm the MPL-2.0 license, notices, third-party attributions, dependency
       pins, and reserved-brand language match the source-preview tree.
 
-## Future binary distribution
+## 1.1.2-beta.2 binary distribution
 
 ### Candidate and verification
 
