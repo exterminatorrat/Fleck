@@ -1870,6 +1870,11 @@ import Testing
       await settleResizeHost(hostingView)
 
       sendResizeMouseEvent(.leftMouseDown, at: CGPoint(x: 1, y: 200), to: window, number: 52)
+      let trackingDeadline = ContinuousClock.now + .seconds(5)
+      while !controller.isTracking, ContinuousClock.now < trackingDeadline {
+        await Task.yield()
+        sendResizeMouseEvent(.leftMouseDown, at: CGPoint(x: 1, y: 200), to: window, number: 52)
+      }
       let dragScreenPoint = window.convertPoint(toScreen: CGPoint(x: -19, y: 200))
       sendResizeMouseEvent(.leftMouseDragged, atScreen: dragScreenPoint, to: window, number: 53)
       sendResizeMouseEvent(.leftMouseUp, atScreen: dragScreenPoint, to: window, number: 54)
