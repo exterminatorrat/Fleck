@@ -435,7 +435,7 @@ import Testing
   await sleeper.resumeAll()
 }
 
-@Test func lifecycleWaiterCannotPreemptPendingImmediatePreparationUpgrade() async {
+@Test func lifecycleWaiterCannotPreemptPendingImmediatePreparationUpgrade() async throws {
   let asrLoadGate = AsyncRuntimeGate()
   let asr = FakeRuntimeAdapter(role: .asr, loadGate: asrLoadGate)
   let cleanup = FakeRuntimeAdapter(role: .cleanup)
