@@ -1,9 +1,9 @@
 # Fleck version and build identity
 
 `VERSION` is the single product-version authority. It uses SemVer and currently
-identifies the local development line as `1.0.3-beta.1`. `CHANGELOG.md` records
-factual development changes under a matching version heading; neither file is
-evidence of a public binary release.
+identifies the current product version as `1.1.2-beta.2`. `CHANGELOG.md` records
+factual development changes under a matching version heading; earlier `-beta.N`
+entries document development history, not public releases.
 
 ## Product-version decisions
 
@@ -21,11 +21,13 @@ Update `VERSION` and its dated `CHANGELOG.md` heading in the same product-change
 commit. Do not derive the version from Git, a branch, an artifact name, or a
 prior bundle.
 
-The local `1.0.3-beta.1` development identity does not change the public
-release policy in [`RELEASES.md`](RELEASES.md): Fleck has no published binary,
-and any future public preview remains in the 0.x series unless the owner makes
-an explicit release-version decision. Do not create retroactive releases from
-development history.
+On 2026-09-18 the owner made the explicit release-version decision to publish the
+first public **Developer Preview** as `1.1.2-beta.2`, superseding the earlier 0.x
+public-preview guidance in [`RELEASES.md`](RELEASES.md). Public previews then
+follow the progression ladder there: preview iterations bump `beta.N`, a human
+MINOR decision resets the suffix for substantial feature work, and only an
+explicit release decision removes the prerelease suffix for the first official
+release. Do not create retroactive releases from development history.
 
 ## Packaging identity
 

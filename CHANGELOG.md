@@ -3,6 +3,18 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.1.2-beta.2] - 2026-09-18
+
+First public **Developer Preview** release. This entry is the public preview record for
+version `1.1.2-beta.2`; it carries the reviewed editor-toolbar integration, the stabilized
+Agent Activity scrollbar, and the CI verification fixes on top of the accumulated 1.x
+development history recorded below. The `-beta.2` iteration follows the internal
+`1.1.2-beta.1` development identity so the public preview is never mistaken for a stable
+release.
+
+For the full technical summary and first-launch onboarding, see
+[`docs/release-notes/1.1.2-beta.2.md`](docs/release-notes/1.1.2-beta.2.md).
+
 ## [1.1.2-beta.1] - 2026-09-17
 
 ### Added

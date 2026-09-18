@@ -11,11 +11,12 @@
   <a href="Package.swift"><img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&amp;logoColor=white"></a>
   <a href="https://github.com/exterminatorrat/Fleck/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI status for main" src="https://github.com/exterminatorrat/Fleck/actions/workflows/ci.yml/badge.svg?branch=main"></a>
   <a href="LICENSE"><img alt="License: MPL-2.0" src="https://img.shields.io/badge/license-MPL--2.0-6355a6"></a>
-  <a href="docs/RELEASES.md"><img alt="Status: source preview" src="https://img.shields.io/badge/status-source%20preview-4b5563"></a>
+  <a href="docs/RELEASES.md"><img alt="Status: public Developer Preview" src="https://img.shields.io/badge/status-public%20developer%20preview-16a34a"></a>
 </p>
 
 <p align="center">
   <a href="#download-and-launch-fleck">Download &amp; launch</a> ·
+  <a href="docs/release-notes/1.1.2-beta.2.md">Release notes &amp; onboarding</a> ·
   <a href="#what-is-here">Features</a> ·
   <a href="#build-and-test">Build &amp; test</a> ·
   <a href="ARCHITECTURE.md">Architecture</a> ·
@@ -26,23 +27,22 @@
 
 ## Download and launch Fleck
 
-> **No public app download yet.** Fleck is currently a source preview. There is
-> no published app ZIP or GitHub Release to download and launch. GitHub's
-> **Code → Download ZIP** downloads source code, not an installable Mac app.
+> **First public Developer Preview available.** Fleck `1.1.2-beta.2` is published on
+> [GitHub Releases](https://github.com/exterminatorrat/Fleck/releases) as a **Pre-release**
+> Developer Preview. Read the [release notes and first-launch onboarding](docs/release-notes/1.1.2-beta.2.md)
+> before your first run — in-app onboarding is not packaged in this release, and the
+> release notes teach the workspace, formatting, dictation, and agent setup in a few
+> minutes. Local development candidates and GitHub Actions artifacts remain unsupported
+> public installs.
 
-Check [GitHub Releases](https://github.com/exterminatorrat/fleck/releases) for
-published app builds. Until the first binary release is published there, no
-public "newest build" is available. Local development candidates and GitHub
-Actions artifacts are not supported public releases.
+### Installing the app release
 
-### Installing a future app release
-
-**These steps apply only after an app ZIP is published on GitHub Releases.**
+**These steps use the published app ZIP on GitHub Releases — not the source code.**
 
 1. Open [GitHub Releases](https://github.com/exterminatorrat/fleck/releases) and
-   choose the newest published app release. Read its supported macOS versions,
-   Mac architecture, known limitations, and upgrade notes. A **Pre-release**
-   label means it is a preview, not a stable release.
+   choose `1.1.2-beta.2` (or the newest preview). Every published build is a **Pre-release**
+   Developer Preview until the first official release, and each preview is honest about
+   its limitations.
 2. Under that release's **Assets**, download the **Fleck app ZIP** for your Mac
    and its checksum file. Do **not** choose **Source code (zip)** or
    **Source code (tar.gz)**; neither contains a ready-to-run app. Verify the
@@ -58,22 +58,23 @@ Actions artifacts are not supported public releases.
    workspace. Fleck is a menu-bar app, so do not rely on a Dock icon to find it.
 
 A prebuilt app does not require Xcode, Swift, or Terminal build commands.
-For the current source-only preview, developers can instead
+Developers who want the newest source can instead
 [get the source](#get-the-source) and [build and test](#build-and-test).
 Packaged development apps require the maintainer's private build registry;
 those commands are not an end-user installer.
 
 Fleck is under active development. [`VERSION`](VERSION) is the source-version
-authority; beta storage formats and contributor-facing interfaces may change.
-See the
-[release policy and binary-distribution checklist](docs/RELEASES.md) for the
-remaining release gates.
+authority; storage formats and contributor-facing interfaces may still change.
+See the [release policy and binary-distribution checklist](docs/RELEASES.md)
+for the current release gates.
 
 ## What is here
 
 ![Fleck dark workspace with Project notes, Image notes, and Next steps tabs, a Reference.txt file shortcut, and the native editor](docs/images/fleck-workspace.png)
 
-Development build 1.0.13-beta.1 Build 58 with synthetic notes and a synthetic file shortcut.
+Illustration from a development build with synthetic notes and a synthetic file shortcut.
+Release-candidate screenshots from the accepted build replace this image before launch
+materials are finalized.
 
 The ordinary build contains:
 
@@ -110,8 +111,10 @@ roadmap and [Architecture](ARCHITECTURE.md) for the system boundaries.
 
 ## Requirements
 
-These are **source-development requirements**. For a future prebuilt app, use
-the macOS and architecture requirements listed on its release page instead.
+These are **source-development requirements**. For the published prebuilt app,
+use the macOS and architecture requirements listed on its release page instead
+(macOS 14 or later; validated on Apple silicon — native Intel and a full macOS 14
+native pass are not yet verified).
 
 | Requirement | Version or scope |
 | --- | --- |
