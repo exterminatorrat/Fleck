@@ -16,12 +16,17 @@
     case bullets
     case numbers
     case checklist
+    case textStyles
+    case text
+    case paragraph
+    case tools
     case delete
 
     var id: Self { self }
 
     var hasSeparatorBefore: Bool {
-      self == .undo || self == .bold
+      self == .undo || self == .bold || self == .textStyles || self == .text
+        || self == .paragraph || self == .tools
     }
   }
 

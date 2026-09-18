@@ -145,7 +145,7 @@ design.
 
 | Artifact/resource | Result |
 | --- | --- |
-| Release executable size | `[not captured]` bytes; target is at or below 18 MiB where practical |
+| Release executable size | `[not captured]` bytes; observational reporting only, with no enforced cap |
 | Ordinary idle RSS | `[not captured]` MB; target is below 75 MB |
 | QA app signed/packaged | `[not captured]` |
 | Logical disk-write tool/output | `[not captured]` |

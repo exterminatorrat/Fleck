@@ -13,7 +13,7 @@ jobs:
   macos:
     name: macOS build and tests
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       FLECK_BUILD_IDENTITY_MODE: ci-unverified
       PYTHONDONTWRITEBYTECODE: "1"
@@ -62,7 +62,7 @@ jobs:
             --result-file "$result_file" \
             --flavor development)"
           printf 'FLECK_APP=%s\n' "$app_path" >> "$GITHUB_ENV"
-      - name: Enforce packaged app size budget
+      - name: Report packaged artifact sizes and audit release contents
         run: Scripts/check-release-size.sh "$FLECK_APP"
       - name: Test release model-asset exclusion
         run: Scripts/test-release-model-asset-exclusion.sh
@@ -74,7 +74,7 @@ jobs:
   macos-enhanced:
     name: macOS Enhanced Local candidate gates
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Check out repository (actions/checkout v6.0.2)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd

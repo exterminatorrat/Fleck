@@ -874,6 +874,7 @@
     @State private var bannerDismissalState = NotesPanelBannerDismissalState()
     @State private var restoreEditorFocusAfterHide = false
     @State private var searchPointerActivationPending = false
+    @State private var pendingNoteLinkTarget: EditorNoteLinkTarget?
     @FocusState private var editorFocus: EditorFocus?
     private let filePicker: NoteFilePicker
 
@@ -1044,8 +1045,21 @@
       .onChange(of: activeBannerOccurrences, initial: true) { _, occurrences in
         bannerDismissalState.reconcile(activeOccurrences: occurrences)
       }
-      .onChange(of: appState.workspace.selectedNoteID, initial: true) { _, _ in
+      .onChange(of: appState.workspace.selectedNoteID, initial: true) { oldValue, newValue in
+        if oldValue != newValue {
+          pendingNoteLinkTarget?.cancel()
+          pendingNoteLinkTarget = nil
+          editorCommands.invalidateEditorSession()
+        }
         appState.refreshSelectedNoteFileReferences()
+        editorFocus = nil
+        synchronizeBodyCommandGuard()
+      }
+      .onChange(of: isBlockingOverlayPresented, initial: true) { _, _ in
+        synchronizeBodyCommandGuard()
+      }
+      .onChange(of: editorFocus, initial: true) { _, _ in
+        synchronizeBodyCommandGuard()
       }
       .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
         appState.refreshSelectedNoteFileReferences()
@@ -2031,7 +2045,11 @@
     }
 
     private var isBlockingOverlayPresented: Bool {
-      searchController.isPresented || noteLinkPickerController.isPresented
+      noteLinkPickerController.isPresented || isNonPickerBlockingOverlayPresented
+    }
+
+    private var isNonPickerBlockingOverlayPresented: Bool {
+      searchController.isPresented
         || notePendingDeletion != nil || folderPendingDeletion != nil || isShowingTrash
         || isShowingAgentActivity
     }
@@ -2105,29 +2123,33 @@
     }
 
     private func insertNoteLink(targetID: UUID, replacing range: NSRange) {
-      guard !searchController.isPresented,
-        let sourceID = noteLinkPickerController.presentedSourceNoteID,
-        let sourceRevision = noteLinkPickerController.presentedSourceRevision,
-        let selectedNote = visibleSelectedNote,
-        selectedNote.id == sourceID,
-        selectedNote.revision == sourceRevision,
+      let insertionTarget = pendingNoteLinkTarget
+      pendingNoteLinkTarget = nil
+      guard !noteLinkPickerController.isPresented,
+        !isNonPickerBlockingOverlayPresented,
+        !dictationRuntime.canCancel,
+        !editorCommands.isFocusedDictationActive,
+        editorFocus != .title,
+        let insertionTarget,
+        insertionTarget.range == range,
+        insertionTarget.isValidAfterPickerDismissal(
+          note: visibleSelectedNote,
+          isEditorVisible: isEditorVisible,
+          commands: editorCommands
+        ),
         let target = appState.workspace.notes.first(where: { $0.id == targetID }),
-        let textView = editorCommands.textView,
-        range.location >= 0,
-        NSMaxRange(range) <= (textView.string as NSString).length
-      else {
-        noteLinkPickerController.dismiss()
-        return
-      }
+        let textView = editorCommands.textView
+      else { return }
 
-      guard editorCommands.insertNoteLink(
-        replacing: range,
+      synchronizeBodyCommandGuard()
+      textView.isEditable = true
+      textView.isSelectable = true
+      guard editorCommands.canPerformBodyCommand else { return }
+      _ = insertionTarget.apply(
         label: target.displayTitle,
-        targetNoteID: target.id
-      ) else {
-        noteLinkPickerController.dismiss()
-        return
-      }
+        targetNoteID: target.id,
+        commands: editorCommands
+      )
     }
 
     private func openNoteLink(_ noteID: UUID) {
@@ -2196,6 +2218,7 @@
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .clipped()
       .onChange(of: isEditorVisible) { _, isVisible in
+        synchronizeBodyCommandGuard()
         if isVisible {
           let restoreBodyFocus = restoreEditorFocusAfterHide
           restoreEditorFocusAfterHide = false
@@ -2224,6 +2247,12 @@
         _ = window.makeFirstResponder(nil)
       }
       editorCommands.textView = nil
+    }
+
+    private func synchronizeBodyCommandGuard() {
+      editorCommands.areBodyCommandsBlocked = isBlockingOverlayPresented
+        || !isEditorVisible
+      editorCommands.isBodyCommandContextBlocked = editorFocus == .title
     }
 
     private var storedPanelSize: CGSize? {
@@ -2325,6 +2354,7 @@
               } else if editorFocus == .title {
                 editorFocus = nil
               }
+              synchronizeBodyCommandGuard()
             },
             onChange: { body, richTextRTF in
               guard visibleSelectedNote?.id == note.id else { return }
@@ -2345,13 +2375,26 @@
             onRequestNoteLink: { range in
               guard !isBlockingOverlayPresented,
                 let source = visibleSelectedNote,
-                source.id == note.id
+                source.id == note.id,
+                let insertionTarget = EditorNoteLinkTarget(
+                  note: source,
+                  range: range,
+                  commands: editorCommands
+                )
               else { return }
               noteLinkPickerController.present(
                 sourceNoteID: source.id,
                 replacementRange: range,
                 sourceRevision: source.revision
               )
+              guard noteLinkPickerController.isPresented else { return }
+              pendingNoteLinkTarget = insertionTarget
+              synchronizeBodyCommandGuard()
+              guard insertionTarget.capturePickerBlock(commands: editorCommands) else {
+                pendingNoteLinkTarget = nil
+                noteLinkPickerController.dismiss()
+                return
+              }
             },
             onOpenNoteLink: openNoteLink,
             onUnavailableNoteLink: { appState.saveError = "Note unavailable" }
@@ -2366,6 +2409,12 @@
             )
             .frame(width: 0, height: 0)
           )
+          .background {
+            EditorFindShortcutRouter(commands: editorCommands)
+              .frame(width: 0, height: 0)
+              .allowsHitTesting(false)
+              .accessibilityHidden(true)
+          }
           .id(note.id)
           .padding(.vertical, 10)
         }
@@ -3876,6 +3925,7 @@
       case fontSize
       case foregroundColor
       case backgroundColor
+      case webLink
 
       var id: Int {
         switch self {
@@ -3884,6 +3934,7 @@
         case .fontSize: 2
         case .foregroundColor: 3
         case .backgroundColor: 4
+        case .webLink: 5
         }
       }
     }
@@ -3900,6 +3951,7 @@
     @State private var fontSizeText = ""
     @FocusState private var isFontSizeFocused: Bool
     @State private var fontSizePickerNoteID: UUID?
+    @State private var webLinkTarget: EditorWebLinkTarget?
     @State private var presentedPopover: PresentedPopover?
     @State private var selectedVisibleCount: Int?
 
@@ -3941,14 +3993,23 @@
       .onChange(of: appState.selectedNote) { _, _ in
         dismissInvalidFontPicker()
         dismissInvalidFontSizePicker()
+        dismissWebLinkEditor()
       }
       .onChange(of: isEditorVisible) { _, _ in
         dismissInvalidFontPicker()
         dismissInvalidFontSizePicker()
+        dismissWebLinkEditor()
       }
       .onChange(of: presentedPopover) { oldPopover, newPopover in
         if oldPopover == .font, newPopover != .font { fontPickerTarget = nil }
         if oldPopover == .fontSize, newPopover != .fontSize { fontSizePickerNoteID = nil }
+        if oldPopover == .webLink, newPopover != .webLink { webLinkTarget = nil }
+      }
+      .onChange(of: commands.areBodyCommandsBlocked) { _, blocked in
+        guard blocked else { return }
+        isFontSizeFocused = false
+        webLinkTarget?.cancel()
+        if presentedPopover == .webLink { presentedPopover = nil }
       }
     }
 
@@ -3991,6 +4052,7 @@
         }
         .accessibilityLabel("Undo")
         .keyboardShortcut("z", modifiers: .command)
+        .disabled(!commands.canPerformEditorHistoryCommand)
       case .redo:
         Button {
           guard isEditorVisible else { return }
@@ -4000,6 +4062,7 @@
         }
         .accessibilityLabel("Redo")
         .keyboardShortcut("z", modifiers: [.command, .shift])
+        .disabled(!commands.canPerformEditorHistoryCommand)
       case .bold:
         Button {
           guard isEditorVisible else { return }
@@ -4008,8 +4071,11 @@
           ToolbarIconLabel(systemImage: "bold", isActive: commands.isBold)
         }
         .accessibilityLabel("Bold")
-        .accessibilityValue(commands.isBold ? "On" : "Off")
+        .accessibilityValue(
+          formattingStateValue(isOn: commands.isBold, isMixed: commands.isBoldMixed)
+        )
         .keyboardShortcut("b", modifiers: .command)
+        .disabled(bodyCommandDisabled)
       case .italic:
         Button {
           guard isEditorVisible else { return }
@@ -4018,8 +4084,11 @@
           ToolbarIconLabel(systemImage: "italic", isActive: commands.isItalic)
         }
         .accessibilityLabel("Italic")
-        .accessibilityValue(commands.isItalic ? "On" : "Off")
+        .accessibilityValue(
+          formattingStateValue(isOn: commands.isItalic, isMixed: commands.isItalicMixed)
+        )
         .keyboardShortcut("i", modifiers: .command)
+        .disabled(bodyCommandDisabled)
       case .underline:
         Button {
           guard isEditorVisible else { return }
@@ -4028,20 +4097,30 @@
           ToolbarIconLabel(systemImage: "underline", isActive: commands.isUnderlined)
         }
         .accessibilityLabel("Underline")
-        .accessibilityValue(commands.isUnderlined ? "On" : "Off")
+        .accessibilityValue(
+          formattingStateValue(isOn: commands.isUnderlined, isMixed: commands.isUnderlineMixed)
+        )
         .keyboardShortcut("u", modifiers: .command)
+        .disabled(bodyCommandDisabled)
       case .strikethrough:
         Button {
           guard isEditorVisible else { return }
           commands.toggleStrikethrough()
         } label: {
-          ToolbarIconLabel(systemImage: "strikethrough")
+          ToolbarIconLabel(systemImage: "strikethrough", isActive: commands.isStrikethrough)
         }
         .accessibilityLabel("Strikethrough")
+        .accessibilityValue(
+          formattingStateValue(
+            isOn: commands.isStrikethrough,
+            isMixed: commands.isStrikethroughMixed
+          )
+        )
+        .disabled(bodyCommandDisabled)
       case .font:
         fontButton
       case .fontSize:
-        fontSizeField()
+        fontSizeField().disabled(bodyCommandDisabled)
       case .fontColor:
         foregroundColorButton
       case .highlight:
@@ -4058,6 +4137,15 @@
           ToolbarIconLabel(systemImage: "checklist")
         }
         .accessibilityLabel("Checklist")
+        .disabled(bodyCommandDisabled)
+      case .textStyles:
+        textStyleMenu(iconOnly: true)
+      case .text:
+        textMenu(iconOnly: true)
+      case .paragraph:
+        paragraphMenu(iconOnly: true)
+      case .tools:
+        toolsInsertMenu(title: "Tools", iconOnly: true)
       case .delete:
         Button(role: .destructive) {
           guard isEditorVisible else { return }
@@ -4121,6 +4209,7 @@
           emptyName: "Automatic"
         )
       )
+      .disabled(bodyCommandDisabled)
     }
 
     private var backgroundColorButton: some View {
@@ -4141,6 +4230,7 @@
           emptyName: "No Highlight"
         )
       )
+      .disabled(bodyCommandDisabled)
     }
 
     private var bulletsButton: some View {
@@ -4153,6 +4243,7 @@
         commands.applyAutomaticList(.bullets)
       }
       .accessibilityLabel("Bullets")
+      .disabled(bodyCommandDisabled)
     }
 
     private var numbersButton: some View {
@@ -4165,13 +4256,14 @@
         commands.applyAutomaticList(.numbers)
       }
       .accessibilityLabel("Numbers")
+      .disabled(bodyCommandDisabled)
     }
 
     private func overflowMenu(items: [FormattingToolbarItem]) -> some View {
       Button {
         presentedPopover = presentedPopover == .overflow(items) ? nil : .overflow(items)
       } label: {
-        ToolbarIconLabel(systemImage: "ellipsis.circle")
+        FormattingOverflowLabel()
       }
       .accessibilityLabel("More formatting")
     }
@@ -4199,6 +4291,8 @@
         foregroundColorPickerContent
       case .backgroundColor:
         backgroundColorPickerContent
+      case .webLink:
+        webLinkPickerContent
       }
     }
 
@@ -4222,25 +4316,43 @@
       case .undo:
         Button("Undo") { performOverflowAction { commands.undo() } }
           .keyboardShortcut("z", modifiers: .command)
+          .disabled(!commands.canPerformEditorHistoryCommand)
       case .redo:
         Button("Redo") { performOverflowAction { commands.redo() } }
           .keyboardShortcut("z", modifiers: [.command, .shift])
+          .disabled(!commands.canPerformEditorHistoryCommand)
       case .bold:
         Button("Bold") { performOverflowAction { commands.toggleBold() } }
-          .accessibilityValue(commands.isBold ? "On" : "Off")
+          .accessibilityValue(
+            formattingStateValue(isOn: commands.isBold, isMixed: commands.isBoldMixed)
+          )
           .keyboardShortcut("b", modifiers: .command)
+          .disabled(bodyCommandDisabled)
       case .italic:
         Button("Italic") { performOverflowAction { commands.toggleItalic() } }
-          .accessibilityValue(commands.isItalic ? "On" : "Off")
+          .accessibilityValue(
+            formattingStateValue(isOn: commands.isItalic, isMixed: commands.isItalicMixed)
+          )
           .keyboardShortcut("i", modifiers: .command)
+          .disabled(bodyCommandDisabled)
       case .underline:
         Button("Underline") { performOverflowAction { commands.toggleUnderline() } }
-          .accessibilityValue(commands.isUnderlined ? "On" : "Off")
+          .accessibilityValue(
+            formattingStateValue(isOn: commands.isUnderlined, isMixed: commands.isUnderlineMixed)
+          )
           .keyboardShortcut("u", modifiers: .command)
+          .disabled(bodyCommandDisabled)
       case .strikethrough:
         Button("Strikethrough") {
           performOverflowAction { commands.toggleStrikethrough() }
         }
+        .accessibilityValue(
+          formattingStateValue(
+            isOn: commands.isStrikethrough,
+            isMixed: commands.isStrikethroughMixed
+          )
+        )
+        .disabled(bodyCommandDisabled)
       case .font:
         Button("Font…") { presentOverflowPicker(presentFontPicker) }
           .accessibilityLabel("Font")
@@ -4249,6 +4361,7 @@
         Button("Font Size…") { presentOverflowPicker(presentFontSizePicker) }
           .accessibilityLabel("Font Size")
           .accessibilityValue(commands.isFontSizeMixed ? "Mixed" : fontSizeDisplay)
+          .disabled(bodyCommandDisabled)
       case .fontColor:
         Button("Font Color…") {
           presentOverflowPicker { presentedPopover = .foregroundColor }
@@ -4261,6 +4374,7 @@
             emptyName: "Automatic"
           )
         )
+        .disabled(bodyCommandDisabled)
       case .highlight:
         Button("Highlight…") {
           presentOverflowPicker { presentedPopover = .backgroundColor }
@@ -4273,6 +4387,7 @@
             emptyName: "No Highlight"
           )
         )
+        .disabled(bodyCommandDisabled)
       case .bullets:
         Menu("Bullets") { bulletMenuItems(includeAutomatic: true) }
       case .numbers:
@@ -4281,6 +4396,15 @@
         Button("Checklist") {
           performOverflowAction { commands.applyList(.checklist) }
         }
+        .disabled(bodyCommandDisabled)
+      case .textStyles:
+        textStyleMenu(iconOnly: false)
+      case .text:
+        textMenu(iconOnly: false)
+      case .paragraph:
+        paragraphMenu(iconOnly: false)
+      case .tools:
+        toolsInsertMenu(title: "Tools / Insert", iconOnly: false)
       case .delete:
         Button("Delete", role: .destructive) {
           performOverflowAction(onDelete)
@@ -4332,6 +4456,199 @@
       Button("Roman (i.)") {
         performListAction(fromOverflow: includeAutomatic) { commands.applyList(.number(.roman)) }
       }
+    }
+
+    private func textStyleMenu(iconOnly: Bool) -> some View {
+      Menu {
+        textStyleActions
+      } label: {
+        if iconOnly {
+          ToolbarIconLabel(systemImage: "textformat.size")
+        } else {
+          Text(commands.currentTextStyle?.rawValue ?? "Text Style")
+        }
+      }
+      .disabled(bodyCommandDisabled)
+      .accessibilityLabel("Text Style")
+      .accessibilityValue(commands.currentTextStyle?.rawValue ?? "Mixed or custom")
+      .help("Apply durable visual paragraph styling")
+    }
+
+    @ViewBuilder private var textStyleActions: some View {
+      ForEach(EditorTextStyle.allCases, id: \.self) { style in
+        Button {
+          _ = commands.applyTextStyle(style)
+        } label: {
+          menuStateLabel(style.rawValue, selected: commands.currentTextStyle == style)
+        }
+      }
+    }
+
+    private func textMenu(iconOnly: Bool) -> some View {
+      Menu {
+        Button("Clear Text Formatting") { _ = commands.clearTextFormatting() }
+        Divider()
+        Button("Copy Formatting") { _ = commands.copyFormatting() }
+          .help("Copies the first selected run's visual formatting without using the clipboard.")
+        Button("Paste Formatting") { _ = commands.pasteFormatting() }
+          .disabled(!commands.canPasteFormatting)
+        Button("Cancel Copied Formatting") { commands.cancelCopiedFormatting() }
+          .disabled(!commands.canPasteFormatting)
+        Divider()
+        baselineMenu
+        caseMenu
+      } label: {
+        if iconOnly {
+          FormattingMenuIconLabel(systemImage: "textformat.alt")
+        } else {
+          Text("Text")
+        }
+      }
+      .menuIndicator(iconOnly ? .hidden : .automatic)
+      .disabled(bodyCommandDisabled)
+      .accessibilityLabel("Text")
+      .help("Text formatting")
+    }
+
+    private func paragraphMenu(iconOnly: Bool) -> some View {
+      Menu {
+        Menu(commands.isAlignmentMixed ? "Alignment (Mixed)" : "Alignment") {
+          alignmentButton("Left", .left)
+          alignmentButton("Center", .center)
+          alignmentButton("Right", .right)
+          alignmentButton("Justified", .justified)
+        }
+        Menu(
+          commands.currentLineSpacing == nil
+            ? "Line Spacing (Mixed or Custom)" : "Line Spacing"
+        ) {
+          ForEach(EditorLineSpacing.allCases, id: \.self) { spacing in
+            Button {
+              _ = commands.applyLineSpacing(spacing)
+            } label: {
+              menuStateLabel(
+                spacing.rawValue,
+                selected: commands.currentLineSpacing == spacing
+              )
+            }
+          }
+        }
+        Menu(
+          commands.currentParagraphSpacingBefore == nil
+            ? "Space Before (Mixed or Custom)" : "Space Before"
+        ) {
+          paragraphSpacingButtons(before: true)
+        }
+        Menu(
+          commands.currentParagraphSpacingAfter == nil
+            ? "Space After (Mixed or Custom)" : "Space After"
+        ) {
+          paragraphSpacingButtons(before: false)
+        }
+        Divider()
+        Button("Increase Indent") { _ = commands.increaseIndent() }
+        Button("Decrease Indent") { _ = commands.decreaseIndent() }
+      } label: {
+        if iconOnly {
+          FormattingMenuIconLabel(systemImage: "arrow.up.and.down.text.horizontal")
+        } else {
+          Text("Paragraph")
+        }
+      }
+      .menuIndicator(iconOnly ? .hidden : .automatic)
+      .disabled(bodyCommandDisabled)
+      .accessibilityLabel("Paragraph")
+      .help("Paragraph formatting")
+    }
+
+    private var baselineMenu: some View {
+      Menu(commands.currentBaseline == nil ? "Baseline (Mixed)" : "Baseline") {
+        ForEach(EditorBaseline.allCases, id: \.self) { baseline in
+          Button {
+            _ = commands.setBaseline(baseline)
+          } label: {
+            menuStateLabel(
+              baseline.rawValue,
+              selected: commands.currentBaseline == baseline
+            )
+          }
+        }
+      }
+    }
+
+    private var caseMenu: some View {
+      Menu("Change Case") {
+        ForEach(EditorTextCase.allCases, id: \.self) { textCase in
+          Button(textCase.rawValue) { _ = commands.transformCase(textCase) }
+            .disabled(commands.textView?.selectedRange().length == 0)
+        }
+      }
+      .help("Uses locale-neutral Unicode case conversion.")
+    }
+
+    private func toolsInsertMenu(title: String, iconOnly: Bool) -> some View {
+      Menu {
+        Button("Web Link…") { presentWebLinkEditor() }
+        Button("Link to Note…") {
+          guard let textView = commands.textView as? ListAwareTextView else { return }
+          textView.onRequestNoteLink?(textView.selectedRange())
+        }
+        Divider()
+        Button("Find in Note") { _ = commands.performFind(.showFind) }
+        Button("Replace in Note") { _ = commands.performFind(.showReplace) }
+        Button("Find Next") { _ = commands.performFind(.nextMatch) }
+        Button("Find Previous") { _ = commands.performFind(.previousMatch) }
+      } label: {
+        if iconOnly {
+          FormattingMenuIconLabel(systemImage: "wrench.adjustable")
+        } else {
+          Text(title)
+        }
+      }
+      .menuIndicator(iconOnly ? .hidden : .automatic)
+      .disabled(bodyCommandDisabled)
+      .accessibilityLabel(title)
+      .help("Links and find tools")
+    }
+
+    private func alignmentButton(_ title: String, _ alignment: NSTextAlignment) -> some View {
+      Button {
+        _ = commands.applyAlignment(alignment)
+      } label: {
+        menuStateLabel(title, selected: commands.currentAlignment == alignment)
+      }
+    }
+
+    @ViewBuilder private func paragraphSpacingButtons(before: Bool) -> some View {
+      ForEach(Array(stride(from: 0, through: 36, by: 6)), id: \.self) { points in
+        Button {
+          if before {
+            _ = commands.applyParagraphSpacingBefore(CGFloat(points))
+          } else {
+            _ = commands.applyParagraphSpacingAfter(CGFloat(points))
+          }
+        } label: {
+          menuStateLabel(
+            "\(points) pt",
+            selected: (before
+              ? commands.currentParagraphSpacingBefore
+              : commands.currentParagraphSpacingAfter) == CGFloat(points)
+          )
+        }
+      }
+    }
+
+    @ViewBuilder private func menuStateLabel(_ title: String, selected: Bool) -> some View {
+      if selected {
+        Label(title, systemImage: "checkmark")
+      } else {
+        Text(title)
+      }
+    }
+
+    private var bodyCommandDisabled: Bool {
+      !isEditorVisible || isTitleFocused || commands.isTitleEditing
+        || !commands.canPerformBodyCommand
     }
 
     @ViewBuilder
@@ -4427,6 +4744,35 @@
       )
     }
 
+    @ViewBuilder
+    private var webLinkPickerContent: some View {
+      if let target = webLinkTarget {
+        EditorWebLinkPopover(
+          target: target,
+          onApply: { url, display in
+            target.apply(
+              urlText: url,
+              displayText: display,
+              note: appState.selectedNote,
+              isEditorVisible: isEditorVisible,
+              commands: commands
+            )
+          },
+          onRemove: {
+            target.remove(
+              note: appState.selectedNote,
+              isEditorVisible: isEditorVisible,
+              commands: commands
+            )
+          },
+          onCancel: {
+            target.cancel()
+            presentedPopover = nil
+          }
+        )
+      }
+    }
+
     private func performDictationPrimaryAction() {
       guard isEditorVisible,
         dictationRuntime.toolbarPresentation.primaryAction != nil
@@ -4467,6 +4813,25 @@
         commands: commands
       )
       if fontPickerTarget != nil { presentedPopover = .font }
+    }
+
+    private func presentWebLinkEditor() {
+      guard !bodyCommandDisabled, let note = appState.selectedNote else { return }
+      webLinkTarget = EditorWebLinkTarget(note: note, commands: commands)
+      if webLinkTarget != nil { presentedPopover = .webLink }
+    }
+
+    private func dismissWebLinkEditor() {
+      guard let target = webLinkTarget else { return }
+      if !target.isValid(
+        note: appState.selectedNote,
+        isEditorVisible: isEditorVisible,
+        commands: commands
+      ) {
+        target.cancel()
+        if presentedPopover == .webLink { presentedPopover = nil }
+        webLinkTarget = nil
+      }
     }
 
     private var motion: AppMotion {
@@ -4560,6 +4925,56 @@
       guard !isMixed else { return "Mixed" }
       guard let color else { return emptyName }
       return FleckPaletteOption.paletteName(for: color) ?? "Custom"
+    }
+
+    private func formattingStateValue(isOn: Bool, isMixed: Bool) -> String {
+      isMixed ? "Mixed" : isOn ? "On" : "Off"
+    }
+  }
+
+  private struct EditorFindShortcutRouter: NSViewRepresentable {
+    let commands: EditorCommands
+
+    func makeNSView(context: Context) -> EditorFindShortcutRoutingView {
+      EditorFindShortcutRoutingView(commands: commands)
+    }
+
+    func updateNSView(_ view: EditorFindShortcutRoutingView, context: Context) {
+      view.commands = commands
+    }
+  }
+
+  private final class EditorFindShortcutRoutingView: NSView {
+    var commands: EditorCommands
+
+    init(commands: EditorCommands) {
+      self.commands = commands
+      super.init(frame: .zero)
+      setAccessibilityElement(false)
+    }
+
+    required init?(coder: NSCoder) {
+      nil
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+      guard event.type == .keyDown,
+        let key = event.charactersIgnoringModifiers?.lowercased()
+      else { return super.performKeyEquivalent(with: event) }
+      let modifiers = event.modifierFlags.intersection([.command, .option, .shift, .control])
+      let action: EditorFindAction
+      if key == "f", modifiers == [.command, .option] {
+        action = .showFind
+      } else if key == "f", modifiers == [.command, .option, .shift] {
+        action = .showReplace
+      } else if key == "g", modifiers == [.command] {
+        action = .nextMatch
+      } else if key == "g", modifiers == [.command, .shift] {
+        action = .previousMatch
+      } else {
+        return super.performKeyEquivalent(with: event)
+      }
+      return commands.performFind(action)
     }
   }
 
@@ -5799,6 +6214,29 @@
           isActive ? Color.accentColor.opacity(0.24) : .clear,
           in: RoundedRectangle(cornerRadius: 5)
         )
+        .contentShape(RoundedRectangle(cornerRadius: 5))
+    }
+  }
+
+  private struct FormattingMenuIconLabel: View {
+    let systemImage: String
+
+    var body: some View {
+      HStack(spacing: 3) {
+        ToolbarIconLabel(systemImage: systemImage)
+        Image(systemName: "chevron.down")
+          .font(.system(size: 8, weight: .semibold))
+          .accessibilityHidden(true)
+      }
+      .contentShape(Rectangle())
+    }
+  }
+
+  struct FormattingOverflowLabel: View {
+    var body: some View {
+      Image(systemName: "ellipsis")
+        .font(.system(size: 17, weight: .bold))
+        .frame(width: 28, height: 26)
         .contentShape(RoundedRectangle(cornerRadius: 5))
     }
   }

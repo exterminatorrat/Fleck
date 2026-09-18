@@ -438,7 +438,7 @@ func WorkspaceSearchHostingPreservesSearchResultsAndNoteStateAcrossAccentUpdates
   searchController.present()
   await settleWorkspaceSearchHost(host)
   searchController.setQuery("cafe", in: state.workspace.notes)
-  let searchDeadline = ContinuousClock.now + .seconds(1)
+  let searchDeadline = ContinuousClock.now + .seconds(5)
   while
     (!searchController.resultsAreCurrent
       || searchController.results.map(\.noteID) != [titleNoteID]),

@@ -454,12 +454,14 @@ func NotesPanelLinkPickerRejectsStaleSourceRevisionWithoutEditing() async throws
     window.makeKeyAndOrderFront(nil)
     await settleBacklinksHost(host)
 
-    picker.present(
-      sourceNoteID: source.id,
-      replacementRange: NSRange(location: 0, length: 4),
-      sourceRevision: source.revision
+    let editor = try #require(
+      hostedBacklinksDescendant(in: host, as: ListAwareTextView.self)
     )
+    #expect(window.makeFirstResponder(editor))
+    editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
+    editor.insertText("[[", replacementRange: editor.selectedRange())
     await settleBacklinksHost(host)
+    #expect(picker.isPresented)
     picker.setQuery(target.title, in: state.workspace.notes)
     try await requireBacklinksPickerReady(
       picker,

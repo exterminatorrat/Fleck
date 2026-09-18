@@ -1185,13 +1185,13 @@
       let center = NotificationCenter.default
       center.addObserver(
         self,
-        selector: #selector(windowDismissed),
+        selector: #selector(windowResignedKey),
         name: NSWindow.didResignKeyNotification,
         object: window
       )
       center.addObserver(
         self,
-        selector: #selector(windowDismissed),
+        selector: #selector(windowWillClose),
         name: NSWindow.willCloseNotification,
         object: window
       )
@@ -1516,13 +1516,31 @@
         && window.childWindows?.contains(where: \.isVisible) != true
     }
 
-    @objc private func windowDismissed() {
+    @objc private func windowWillClose() {
       guard ownsPresentation else { return }
       isPresented = false
       presentationTop = nil
       invalidateQueuedWork()
       if let installedWindow {
         cancelAndRestore(in: installedWindow, publication: .deferred)
+      }
+      scheduleReconcile()
+    }
+
+    @objc private func windowResignedKey() {
+      guard ownsPresentation else { return }
+      isPresented = false
+      presentationTop = nil
+      invalidateQueuedWork()
+      let window = installedWindow
+      if ownsTracking {
+        // A hidden window is a transient hide; the deferred visibility
+        // reconcile cancels the drag only if the window stays hidden.
+        if let window, window.isVisible {
+          cancelAndRestore(in: window, publication: .deferred)
+        }
+      } else if let window {
+        cancelAndRestore(in: window, publication: .deferred)
       }
       scheduleReconcile()
     }
@@ -1617,7 +1635,7 @@
         return
       }
       guard controller.isPresentationOwner(attachmentID) else { return }
-      if !isLiveResizeEligible(in: window) {
+      if !isLiveResizeEligible(in: window) || !window.isVisible {
         if controller.isOwned(by: attachmentID) {
           cancelAndRestore(in: window, publication: publication)
         }

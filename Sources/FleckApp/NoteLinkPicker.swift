@@ -201,8 +201,8 @@
       }
 
       hasActivatedCurrentPresentation = true
-      activate(noteID, replacementRange)
       dismiss()
+      activate(noteID, replacementRange)
       return true
     }
 

@@ -435,7 +435,7 @@ import Testing
   await sleeper.resumeAll()
 }
 
-@Test func lifecycleWaiterCannotPreemptPendingImmediatePreparationUpgrade() async {
+@Test func lifecycleWaiterCannotPreemptPendingImmediatePreparationUpgrade() async throws {
   let asrLoadGate = AsyncRuntimeGate()
   let asr = FakeRuntimeAdapter(role: .asr, loadGate: asrLoadGate)
   let cleanup = FakeRuntimeAdapter(role: .cleanup)
@@ -456,7 +456,11 @@ import Testing
   let immediatePreparation = Task {
     await runtime.prepare(for: .immediateCapture)
   }
-  await Task.yield()
+  try await waitForRuntimeCondition(
+    "both lifecycle waiters to register before opening the load gate"
+  ) {
+    await runtime.preparationWaiterCountForTesting == 2
+  }
 
   await asrLoadGate.openGate()
   await likelyPreparation.value

@@ -3,6 +3,25 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.1.2-beta.1] - 2026-09-17
+
+### Added
+
+- Expanded the editor toolbar with visual text styles, paragraph alignment and spacing,
+  indentation, clear and copied formatting, safe web and note links, in-note find and replace,
+  baseline controls, and Unicode-aware case conversion.
+
+### Changed
+
+- Added the reviewed compact Text, Paragraph, and Tools icons while retaining textual overflow
+  menus, truthful accessibility state, measured ordered overflow, a leading microphone, and a
+  trailing Delete action.
+
+### Fixed
+
+- Preserved current rich-text, list, note-link, inline-image, selection, undo, and canonical-save
+  behavior across the expanded commands and their guarded delayed targets.
+
 ## [1.0.21-beta.1] - 2026-09-17
 
 ### Fixed
