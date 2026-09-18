@@ -2148,7 +2148,9 @@ import Testing
 
   #expect(controller.isTracking)
   #expect(window.frame.width == 620)
-  sendResizeEscapeEvent(to: window, number: 82)
+  if controller.isTracking {
+    sendResizeEscapeEvent(to: window, number: 82)
+  }
   #expect(!controller.isTracking)
 
   host.uninstall()
