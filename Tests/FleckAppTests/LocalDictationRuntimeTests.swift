@@ -456,7 +456,11 @@ import Testing
   let immediatePreparation = Task {
     await runtime.prepare(for: .immediateCapture)
   }
-  await Task.yield()
+  try await waitForRuntimeCondition(
+    "both lifecycle waiters to register before opening the load gate"
+  ) {
+    await runtime.preparationWaiterCountForTesting == 2
+  }
 
   await asrLoadGate.openGate()
   await likelyPreparation.value
