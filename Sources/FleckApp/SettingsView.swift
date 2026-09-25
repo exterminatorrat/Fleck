@@ -107,6 +107,10 @@
       List(selection: $selection) {
         Section {
           sectionRows(SettingsSection.fleckCases)
+        } header: {
+          Text("Fleck")
+            .padding(.bottom, 4)
+            .background(SettingsSearchProbe(identifier: "settings-fleck-sidebar-heading"))
         }
         sectionGroup("Voice & Writing", sections: SettingsSection.voiceAndWritingCases)
         sectionGroup("Connections", sections: SettingsSection.connectionCases)
@@ -151,7 +155,7 @@
     var body: some View {
       content
         .padding(.horizontal, 12)
-        .padding(.top, 6)
+        .padding(.top, 44)
         .padding(.bottom, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background {
@@ -656,15 +660,25 @@
     var body: some View {
       HStack(alignment: .top, spacing: 12) {
         SettingsSidebarSurface {
-          VStack(alignment: .leading, spacing: 10) {
-            Text("Fleck")
-              .font(.headline)
-              .lineLimit(1)
-              .fixedSize(horizontal: false, vertical: true)
-              .frame(height: 28)
-              .background(SettingsSearchProbe(identifier: "settings-fleck-sidebar-heading"))
-              .padding(.leading, 58)
-              .accessibilityAddTraits(.isHeader)
+          VStack(alignment: .leading, spacing: 4) {
+            SettingsSearchField(
+              query: $searchQuery,
+              focusRequest: searchFocusRequest,
+              onMove: moveSearchHighlight,
+              onSubmit: submitHighlightedSearchResult,
+              onBeginEditing: { recordingSelection.cancel() },
+              onFocusChange: { isSettingsSearchFieldFocused = $0 }
+            )
+            .frame(height: 28)
+            .overlay {
+              if isSettingsSearchFieldFocused {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                  .strokeBorder(Color.primary.opacity(0.72), lineWidth: 1.5)
+                  .padding(1)
+                  .allowsHitTesting(false)
+                  .accessibilityHidden(true)
+              }
+            }
             if isSearching {
               SettingsSearchResultsView(
                 results: searchResults,
@@ -731,27 +745,6 @@
               }
             }
           }
-          SettingsSearchField(
-            query: $searchQuery,
-            focusRequest: searchFocusRequest,
-            onMove: moveSearchHighlight,
-            onSubmit: submitHighlightedSearchResult,
-            onBeginEditing: { recordingSelection.cancel() },
-            onFocusChange: { isSettingsSearchFieldFocused = $0 }
-          )
-          .frame(height: 28)
-          .overlay {
-            if isSettingsSearchFieldFocused {
-              RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.72), lineWidth: 1.5)
-                .padding(1)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
-          }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.horizontal, 24)
-          .padding(.top, 12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }

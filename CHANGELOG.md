@@ -3,6 +3,20 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.2.2-beta.1] - 2026-09-25
+
+Private local on-device QA only; this correction is not an accepted build or public
+release and makes no model-release, model-behavior, or runtime claim.
+
+### Fixed
+
+- Restored global Settings search inside the sidebar, between the native red and
+  yellow title-bar traffic lights and the original Fleck section heading above
+  General. The search now sits with nearly equal upper and lower gaps (within
+  one point in hosted tests), restoring the native Fleck/General grouping while
+  leaving detail page content unchanged and preserving search focus and result
+  behavior.
+
 ## [1.2.1-beta.1] - 2026-09-25
 
 Private local on-device QA candidate only; this is not an accepted build or public release, and no
