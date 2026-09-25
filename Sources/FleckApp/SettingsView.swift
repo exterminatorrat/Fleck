@@ -105,7 +105,9 @@
 
     var body: some View {
       List(selection: $selection) {
-        sectionGroup("Fleck", sections: SettingsSection.fleckCases)
+        Section {
+          sectionRows(SettingsSection.fleckCases)
+        }
         sectionGroup("Voice & Writing", sections: SettingsSection.voiceAndWritingCases)
         sectionGroup("Connections", sections: SettingsSection.connectionCases)
         sectionGroup("Information", sections: SettingsSection.informationCases)
@@ -117,16 +119,20 @@
       .accessibilityIdentifier("settings-section-sidebar")
     }
 
+    private func sectionRows(_ sections: [SettingsSection]) -> some View {
+      ForEach(sections) { section in
+        Label(section.title, systemImage: section.systemImage)
+          .tag(section)
+      }
+    }
+
     @ViewBuilder
     private func sectionGroup(
       _ title: LocalizedStringKey,
       sections: [SettingsSection]
     ) -> some View {
       Section {
-        ForEach(sections) { section in
-          Label(section.title, systemImage: section.systemImage)
-            .tag(section)
-        }
+        sectionRows(sections)
       } header: {
         Text(title)
           .padding(.bottom, 4)
@@ -145,7 +151,7 @@
     var body: some View {
       content
         .padding(.horizontal, 12)
-        .padding(.top, 38)
+        .padding(.top, 6)
         .padding(.bottom, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background {
@@ -624,6 +630,7 @@
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
     @State private var microphones: [DictationMicrophoneOption] = []
     @State private var recordingSelection = SettingsShortcutRecordingState()
+    @State private var isSettingsSearchFieldFocused = false
     @State private var searchQuery = ""
     @State private var searchFocusRequest: UUID?
     @State private var highlightedSearchTarget: SettingsSearchTarget?
@@ -649,16 +656,15 @@
     var body: some View {
       HStack(alignment: .top, spacing: 12) {
         SettingsSidebarSurface {
-          VStack(spacing: 10) {
-            SettingsSearchField(
-              query: $searchQuery,
-              focusRequest: searchFocusRequest,
-              onMove: moveSearchHighlight,
-              onSubmit: submitHighlightedSearchResult,
-              onBeginEditing: { recordingSelection.cancel() }
-            )
-            .frame(height: 28)
-
+          VStack(alignment: .leading, spacing: 10) {
+            Text("Fleck")
+              .font(.headline)
+              .lineLimit(1)
+              .fixedSize(horizontal: false, vertical: true)
+              .frame(height: 28)
+              .background(SettingsSearchProbe(identifier: "settings-fleck-sidebar-heading"))
+              .padding(.leading, 58)
+              .accessibilityAddTraits(.isHeader)
             if isSearching {
               SettingsSearchResultsView(
                 results: searchResults,
@@ -675,51 +681,79 @@
         }
         .frame(width: 220)
         .padding(.vertical, 8)
-        ScrollViewReader { proxy in
-          ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-              if selectedSection != .vocabulary {
-                SettingsPageHeader(section: selectedSection, searchRequest: searchRequest)
+        ZStack(alignment: .topLeading) {
+          ScrollViewReader { proxy in
+            ScrollView {
+              VStack(alignment: .leading, spacing: 20) {
+                if selectedSection != .vocabulary {
+                  SettingsPageHeader(section: selectedSection, searchRequest: searchRequest)
+                }
+                switch selectedSection {
+                case .appearance:
+                  appearance
+                case .editing:
+                  editing
+                case .shortcuts:
+                  shortcuts
+                case .dictation:
+                  dictation
+                case .vocabulary:
+                  vocabulary
+                case .agents:
+                  AgentSettingsView()
+                case .about:
+                  AboutSettingsView(identity: buildIdentity)
+                }
               }
-              switch selectedSection {
-              case .appearance:
-                appearance
-              case .editing:
-                editing
-              case .shortcuts:
-                shortcuts
-              case .dictation:
-                dictation
-              case .vocabulary:
-                vocabulary
-              case .agents:
-                AgentSettingsView()
-              case .about:
-                AboutSettingsView(identity: buildIdentity)
+              .environment(\.settingsSearchRequest, searchRequest)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .padding(.horizontal, 24)
+              .padding(.bottom, 20)
+            }
+            .id(selectedSection)
+            .safeAreaPadding(.top, 40)
+            .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .onChange(of: searchRequest?.id) { _, _ in
+              vocabularyPageScrollRequestID = nil
+              guard let searchRequest else { return }
+              Task { @MainActor in
+                await Task.yield()
+                await Task.yield()
+                guard self.searchRequest?.id == searchRequest.id else { return }
+                let pageScrollAnchor = searchRequest.anchor.pageScrollAnchor
+                let isTransferFooter = pageScrollAnchor == .vocabularyTransferFooter
+                proxy.scrollTo(pageScrollAnchor, anchor: isTransferFooter ? .bottom : .center)
+                if searchRequest.anchor.usesVocabularyFocusLifecycle {
+                  await Task.yield()
+                  guard self.searchRequest?.id == searchRequest.id else { return }
+                  vocabularyPageScrollRequestID = searchRequest.id
+                }
               }
             }
-            .environment(\.settingsSearchRequest, searchRequest)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 24)
-            .padding(.bottom, 20)
           }
-          .id(selectedSection)
-          .safeAreaPadding(.top, 40)
-          .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-          .onChange(of: searchRequest?.id) { _, _ in
-            vocabularyPageScrollRequestID = nil
-            guard let searchRequest else { return }
-            Task { @MainActor in
-              await Task.yield()
-              await Task.yield()
-              guard self.searchRequest?.id == searchRequest.id else { return }
-              proxy.scrollTo(searchRequest.anchor.pageScrollAnchor, anchor: .center)
-              if searchRequest.anchor.pageScrollAnchor == .section(.vocabulary) {
-                vocabularyPageScrollRequestID = searchRequest.id
-              }
+          SettingsSearchField(
+            query: $searchQuery,
+            focusRequest: searchFocusRequest,
+            onMove: moveSearchHighlight,
+            onSubmit: submitHighlightedSearchResult,
+            onBeginEditing: { recordingSelection.cancel() },
+            onFocusChange: { isSettingsSearchFieldFocused = $0 }
+          )
+          .frame(height: 28)
+          .overlay {
+            if isSettingsSearchFieldFocused {
+              RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.72), lineWidth: 1.5)
+                .padding(1)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             }
           }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 24)
+          .padding(.top, 12)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
       .padding(.leading, 8)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1444,9 +1478,13 @@
     func sorted<Element>(
       _ values: [Element],
       by key: (Element) -> String,
-      id: (Element) -> UUID
+      id: (Element) -> UUID,
+      priority: ((Element) -> Bool)? = nil
     ) -> [Element] {
       values.sorted { lhs, rhs in
+        if let priority, priority(lhs) != priority(rhs) {
+          return priority(lhs)
+        }
         let lhsKey = key(lhs).folding(
           options: [.caseInsensitive, .diacriticInsensitive],
           locale: Locale(identifier: "en_US_POSIX")
@@ -1459,18 +1497,18 @@
           return self == .aToZ ? lhsKey < rhsKey : lhsKey > rhsKey
         }
         if key(lhs) != key(rhs) {
-          return self == .aToZ ? key(lhs) < key(rhs) : key(lhs) > key(rhs)
+          return key(lhs) < key(rhs)
         }
         let lhsID = id(lhs).uuidString
         let rhsID = id(rhs).uuidString
-        return self == .aToZ ? lhsID < rhsID : lhsID > rhsID
+        return lhsID < rhsID
       }
     }
   }
 
   private struct PersonalDictionarySettingsSection: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ScaledMetric(relativeTo: .title2) private var titleSize = 20
+    @ScaledMetric(relativeTo: .title2) private var titleSize = 23
     @ObservedObject var viewModel: PersonalDictionarySettingsViewModel
     @Binding var searchRequest: SettingsSearchRequest?
     let pageScrollReadyRequestID: UUID?
@@ -1479,6 +1517,7 @@
     @State private var showsDictionaryExporter = false
     @State private var showsCSVExporter = false
     @FocusState private var isSearchFocused: Bool
+    @FocusState private var isSearchTriggerFocused: Bool
     @FocusState private var isOptionsTriggerFocused: Bool
     @State private var isViewPresent = false
     @State private var isSearchExpanded = false
@@ -1494,7 +1533,8 @@
     @State private var optionsDismissalGeneration: Int?
     @State private var optionsDismissalRequestID: UUID?
     @State private var returnsFocusAfterOptionsDismissal = false
-    @State private var sortOrder = SettingsVocabularySortOrder.aToZ
+    @AppStorage("settings.vocabularySortOrder")
+    private var sortOrder = SettingsVocabularySortOrder.aToZ
     @State private var isReloading = false
 
     private let maximumTransferBytes = 64 * 1024 + 256
@@ -1506,12 +1546,15 @@
     var body: some View {
       VStack(alignment: .leading, spacing: 14) {
         dictionaryHeader
+        dictionaryToolbar
         if isSearchExpanded {
           searchSurface
             .transition(.opacity)
         }
+        Divider()
         messages
         listSurface
+        transferFooter
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .onChange(of: searchRequest?.id, initial: true) { _, _ in
@@ -1646,6 +1689,23 @@
         defaultFilename: "Fleck Personal Dictionary Entries.csv",
         onCompletion: handleFileCompletion
       )
+      .confirmationDialog(
+        viewModel.pendingEntryDeletion.map { "Delete \($0.preferredForm)?" } ?? "Delete this entry?",
+        isPresented: Binding(
+          get: { viewModel.pendingEntryDeletion != nil },
+          set: { if !$0 { viewModel.cancelEntryDeletion() } }
+        ),
+        titleVisibility: .visible
+      ) {
+        Button("Delete", role: .destructive) {
+          Task { @MainActor in await viewModel.confirmEntryDeletion() }
+        }
+        Button("Cancel", role: .cancel) {
+          viewModel.cancelEntryDeletion()
+        }
+      } message: {
+        Text("Fleck will stop applying this vocabulary entry.")
+      }
     }
 
     private var dictionaryHeader: some View {
@@ -1655,34 +1715,54 @@
           .background(SettingsPageHeaderProbe())
           .settingsSearchAnchor(.section(.vocabulary), request: visibleSearchRequest)
         Spacer(minLength: 8)
-        if viewModel.filter != .all {
-          Text(viewModel.filter.rawValue)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("Dictionary filter")
-            .accessibilityValue(viewModel.filter.rawValue)
-        }
-        searchTrigger
-        Button("Options") {
-          toggleOptions()
-        }
-        .buttonStyle(.borderless)
-        .focusable()
-        .focused($isOptionsTriggerFocused)
-        .accessibilityIdentifier("settings-vocabulary-options-trigger")
-        .accessibilityHint("Shows dictionary filters and less frequent actions")
-        .popover(isPresented: optionsPresentation, arrowEdge: .top) {
-          optionsPopover
-        }
         Button("Add new") {
           presentAfterClosingOptions {
             viewModel.beginAddingEntry()
           }
         }
         .buttonStyle(.borderedProminent)
+        .controlSize(.large)
         .accessibilityLabel("Add a new vocabulary word or phrase")
         .accessibilityHint("Opens the vocabulary word editor")
         .settingsSearchAnchor(.vocabularyAdd, request: visibleSearchRequest)
+      }
+      .frame(maxWidth: .infinity, minHeight: 40)
+    }
+
+    private var dictionaryToolbar: some View {
+      HStack(spacing: 12) {
+        HStack(spacing: 4) {
+          ForEach(PersonalDictionarySettingsViewModel.Filter.allCases) { filter in
+            Button {
+              viewModel.filter = filter
+            } label: {
+              Text(filter.rawValue)
+                .font(.subheadline.weight(filter == viewModel.filter ? .semibold : .regular))
+                .foregroundStyle(filter == viewModel.filter ? .primary : .secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(alignment: .bottom) {
+                  if filter == viewModel.filter {
+                    Rectangle()
+                      .fill(Color.primary.opacity(0.72))
+                      .frame(height: 2)
+                  }
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(filter.rawValue) filter")
+            .accessibilityValue(filter == viewModel.filter ? "Selected" : "Available")
+            .accessibilityHint("Shows \(filter.rawValue.lowercased()) vocabulary")
+            .settingsSearchAnchor(.vocabularyFilter(filter), request: visibleSearchRequest)
+          }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Personal dictionary filter")
+        .accessibilityHint("Choose which vocabulary entries are shown")
+        Spacer(minLength: 8)
+        searchTrigger
+        sortControl
+        reloadControl
       }
       .frame(maxWidth: .infinity)
     }
@@ -1698,9 +1778,26 @@
         }
       } label: {
         Image(systemName: "magnifyingglass")
+          .frame(width: 28, height: 28)
       }
       .buttonStyle(.plain)
+      .focusEffectDisabled()
       .keyboardShortcut("f", modifiers: .command)
+      .focused($isSearchTriggerFocused)
+      .background {
+        if isSearchTriggerFocused {
+          RoundedRectangle(cornerRadius: 7, style: .continuous)
+            .fill(Color(nsColor: .unemphasizedSelectedContentBackgroundColor))
+        }
+      }
+      .overlay {
+        if isSearchTriggerFocused {
+          RoundedRectangle(cornerRadius: 7, style: .continuous)
+            .strokeBorder(Color.primary.opacity(0.72), lineWidth: 1.5)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+      }
       .disabled(hasModalPresentation)
       .help("Search vocabulary (⌘F)")
       .accessibilityLabel("Search vocabulary")
@@ -1708,54 +1805,32 @@
       .accessibilityIdentifier("settings-vocabulary-search-trigger")
     }
 
+    private var transferFooter: some View {
+      HStack {
+        Button("Import / Export…") {
+          toggleOptions()
+        }
+        .font(.footnote)
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .focused($isOptionsTriggerFocused)
+        .accessibilityIdentifier("settings-vocabulary-options-trigger")
+        .accessibilityHint("Imports or exports your personal dictionary")
+        .id(SettingsSearchTarget.vocabularyTransferFooter)
+        .popover(isPresented: optionsPresentation, arrowEdge: .bottom) {
+          optionsPopover
+        }
+        Spacer(minLength: 0)
+      }
+      .frame(maxWidth: .infinity)
+    }
+
     private var optionsPopover: some View {
       ScrollViewReader { proxy in
         ScrollView {
           VStack(alignment: .leading, spacing: 10) {
-            Text("Show")
-              .font(.headline)
-            ForEach(PersonalDictionarySettingsViewModel.Filter.allCases) { filter in
-              Button {
-                viewModel.filter = filter
-              } label: {
-                HStack {
-                  Text(filter.rawValue)
-                  Spacer()
-                  if filter == viewModel.filter {
-                    Image(systemName: "checkmark")
-                      .accessibilityHidden(true)
-                  }
-                }
-                .contentShape(Rectangle())
-              }
-              .buttonStyle(.plain)
-              .padding(.vertical, 4)
-              .accessibilityLabel(filter.rawValue)
-              .accessibilityValue(filter == viewModel.filter ? "Selected" : "Available")
-              .accessibilityHint("Shows \(filter.rawValue.lowercased()) vocabulary")
-              .settingsSearchAnchor(
-                .vocabularyFilter(filter),
-                request: optionsSearchRequest
-              )
-            }
-
-            Divider()
-
-            Button("Find in Dictionary") {
-              presentAfterClosingOptions {
-                openSearch(source: .pointer)
-              }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            sortControl
-            reloadControl
-
-            Divider()
-
             Text("Transfer")
               .font(.headline)
-              .frame(maxWidth: .infinity, alignment: .leading)
               .settingsSearchAnchor(.vocabularyTransfer, request: optionsSearchRequest)
 
             Button("Export Dictionary") {
@@ -1816,7 +1891,7 @@
           }
         }
       }
-      .frame(width: 280, height: 360)
+      .frame(width: 280, height: 260)
       .accessibilityIdentifier("settings-vocabulary-options-content")
       .background(SettingsSearchProbe(identifier: "settings-vocabulary-options-content"))
       .onExitCommand {
@@ -1829,16 +1904,18 @@
     }
 
     private var sortControl: some View {
-      Picker("Sort", selection: $sortOrder) {
-        ForEach(SettingsVocabularySortOrder.allCases) { order in
-          Text(order.rawValue).tag(order)
-        }
+      Button {
+        sortOrder = sortOrder == .aToZ ? .zToA : .aToZ
+      } label: {
+        Image(systemName: "arrow.up.arrow.down")
+          .frame(width: 28, height: 28)
       }
-      .pickerStyle(.menu)
+      .buttonStyle(.plain)
+      .help("Sort \(sortOrder.rawValue)")
       .accessibilityLabel("Sort vocabulary")
       .accessibilityValue(sortOrder.rawValue)
-      .accessibilityHint("Sorts vocabulary alphabetically")
-      .settingsSearchAnchor(.vocabularySort, request: optionsSearchRequest)
+      .accessibilityHint("Switches between A–Z and Z–A")
+      .settingsSearchAnchor(.vocabularySort, request: visibleSearchRequest)
     }
 
     private var reloadControl: some View {
@@ -1847,16 +1924,17 @@
           ProgressView()
             .controlSize(.small)
         } else {
-          Label("Reload", systemImage: "arrow.clockwise")
+          Image(systemName: "arrow.clockwise")
+            .frame(width: 28, height: 28)
         }
       }
-      .buttonStyle(.borderless)
+      .buttonStyle(.plain)
       .disabled(isReloading)
-      .accessibilityLabel("Reload vocabulary")
+      .help("Refresh dictionary")
+      .accessibilityLabel("Refresh dictionary")
       .accessibilityValue(isReloading ? "Reloading" : "Ready")
       .accessibilityHint("Loads the latest local vocabulary entries")
-      .tint(.primary)
-      .settingsSearchAnchor(.vocabularyReload, request: optionsSearchRequest)
+      .settingsSearchAnchor(.vocabularyReload, request: visibleSearchRequest)
     }
 
     @ViewBuilder
@@ -1872,15 +1950,11 @@
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Reloading dictionary")
       } else if let errorMessage = viewModel.errorMessage {
-        HStack(spacing: 8) {
-          Label(errorMessage, systemImage: "exclamationmark.triangle")
-            .foregroundStyle(.red)
-            .accessibilityLabel("Personal dictionary error")
-            .accessibilityValue(errorMessage)
-          Button("Reload", action: reloadVocabulary)
-            .accessibilityHint("Loads the latest local vocabulary entries")
-        }
-        .font(.caption)
+        Label(errorMessage, systemImage: "exclamationmark.triangle")
+          .foregroundStyle(.red)
+          .font(.caption)
+          .accessibilityLabel("Personal dictionary error")
+          .accessibilityValue(errorMessage)
       } else if let statusMessage = viewModel.statusMessage {
         Label(statusMessage, systemImage: "checkmark.circle")
           .foregroundStyle(.secondary)
@@ -1890,9 +1964,9 @@
       }
     }
 
-    @ViewBuilder
     private var listSurface: some View {
-      VStack(alignment: .leading, spacing: 0) {
+      let card = RoundedRectangle(cornerRadius: 12, style: .continuous)
+      return VStack(alignment: .leading, spacing: 0) {
         if viewModel.filter == .suggestions {
           if sortedSuggestions.isEmpty {
             emptyState
@@ -1910,7 +1984,7 @@
           emptyState
         } else {
           ForEach(Array(sortedEntries.enumerated()), id: \.element.id) { index, entry in
-            entryRow(entry)
+            entryRow(entry, expectedRevision: viewModel.revision)
               .padding(.horizontal, 12)
             if index < sortedEntries.count - 1 {
               Divider().padding(.leading, 12)
@@ -1919,11 +1993,20 @@
         }
       }
       .frame(maxWidth: .infinity, alignment: .topLeading)
-      .overlay(alignment: .top) { Divider() }
+      .background(Color(nsColor: .controlBackgroundColor), in: card)
+      .overlay {
+        card.strokeBorder(Color(nsColor: .separatorColor).opacity(0.65), lineWidth: 0.8)
+      }
+      .clipShape(card)
     }
 
     private var sortedEntries: [PersonalDictionaryEntry] {
-      sortOrder.sorted(viewModel.visibleEntries, by: \.preferredForm, id: \.id)
+      sortOrder.sorted(
+        viewModel.visibleEntries,
+        by: \.preferredForm,
+        id: \.id,
+        priority: \.isPriority
+      )
     }
 
     private var sortedSuggestions: [PersonalDictionarySuggestion] {
@@ -1945,10 +2028,10 @@
           Text("No entries yet. Use Add new to add a word, phrase, or correction.")
             .foregroundStyle(.secondary)
         } else if !viewModel.query.isEmpty {
-          Text("No matching entries. Clear search or choose another filter in Options.")
+          Text("No matching entries. Clear search or choose another filter.")
             .foregroundStyle(.secondary)
         } else if viewModel.filter != .all {
-          Text("No entries match this filter. Choose All in Options or use Add new.")
+          Text("No entries match this filter. Choose All or use Add new.")
             .foregroundStyle(.secondary)
         }
       }
@@ -1957,39 +2040,26 @@
       .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func entryRow(_ entry: PersonalDictionaryEntry) -> some View {
-      Button {
-        viewModel.beginEditingEntry(entry)
-      } label: {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-          Text(entryTitle(entry))
-            .font(.body)
-            .multilineTextAlignment(.leading)
-            .fixedSize(horizontal: false, vertical: true)
-          Spacer(minLength: 8)
-          if !entry.isEnabled {
-            Text("Disabled")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-          if entry.isPriority {
-            Image(systemName: "star.fill")
-              .font(.caption2)
-              .foregroundStyle(.secondary)
-              .accessibilityHidden(true)
+    private func entryRow(
+      _ entry: PersonalDictionaryEntry,
+      expectedRevision: UInt64
+    ) -> some View {
+      PersonalDictionaryEntryRow(
+        entry: entry,
+        title: entryTitle(entry),
+        accessibilityValue: entryAccessibilityValue(entry),
+        onEdit: { viewModel.beginEditingEntry(entry) },
+        onDelete: { viewModel.requestEntryDeletion(entry, expectedRevision: expectedRevision) },
+        onPriorityToggle: { priority in
+          Task { @MainActor in
+            await viewModel.setPriority(
+              priority,
+              id: entry.id,
+              expectedRevision: expectedRevision
+            )
           }
         }
-        .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
-        .contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
-      .background(
-        SettingsSearchProbe(identifier: "settings-vocabulary-entry-frame-\(entry.id.uuidString)")
       )
-      .accessibilityIdentifier("settings-vocabulary-entry-\(entry.id.uuidString)")
-      .accessibilityLabel("Edit \(entry.preferredForm)")
-      .accessibilityValue(entryAccessibilityValue(entry))
-      .accessibilityHint("Opens this vocabulary word for editing")
     }
 
     private func entryTitle(_ entry: PersonalDictionaryEntry) -> String {
@@ -2065,18 +2135,20 @@
     }
 
     private var searchSurface: some View {
-      HStack(spacing: 7) {
+      let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+      return HStack(spacing: 7) {
         Image(systemName: "magnifyingglass")
           .foregroundStyle(.secondary)
           .accessibilityHidden(true)
         TextField("Search vocabulary", text: $viewModel.query)
-          .textFieldStyle(.roundedBorder)
+          .textFieldStyle(.plain)
+          .frame(maxWidth: .infinity)
           .focused($isSearchFocused)
-        .accessibilityLabel("Search vocabulary")
-        .accessibilityValue(viewModel.query.isEmpty ? "No search" : viewModel.query)
-        .accessibilityHint("Searches saved words and corrections")
-        .settingsSearchAnchor(.vocabularySearch, request: visibleSearchRequest)
-        .accessibilityIdentifier("settings-vocabulary-local-search-field")
+          .accessibilityLabel("Search vocabulary")
+          .accessibilityValue(viewModel.query.isEmpty ? "No search" : viewModel.query)
+          .accessibilityHint("Searches saved words and corrections")
+          .settingsSearchAnchor(.vocabularySearch, request: visibleSearchRequest)
+          .accessibilityIdentifier("settings-vocabulary-local-search-field")
         Button {
           closeSearch(source: .pointer)
         } label: {
@@ -2088,12 +2160,20 @@
         .accessibilityHint("Clears search and closes vocabulary search")
       }
       .frame(maxWidth: .infinity)
+      .padding(.horizontal, 8)
+      .frame(height: 32)
+      .background(Color(nsColor: .controlBackgroundColor), in: shape)
+      .overlay {
+        shape.strokeBorder(Color(nsColor: .separatorColor).opacity(0.65), lineWidth: 0.8)
+      }
       .background(SettingsSearchProbe(identifier: "settings-vocabulary-local-search-field"))
     }
 
     private var hasModalPresentation: Bool {
       viewModel.entryEdit != nil
         || viewModel.suggestionEdit != nil
+        || viewModel.pendingEntryDeletion != nil
+        || viewModel.isEntryDeletionInFlight
         || viewModel.isImportPreviewPresented
         || showsImporter
         || showsDictionaryExporter
@@ -2187,8 +2267,11 @@
       case .section(.vocabulary), .vocabularyAdd:
         dismissOptionsForNewPresentation()
         isSearchFocused = false
-      case .vocabularyFilter, .vocabularySort, .vocabularyReload, .vocabularyTransfer,
-        .vocabularyExportDictionary, .vocabularyExportCSV, .vocabularyImportDictionary:
+      case .vocabularyFilter, .vocabularySort, .vocabularyReload:
+        isSearchFocused = false
+        dismissOptionsForNewPresentation()
+      case .vocabularyTransfer, .vocabularyExportDictionary, .vocabularyExportCSV,
+        .vocabularyImportDictionary:
         isSearchFocused = false
         activeOptionsRevealID = request.id
         focusedOptionsRevealID = nil
@@ -2308,6 +2391,7 @@
       searchPresentationGeneration += 1
       presentationGeneration += 1
       isOptionsTriggerFocused = false
+      isSearchTriggerFocused = false
       withAnimation(motion.presentationAnimation(for: source)) {
         isSearchExpanded = true
         isSearchFocused = true
@@ -2320,7 +2404,7 @@
         isSearchExpanded = false
         isSearchFocused = false
       }
-      isOptionsTriggerFocused = true
+      isSearchTriggerFocused = true
       clearSearchQueryAfterTeardown()
     }
 
@@ -2380,6 +2464,160 @@
       if case .failure(let error) = result {
         viewModel.handleFileOperationFailure(error)
       }
+    }
+  }
+
+  private struct PersonalDictionaryEntryRow: View {
+    private enum Action: Hashable {
+      case edit
+      case delete
+      case priority
+    }
+
+    let entry: PersonalDictionaryEntry
+    let title: String
+    let accessibilityValue: String
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+    let onPriorityToggle: (Bool) -> Void
+    @State private var isHovered = false
+    @FocusState private var focusedAction: Action?
+    @AccessibilityFocusState private var accessibilityFocusedAction: Action?
+
+    private var isFocused: Bool {
+      focusedAction != nil || accessibilityFocusedAction != nil
+    }
+
+    private var showsActions: Bool {
+      isHovered || isFocused
+    }
+
+    var body: some View {
+      HStack(spacing: 10) {
+        Button(action: onEdit) {
+          HStack(spacing: 6) {
+            Text(title)
+              .font(.body)
+              .multilineTextAlignment(.leading)
+              .fixedSize(horizontal: false, vertical: true)
+            if entry.isPriority {
+              Image(systemName: "star.fill")
+                .font(.caption2)
+                .foregroundStyle(Color.accentColor)
+                .accessibilityHidden(true)
+            }
+            if !entry.isEnabled {
+              Text("Disabled")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+          }
+          .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+          .contentShape(Rectangle())
+          .background {
+            if focusedAction == .edit || accessibilityFocusedAction == .edit {
+              RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(nsColor: .unemphasizedSelectedContentBackgroundColor))
+            }
+          }
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .focused($focusedAction, equals: .edit)
+        .accessibilityFocused($accessibilityFocusedAction, equals: .edit)
+        .overlay {
+          if focusedAction == .edit || accessibilityFocusedAction == .edit {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+              .strokeBorder(Color.primary.opacity(0.72), lineWidth: 1.5)
+              .allowsHitTesting(false)
+              .accessibilityHidden(true)
+          }
+        }
+        .help("Edit \(entry.preferredForm)")
+        .accessibilityLabel("Edit \(entry.preferredForm)")
+        .accessibilityValue(accessibilityValue)
+        .accessibilityHint("Opens this dictionary entry for editing")
+        .accessibilityIdentifier("settings-vocabulary-entry-\(entry.id.uuidString)")
+        HStack(spacing: 4) {
+          actionButton(
+            .delete,
+            systemImage: "trash",
+            accessibilityLabel: "Delete \(entry.preferredForm)",
+            accessibilityHint: "Asks for confirmation before deleting this entry",
+            accessibilityIdentifier: "settings-vocabulary-entry-delete-\(entry.id.uuidString)",
+            role: .destructive,
+            action: onDelete
+          )
+          actionButton(
+            .priority,
+            systemImage: entry.isPriority ? "star.fill" : "star",
+            accessibilityLabel: entry.isPriority
+              ? "Unstar \(entry.preferredForm)"
+              : "Star \(entry.preferredForm)",
+            accessibilityValue: entry.isPriority ? "Starred" : "Not starred",
+            accessibilityHint: "Pins starred entries to the top of the dictionary",
+            accessibilityIdentifier: "settings-vocabulary-entry-priority-\(entry.id.uuidString)",
+            isPriority: entry.isPriority,
+            action: { onPriorityToggle(!entry.isPriority) }
+          )
+        }
+        .opacity(showsActions ? 1 : 0)
+      }
+      .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+      .background {
+        if showsActions {
+          RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Color(nsColor: .unemphasizedSelectedContentBackgroundColor))
+        }
+      }
+      .onHover { isHovered = $0 }
+      .background(
+        SettingsSearchProbe(identifier: "settings-vocabulary-entry-frame-\(entry.id.uuidString)")
+      )
+      .accessibilityElement(children: .contain)
+    }
+
+    private func actionButton(
+      _ action: Action,
+      systemImage: String,
+      accessibilityLabel: String,
+      accessibilityValue: String? = nil,
+      accessibilityHint: String,
+      accessibilityIdentifier: String,
+      role: ButtonRole? = nil,
+      isPriority: Bool = false,
+      action perform: @escaping () -> Void
+    ) -> some View {
+      Button(role: role, action: perform) {
+        Image(systemName: systemImage)
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(isPriority ? Color.accentColor : Color.secondary)
+          .frame(width: 24, height: 24)
+          .background {
+            if focusedAction == action || accessibilityFocusedAction == action {
+              RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color(nsColor: .unemphasizedSelectedContentBackgroundColor))
+            }
+          }
+      }
+      .buttonStyle(.plain)
+      .focusEffectDisabled()
+      .focused($focusedAction, equals: action)
+      .accessibilityFocused($accessibilityFocusedAction, equals: action)
+      .overlay {
+        if focusedAction == action || accessibilityFocusedAction == action {
+          RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .strokeBorder(Color.primary.opacity(0.72), lineWidth: 1.5)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+      }
+      .help(accessibilityLabel)
+      .accessibilityLabel(accessibilityLabel)
+      .accessibilityValue(accessibilityValue ?? "")
+      .accessibilityHint(accessibilityHint)
+      .accessibilityIdentifier(accessibilityIdentifier)
     }
   }
 

@@ -81,6 +81,16 @@ struct FolderNavigatorPresentationTests {
     #expect(source.contains(".transition(composerTransition)"))
   }
 
+  @Test func focusedUnselectedFolderRowsUseAdaptiveNeutralOutlines() throws {
+    let source = try folderNavigatorSource()
+    #expect(source.contains("if isFocused && !isSelected {"))
+    #expect(source.contains(".strokeBorder(Color.primary, lineWidth: 1)"))
+    #expect(!source.contains(".strokeBorder(Color.accentColor"))
+    #expect(source.contains("? Color.accentColor.opacity(0.28)"))
+    #expect(source.contains("isSelected ? Color.accentColor.opacity(0.18) : .clear"))
+    #expect(source.contains(".accessibilityHint(isEmpty ? \"Empty folder\" : \"\")"))
+  }
+
   @Test(arguments: [
     OverflowCase(width: 380, names: ["A"], overflows: false),
     OverflowCase(width: 520, names: ["A", "B"], overflows: false),

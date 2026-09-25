@@ -905,14 +905,12 @@
 
     let titleField: NSTextField
     let textView: ListAwareTextView
-    var isPinned: Bool
 
     override var isFlipped: Bool { true }
 
-    init(titleField: NSTextField, textView: ListAwareTextView, isPinned: Bool = false) {
+    init(titleField: NSTextField, textView: ListAwareTextView) {
       self.titleField = titleField
       self.textView = textView
-      self.isPinned = isPinned
       super.init(frame: .zero)
       autoresizingMask = [.width]
       addSubview(titleField)
@@ -927,7 +925,7 @@
     func updateLayout(width: CGFloat, minimumHeight: CGFloat) {
       let width = max(0, width)
       let titleHeight = max(24, titleField.fittingSize.height)
-      let leadingCompensation = isPinned ? Self.nativeTitleTextInset : 0
+      let leadingCompensation = Self.nativeTitleTextInset
       let titleFrame = NSRect(
         x: 16 - leadingCompensation,
         y: 12,
@@ -1262,8 +1260,7 @@
       configureNoteLinks(on: textView)
       let documentView = NativeEditorDocumentView(
         titleField: titleField,
-        textView: textView,
-        isPinned: isPinned
+        textView: textView
       )
       scrollView.documentView = documentView
       documentView.autoresizingMask = [.width]
@@ -1336,7 +1333,6 @@
       documentView.titleField.setAccessibilityElement(isEnabled)
       documentView.titleField.font = EditorTypography.titleNSFont(family: titleFontFamily)
       documentView.titleField.textColor = isPinned ? .textColor : .labelColor
-      documentView.isPinned = isPinned
       if documentView.titleField.stringValue != title {
         documentView.titleField.stringValue = title
       }

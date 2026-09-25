@@ -69,6 +69,103 @@ func personalDictionarySettingsBindsAddEnableAndDeleteToDisplayedRevision() asyn
 }
 
 @Test @MainActor
+func personalDictionarySettingsPriorityUsesDisplayedRevisionAndPersists() async throws {
+  let root = temporarySettingsDictionaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = PersonalDictionaryStore(rootURL: root)
+  let entry = settingsEntry(11, "Fleck")
+  try await store.upsert(entry)
+  let viewModel = PersonalDictionarySettingsViewModel(store: store)
+  await viewModel.load()
+
+  await viewModel.setPriority(true, id: entry.id, expectedRevision: viewModel.revision)
+
+  #expect(viewModel.entries.first?.isPriority == true)
+  #expect(viewModel.errorMessage == nil)
+
+  let reloadedViewModel = PersonalDictionarySettingsViewModel(store: store)
+  await reloadedViewModel.load()
+  #expect(reloadedViewModel.entries.first?.isPriority == true)
+}
+
+@Test @MainActor
+func personalDictionarySettingsDoesNotRebaseConcurrentPriorityChanges() async throws {
+  let root = temporarySettingsDictionaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = PersonalDictionaryStore(rootURL: root)
+  let entry = settingsEntry(12, "Dictionary")
+  try await store.upsert(entry)
+  let viewModel = PersonalDictionarySettingsViewModel(store: store)
+  await viewModel.load()
+  let displayedRevision = viewModel.revision
+
+  _ = try await store.mutate(
+    expectedRevision: displayedRevision,
+    .setPriority(true, id: entry.id)
+  )
+  await viewModel.setPriority(false, id: entry.id, expectedRevision: displayedRevision)
+
+  #expect(viewModel.revision == displayedRevision + 1)
+  #expect(viewModel.entries.first?.isPriority == true)
+  #expect(viewModel.errorMessage == "Dictionary changed; try again.")
+}
+
+@Test @MainActor
+func personalDictionaryRowDeletionWaitsForConfirmationBeforeMutating() async throws {
+  let root = temporarySettingsDictionaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = PersonalDictionaryStore(rootURL: root)
+  let entry = settingsEntry(13, "Remove only after confirmation")
+  try await store.upsert(entry)
+  let viewModel = PersonalDictionarySettingsViewModel(store: store)
+  await viewModel.load()
+  let displayedRevision = viewModel.revision
+
+  viewModel.requestEntryDeletion(entry, expectedRevision: displayedRevision)
+
+  #expect(viewModel.pendingEntryDeletion?.id == entry.id)
+  #expect(viewModel.pendingEntryDeletion?.expectedRevision == displayedRevision)
+  #expect(viewModel.entries.map(\.id) == [entry.id])
+  #expect(viewModel.revision == displayedRevision)
+
+  viewModel.cancelEntryDeletion()
+  #expect(viewModel.pendingEntryDeletion == nil)
+  #expect(viewModel.entries.map(\.id) == [entry.id])
+  #expect(viewModel.revision == displayedRevision)
+
+  viewModel.requestEntryDeletion(entry, expectedRevision: displayedRevision)
+  await viewModel.confirmEntryDeletion()
+
+  #expect(viewModel.pendingEntryDeletion == nil)
+  #expect(!viewModel.isEntryDeletionInFlight)
+  #expect(viewModel.entries.isEmpty)
+  #expect(viewModel.revision == displayedRevision + 1)
+}
+
+@Test @MainActor
+func personalDictionaryRowDeletionRejectsAStaleDisplayedRevision() async throws {
+  let root = temporarySettingsDictionaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = PersonalDictionaryStore(rootURL: root)
+  let entry = settingsEntry(14, "Concurrent delete")
+  try await store.upsert(entry)
+  let viewModel = PersonalDictionarySettingsViewModel(store: store)
+  await viewModel.load()
+  let displayedRevision = viewModel.revision
+  viewModel.requestEntryDeletion(entry, expectedRevision: displayedRevision)
+
+  _ = try await store.mutate(
+    expectedRevision: displayedRevision,
+    .upsert(settingsEntry(15, "Newer entry"))
+  )
+  await viewModel.confirmEntryDeletion()
+
+  #expect(viewModel.entries.map(\.id) == [entry.id, settingsUUID(15)])
+  #expect(viewModel.revision == displayedRevision + 1)
+  #expect(viewModel.errorMessage == "Dictionary changed; try again.")
+}
+
+@Test @MainActor
 func personalDictionaryEntryEditorPreservesIdentityAndMetadataWhenSavingCorrections() async throws {
   let root = temporarySettingsDictionaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
@@ -673,6 +770,12 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
     contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
     encoding: .utf8
   )
+  let viewModelSource = try String(
+    contentsOf: repository.appendingPathComponent(
+      "Sources/FleckApp/PersonalDictionarySettingsViewModel.swift"
+    ),
+    encoding: .utf8
+  )
 
   #expect(runtimeSource.contains(
     "let personalDictionaryStore = PersonalDictionaryStore(rootURL: applicationSupportURL)"
@@ -688,10 +791,16 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
   #expect(settingsSource.contains("expectedRevision: expectedRevision"))
   #expect(settingsSource.contains("case vocabulary = \"Vocabulary\""))
   #expect(settingsSource.contains("Text(\"Dictionary\")"))
-  #expect(settingsSource.contains("Button(\"Options\")"))
+  #expect(settingsSource.contains("Button(\"Import / Export…\")"))
   #expect(settingsSource.contains("Button(\"Add new\")"))
   #expect(settingsSource.contains("private func entryTitle("))
   #expect(settingsSource.contains("viewModel.beginEditingEntry(entry)"))
+  #expect(settingsSource.contains("viewModel.requestEntryDeletion("))
+  #expect(viewModelSource.contains("func setPriority("))
+  #expect(viewModelSource.contains("mutation: .setPriority(priority, id: id)"))
+  #expect(viewModelSource.contains("func requestEntryDeletion("))
+  #expect(viewModelSource.contains("func confirmEntryDeletion() async"))
+  #expect(viewModelSource.contains("expectedRevision: request.expectedRevision"))
   #expect(settingsSource.contains("PersonalDictionaryEntryEditSheet("))
   #expect(settingsSource.contains("Toggle(\"Correct a misspelling\""))
   #expect(settingsSource.contains("TextField(\"Correct from\""))
@@ -700,6 +809,7 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
   #expect(!settingsSource.contains(".searchable("))
   #expect(settingsSource.contains("private var optionsPopover: some View"))
   #expect(settingsSource.contains("ForEach(PersonalDictionarySettingsViewModel.Filter.allCases)"))
+  #expect(settingsSource.contains("private var transferFooter: some View"))
   #expect(settingsSource.contains("Button(\"Approve\""))
   #expect(settingsSource.contains("Button(\"Edit and Approve\""))
   #expect(settingsSource.contains("Button(\"Dismiss\""))
@@ -746,13 +856,16 @@ func personalDictionaryVocabularyUsesTheTaskFlowAndLocalSortControls() throws {
   )
 
   #expect(settingsSource.contains("Text(\"Dictionary\")"))
-  #expect(settingsSource.contains("Button(\"Options\")"))
+  #expect(settingsSource.contains("Button(\"Import / Export…\")"))
   #expect(settingsSource.contains("Button(\"Add new\")"))
   #expect(!settingsSource.contains("Teach Fleck the words and phrases that matter to you"))
-  #expect(settingsSource.contains("Picker(\"Sort\""))
+  #expect(settingsSource.contains("@AppStorage(\"settings.vocabularySortOrder\")"))
+  #expect(settingsSource.contains("Image(systemName: \"arrow.up.arrow.down\")"))
   #expect(settingsSource.contains("SettingsVocabularySortOrder"))
   #expect(settingsSource.contains("case aToZ"))
   #expect(settingsSource.contains("case zToA"))
+  #expect(settingsSource.contains(".settingsSearchAnchor(.vocabularySort, request: visibleSearchRequest)"))
+  #expect(settingsSource.contains(".settingsSearchAnchor(.vocabularyReload, request: visibleSearchRequest)"))
   #expect(settingsSource.contains("viewModel.load()"))
   #expect(settingsSource.contains("isReloading"))
   #expect(settingsSource.contains("isSearchExpanded"))
@@ -779,11 +892,11 @@ func personalDictionaryVocabularySearchUsesFixedCustomOverlayAndAccessibleDismis
 
   #expect(!settingsSource.contains("ViewThatFits(in: .horizontal)"))
   #expect(!settingsSource.contains("private var toolbarRows: some View"))
-  #expect(settingsSource.contains(".textFieldStyle(.roundedBorder)"))
+  #expect(settingsSource.contains(".textFieldStyle(.plain)"))
   #expect(settingsSource.contains("private var searchSurface: some View"))
   #expect(settingsSource.contains("@Environment(\\.accessibilityReduceMotion) private var reduceMotion"))
   #expect(settingsSource.contains("AppMotion(reduceMotion: reduceMotion)"))
-  #expect(settingsSource.contains("openSearch(source: .pointer)"))
+  #expect(settingsSource.contains("openSearch(source: isCommandF ? .keyboard : .pointer)"))
   #expect(settingsSource.contains("withAnimation(motion.presentationAnimation(for: source))"))
   #expect(settingsSource.contains(".onExitCommand"))
   #expect(settingsSource.contains("closeSearch(source: .keyboard)"))
@@ -797,11 +910,14 @@ func personalDictionaryVocabularySearchUsesFixedCustomOverlayAndAccessibleDismis
     range: optionsStart.upperBound..<settingsSource.endIndex
   ))
   let optionsSource = settingsSource[optionsStart.lowerBound..<sortStart.lowerBound]
-  #expect(optionsSource.contains("ForEach(PersonalDictionarySettingsViewModel.Filter.allCases)"))
-  #expect(optionsSource.contains("Text(filter.rawValue)"))
-  #expect(optionsSource.contains("Button(\"Find in Dictionary\")"))
+  #expect(optionsSource.contains("Text(\"Transfer\")"))
+  #expect(!optionsSource.contains("ForEach(PersonalDictionarySettingsViewModel.Filter.allCases)"))
+  #expect(!optionsSource.contains("Button(\"Find in Dictionary\")"))
+  #expect(!optionsSource.contains("sortControl"))
+  #expect(!optionsSource.contains("reloadControl"))
   #expect(optionsSource.contains("settingsSearchAnchor(.vocabularyTransfer"))
   #expect(optionsSource.contains("presentAfterClosingOptions"))
+  #expect(settingsSource.contains(".settingsSearchAnchor(.vocabularyFilter(filter), request: visibleSearchRequest)"))
   #expect(settingsSource.contains("private var optionsPresentation: Binding<Bool>"))
   #expect(settingsSource.contains("private func optionsPopoverDidDisappear()"))
 }
@@ -823,6 +939,35 @@ func personalDictionaryVocabularySearchDefersQueryClearUntilFieldTeardown() thro
   #expect(settingsSource.contains("clearSearchQueryAfterTeardown()"))
   #expect(settingsSource.contains("closeSearch(source: .pointer)"))
   #expect(settingsSource.contains("closeSearch(source: .keyboard)"))
+}
+
+@Test
+func personalDictionaryFocusIsNeutralAndKeepsControlsKeyboardAccessible() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let settingsSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+  let searchSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsSearch.swift"),
+    encoding: .utf8
+  )
+
+  #expect(searchSource.contains("field.focusRingType = .none"))
+  #expect(searchSource.contains("onFocusChange(true)"))
+  #expect(searchSource.contains(".focusEffectDisabled(usesNeutralKeyboardFocus)"))
+  #expect(searchSource.contains("Color.primary.opacity(0.72)"))
+  #expect(settingsSource.contains(".focused($focusedAction"))
+  #expect(settingsSource.contains(": \"Star \\(entry.preferredForm)\""))
+  #expect(settingsSource.contains(".accessibilityHidden(true)"))
+  #expect(settingsSource.contains(".accessibilityLabel(\"Edit \\(entry.preferredForm)\")"))
+  #expect(settingsSource.contains("accessibilityLabel(\"Personal dictionary filter\")"))
+  #expect(settingsSource.contains("background(alignment: .bottom)"))
+  #expect(settingsSource.contains(".fill(Color.primary.opacity(0.72))"))
+  #expect(!settingsSource.contains("Color.accentColor.opacity(0.12)"))
 }
 
 @Test @MainActor
@@ -939,15 +1084,25 @@ func personalDictionaryUsesOneLargeGlassPanelWithAccessibleFilterTabs() throws {
   )
 
   #expect(settingsSource.contains("private var optionsPopover: some View"))
+  #expect(settingsSource.contains("private var dictionaryToolbar: some View"))
   #expect(settingsSource.contains("ForEach(PersonalDictionarySettingsViewModel.Filter.allCases)"))
   #expect(settingsSource.contains("Text(filter.rawValue)"))
-  #expect(settingsSource.contains("if filter == viewModel.filter"))
   #expect(settingsSource.contains(".popover(isPresented: optionsPresentation"))
+  #expect(settingsSource.contains("Color(nsColor: .controlBackgroundColor)"))
+  #expect(settingsSource.contains("RoundedRectangle(cornerRadius: 12, style: .continuous)"))
   #expect(settingsSource.contains(".frame(maxWidth: .infinity, minHeight: 48"))
   #expect(settingsSource.contains("Divider().padding(.leading, 12)"))
   #expect(!settingsSource.contains(".frame(maxWidth: .infinity, minHeight: 280"))
   #expect(!settingsSource.contains("private var dictionaryPanel: some View"))
-  #expect(!settingsSource.contains("private var filterTabs: some View"))
+  #expect(settingsSource.contains("private var transferFooter: some View"))
+  #expect(settingsSource.contains(".id(SettingsSearchTarget.vocabularyTransferFooter)"))
+  #expect(settingsSource.contains("private struct PersonalDictionaryEntryRow: View"))
+  #expect(settingsSource.contains("focusedAction"))
+  #expect(settingsSource.contains("onHover"))
+  #expect(settingsSource.contains("Button(\"Delete\", role: .destructive)"))
+  #expect(settingsSource.contains("viewModel.confirmEntryDeletion()"))
+  #expect(settingsSource.contains("accessibilityLabel: entry.isPriority\n"))
+  #expect(settingsSource.contains(": \"Star \\(entry.preferredForm)\""))
   #expect(settingsSource.contains("Text(\"Transfer\")"))
   #expect(!settingsSource.contains("DisclosureGroup(\"Transfer\""))
 }
@@ -958,18 +1113,33 @@ func personalDictionaryVocabularySortOrdersEntriesInBothDirections() {
     settingsEntry(1, "zulu"),
     settingsEntry(2, "Alpha"),
     settingsEntry(3, "bravo"),
+    PersonalDictionaryEntry(
+      id: settingsUUID(4),
+      preferredForm: "Beta",
+      isPriority: true
+    ),
   ]
 
   #expect(
     SettingsVocabularySortOrder.aToZ
-      .sorted(entries, by: \.preferredForm, id: \.id)
-      .map(\.preferredForm) == ["Alpha", "bravo", "zulu"]
+      .sorted(entries, by: \.preferredForm, id: \.id, priority: \.isPriority)
+      .map(\.preferredForm) == ["Beta", "Alpha", "bravo", "zulu"]
   )
   #expect(
     SettingsVocabularySortOrder.zToA
-      .sorted(entries, by: \.preferredForm, id: \.id)
-      .map(\.preferredForm) == ["zulu", "bravo", "Alpha"]
+      .sorted(entries, by: \.preferredForm, id: \.id, priority: \.isPriority)
+      .map(\.preferredForm) == ["Beta", "zulu", "bravo", "Alpha"]
   )
+
+  let ties = [settingsEntry(5, "same"), settingsEntry(6, "Same")]
+  let ascendingTies = SettingsVocabularySortOrder.aToZ
+    .sorted(ties, by: \.preferredForm, id: \.id)
+    .map(\.id)
+  let descendingTies = SettingsVocabularySortOrder.zToA
+    .sorted(ties, by: \.preferredForm, id: \.id)
+    .map(\.id)
+  #expect(ascendingTies == [settingsUUID(6), settingsUUID(5)])
+  #expect(descendingTies == ascendingTies)
 }
 
 private func settingsEntry(

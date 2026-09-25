@@ -39,6 +39,7 @@
     case vocabularySort
     case vocabularyReload
     case vocabularyTransfer
+    case vocabularyTransferFooter
     case vocabularyExportDictionary
     case vocabularyExportCSV
     case vocabularyImportDictionary
@@ -91,6 +92,7 @@
       case .vocabularySort: "vocabulary-sort"
       case .vocabularyReload: "vocabulary-reload"
       case .vocabularyTransfer: "vocabulary-transfer"
+      case .vocabularyTransferFooter: "vocabulary-transfer-footer"
       case .vocabularyExportDictionary: "vocabulary-export-dictionary"
       case .vocabularyExportCSV: "vocabulary-export-csv"
       case .vocabularyImportDictionary: "vocabulary-import-dictionary"
@@ -118,9 +120,11 @@
 
     var pageScrollAnchor: Self {
       switch self {
+      case .vocabularyTransfer, .vocabularyExportDictionary, .vocabularyExportCSV,
+        .vocabularyImportDictionary:
+        .vocabularyTransferFooter
       case .vocabularyAdd, .vocabularySearch, .vocabularyFilter, .vocabularySort,
-        .vocabularyReload, .vocabularyTransfer, .vocabularyExportDictionary,
-        .vocabularyExportCSV, .vocabularyImportDictionary:
+        .vocabularyReload:
         .section(.vocabulary)
       default:
         self
@@ -483,6 +487,7 @@
     let onMove: (SettingsSearchMove) -> Void
     let onSubmit: () -> Void
     let onBeginEditing: () -> Void
+    let onFocusChange: (Bool) -> Void
 
     func makeCoordinator() -> Coordinator {
       Coordinator(parent: self)
@@ -522,6 +527,16 @@
       field.controlSize = .large
       field.cell?.controlSize = .large
       field.font = .systemFont(ofSize: 13)
+      field.focusRingType = .none
+    }
+
+    static func dismantleNSView(_ field: NSSearchField, coordinator: Coordinator) {
+      let onFocusChange = coordinator.parent.onFocusChange
+      field.delegate = nil
+      Task { @MainActor in
+        await Task.yield()
+        onFocusChange(false)
+      }
     }
 
     func sizeThatFits(
@@ -541,7 +556,12 @@
       }
 
       func controlTextDidBeginEditing(_ notification: Notification) {
+        parent.onFocusChange(true)
         parent.onBeginEditing()
+      }
+
+      func controlTextDidEndEditing(_ notification: Notification) {
+        parent.onFocusChange(false)
       }
 
       func controlTextDidChange(_ notification: Notification) {
@@ -887,12 +907,24 @@
       request?.anchor == target
     }
 
+    private var usesNeutralKeyboardFocus: Bool {
+      switch target {
+      case .vocabularySearch, .vocabularyFilter, .vocabularySort, .vocabularyReload,
+        .vocabularyTransfer, .vocabularyExportDictionary, .vocabularyExportCSV,
+        .vocabularyImportDictionary:
+        true
+      default:
+        false
+      }
+    }
+
     func body(content: Content) -> some View {
       content
         .id(target)
         .accessibilityIdentifier(target.accessibilityIdentifier)
         .accessibilityLabel(target.focusLabel)
         .focusable()
+        .focusEffectDisabled(usesNeutralKeyboardFocus)
         .focused($isKeyboardFocused)
         .accessibilityFocused($isFocused)
         .background {
@@ -904,7 +936,15 @@
         .overlay {
           if isRevealed {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-              .strokeBorder(.primary, style: StrokeStyle(lineWidth: 2, dash: [4, 3]))
+              .strokeBorder(
+                Color.primary.opacity(0.72),
+                style: StrokeStyle(lineWidth: 2, dash: [4, 3])
+              )
+              .allowsHitTesting(false)
+              .accessibilityHidden(true)
+          } else if usesNeutralKeyboardFocus && isKeyboardFocused {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+              .strokeBorder(Color.primary.opacity(0.72), lineWidth: 1.5)
               .allowsHitTesting(false)
               .accessibilityHidden(true)
           }

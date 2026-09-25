@@ -2381,7 +2381,6 @@ private actor AccessibilitySleepGate {
     "Search vocabulary",
     "Clear vocabulary search",
     "Edit \\(entry.preferredForm)",
-    "Enable \\(entry.preferredForm)",
     "Approve \\(suggestion.preferredForm)",
     "Edit and approve \\(suggestion.preferredForm)",
     "Dismiss \\(suggestion.preferredForm)",
@@ -2393,6 +2392,10 @@ private actor AccessibilitySleepGate {
   ] {
     #expect(settingsSource.contains("accessibilityLabel(\"\(label)\")"))
   }
+  #expect(settingsSource.contains("Toggle(\"Use this word in dictation\", isOn: $isEnabled)"))
+  #expect(settingsSource.contains(
+    ".accessibilityHint(\"Keeps this vocabulary entry active for dictation\")"
+  ))
   #expect(settingsSource.contains("accessibilityLabel(\"Word or phrase\")"))
   #expect(settingsSource.contains("accessibilityLabel(\"Correct from\")"))
   #expect(settingsSource.contains("accessibilityLabel(\"Delete vocabulary word\")"))

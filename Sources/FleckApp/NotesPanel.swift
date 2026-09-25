@@ -3292,7 +3292,7 @@
       .overlay {
         if isFocused && !isSelected {
           RoundedRectangle(cornerRadius: 6)
-            .strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1)
+            .strokeBorder(Color.primary, lineWidth: 1)
         }
       }
       .accessibilityHint(isEmpty ? "Empty folder" : "")

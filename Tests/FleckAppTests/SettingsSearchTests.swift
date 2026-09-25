@@ -131,6 +131,27 @@
       #expect(SettingsSearchIndex.catalog.allSatisfy { expected.contains($0.anchor) })
     }
 
+    @Test func vocabularyActionsRemainAvailableInGlobalSettingsSearch() {
+      let queries: [(String, SettingsSearchTarget)] = [
+        ("Add New", .vocabularyAdd),
+        ("Search vocabulary", .vocabularySearch),
+        ("All", .vocabularyFilter(.all)),
+        ("Enabled", .vocabularyFilter(.enabled)),
+        ("Disabled", .vocabularyFilter(.disabled)),
+        ("Suggestions", .vocabularyFilter(.suggestions)),
+        ("Sort", .vocabularySort),
+        ("Reload", .vocabularyReload),
+        ("Transfer", .vocabularyTransfer),
+        ("Export Dictionary", .vocabularyExportDictionary),
+        ("Export Entries (CSV)", .vocabularyExportCSV),
+        ("Import Dictionary", .vocabularyImportDictionary),
+      ]
+
+      for (query, target) in queries {
+        #expect(SettingsSearchIndex.results(for: query).first?.target == target)
+      }
+    }
+
     @Test func labelsComeFromTheirAuthoritativeTypes() throws {
       for section in SettingsSection.allCases {
         let result = try #require(
@@ -212,11 +233,24 @@
         .vocabularyExportCSV,
         .vocabularyImportDictionary,
       ]
+      let transferTargets: [SettingsSearchTarget] = [
+        .vocabularyTransfer,
+        .vocabularyExportDictionary,
+        .vocabularyExportCSV,
+        .vocabularyImportDictionary,
+      ]
 
       #expect(
-        vocabularyTargets.allSatisfy {
+        vocabularyTargets.filter { !transferTargets.contains($0) }.allSatisfy {
           $0.pageScrollAnchor == .section(.vocabulary)
         }
+      )
+      #expect(
+        transferTargets.allSatisfy { $0.pageScrollAnchor == .vocabularyTransferFooter }
+      )
+      #expect(
+        SettingsSearchTarget.vocabularyTransferFooter.pageScrollAnchor
+          == .vocabularyTransferFooter
       )
       #expect(SettingsSearchTarget.section(.vocabulary).pageScrollAnchor == .section(.vocabulary))
       #expect(SettingsSearchTarget.appearanceTheme.pageScrollAnchor == .appearanceTheme)

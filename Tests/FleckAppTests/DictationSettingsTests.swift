@@ -251,7 +251,9 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   #expect(source.contains(".accessibilityHint(detail)"))
   #expect(source.contains(".accessibilityIdentifier(title)"))
   #expect(source.contains("case .editing:\n        \"gearshape\""))
-  #expect(source.contains(".padding(.top, 38)"))
+  #expect(source.contains(".padding(.top, 6)"))
+  #expect(source.contains("settings-fleck-sidebar-heading"))
+  #expect(!source.contains("sectionGroup(\"Fleck\""))
   let sectionGroupStart = try #require(source.range(of: "private func sectionGroup("))
   let sidebarSurfaceStart = try #require(
     source.range(
@@ -706,6 +708,125 @@ func DictationSettingsHostedWindowKeepsInsetSidebarAndTrafficLightsContained()
 
   window.contentView = nil
   window.orderOut(nil)
+}
+
+@Test @MainActor
+func DictationSettingsHostedHeaderAlignsFleckAndSearchWithTrafficLightsAtMinimumSizes()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let sizes = [NSSize(width: 760, height: 520), NSSize(width: 840, height: 600)]
+  let dynamicTypeSizes: [DynamicTypeSize] = [.large, .accessibility3]
+  var windowIndex = 0
+
+  for size in sizes {
+    for dynamicTypeSize in dynamicTypeSizes {
+      let host = NSHostingView(
+        rootView: SettingsView(runtime: fixture.runtime)
+          .environmentObject(fixture.appState)
+          .environment(\.dynamicTypeSize, dynamicTypeSize)
+      )
+      let window = NSWindow(
+        contentRect: NSRect(origin: .zero, size: size),
+        styleMask: [.titled, .resizable, .closable, .fullSizeContentView],
+        backing: .buffered,
+        defer: false
+      )
+      window.toolbar = NSToolbar(
+        identifier: "settings-hosted-header-row-\(windowIndex)"
+      )
+      windowIndex += 1
+      window.toolbarStyle = .unifiedCompact
+      window.contentView = host
+      window.setContentSize(size)
+      window.makeKeyAndOrderFront(nil)
+      await settleSettingsHost(host)
+
+      let closeButton = try #require(window.standardWindowButton(.closeButton))
+      let minimizeButton = try #require(window.standardWindowButton(.miniaturizeButton))
+      let trafficLightFrames = [closeButton, minimizeButton].map {
+        $0.convert($0.bounds, to: nil)
+      }
+      let fleckHeading = try #require(
+        settingsView(withAccessibilityIdentifier: "settings-fleck-sidebar-heading", in: host)
+      )
+      let searchField = try #require(
+        settingsView(withAccessibilityIdentifier: "settings-search-field", in: host)
+          as? NSSearchField
+      )
+      let fleckHeadingFrame = fleckHeading.convert(fleckHeading.bounds, to: nil)
+      let searchFieldFrame = searchField.convert(searchField.bounds, to: nil)
+      let pageHeader = try #require(
+        settingsView(withAccessibilityIdentifier: "settings-page-header", in: host)
+      )
+      let pageHeaderFrame = pageHeader.convert(pageHeader.bounds, to: nil)
+      let trafficLightsMaxX = try #require(trafficLightFrames.map(\.maxX).max())
+      let sidebarSurface = try #require(settingsSidebarSurface(of: host))
+      let sidebarSurfaceFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
+
+      #expect(!fleckHeadingFrame.isEmpty)
+      #expect(!searchFieldFrame.isEmpty)
+      #expect(searchFieldFrame.width > 100)
+      #expect(fleckHeadingFrame.minX > trafficLightsMaxX)
+      #expect(searchFieldFrame.minX > sidebarSurfaceFrame.maxX)
+      #expect(abs(trafficLightFrames[0].midY - trafficLightFrames[1].midY) <= 1)
+      #expect(trafficLightFrames.allSatisfy { abs($0.midY - fleckHeadingFrame.midY) <= 3 })
+      #expect(trafficLightFrames.allSatisfy { abs($0.midY - searchFieldFrame.midY) <= 3 })
+      #expect(trafficLightFrames.allSatisfy { !$0.intersects(fleckHeadingFrame) })
+      #expect(trafficLightFrames.allSatisfy { !$0.intersects(searchFieldFrame) })
+      #expect(!fleckHeadingFrame.intersects(searchFieldFrame))
+      #expect(!searchFieldFrame.intersects(pageHeaderFrame))
+
+      let searchCenter = NSPoint(x: searchFieldFrame.midX, y: searchFieldFrame.midY)
+      let searchHit = host.hitTest(searchCenter)
+      #expect(searchHit === searchField || searchHit?.isDescendant(of: searchField) == true)
+
+      for button in [closeButton, minimizeButton] {
+        let superview = try #require(button.superview)
+        let centerInSuperview = button.convert(
+          NSPoint(x: button.bounds.midX, y: button.bounds.midY),
+          to: superview
+        )
+        let hit = superview.hitTest(centerInSuperview)
+        #expect(hit === button || hit?.isDescendant(of: button) == true)
+      }
+
+      let sidebar = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
+      let appearanceRow = try #require(settingsSidebarRow(.appearance, in: sidebar))
+      sidebar.selectRowIndexes(IndexSet(integer: appearanceRow), byExtendingSelection: false)
+      NotificationCenter.default.post(
+        name: NSTableView.selectionDidChangeNotification,
+        object: sidebar
+      )
+      await settleSettingsHost(host)
+
+      let appearanceHeader = try #require(
+        settingsView(withAccessibilityIdentifier: "settings-page-header", in: host)
+      )
+      let appearanceHeaderFrame = appearanceHeader.convert(appearanceHeader.bounds, to: nil)
+      let searchFieldAfterSwitch = try #require(
+        settingsView(withAccessibilityIdentifier: "settings-search-field", in: host)
+          as? NSSearchField
+      )
+      let searchFieldFrameAfterSwitch = searchFieldAfterSwitch.convert(
+        searchFieldAfterSwitch.bounds,
+        to: nil
+      )
+      #expect(!appearanceHeaderFrame.isEmpty)
+      #expect(!searchFieldFrameAfterSwitch.intersects(appearanceHeaderFrame))
+      #expect(searchFieldAfterSwitch === searchField)
+
+      #expect(window.makeFirstResponder(searchFieldAfterSwitch))
+      await settleSettingsHost(host)
+      #expect(
+        window.firstResponder === searchFieldAfterSwitch
+          || window.firstResponder === searchFieldAfterSwitch.currentEditor()
+      )
+
+      window.contentView = nil
+      window.orderOut(nil)
+    }
+  }
 }
 
 @Test @MainActor
@@ -1210,10 +1331,16 @@ private func settingsColorDistance(_ lhs: NSColor, _ rhs: NSColor) -> CGFloat {
   #expect(settings.contains("SettingsSearchIndex.results(for: searchQuery)"))
   #expect(settings.contains("onSubmit: submitHighlightedSearchResult"))
   #expect(settings.contains("searchRequest = SettingsSearchRequest(target: result.target, anchor: anchor)"))
-  #expect(settings.contains("proxy.scrollTo(searchRequest.anchor.pageScrollAnchor, anchor: .center)"))
+  #expect(settings.contains("proxy.scrollTo(pageScrollAnchor, anchor: isTransferFooter ? .bottom : .center)"))
+  #expect(settings.contains(".id(SettingsSearchTarget.vocabularyTransferFooter)"))
+  #expect(settings.contains("if searchRequest.anchor.usesVocabularyFocusLifecycle"))
   #expect(settings.contains(".environment(\\.settingsSearchRequest, searchRequest)"))
   #expect(settings.contains(".settingsSearchAnchor(.appearanceTheme, request: searchRequest)"))
   #expect(settings.contains(".settingsSearchAnchor(.dictationPrivacy, request: searchRequest)"))
+  #expect(settings.contains(".settingsSearchAnchor(.vocabularyFilter(filter), request: visibleSearchRequest)"))
+  #expect(settings.contains(".settingsSearchAnchor(.vocabularySort, request: visibleSearchRequest)"))
+  #expect(settings.contains(".settingsSearchAnchor(.vocabularyReload, request: visibleSearchRequest)"))
+  #expect(settings.contains("settingsSearchAnchor(.vocabularyTransfer, request: optionsSearchRequest)"))
   #expect(settings.contains("searchRequest: $searchRequest"))
   #expect(settings.contains("pageScrollReadyRequestID: vocabularyPageScrollRequestID"))
   #expect(agents.contains(".settingsSearchAnchor(.agentsActivity, request: searchRequest)"))

@@ -3,6 +3,22 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.2.1-beta.1] - 2026-09-25
+
+Private local on-device QA candidate only; this is not an accepted build or public release, and no
+model release or model behavior is claimed.
+
+### Changed
+
+- Kept dictionary entries in one shared rounded list card with dividers; each full word row remains
+  an always-actionable Edit target, while hover or focus reveals the delete and star icons. Starred
+  entries stay above unstarred entries in either alphabetical sort order, and deletion requires
+  confirmation.
+- Aligned the Fleck heading and global Settings search on the title-bar top row beside the traffic
+  lights, and made keyboard focus treatment neutral across folder navigation, dictionary controls,
+  and Settings search.
+- Applied the same title inset to pinned and unpinned notes so note titles align with editor text.
+
 ## [1.2.0-beta.1] - 2026-09-25
 
 Local development candidate only. This entry is not an accepted or public

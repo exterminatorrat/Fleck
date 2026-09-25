@@ -28,6 +28,8 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     var csvExportData: Data?
     var entryEdit: EntryEdit?
     var entryEditMutationSessionID: UUID?
+    var pendingEntryDeletion: PendingEntryDeletion?
+    var isEntryDeletionInFlight = false
     var suggestionEdit: SuggestionEdit?
     var importPreviewData: Data?
     var importPreview: PersonalDictionaryImportPreview?
@@ -90,6 +92,12 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     }
   }
 
+  struct PendingEntryDeletion: Equatable {
+    let id: UUID
+    let preferredForm: String
+    let expectedRevision: UInt64
+  }
+
   struct ImportPreviewRow: Identifiable, Equatable {
     enum Action: String, Equatable {
       case add = "Add"
@@ -138,6 +146,8 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
   var canonicalExportData: Data? { state.canonicalExportData }
   var csvExportData: Data? { state.csvExportData }
   var entryEdit: EntryEdit? { state.entryEdit }
+  var pendingEntryDeletion: PendingEntryDeletion? { state.pendingEntryDeletion }
+  var isEntryDeletionInFlight: Bool { state.isEntryDeletionInFlight }
   var suggestionEdit: SuggestionEdit? { state.suggestionEdit }
   var importPreviewData: Data? { state.importPreviewData }
   var importPreview: PersonalDictionaryImportPreview? { state.importPreview }
@@ -286,6 +296,48 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
         action: .entry
       )
     }
+  }
+
+  func setPriority(_ priority: Bool, id: UUID, expectedRevision: UInt64) async {
+    await enqueue {
+      await self.mutate(
+        expectedRevision: expectedRevision,
+        mutation: .setPriority(priority, id: id),
+        action: .entry
+      )
+    }
+  }
+
+  func requestEntryDeletion(
+    _ entry: PersonalDictionaryEntry,
+    expectedRevision: UInt64
+  ) {
+    guard !isEntryDeletionInFlight else { return }
+    state.pendingEntryDeletion = PendingEntryDeletion(
+      id: entry.id,
+      preferredForm: entry.preferredForm,
+      expectedRevision: expectedRevision
+    )
+    clearMessages()
+  }
+
+  func cancelEntryDeletion() {
+    guard !isEntryDeletionInFlight else { return }
+    state.pendingEntryDeletion = nil
+  }
+
+  func confirmEntryDeletion() async {
+    guard let request = state.pendingEntryDeletion, !isEntryDeletionInFlight else { return }
+    state.pendingEntryDeletion = nil
+    state.isEntryDeletionInFlight = true
+    await enqueue {
+      await self.mutate(
+        expectedRevision: request.expectedRevision,
+        mutation: .delete(id: request.id),
+        action: .entry
+      )
+    }
+    state.isEntryDeletionInFlight = false
   }
 
   func beginAddingEntry() {

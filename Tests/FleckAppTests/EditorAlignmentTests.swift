@@ -76,31 +76,48 @@
   }
 
   @Test @MainActor func ordinaryTitleKeepsNativeLabelColorAndLayoutInset() async throws {
-    let ordinary = try await makeEditorAlignmentPanel(
-      isPinned: false,
-      fontFamily: "Avenir Next",
-      fontSize: 17
-    )
-    do {
-      let appearance = try #require(NSAppearance(named: .darkAqua))
-      ordinary.window.appearance = appearance
-      await settleEditorAlignmentView(ordinary.host)
-
-      let title = try #require(editorAlignmentDescendant(in: ordinary.host, as: NSTextField.self) {
-        $0.placeholderString == "Note title"
-      })
-      let body = try #require(editorAlignmentDescendant(in: ordinary.host, as: ListAwareTextView.self))
-      #expect(
-        resolvedEditorColor(title.textColor, appearance: appearance)
-          == resolvedEditorColor(.labelColor, appearance: appearance)
+    for (family, bodySize) in [("Avenir Next", 11.0), ("Menlo", 24.0)] {
+      let ordinary = try await makeEditorAlignmentPanel(
+        isPinned: false,
+        fontFamily: family,
+        fontSize: bodySize
       )
-      #expect(try nativeTextOrigin(title, afterFocusingIn: ordinary.window, host: ordinary.host)
-        - nativeTextOrigin(body, in: ordinary.host) == 2)
-    } catch {
+      do {
+        let body = try #require(
+          editorAlignmentDescendant(in: ordinary.host, as: ListAwareTextView.self)
+        )
+        for appearanceName in [NSAppearance.Name.aqua, .darkAqua] {
+          let appearance = try #require(NSAppearance(named: appearanceName))
+          ordinary.window.appearance = appearance
+          await settleEditorAlignmentView(ordinary.host)
+
+          let title = try #require(editorAlignmentDescendant(in: ordinary.host, as: NSTextField.self) {
+            $0.placeholderString == "Note title"
+          })
+          let titleFrame = title.convert(title.bounds, to: ordinary.host)
+          let bodyFrame = body.convert(body.bounds, to: ordinary.host)
+          #expect(
+            resolvedEditorColor(title.textColor, appearance: appearance)
+              == resolvedEditorColor(.labelColor, appearance: appearance)
+          )
+          #expect(abs(titleFrame.maxX - (bodyFrame.maxX - 16)) < 0.01)
+
+          let titleOrigin = try nativeTextOrigin(
+            title,
+            afterFocusingIn: ordinary.window,
+            host: ordinary.host
+          )
+          let bodyOrigin = try nativeTextOrigin(body, in: ordinary.host)
+          #expect(abs(titleOrigin - bodyOrigin) < 0.01)
+          await settleEditorAlignmentView(ordinary.host)
+          #expect(title.convert(title.bounds, to: ordinary.host) == titleFrame)
+        }
+      } catch {
+        await ordinary.close()
+        throw error
+      }
       await ordinary.close()
-      throw error
     }
-    await ordinary.close()
   }
 
   @Test @MainActor func checklistPrefixReservesTwentyPointsAcrossContentFontsAndDepths() throws {
