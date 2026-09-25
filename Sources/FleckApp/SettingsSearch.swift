@@ -373,7 +373,12 @@
           aliases: ["vocabulary filter"]
         )
       }
-      add(.vocabularySort, "Sort", to: .vocabulary, aliases: ["alphabetical A to Z Z to A"])
+      add(
+        .vocabularySort,
+        "Sort",
+        to: .vocabulary,
+        aliases: ["alphabetical A to Z Z to A", "recently used", "most used"]
+      )
       add(.vocabularyReload, "Reload", to: .vocabulary, aliases: ["refresh"])
       add(.vocabularyTransfer, "Transfer", to: .vocabulary)
       add(.vocabularyExportDictionary, "Export Dictionary", to: .vocabulary)
@@ -907,6 +912,13 @@
       request?.anchor == target
     }
 
+    private var usesFilterUnderlineFocusStyle: Bool {
+      switch target {
+      case .vocabularyFilter: true
+      default: false
+      }
+    }
+
     private var usesNeutralKeyboardFocus: Bool {
       switch target {
       case .vocabularySearch, .vocabularyFilter, .vocabularySort, .vocabularyReload,
@@ -933,8 +945,14 @@
             SettingsSearchProbe(identifier: "settings-keyboard-focus-\(target.identifier)")
           }
         }
-        .overlay {
-          if isRevealed {
+        .overlay(alignment: .bottom) {
+          if usesFilterUnderlineFocusStyle && (isRevealed || isKeyboardFocused || isFocused) {
+            Rectangle()
+              .fill(Color.primary)
+              .frame(height: 3)
+              .allowsHitTesting(false)
+              .accessibilityHidden(true)
+          } else if isRevealed {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
               .strokeBorder(
                 Color.primary.opacity(0.72),
@@ -950,7 +968,7 @@
           }
         }
         .overlay(alignment: .topTrailing) {
-          if isRevealed {
+          if isRevealed && !usesFilterUnderlineFocusStyle {
             Image(systemName: "scope")
               .padding(4)
               .background(.regularMaterial, in: Circle())

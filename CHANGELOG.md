@@ -3,6 +3,19 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.2.3-beta.1] - 2026-09-25
+
+Private local QA candidate only; this change is not an accepted build or public release. It makes
+no model-readiness claim and adds no runtime usage tracking.
+
+### Changed
+
+- Replaced the rounded-pill Dictionary filter focus treatment with an underline and let row-hover
+  backgrounds extend edge-to-edge beneath the card clip.
+- Added a compact `SORT BY` popover with `A–Z`, `Z–A`, `Recently used`, and `Most used` options.
+  Starred entries stay pinned, and the popover notes that usage-based ordering uses saved usage
+  only, not runtime tracking.
+
 ## [1.2.2-beta.1] - 2026-09-25
 
 Private local on-device QA only; this correction is not an accepted build or public

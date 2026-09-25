@@ -1465,18 +1465,61 @@
   enum SettingsVocabularySortOrder: String, CaseIterable, Identifiable {
     case aToZ = "A–Z"
     case zToA = "Z–A"
+    case recentlyUsed = "Recently used"
+    case mostUsed = "Most used"
 
     var id: Self { self }
+
+    var isUsageBased: Bool {
+      switch self {
+      case .aToZ, .zToA: false
+      case .recentlyUsed, .mostUsed: true
+      }
+    }
+
+    var suggestionSortOrder: Self {
+      isUsageBased ? .aToZ : self
+    }
+
+    var symbolName: String {
+      switch self {
+      case .aToZ: "arrow.up"
+      case .zToA: "arrow.down"
+      case .recentlyUsed: "clock"
+      case .mostUsed: "chart.bar"
+      }
+    }
 
     func sorted<Element>(
       _ values: [Element],
       by key: (Element) -> String,
       id: (Element) -> UUID,
-      priority: ((Element) -> Bool)? = nil
+      priority: ((Element) -> Bool)? = nil,
+      usage: ((Element) -> PersonalDictionaryUsage)? = nil
     ) -> [Element] {
       values.sorted { lhs, rhs in
         if let priority, priority(lhs) != priority(rhs) {
           return priority(lhs)
+        }
+        switch self {
+        case .recentlyUsed:
+          if let usage {
+            let lhsDate = usage(lhs).lastUsedAt
+            let rhsDate = usage(rhs).lastUsedAt
+            if let lhsDate, let rhsDate, lhsDate != rhsDate {
+              return lhsDate > rhsDate
+            }
+            if lhsDate != nil, rhsDate == nil { return true }
+            if lhsDate == nil, rhsDate != nil { return false }
+          }
+        case .mostUsed:
+          if let usage {
+            let lhsCount = usage(lhs).useCount
+            let rhsCount = usage(rhs).useCount
+            if lhsCount != rhsCount { return lhsCount > rhsCount }
+          }
+        case .aToZ, .zToA:
+          break
         }
         let lhsKey = key(lhs).folding(
           options: [.caseInsensitive, .diacriticInsensitive],
@@ -1487,9 +1530,9 @@
           locale: Locale(identifier: "en_US_POSIX")
         )
         if lhsKey != rhsKey {
-          return self == .aToZ ? lhsKey < rhsKey : lhsKey > rhsKey
+          return self == .zToA ? lhsKey > rhsKey : lhsKey < rhsKey
         }
-        if key(lhs) != key(rhs) {
+        if !isUsageBased, key(lhs) != key(rhs) {
           return key(lhs) < key(rhs)
         }
         let lhsID = id(lhs).uuidString
@@ -1512,9 +1555,12 @@
     @FocusState private var isSearchFocused: Bool
     @FocusState private var isSearchTriggerFocused: Bool
     @FocusState private var isOptionsTriggerFocused: Bool
+    @FocusState private var focusedSortOrder: SettingsVocabularySortOrder?
     @State private var isViewPresent = false
     @State private var isSearchExpanded = false
     @State private var isOptionsPresented = false
+    @State private var isSortPresented = false
+    @State private var hoveredSortOrder: SettingsVocabularySortOrder?
     @State private var activeOptionsRevealID: UUID?
     @State private var focusedOptionsRevealID: UUID?
     @State private var deferredSearchRequest: SettingsSearchRequest?
@@ -1551,6 +1597,7 @@
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .onChange(of: searchRequest?.id, initial: true) { _, _ in
+        isSortPresented = false
         searchPresentationGeneration += 1
         presentationGeneration += 1
         clearPendingOptionsPresentation()
@@ -1564,6 +1611,7 @@
       .onChange(of: hasModalPresentation) { wasPresented, isPresented in
         presentationGeneration += 1
         if isPresented {
+          isSortPresented = false
           clearPendingOptionsPresentation()
           optionsDismissalGeneration = nil
           returnsFocusAfterOptionsDismissal = false
@@ -1577,8 +1625,12 @@
         activeOptionsRevealID = nil
         focusedOptionsRevealID = nil
       }
+      .onChange(of: viewModel.filter) { _, _ in
+        isSortPresented = false
+      }
       .onExitCommand {
-        guard isSearchExpanded, !isOptionsPresented, !hasModalPresentation else { return }
+        guard isSearchExpanded, !isOptionsPresented, !isSortPresented, !hasModalPresentation
+        else { return }
         closeSearch(source: .keyboard)
       }
       .onAppear {
@@ -1597,6 +1649,9 @@
         optionsDismissalGeneration = nil
         returnsFocusAfterOptionsDismissal = false
         isOptionsPresented = false
+        isSortPresented = false
+        hoveredSortOrder = nil
+        focusedSortOrder = nil
       }
       .sheet(
         isPresented: Binding(
@@ -1896,19 +1951,137 @@
       }
     }
 
+    private var sortPopover: some View {
+      VStack(alignment: .leading, spacing: 8) {
+        Text("SORT BY")
+          .font(.system(size: 10, weight: .bold, design: .rounded))
+          .tracking(1.2)
+          .foregroundStyle(.secondary)
+          .padding(.horizontal, 8)
+          .padding(.top, 3)
+
+        VStack(spacing: 2) {
+          ForEach(sortOrdersForCurrentFilter) { order in
+            sortOption(order)
+          }
+        }
+
+        if viewModel.filter != .suggestions {
+          Text("Usage reflects saved data, not live dictation.")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 8)
+        }
+      }
+      .padding(8)
+      .frame(width: 196)
+      .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.8)
+      }
+      .onExitCommand {
+        isSortPresented = false
+      }
+      .onDisappear {
+        hoveredSortOrder = nil
+        focusedSortOrder = nil
+      }
+    }
+
+    private var sortOrdersForCurrentFilter: [SettingsVocabularySortOrder] {
+      viewModel.filter == .suggestions
+        ? [.aToZ, .zToA]
+        : SettingsVocabularySortOrder.allCases
+    }
+
+    private var sortOrderForCurrentFilter: SettingsVocabularySortOrder {
+      viewModel.filter == .suggestions ? sortOrder.suggestionSortOrder : sortOrder
+    }
+
+    private func sortOption(_ order: SettingsVocabularySortOrder) -> some View {
+      let isSelected = order == sortOrderForCurrentFilter
+      let isHovered = order == hoveredSortOrder
+      let isFocused = order == focusedSortOrder
+
+      return Button {
+        sortOrder = order
+        isSortPresented = false
+      } label: {
+        HStack(spacing: 9) {
+          Image(systemName: order.symbolName)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+            .frame(width: 16)
+            .accessibilityHidden(true)
+
+          Text(order.rawValue)
+            .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+
+          Spacer(minLength: 0)
+
+          if isSelected {
+            Image(systemName: "checkmark")
+              .font(.system(size: 11, weight: .bold))
+              .foregroundStyle(Color.accentColor)
+              .accessibilityHidden(true)
+          }
+        }
+        .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+      }
+      .buttonStyle(.plain)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 5)
+      .background {
+        RoundedRectangle(cornerRadius: 7, style: .continuous)
+          .fill(
+            isSelected
+              ? Color.accentColor.opacity(0.14)
+              : isHovered || isFocused ? Color.primary.opacity(0.07) : Color.clear
+          )
+      }
+      .overlay {
+        if isFocused {
+          RoundedRectangle(cornerRadius: 7, style: .continuous)
+            .strokeBorder(Color.accentColor.opacity(0.82), lineWidth: 1)
+        }
+      }
+      .onHover { isHovering in
+        if isHovering {
+          hoveredSortOrder = order
+        } else if hoveredSortOrder == order {
+          hoveredSortOrder = nil
+        }
+      }
+      .focused($focusedSortOrder, equals: order)
+      .accessibilityLabel("Sort by \(order.rawValue)")
+      .accessibilityValue(isSelected ? "Selected" : "Not selected")
+      .accessibilityHint("Selects this vocabulary sort order")
+      .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
     private var sortControl: some View {
       Button {
-        sortOrder = sortOrder == .aToZ ? .zToA : .aToZ
+        isSortPresented.toggle()
       } label: {
         Image(systemName: "arrow.up.arrow.down")
           .frame(width: 28, height: 28)
       }
       .buttonStyle(.plain)
-      .help("Sort \(sortOrder.rawValue)")
+      .help("Sort \(sortOrderForCurrentFilter.rawValue)")
       .accessibilityLabel("Sort vocabulary")
-      .accessibilityValue(sortOrder.rawValue)
-      .accessibilityHint("Switches between A–Z and Z–A")
+      .accessibilityValue(sortOrderForCurrentFilter.rawValue)
+      .accessibilityHint(
+        viewModel.filter == .suggestions
+          ? "Choose a sort order for pending suggestions"
+          : "Choose a sort order for vocabulary entries"
+      )
       .settingsSearchAnchor(.vocabularySort, request: visibleSearchRequest)
+      .popover(isPresented: $isSortPresented, arrowEdge: .bottom) {
+        sortPopover
+      }
     }
 
     private var reloadControl: some View {
@@ -1978,7 +2151,6 @@
         } else {
           ForEach(Array(sortedEntries.enumerated()), id: \.element.id) { index, entry in
             entryRow(entry, expectedRevision: viewModel.revision)
-              .padding(.horizontal, 12)
             if index < sortedEntries.count - 1 {
               Divider().padding(.leading, 12)
             }
@@ -1998,12 +2170,17 @@
         viewModel.visibleEntries,
         by: \.preferredForm,
         id: \.id,
-        priority: \.isPriority
+        priority: \.isPriority,
+        usage: \.usage
       )
     }
 
     private var sortedSuggestions: [PersonalDictionarySuggestion] {
-      sortOrder.sorted(viewModel.visibleSuggestions, by: \.preferredForm, id: \.id)
+      sortOrderForCurrentFilter.sorted(
+        viewModel.visibleSuggestions,
+        by: \.preferredForm,
+        id: \.id
+      )
     }
 
     @ViewBuilder
@@ -2491,6 +2668,7 @@
           HStack(spacing: 6) {
             Text(title)
               .font(.body)
+              .underline(focusedAction == .edit || accessibilityFocusedAction == .edit)
               .multilineTextAlignment(.leading)
               .fixedSize(horizontal: false, vertical: true)
             if entry.isPriority {
@@ -2508,25 +2686,11 @@
           }
           .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
           .contentShape(Rectangle())
-          .background {
-            if focusedAction == .edit || accessibilityFocusedAction == .edit {
-              RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(nsColor: .unemphasizedSelectedContentBackgroundColor))
-            }
-          }
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
         .focused($focusedAction, equals: .edit)
         .accessibilityFocused($accessibilityFocusedAction, equals: .edit)
-        .overlay {
-          if focusedAction == .edit || accessibilityFocusedAction == .edit {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-              .strokeBorder(Color.primary.opacity(0.72), lineWidth: 1.5)
-              .allowsHitTesting(false)
-              .accessibilityHidden(true)
-          }
-        }
         .help("Edit \(entry.preferredForm)")
         .accessibilityLabel("Edit \(entry.preferredForm)")
         .accessibilityValue(accessibilityValue)
@@ -2557,10 +2721,11 @@
         }
         .opacity(showsActions ? 1 : 0)
       }
+      .padding(.horizontal, 12)
       .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
       .background {
         if showsActions {
-          RoundedRectangle(cornerRadius: 8, style: .continuous)
+          Rectangle()
             .fill(Color(nsColor: .unemphasizedSelectedContentBackgroundColor))
         }
       }

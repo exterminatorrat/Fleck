@@ -960,7 +960,20 @@ func personalDictionaryFocusIsNeutralAndKeepsControlsKeyboardAccessible() throws
   #expect(searchSource.contains("onFocusChange(true)"))
   #expect(searchSource.contains(".focusEffectDisabled(usesNeutralKeyboardFocus)"))
   #expect(searchSource.contains("Color.primary.opacity(0.72)"))
+  #expect(searchSource.contains("usesFilterUnderlineFocusStyle"))
+  #expect(searchSource.contains(".overlay(alignment: .bottom)"))
+  #expect(searchSource.contains("isRevealed || isKeyboardFocused || isFocused"))
   #expect(settingsSource.contains(".focused($focusedAction"))
+  #expect(
+    settingsSource.contains(
+      ".underline(focusedAction == .edit || accessibilityFocusedAction == .edit)"
+    )
+  )
+  #expect(
+    settingsSource.contains(
+      ".padding(.horizontal, 12)\n      .frame(maxWidth: .infinity"
+    )
+  )
   #expect(settingsSource.contains(": \"Star \\(entry.preferredForm)\""))
   #expect(settingsSource.contains(".accessibilityHidden(true)"))
   #expect(settingsSource.contains(".accessibilityLabel(\"Edit \\(entry.preferredForm)\")"))
@@ -1140,6 +1153,157 @@ func personalDictionaryVocabularySortOrdersEntriesInBothDirections() {
     .map(\.id)
   #expect(ascendingTies == [settingsUUID(6), settingsUUID(5)])
   #expect(descendingTies == ascendingTies)
+}
+
+@Test
+func personalDictionaryVocabularyUsageSortOrdersPinEntriesAndBreakTiesDeterministically() {
+  let latestUse = Date(timeIntervalSince1970: 300)
+  let earlierUse = Date(timeIntervalSince1970: 200)
+  let entries = [
+    PersonalDictionaryEntry(
+      id: settingsUUID(1),
+      preferredForm: "Zulu",
+      usage: .init(useCount: 5, lastUsedAt: earlierUse)
+    ),
+    PersonalDictionaryEntry(
+      id: settingsUUID(2),
+      preferredForm: "Alpha",
+      usage: .init(useCount: 8, lastUsedAt: latestUse)
+    ),
+    PersonalDictionaryEntry(
+      id: settingsUUID(3),
+      preferredForm: "alpha",
+      usage: .init(useCount: 8, lastUsedAt: latestUse)
+    ),
+    PersonalDictionaryEntry(
+      id: settingsUUID(4),
+      preferredForm: "Beta",
+      usage: .init(useCount: 12)
+    ),
+    PersonalDictionaryEntry(
+      id: settingsUUID(5),
+      preferredForm: "Pinned",
+      isPriority: true,
+      usage: .init(useCount: 0)
+    ),
+    PersonalDictionaryEntry(
+      id: settingsUUID(6),
+      preferredForm: "Bravo",
+      usage: .init(useCount: 8, lastUsedAt: latestUse)
+    ),
+  ]
+
+  let recentlyUsed = SettingsVocabularySortOrder.recentlyUsed
+    .sorted(entries, by: \.preferredForm, id: \.id, priority: \.isPriority, usage: \.usage)
+    .map(\.id)
+  let mostUsed = SettingsVocabularySortOrder.mostUsed
+    .sorted(entries, by: \.preferredForm, id: \.id, priority: \.isPriority, usage: \.usage)
+    .map(\.id)
+
+  #expect(
+    recentlyUsed == [
+      settingsUUID(5), settingsUUID(2), settingsUUID(3), settingsUUID(6), settingsUUID(1),
+      settingsUUID(4),
+    ]
+  )
+  #expect(
+    mostUsed == [
+      settingsUUID(5), settingsUUID(4), settingsUUID(2), settingsUUID(3), settingsUUID(6),
+      settingsUUID(1),
+    ]
+  )
+  #expect(SettingsVocabularySortOrder.recentlyUsed.suggestionSortOrder == .aToZ)
+  #expect(SettingsVocabularySortOrder.mostUsed.suggestionSortOrder == .aToZ)
+  #expect(SettingsVocabularySortOrder.zToA.suggestionSortOrder == .zToA)
+  #expect(SettingsVocabularySortOrder(rawValue: "A–Z") == .aToZ)
+  #expect(SettingsVocabularySortOrder(rawValue: "Z–A") == .zToA)
+}
+
+@Test
+func personalDictionaryEntryListSortPassesUsageMetadata() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let settingsSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+  let sortStart = try #require(
+    settingsSource.range(of: "private var sortedEntries: [PersonalDictionaryEntry]")
+  )
+  let suggestionsStart = try #require(
+    settingsSource.range(
+      of: "private var sortedSuggestions: [PersonalDictionarySuggestion]",
+      range: sortStart.upperBound..<settingsSource.endIndex
+    )
+  )
+  let sortedEntriesSource = settingsSource[sortStart.lowerBound..<suggestionsStart.lowerBound]
+
+  #expect(sortedEntriesSource.contains("sortOrder.sorted("))
+  #expect(sortedEntriesSource.contains("priority: \\.isPriority"))
+  #expect(sortedEntriesSource.contains("usage: \\.usage"))
+}
+
+@Test
+func personalDictionarySortSettingsSearchAliasesFindSortByUsage() {
+  for query in ["recently used", "most used"] {
+    #expect(
+      SettingsSearchIndex.results(for: query).contains { $0.target == .vocabularySort }
+    )
+  }
+}
+
+@Test
+func personalDictionarySortPopoverKeepsSearchAndKeyboardInteractionsAccessible() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let settingsSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+  let sortStart = try #require(settingsSource.range(of: "private var sortPopover: some View"))
+  let reloadStart = try #require(
+    settingsSource.range(
+      of: "private var reloadControl: some View",
+      range: sortStart.upperBound..<settingsSource.endIndex
+    )
+  )
+  let sortSource = settingsSource[sortStart.lowerBound..<reloadStart.lowerBound]
+
+  #expect(sortSource.contains("Text(\"SORT BY\")"))
+  #expect(sortSource.contains(".background(.regularMaterial"))
+  #expect(sortSource.contains("sortOrdersForCurrentFilter"))
+  #expect(sortSource.contains("SettingsVocabularySortOrder.allCases"))
+  #expect(sortSource.contains("viewModel.filter == .suggestions"))
+  #expect(sortSource.contains("sortOrder.suggestionSortOrder"))
+  #expect(sortSource.contains("if viewModel.filter != .suggestions"))
+  #expect(sortSource.contains("Text(\"Usage reflects saved data, not live dictation.\")"))
+  #expect(sortSource.contains("sortOrder = order"))
+  #expect(sortSource.contains("Image(systemName: \"checkmark\")"))
+  #expect(sortSource.contains("isHovered || isFocused"))
+  #expect(sortSource.contains(".onHover"))
+  #expect(sortSource.contains(".focused($focusedSortOrder, equals: order)"))
+  #expect(sortSource.contains(".accessibilityLabel(\"Sort by \\(order.rawValue)\")"))
+  #expect(
+    sortSource.contains(".accessibilityValue(isSelected ? \"Selected\" : \"Not selected\")")
+  )
+  #expect(sortSource.contains(".accessibilityAddTraits(isSelected ? .isSelected : [])"))
+  #expect(sortSource.contains(".popover(isPresented: $isSortPresented, arrowEdge: .bottom)"))
+  #expect(sortSource.contains(".onExitCommand"))
+  #expect(sortSource.contains("isSortPresented = false"))
+  #expect(!sortSource.contains("Picker("))
+  #expect(!sortSource.contains(".animation("))
+  #expect(
+    settingsSource.contains(
+      ".settingsSearchAnchor(.vocabularySort, request: visibleSearchRequest)"
+    )
+  )
+  #expect(settingsSource.contains("!isSortPresented"))
+  #expect(settingsSource.contains(".onChange(of: searchRequest?.id, initial: true)"))
+  #expect(settingsSource.contains(".onChange(of: hasModalPresentation)"))
 }
 
 private func settingsEntry(
