@@ -64,9 +64,12 @@
 
   struct AgentSettingsView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.settingsSearchRequest) private var searchRequest
     @State private var showsClearConfirmation = false
     @State private var showsAgentActivity = false
     @State private var profileForCapabilities: AgentIntegrationProfile?
+    @State private var isActivityExpanded = false
+    @State private var isAccessExpanded = false
 
     var body: some View {
       VStack(alignment: .leading, spacing: 16) {
@@ -74,7 +77,7 @@
         availableIntegrations
         connectedProfiles
         setupInstructions
-        DisclosureGroup("Activity") {
+        DisclosureGroup("Activity", isExpanded: $isActivityExpanded) {
           VStack(alignment: .leading, spacing: 8) {
             SettingsPreferenceRow(
               "Show agent update banners",
@@ -93,12 +96,14 @@
               .controlSize(.small)
               .accessibilityLabel("Show agent update banners")
             }
+            .settingsSearchAnchor(.agentsUpdateBanners, request: searchRequest)
             Text("Review changes made by authorized local integrations.")
               .font(.caption)
               .foregroundStyle(.secondary)
             Button("Open Agent Activity") {
               showsAgentActivity = true
             }
+            .settingsSearchAnchor(.agentsOpenActivity, request: searchRequest)
             .sheet(isPresented: $showsAgentActivity) {
               AgentActivityView(
                 onOpenNote: { noteID in
@@ -113,6 +118,7 @@
             Button("Clear Activity", role: .destructive) {
               showsClearConfirmation = true
             }
+            .settingsSearchAnchor(.agentsClearActivity, request: searchRequest)
             .confirmationDialog("Clear Agent Activity?", isPresented: $showsClearConfirmation) {
               Button("Clear Activity", role: .destructive) {
                 appState.clearAgentActivity()
@@ -121,17 +127,26 @@
             }
           }
           .padding(.top, 4)
+          .accessibilityIdentifier("settings-agents-activity-content")
+          .background(SettingsSearchProbe(identifier: "settings-agents-activity-content"))
         }
         .disclosureGroupStyle(SettingsDisclosureGroupStyle())
-        DisclosureGroup("Access") {
+        .settingsSearchAnchor(.agentsActivity, request: searchRequest)
+        DisclosureGroup("Access", isExpanded: $isAccessExpanded) {
           Text(
             "Only notes with explicit capability grants can be read or edited by authorized integrations. This protects against cooperative tools, not malicious software already running as your macOS user."
           )
           .font(.caption)
           .foregroundStyle(.secondary)
           .padding(.top, 4)
+          .accessibilityIdentifier("settings-agents-access-content")
+          .background(SettingsSearchProbe(identifier: "settings-agents-access-content"))
         }
         .disclosureGroupStyle(SettingsDisclosureGroupStyle())
+        .settingsSearchAnchor(.agentsAccess, request: searchRequest)
+      }
+      .onChange(of: searchRequest?.id, initial: true) { _, _ in
+        revealSearchTarget()
       }
       .sheet(item: $profileForCapabilities) { profile in
         if let capabilities = appState.capabilityProfile(profile.id) {
@@ -141,6 +156,17 @@
           )
           .environmentObject(appState)
         }
+      }
+    }
+
+    private func revealSearchTarget() {
+      switch searchRequest?.anchor {
+      case .agentsActivity, .agentsUpdateBanners, .agentsOpenActivity, .agentsClearActivity:
+        isActivityExpanded = true
+      case .agentsAccess:
+        isAccessExpanded = true
+      default:
+        break
       }
     }
 
@@ -189,6 +215,7 @@
       .task {
         await appState.refreshAgentConnectorStatus()
       }
+      .settingsSearchAnchor(.agentsConnector, request: searchRequest)
     }
 
     private var availableIntegrations: some View {
@@ -205,6 +232,7 @@
       SettingsPreferenceRow(integration.displayName, detail: integration.description) {
         addButton(for: integration)
       }
+      .settingsSearchAnchor(.agentIntegration(integration), request: searchRequest)
     }
 
     private func addButton(for integration: AgentIntegrationKind) -> some View {
@@ -234,6 +262,7 @@
           }
         }
       }
+      .settingsSearchAnchor(.agentsConnectedProfiles, request: searchRequest)
     }
 
     private func connectedProfile(_ profile: AgentIntegrationProfile) -> some View {
@@ -277,28 +306,31 @@
     }
 
     private var setupInstructions: some View {
-      SettingsPreferenceRow(
-        "Set up a local integration",
-        detail: "Connect a local tool and grant only the access it needs."
-      ) {
-        VStack(alignment: .leading, spacing: 10) {
-          setupStep(
-            number: 1,
-            title: "Install the local connector",
-            detail: "The connector stays on this Mac and opens no network listener."
-          )
-          setupStep(
-            number: 2,
-            title: "Add an integration",
-            detail: "Choose one of the available integrations above."
-          )
-          setupStep(
-            number: 3,
-            title: "Use the generated local snippet",
-            detail: "Copy the snippet and grant only the note capabilities you need."
-          )
-        }
+      VStack(alignment: .leading, spacing: 10) {
+        Text("Set up a local integration")
+          .font(.headline)
+        Text("Connect a local tool and grant only the access it needs.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        setupStep(
+          number: 1,
+          title: "Install the local connector",
+          detail: "The connector stays on this Mac and opens no network listener."
+        )
+        setupStep(
+          number: 2,
+          title: "Add an integration",
+          detail: "Choose one of the available integrations above."
+        )
+        setupStep(
+          number: 3,
+          title: "Use the generated local snippet",
+          detail: "Copy the snippet and grant only the note capabilities you need."
+        )
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .settingsSearchAnchor(.agentsSetup, request: searchRequest)
     }
 
     private func setupStep(number: Int, title: String, detail: String) -> some View {

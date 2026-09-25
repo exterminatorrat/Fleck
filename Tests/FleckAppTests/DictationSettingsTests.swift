@@ -367,7 +367,7 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   ))
   #expect(source.contains("isReady ? \"Ready\" : \"Needs attention\""))
   #expect(source.contains("Text(DictationSettingsGroup.models.rawValue)"))
-  #expect(source.contains("DisclosureGroup(DictationSettingsGroup.privacy.rawValue)"))
+  #expect(source.contains("DisclosureGroup(isExpanded: $isDictationPrivacyExpanded)"))
   #expect(!source.contains("SettingsSectionCard(\"Controls\")"))
 }
 
@@ -390,7 +390,7 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
     "        models",
     "        capture",
     "        experienceAndHistory",
-    "        DisclosureGroup(DictationSettingsGroup.privacy.rawValue)",
+    "        DisclosureGroup(isExpanded: $isDictationPrivacyExpanded)",
   ]
   var cursor = dictationSource.startIndex
   for marker in markers {
@@ -1185,6 +1185,43 @@ private func settingsColorDistance(_ lhs: NSColor, _ rhs: NSColor) -> CGFloat {
   )
   let dictationSource = source[dictationStart.lowerBound..<vocabularyStart.lowerBound]
   #expect(!dictationSource.contains("PersonalDictionarySettingsSection"))
+}
+
+@Test func SettingsSearchConnectsGlobalResultsToExistingControlAnchors() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let settings = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+  let agents = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/AgentSettingsView.swift"),
+    encoding: .utf8
+  )
+  let about = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/AboutSettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(settings.contains("SettingsSearchField("))
+  #expect(settings.contains("SettingsSearchResultsView("))
+  #expect(settings.contains("SettingsSearchIndex.results(for: searchQuery)"))
+  #expect(settings.contains("onSubmit: submitHighlightedSearchResult"))
+  #expect(settings.contains("searchRequest = SettingsSearchRequest(target: result.target, anchor: anchor)"))
+  #expect(settings.contains("proxy.scrollTo(searchRequest.anchor.pageScrollAnchor, anchor: .center)"))
+  #expect(settings.contains(".environment(\\.settingsSearchRequest, searchRequest)"))
+  #expect(settings.contains(".settingsSearchAnchor(.appearanceTheme, request: searchRequest)"))
+  #expect(settings.contains(".settingsSearchAnchor(.dictationPrivacy, request: searchRequest)"))
+  #expect(settings.contains("searchRequest: $searchRequest"))
+  #expect(settings.contains("pageScrollReadyRequestID: vocabularyPageScrollRequestID"))
+  #expect(agents.contains(".settingsSearchAnchor(.agentsActivity, request: searchRequest)"))
+  #expect(agents.contains(".settingsSearchAnchor(.agentsAccess, request: searchRequest)"))
+  #expect(agents.contains("isActivityExpanded = true"))
+  #expect(agents.contains("isAccessExpanded = true"))
+  #expect(about.contains(".settingsSearchAnchor(.aboutMetadata, request: searchRequest)"))
+  #expect(about.contains("isMetadataExpanded = true"))
 }
 
 @Test @MainActor func DictationSettingsPendingRouteIsDurableAndConsumedOnce() async throws {

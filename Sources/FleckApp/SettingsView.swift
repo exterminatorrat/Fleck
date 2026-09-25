@@ -193,6 +193,21 @@
     func updateNSView(_ view: NSView, context: Context) {}
   }
 
+  private struct SettingsTypographyProbe: NSViewRepresentable {
+    let identifier: String
+
+    func makeNSView(context: Context) -> NSView {
+      let view = NSView()
+      view.setAccessibilityElement(false)
+      view.setAccessibilityIdentifier(identifier)
+      return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+      view.setAccessibilityIdentifier(identifier)
+    }
+  }
+
   private struct SettingsWindowChromeConfigurator: NSViewRepresentable {
     func makeNSView(context: Context) -> SettingsWindowChromeView {
       SettingsWindowChromeView()
@@ -340,19 +355,28 @@
   }
 
   struct SettingsPageHeader: View {
+    @ScaledMetric(relativeTo: .title2) private var generalTitleSize = 20
     let section: SettingsSection
+    let searchRequest: SettingsSearchRequest?
 
     var body: some View {
       VStack(alignment: .leading, spacing: 4) {
         Text(section.title)
-          .font(.title2.weight(.semibold))
+          .font(
+            section == .editing
+              ? .system(size: generalTitleSize, weight: .semibold)
+              : .title2.weight(.semibold)
+          )
           .background(SettingsPageHeaderProbe())
-        Text(section.description)
-          .font(.callout)
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
+        if section != .editing {
+          Text(section.description)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
+      .settingsSearchAnchor(.section(section), request: searchRequest)
     }
   }
 
@@ -455,22 +479,109 @@
     }
   }
 
+  private enum SettingsToggleRowStyle {
+    case standard
+    case general
+  }
+
   private struct SettingsToggleRow: View {
+    @ScaledMetric(relativeTo: .body) private var generalTitleSize = 13
+    @ScaledMetric(relativeTo: .callout) private var generalDetailSize = 12
     let title: String
     let detail: String
     @Binding var isOn: Bool
+    var style = SettingsToggleRowStyle.standard
+    var tint: Color? = nil
+
+    @ViewBuilder
+    var body: some View {
+      Group {
+        if style == .general {
+          content
+            .padding(.horizontal, 14)
+            .padding(.vertical, 14)
+            .frame(minHeight: 64, alignment: .leading)
+        } else {
+          SettingsPreferenceRow(title, detail: detail) {
+            settingsToggle
+          }
+        }
+      }
+    }
+
+    private var content: some View {
+      HStack(alignment: .top, spacing: 16) {
+        VStack(alignment: .leading, spacing: 3) {
+          Text(title)
+            .font(.system(size: generalTitleSize, weight: .regular))
+            .background(
+              SettingsTypographyProbe(identifier: "settings-general-title-\(title)")
+            )
+          Text(detail)
+            .font(.system(size: generalDetailSize, weight: .regular))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .background(
+              SettingsTypographyProbe(identifier: "settings-general-detail-\(title)")
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        settingsToggle
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var settingsToggle: some View {
+      if let tint {
+        baseToggle.tint(tint)
+      } else {
+        baseToggle
+      }
+    }
+
+    private var baseToggle: some View {
+      Toggle(isOn: $isOn) { EmptyView() }
+        .labelsHidden()
+        .toggleStyle(.switch)
+        .controlSize(.small)
+        .accessibilityLabel(title)
+        .accessibilityHint(detail)
+        .accessibilityIdentifier(title)
+    }
+  }
+
+  private struct GeneralSettingsGroup<Content: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @ScaledMetric(relativeTo: .callout) private var titleSize = 12
+    let title: String
+    let content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+      self.title = title
+      self.content = content()
+    }
 
     var body: some View {
-      SettingsPreferenceRow(title, detail: detail) {
-        Toggle(isOn: $isOn) { EmptyView() }
-          .labelsHidden()
-          .toggleStyle(.switch)
-          .controlSize(.small)
-          .accessibilityElement(children: .ignore)
-          .accessibilityLabel(title)
-          .accessibilityHint(detail)
+      VStack(alignment: .leading, spacing: 8) {
+        Text(title)
+          .font(.system(size: titleSize, weight: .medium))
+          .background(
+            SettingsTypographyProbe(identifier: "settings-general-section-\(title)")
+          )
+        VStack(alignment: .leading, spacing: 0) {
+          content
+        }
+        .background {
+          let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+          shape.fill(Color(nsColor: .controlBackgroundColor))
+            .overlay {
+              shape.fill(Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.025))
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
       }
-      .accessibilityIdentifier(title)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 
@@ -499,6 +610,8 @@
   struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @ObservedObject var runtime: DictationRuntime
     @ObservedObject private var admittedModelSettingsViewModel: AdmittedModelSettingsViewModel
     @ObservedObject private var cleanupAdmittedModelSettingsViewModel: AdmittedModelSettingsViewModel
@@ -506,11 +619,17 @@
       PersonalDictionarySettingsViewModel
     @ObservedObject private var historyController: DictationHistoryController
     private let buildIdentity: BuildIdentity
-    @State private var selectedSection = SettingsSection.appearance
+    @State private var selectedSection = SettingsSection.editing
     @State private var showsHistoryClearConfirmation = false
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
     @State private var microphones: [DictationMicrophoneOption] = []
     @State private var recordingSelection = SettingsShortcutRecordingState()
+    @State private var searchQuery = ""
+    @State private var searchFocusRequest: UUID?
+    @State private var highlightedSearchTarget: SettingsSearchTarget?
+    @State private var searchRequest: SettingsSearchRequest?
+    @State private var vocabularyPageScrollRequestID: UUID?
+    @State private var isDictationPrivacyExpanded = false
 
     init(runtime: DictationRuntime, buildIdentity: BuildIdentity = .current()) {
       self.runtime = runtime
@@ -530,37 +649,77 @@
     var body: some View {
       HStack(alignment: .top, spacing: 12) {
         SettingsSidebarSurface {
-          SettingsSectionSidebar(selection: $selectedSection)
+          VStack(spacing: 10) {
+            SettingsSearchField(
+              query: $searchQuery,
+              focusRequest: searchFocusRequest,
+              onMove: moveSearchHighlight,
+              onSubmit: submitHighlightedSearchResult,
+              onBeginEditing: { recordingSelection.cancel() }
+            )
+            .frame(height: 28)
+
+            if isSearching {
+              SettingsSearchResultsView(
+                results: searchResults,
+                highlightedTarget: highlightedSearchTarget,
+                accentPresentation: accentPresentation,
+                onHighlight: { highlightedSearchTarget = $0 },
+                onActivate: activateSearchResult,
+                onCancel: cancelSettingsSearch
+              )
+            } else {
+              SettingsSectionSidebar(selection: sectionSelection)
+            }
+          }
         }
         .frame(width: 220)
         .padding(.vertical, 8)
-        ScrollView {
-          VStack(alignment: .leading, spacing: 20) {
-            SettingsPageHeader(section: selectedSection)
-            switch selectedSection {
-            case .appearance:
-              appearance
-            case .editing:
-              editing
-            case .shortcuts:
-              shortcuts
-            case .dictation:
-              dictation
-            case .vocabulary:
-              vocabulary
-            case .agents:
-              AgentSettingsView()
-            case .about:
-              AboutSettingsView(identity: buildIdentity)
+        ScrollViewReader { proxy in
+          ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+              if selectedSection != .vocabulary {
+                SettingsPageHeader(section: selectedSection, searchRequest: searchRequest)
+              }
+              switch selectedSection {
+              case .appearance:
+                appearance
+              case .editing:
+                editing
+              case .shortcuts:
+                shortcuts
+              case .dictation:
+                dictation
+              case .vocabulary:
+                vocabulary
+              case .agents:
+                AgentSettingsView()
+              case .about:
+                AboutSettingsView(identity: buildIdentity)
+              }
+            }
+            .environment(\.settingsSearchRequest, searchRequest)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 20)
+          }
+          .id(selectedSection)
+          .safeAreaPadding(.top, 40)
+          .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+          .onChange(of: searchRequest?.id) { _, _ in
+            vocabularyPageScrollRequestID = nil
+            guard let searchRequest else { return }
+            Task { @MainActor in
+              await Task.yield()
+              await Task.yield()
+              guard self.searchRequest?.id == searchRequest.id else { return }
+              proxy.scrollTo(searchRequest.anchor.pageScrollAnchor, anchor: .center)
+              if searchRequest.anchor.pageScrollAnchor == .section(.vocabulary) {
+                vocabularyPageScrollRequestID = searchRequest.id
+              }
             }
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.horizontal, 24)
-          .padding(.bottom, 20)
         }
-        .id(selectedSection)
-        .safeAreaPadding(.top, 40)
-        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
       .padding(.leading, 8)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -578,8 +737,13 @@
         }
       }
       .background(SettingsWindowChromeConfigurator())
+      .tint(accentPresentation.color)
       .onChange(of: selectedSection) { _, newSection in
         recordingSelection.transition(to: newSection)
+      }
+      .onChange(of: searchQuery) { _, _ in
+        recordingSelection.cancel()
+        highlightedSearchTarget = searchResults.first?.target
       }
       .onAppear {
         consumePendingSettingsRoute()
@@ -633,7 +797,81 @@
 
     private func consumePendingSettingsRoute() {
       guard let section = runtime.consumePendingSettingsSection() else { return }
+      recordingSelection.cancel()
+      searchQuery = ""
+      highlightedSearchTarget = nil
+      searchRequest = nil
+      vocabularyPageScrollRequestID = nil
       selectedSection = section
+    }
+
+    private var isSearching: Bool {
+      !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var accentPresentation: SettingsAccentPresentation {
+      SettingsAccentPresentation(
+        hex: appState.preferences.accentHex,
+        colorScheme: colorScheme,
+        increasedContrast: colorSchemeContrast == .increased
+      )
+    }
+
+    private func cancelSettingsSearch() {
+      searchQuery = ""
+      highlightedSearchTarget = nil
+      searchFocusRequest = UUID()
+    }
+
+    private var searchResults: [SettingsSearchResult] {
+      SettingsSearchIndex.results(for: searchQuery)
+    }
+
+    private var sectionSelection: Binding<SettingsSection> {
+      Binding(
+        get: { selectedSection },
+        set: { section in
+          if selectedSection == section,
+            let target = searchRequest?.target,
+            SettingsSearchIndex.catalog.first(where: { $0.target == target })?.destination
+              == section
+          {
+            return
+          }
+          recordingSelection.cancel()
+          searchRequest = nil
+          vocabularyPageScrollRequestID = nil
+          selectedSection = section
+        }
+      )
+    }
+
+    private func moveSearchHighlight(_ move: SettingsSearchMove) {
+      highlightedSearchTarget = SettingsSearchIndex.movingHighlight(
+        move,
+        from: highlightedSearchTarget,
+        in: searchResults
+      )
+    }
+
+    private func submitHighlightedSearchResult() {
+      guard let highlightedSearchTarget,
+        let result = searchResults.first(where: { $0.target == highlightedSearchTarget })
+      else { return }
+      activateSearchResult(result)
+    }
+
+    private func activateSearchResult(_ result: SettingsSearchResult) {
+      recordingSelection.cancel()
+      selectedSection = result.destination
+      searchQuery = ""
+      highlightedSearchTarget = nil
+      let anchor = result.anchor.revealAnchor(isPackaged: buildIdentity.isPackaged)
+      if anchor == .dictationPrivacy {
+        isDictationPrivacyExpanded = true
+      }
+      vocabularyPageScrollRequestID = nil
+      searchRequest = SettingsSearchRequest(target: result.target, anchor: anchor)
     }
 
     private var appearance: some View {
@@ -652,6 +890,7 @@
           .labelsHidden()
           .pickerStyle(.menu)
         }
+        .settingsSearchAnchor(.appearanceTheme, request: searchRequest)
         SettingsPreferenceRow(
           "Accent color",
           detail: "Choose the color used for selections and actions."
@@ -666,10 +905,11 @@
             runtime.preferencesDidChange()
           }
         }
+        .settingsSearchAnchor(.appearanceAccent, request: searchRequest)
 
         Text("Editor canvas")
           .font(.headline)
-          .padding(.top, 4)
+          .padding(.top, 12)
         SettingsPreferenceRow(
           "Editor text color",
           detail: "Choose the color used for note text."
@@ -683,6 +923,7 @@
             appState.updatePreferences { $0.editorTextHex = hex }
           }
         }
+        .settingsSearchAnchor(.appearanceEditorText, request: searchRequest)
         SettingsPreferenceRow(
           "Editor background",
           detail: "Choose the canvas color behind your notes."
@@ -696,6 +937,7 @@
             appState.updatePreferences { $0.editorBackgroundHex = hex }
           }
         }
+        .settingsSearchAnchor(.appearanceEditorBackground, request: searchRequest)
         SettingsPreferenceRow(
           "Glass opacity",
           detail: "Adjust how much of the window shows through Fleck surfaces."
@@ -706,10 +948,11 @@
           .labelsHidden()
           .frame(width: 150)
         }
+        .settingsSearchAnchor(.appearanceGlassOpacity, request: searchRequest)
 
         Text("Menu size")
           .font(.headline)
-          .padding(.top, 4)
+          .padding(.top, 12)
         SettingsPreferenceRow(
           "Width",
           detail: "Set the width of the menu bar notes panel."
@@ -720,6 +963,7 @@
             Text(MenuPanelSettingsSizePolicy.label(for: appState.preferences.panelWidth))
           }
         }
+        .settingsSearchAnchor(.appearanceWidth, request: searchRequest)
         SettingsPreferenceRow(
           "Height",
           detail: "Set the height of the menu bar notes panel."
@@ -730,6 +974,7 @@
             Text(MenuPanelSettingsSizePolicy.label(for: appState.preferences.panelHeight))
           }
         }
+        .settingsSearchAnchor(.appearanceHeight, request: searchRequest)
       }
     }
 
@@ -750,24 +995,51 @@
     }
 
     private var editing: some View {
-      VStack(alignment: .leading, spacing: 12) {
-        SettingsToggleRow(
-          title: "Create lists automatically",
-          detail: "Recognize list-shaped lines while you edit.",
-          isOn: preferenceBinding(\.automaticLists)
-        )
-        SettingsToggleRow(
-          title: "Confirm before moving notes to Trash",
-          detail: "Ask before a note is moved to the Trash folder.",
-          isOn: preferenceBinding(\.confirmBeforeMovingNotesToTrash)
-        )
+      let launchAtLogin = Group {
         SettingsToggleRow(
           title: "Launch at login",
           detail: "Start Fleck automatically when you sign in.",
           isOn: Binding(
             get: { appState.preferences.launchAtLogin },
             set: { appState.setLaunchAtLogin($0) }
-          ))
+          ),
+          style: .general,
+          tint: accentPresentation.color
+        )
+      }
+      .settingsSearchAnchor(.generalLaunchAtLogin, request: searchRequest)
+      let automaticLists = Group {
+        SettingsToggleRow(
+          title: "Create lists automatically",
+          detail: "Recognize list-shaped lines while you edit.",
+          isOn: preferenceBinding(\.automaticLists),
+          style: .general,
+          tint: accentPresentation.color
+        )
+      }
+      .settingsSearchAnchor(.generalAutomaticLists, request: searchRequest)
+      let trashConfirmation = Group {
+        SettingsToggleRow(
+          title: "Confirm before moving notes to Trash",
+          detail: "Ask before a note is moved to the Trash folder.",
+          isOn: preferenceBinding(\.confirmBeforeMovingNotesToTrash),
+          style: .general,
+          tint: accentPresentation.color
+        )
+      }
+      .settingsSearchAnchor(.generalConfirmTrash, request: searchRequest)
+
+      return VStack(alignment: .leading, spacing: 12) {
+        GeneralSettingsGroup("Startup") {
+          launchAtLogin
+        }
+        Divider()
+        GeneralSettingsGroup("Editing") {
+          automaticLists
+          Divider()
+            .padding(.leading, 14)
+          trashConfirmation
+        }
       }
     }
 
@@ -812,9 +1084,10 @@
               }
             }
           }
+          .settingsSearchAnchor(.shortcut(action), request: searchRequest)
         }
         Text(
-          "Click a shortcut and press the complete chord. Conflicting combinations are highlighted and disabled shortcuts can be restored at any time."
+          "Click a shortcut, then press the key combination. Conflicts are highlighted. Restore brings back the default shortcut."
         )
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -827,15 +1100,20 @@
         models
         capture
         experienceAndHistory
-        DisclosureGroup(DictationSettingsGroup.privacy.rawValue) {
+        DisclosureGroup(isExpanded: $isDictationPrivacyExpanded) {
           Text(
             "Audio stays in memory only and is discarded when capture finishes, is cancelled, is interrupted, or fails. History is local, contains no audio, and expires after 30 days. Turning history off affects future successful captures only."
           )
           .font(.caption)
           .foregroundStyle(.secondary)
           .padding(.top, 4)
+          .accessibilityIdentifier("settings-dictation-privacy-content")
+          .background(SettingsSearchProbe(identifier: "settings-dictation-privacy-content"))
+        } label: {
+          Text(DictationSettingsGroup.privacy.rawValue)
         }
         .disclosureGroupStyle(SettingsDisclosureGroupStyle())
+        .settingsSearchAnchor(.dictationPrivacy, request: searchRequest)
       }
     }
 
@@ -868,6 +1146,7 @@
           }
         }
       }
+      .settingsSearchAnchor(.dictationStatus, request: searchRequest)
     }
 
     private var capture: some View {
@@ -915,6 +1194,7 @@
             }
           }
         }
+        .settingsSearchAnchor(.dictationModifier, request: searchRequest)
         SettingsPreferenceRow(
           "Microphone",
           detail: "Choose which microphone Fleck uses for dictation."
@@ -927,6 +1207,7 @@
           }
           .labelsHidden()
         }
+        .settingsSearchAnchor(.dictationMicrophone, request: searchRequest)
         SettingsPreferenceRow(
           "Recognition language",
           detail: "Choose the language used to recognize your dictation."
@@ -934,6 +1215,7 @@
           Text("English")
             .foregroundStyle(.secondary)
         }
+        .settingsSearchAnchor(.dictationRecognitionLanguage, request: searchRequest)
       }
     }
 
@@ -946,16 +1228,19 @@
           detail: "Show a compact status surface while Fleck is listening.",
           isOn: dictationPreferenceBinding(\.dictationCapsuleEnabled)
         )
+        .settingsSearchAnchor(.dictationStatusCapsule, request: searchRequest)
         SettingsToggleRow(
           title: "Show shortcut guide in editor",
           detail: "Show shortcut and Smart Capture guidance above the editor when dictation is ready.",
           isOn: preferenceBinding(\.showDictationShortcutGuide)
         )
+        .settingsSearchAnchor(.dictationShortcutGuide, request: searchRequest)
         SettingsToggleRow(
           title: "Keep local history for 30 days",
           detail: "Keep successful transcripts on this Mac for up to 30 days.",
           isOn: dictationPreferenceBinding(\.dictationHistoryEnabled)
         )
+        .settingsSearchAnchor(.dictationLocalHistory, request: searchRequest)
         SettingsPreferenceRow(
           "Clear History",
           detail: "Remove all local transcript records from this Mac."
@@ -964,12 +1249,16 @@
             showsHistoryClearConfirmation = true
           }
         }
+        .settingsSearchAnchor(.dictationClearHistory, request: searchRequest)
       }
     }
 
     private var vocabulary: some View {
       PersonalDictionarySettingsSection(
-        viewModel: personalDictionarySettingsViewModel
+        viewModel: personalDictionarySettingsViewModel,
+        searchRequest: $searchRequest,
+        pageScrollReadyRequestID: vocabularyPageScrollRequestID,
+        selectedSection: $selectedSection
       )
     }
 
@@ -995,6 +1284,7 @@
             progressAccessibilityLabel: "Enhanced local dictation installation progress"
           )
         }
+        .settingsSearchAnchor(.dictationModel, request: searchRequest)
         SettingsPreferenceRow(
           "Cleanup model",
           detail: "Use the local model that polishes captured text."
@@ -1005,6 +1295,7 @@
             progressAccessibilityLabel: "Enhanced local cleanup installation progress"
           )
         }
+        .settingsSearchAnchor(.dictationCleanupModel, request: searchRequest)
       }
     }
 
@@ -1179,13 +1470,30 @@
 
   private struct PersonalDictionarySettingsSection: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @ScaledMetric(relativeTo: .title2) private var titleSize = 20
     @ObservedObject var viewModel: PersonalDictionarySettingsViewModel
+    @Binding var searchRequest: SettingsSearchRequest?
+    let pageScrollReadyRequestID: UUID?
+    @Binding var selectedSection: SettingsSection
     @State private var showsImporter = false
     @State private var showsDictionaryExporter = false
     @State private var showsCSVExporter = false
     @FocusState private var isSearchFocused: Bool
+    @FocusState private var isOptionsTriggerFocused: Bool
+    @State private var isViewPresent = false
     @State private var isSearchExpanded = false
+    @State private var isOptionsPresented = false
+    @State private var activeOptionsRevealID: UUID?
+    @State private var focusedOptionsRevealID: UUID?
+    @State private var deferredSearchRequest: SettingsSearchRequest?
+    @State private var searchPresentationGeneration = 0
+    @State private var presentationGeneration = 0
+    @State private var pendingOptionsPresentation: (() -> Void)?
+    @State private var pendingOptionsPresentationGeneration: Int?
+    @State private var pendingOptionsPresentationRequestID: UUID?
+    @State private var optionsDismissalGeneration: Int?
+    @State private var optionsDismissalRequestID: UUID?
+    @State private var returnsFocusAfterOptionsDismissal = false
     @State private var sortOrder = SettingsVocabularySortOrder.aToZ
     @State private var isReloading = false
 
@@ -1196,27 +1504,64 @@
     }
 
     var body: some View {
-      VStack(alignment: .leading, spacing: 16) {
-        HStack(alignment: .top, spacing: 16) {
-          VStack(alignment: .leading, spacing: 4) {
-            Text("Teach Fleck the words and phrases that matter to you")
-              .font(.body.weight(.medium))
-            Text("Add a correction when Fleck consistently hears something else.")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              .fixedSize(horizontal: false, vertical: true)
-          }
-          Spacer(minLength: 8)
-          Button("Add New") { viewModel.beginAddingEntry() }
-            .buttonStyle(.borderedProminent)
-            .accessibilityLabel("Add a new vocabulary word or phrase")
-            .accessibilityHint("Opens the vocabulary word editor")
+      VStack(alignment: .leading, spacing: 14) {
+        dictionaryHeader
+        if isSearchExpanded {
+          searchSurface
+            .transition(.opacity)
         }
-
-        dictionaryPanel
-        transfer
+        messages
+        listSurface
       }
       .frame(maxWidth: .infinity, alignment: .leading)
+      .onChange(of: searchRequest?.id, initial: true) { _, _ in
+        searchPresentationGeneration += 1
+        presentationGeneration += 1
+        clearPendingOptionsPresentation()
+        optionsDismissalGeneration = nil
+        returnsFocusAfterOptionsDismissal = false
+        revealSearchTarget()
+      }
+      .onChange(of: pageScrollReadyRequestID) { _, _ in
+        revealSearchTarget()
+      }
+      .onChange(of: hasModalPresentation) { wasPresented, isPresented in
+        presentationGeneration += 1
+        if isPresented {
+          clearPendingOptionsPresentation()
+          optionsDismissalGeneration = nil
+          returnsFocusAfterOptionsDismissal = false
+        }
+        if wasPresented, !isPresented {
+          revealDeferredSearchTarget()
+        }
+      }
+      .onChange(of: isOptionsPresented) { _, isPresented in
+        guard !isPresented else { return }
+        activeOptionsRevealID = nil
+        focusedOptionsRevealID = nil
+      }
+      .onExitCommand {
+        guard isSearchExpanded, !isOptionsPresented, !hasModalPresentation else { return }
+        closeSearch(source: .keyboard)
+      }
+      .onAppear {
+        isViewPresent = true
+        presentationGeneration += 1
+        revealSearchTarget()
+      }
+      .onDisappear {
+        isViewPresent = false
+        activeOptionsRevealID = nil
+        focusedOptionsRevealID = nil
+        deferredSearchRequest = nil
+        searchPresentationGeneration += 1
+        presentationGeneration += 1
+        clearPendingOptionsPresentation()
+        optionsDismissalGeneration = nil
+        returnsFocusAfterOptionsDismissal = false
+        isOptionsPresented = false
+      }
       .sheet(
         isPresented: Binding(
           get: { viewModel.entryEdit != nil },
@@ -1303,72 +1648,184 @@
       )
     }
 
-    private var toolbar: some View {
-      HStack(spacing: 8) {
-        filterTabs
+    private var dictionaryHeader: some View {
+      HStack(spacing: 10) {
+        Text("Dictionary")
+          .font(.system(size: titleSize, weight: .semibold))
+          .background(SettingsPageHeaderProbe())
+          .settingsSearchAnchor(.section(.vocabulary), request: visibleSearchRequest)
         Spacer(minLength: 8)
-        ZStack(alignment: .trailing) {
-          toolbarTrailingContent
-            .opacity(isSearchExpanded ? 0 : 1)
-            .accessibilityHidden(isSearchExpanded)
-            .allowsHitTesting(!isSearchExpanded)
-          if isSearchExpanded {
-            searchSurface
-              .transition(.opacity)
+        if viewModel.filter != .all {
+          Text(viewModel.filter.rawValue)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("Dictionary filter")
+            .accessibilityValue(viewModel.filter.rawValue)
+        }
+        searchTrigger
+        Button("Options") {
+          toggleOptions()
+        }
+        .buttonStyle(.borderless)
+        .focusable()
+        .focused($isOptionsTriggerFocused)
+        .accessibilityIdentifier("settings-vocabulary-options-trigger")
+        .accessibilityHint("Shows dictionary filters and less frequent actions")
+        .popover(isPresented: optionsPresentation, arrowEdge: .top) {
+          optionsPopover
+        }
+        Button("Add new") {
+          presentAfterClosingOptions {
+            viewModel.beginAddingEntry()
           }
         }
-        .frame(width: 236, height: 30, alignment: .trailing)
+        .buttonStyle(.borderedProminent)
+        .accessibilityLabel("Add a new vocabulary word or phrase")
+        .accessibilityHint("Opens the vocabulary word editor")
+        .settingsSearchAnchor(.vocabularyAdd, request: visibleSearchRequest)
       }
       .frame(maxWidth: .infinity)
-      .frame(height: 30)
-      .onExitCommand {
-        guard isSearchExpanded else { return }
-        closeSearch(source: .keyboard)
+    }
+
+    private var searchTrigger: some View {
+      Button {
+        let isCommandF = NSEvent.modifierFlags.contains(.command)
+        guard !hasModalPresentation,
+          !isCommandF || !isSettingsSearchFieldFocused
+        else { return }
+        presentAfterClosingOptions {
+          openSearch(source: isCommandF ? .keyboard : .pointer)
+        }
+      } label: {
+        Image(systemName: "magnifyingglass")
       }
+      .buttonStyle(.plain)
+      .keyboardShortcut("f", modifiers: .command)
+      .disabled(hasModalPresentation)
+      .help("Search vocabulary (⌘F)")
+      .accessibilityLabel("Search vocabulary")
+      .accessibilityHint("Focuses the vocabulary search field")
+      .accessibilityIdentifier("settings-vocabulary-search-trigger")
     }
 
-    private var toolbarTrailingContent: some View {
-      HStack(spacing: 8) {
-        summaryLabel
-        searchTrigger
-        sortControl
-        reloadControl
-      }
-    }
-
-    private var summaryLabel: some View {
-      Text(entrySummary)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-    }
-
-    private var filterTabs: some View {
-      HStack(spacing: 2) {
-        ForEach(PersonalDictionarySettingsViewModel.Filter.allCases) { filter in
-          Button(filter.rawValue) {
-            viewModel.filter = filter
-          }
-          .buttonStyle(.plain)
-          .font(.caption.weight(filter == viewModel.filter ? .semibold : .regular))
-          .foregroundStyle(filter == viewModel.filter ? .primary : .secondary)
-          .padding(.horizontal, 6)
-          .padding(.vertical, 5)
-          .overlay(alignment: .bottom) {
-            if filter == viewModel.filter {
-              Capsule()
-                .fill(Color.accentColor)
-                .frame(height: 2)
+    private var optionsPopover: some View {
+      ScrollViewReader { proxy in
+        ScrollView {
+          VStack(alignment: .leading, spacing: 10) {
+            Text("Show")
+              .font(.headline)
+            ForEach(PersonalDictionarySettingsViewModel.Filter.allCases) { filter in
+              Button {
+                viewModel.filter = filter
+              } label: {
+                HStack {
+                  Text(filter.rawValue)
+                  Spacer()
+                  if filter == viewModel.filter {
+                    Image(systemName: "checkmark")
+                      .accessibilityHidden(true)
+                  }
+                }
+                .contentShape(Rectangle())
+              }
+              .buttonStyle(.plain)
+              .padding(.vertical, 4)
+              .accessibilityLabel(filter.rawValue)
+              .accessibilityValue(filter == viewModel.filter ? "Selected" : "Available")
+              .accessibilityHint("Shows \(filter.rawValue.lowercased()) vocabulary")
+              .settingsSearchAnchor(
+                .vocabularyFilter(filter),
+                request: optionsSearchRequest
+              )
             }
+
+            Divider()
+
+            Button("Find in Dictionary") {
+              presentAfterClosingOptions {
+                openSearch(source: .pointer)
+              }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            sortControl
+            reloadControl
+
+            Divider()
+
+            Text("Transfer")
+              .font(.headline)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .settingsSearchAnchor(.vocabularyTransfer, request: optionsSearchRequest)
+
+            Button("Export Dictionary") {
+              presentAfterClosingOptions {
+                Task { @MainActor in
+                  await viewModel.prepareCanonicalExport()
+                  showsDictionaryExporter = viewModel.canonicalExportData != nil
+                }
+              }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("Export complete personal dictionary")
+            .accessibilityHint("Exports entries and pending suggestions in a restorable format")
+            .settingsSearchAnchor(.vocabularyExportDictionary, request: optionsSearchRequest)
+
+            Button("Export Entries (CSV)") {
+              presentAfterClosingOptions {
+                Task { @MainActor in
+                  await viewModel.prepareCSVExport()
+                  showsCSVExporter = viewModel.csvExportData != nil
+                }
+              }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("Export visible entries as CSV")
+            .accessibilityHint("Exports only the currently visible entries")
+            .settingsSearchAnchor(.vocabularyExportCSV, request: optionsSearchRequest)
+
+            Text(
+              "CSV excludes pending suggestions and cannot restore a complete personal dictionary."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            Button("Import Dictionary") {
+              presentAfterClosingOptions {
+                showsImporter = true
+              }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("Import personal dictionary")
+            .accessibilityHint("Selects a Fleck dictionary or compatible JSON file to preview")
+            .settingsSearchAnchor(.vocabularyImportDictionary, request: optionsSearchRequest)
           }
-          .accessibilityLabel(filter.rawValue)
-          .accessibilityValue(filter == viewModel.filter ? "Selected" : "Available")
-          .accessibilityHint("Shows \(filter.rawValue.lowercased()) vocabulary")
+          .padding(14)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .onChange(of: optionsScrollRequest?.id, initial: true) { _, _ in
+          guard let request = optionsScrollRequest else { return }
+          Task { @MainActor in
+            await Task.yield()
+            guard optionsScrollRequest?.id == request.id else { return }
+            proxy.scrollTo(request.anchor, anchor: .center)
+            await Task.yield()
+            guard optionsScrollRequest?.id == request.id else { return }
+            focusedOptionsRevealID = request.id
+          }
         }
       }
-      .accessibilityElement(children: .contain)
-      .accessibilityLabel("Personal dictionary filter")
-      .accessibilityValue(viewModel.filter.rawValue)
-      .accessibilityHint("Filters entries or shows pending suggestions")
+      .frame(width: 280, height: 360)
+      .accessibilityIdentifier("settings-vocabulary-options-content")
+      .background(SettingsSearchProbe(identifier: "settings-vocabulary-options-content"))
+      .onExitCommand {
+        guard isOptionsPresented, !hasModalPresentation else { return }
+        beginOptionsDismissal(returnFocus: true)
+      }
+      .onDisappear {
+        optionsPopoverDidDisappear()
+      }
     }
 
     private var sortControl: some View {
@@ -1381,6 +1838,7 @@
       .accessibilityLabel("Sort vocabulary")
       .accessibilityValue(sortOrder.rawValue)
       .accessibilityHint("Sorts vocabulary alphabetically")
+      .settingsSearchAnchor(.vocabularySort, request: optionsSearchRequest)
     }
 
     private var reloadControl: some View {
@@ -1397,75 +1855,38 @@
       .accessibilityLabel("Reload vocabulary")
       .accessibilityValue(isReloading ? "Reloading" : "Ready")
       .accessibilityHint("Loads the latest local vocabulary entries")
-    }
-
-    private var entrySummary: String {
-      if viewModel.filter == .suggestions {
-        let count = viewModel.visibleSuggestions.count
-        return count == 1 ? "1 pending suggestion" : "\(count) pending suggestions"
-      }
-      let count = viewModel.visibleEntries.count
-      let total = viewModel.entries.count
-      if viewModel.query.isEmpty, viewModel.filter == .all {
-        return total == 1 ? "1 saved word" : "\(total) saved words"
-      }
-      return "\(count) of \(total) saved words"
+      .tint(.primary)
+      .settingsSearchAnchor(.vocabularyReload, request: optionsSearchRequest)
     }
 
     @ViewBuilder
     private var messages: some View {
-      if let errorMessage = viewModel.errorMessage {
-        Label(errorMessage, systemImage: "exclamationmark.triangle")
-          .foregroundStyle(.red)
-          .font(.caption)
-          .accessibilityLabel("Personal dictionary error")
-          .accessibilityValue(errorMessage)
+      if isReloading {
+        HStack(spacing: 8) {
+          ProgressView()
+            .controlSize(.small)
+          Text("Reloading dictionary…")
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Reloading dictionary")
+      } else if let errorMessage = viewModel.errorMessage {
+        HStack(spacing: 8) {
+          Label(errorMessage, systemImage: "exclamationmark.triangle")
+            .foregroundStyle(.red)
+            .accessibilityLabel("Personal dictionary error")
+            .accessibilityValue(errorMessage)
+          Button("Reload", action: reloadVocabulary)
+            .accessibilityHint("Loads the latest local vocabulary entries")
+        }
+        .font(.caption)
       } else if let statusMessage = viewModel.statusMessage {
         Label(statusMessage, systemImage: "checkmark.circle")
           .foregroundStyle(.secondary)
           .font(.caption)
           .accessibilityLabel("Personal dictionary status")
           .accessibilityValue(statusMessage)
-      }
-    }
-
-    @ViewBuilder
-    private var dictionaryPanel: some View {
-      VStack(alignment: .leading, spacing: 0) {
-        toolbar
-          .padding(.horizontal, 12)
-          .padding(.top, 12)
-          .padding(.bottom, 10)
-        messages
-          .padding(.horizontal, 12)
-          .padding(.bottom, 8)
-        Divider()
-        listSurface
-      }
-      .frame(maxWidth: .infinity, alignment: .topLeading)
-      .background {
-        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
-        if reduceTransparency {
-          shape.fill(Color(nsColor: .controlBackgroundColor))
-            .overlay { shape.fill(Color.primary.opacity(0.03)) }
-            .overlay { shape.stroke(Color.primary.opacity(0.10), lineWidth: 1) }
-        } else if #available(macOS 26, *) {
-          shape.fill(.clear)
-            .glassEffect(
-              Glass.regular.tint(Color.black.opacity(0.18)),
-              in: shape
-            )
-        } else {
-          shape.fill(.ultraThinMaterial)
-            .overlay {
-              shape.fill(Color.black.opacity(0.10))
-            }
-        }
-      }
-      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-          .stroke(.separator.opacity(0.5), lineWidth: 1)
       }
     }
 
@@ -1479,7 +1900,7 @@
             ForEach(Array(sortedSuggestions.enumerated()), id: \.element.id) { index, suggestion in
               suggestionRow(suggestion, expectedRevision: viewModel.revision)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
               if index < sortedSuggestions.count - 1 {
                 Divider().padding(.leading, 12)
               }
@@ -1491,15 +1912,14 @@
           ForEach(Array(sortedEntries.enumerated()), id: \.element.id) { index, entry in
             entryRow(entry)
               .padding(.horizontal, 12)
-              .padding(.vertical, 10)
             if index < sortedEntries.count - 1 {
               Divider().padding(.leading, 12)
             }
           }
         }
       }
-      .frame(maxWidth: .infinity, minHeight: 280, alignment: .topLeading)
-      .padding(.bottom, 12)
+      .frame(maxWidth: .infinity, alignment: .topLeading)
+      .overlay(alignment: .top) { Divider() }
     }
 
     private var sortedEntries: [PersonalDictionaryEntry] {
@@ -1514,16 +1934,21 @@
     private var emptyState: some View {
       Group {
         if viewModel.filter == .suggestions {
-          Text("No pending suggestions. Fleck will show new forms here when it finds them.")
+          if viewModel.suggestions.isEmpty {
+            Text("No pending suggestions.")
+              .foregroundStyle(.secondary)
+          } else {
+            Text("No suggestions match your search. Clear search to review the queue.")
+              .foregroundStyle(.secondary)
+          }
+        } else if viewModel.entries.isEmpty {
+          Text("No entries yet. Use Add new to add a word, phrase, or correction.")
             .foregroundStyle(.secondary)
         } else if !viewModel.query.isEmpty {
-          Text("No matching entries. Clear search or choose another filter.")
+          Text("No matching entries. Clear search or choose another filter in Options.")
             .foregroundStyle(.secondary)
         } else if viewModel.filter != .all {
-          Text("No entries match this filter. Choose All or use Add New.")
-            .foregroundStyle(.secondary)
-        } else {
-          Text("No entries yet. Use Add New to teach Fleck a word or phrase.")
+          Text("No entries match this filter. Choose All in Options or use Add new.")
             .foregroundStyle(.secondary)
         }
       }
@@ -1533,62 +1958,63 @@
     }
 
     private func entryRow(_ entry: PersonalDictionaryEntry) -> some View {
-      HStack(spacing: 12) {
-        Button {
-          viewModel.beginEditingEntry(entry)
-        } label: {
-          HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 3) {
-              HStack(spacing: 5) {
-                Text(entry.preferredForm)
-                  .fontWeight(.medium)
-                if entry.isPriority {
-                  Image(systemName: "star.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Prioritized")
-                }
-              }
-              if !entry.aliases.isEmpty {
-                Text("Corrects: \(entry.aliases.joined(separator: ", "))")
-                  .font(.caption)
-                  .foregroundStyle(.secondary)
-              }
-            }
-            Spacer()
+      Button {
+        viewModel.beginEditingEntry(entry)
+      } label: {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          Text(entryTitle(entry))
+            .font(.body)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+          Spacer(minLength: 8)
+          if !entry.isEnabled {
+            Text("Disabled")
+              .font(.caption)
+              .foregroundStyle(.secondary)
           }
-          .contentShape(Rectangle())
+          if entry.isPriority {
+            Image(systemName: "star.fill")
+              .font(.caption2)
+              .foregroundStyle(.secondary)
+              .accessibilityHidden(true)
+          }
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Edit \(entry.preferredForm)")
-        .accessibilityValue(
-          entry.aliases.isEmpty
-            ? "Saved word"
-            : "Corrects \(entry.aliases.joined(separator: ", "))"
-        )
-        .accessibilityHint("Opens this vocabulary word for editing")
-
-        Toggle("Use \(entry.preferredForm)", isOn: Binding(
-          get: { entry.isEnabled },
-          set: { enabled in
-            let expectedRevision = viewModel.revision
-            Task { @MainActor in
-              await viewModel.setEnabled(
-                enabled,
-                id: entry.id,
-                expectedRevision: expectedRevision
-              )
-            }
-          }
-        ))
-        .labelsHidden()
-        .toggleStyle(.switch)
-        .controlSize(.small)
-        .accessibilityLabel("Enable \(entry.preferredForm)")
-        .accessibilityValue(entry.isEnabled ? "Enabled" : "Disabled")
-        .accessibilityHint("Toggles whether this entry is used for dictation")
+        .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+        .contentShape(Rectangle())
       }
-      .accessibilityElement(children: .contain)
+      .buttonStyle(.plain)
+      .background(
+        SettingsSearchProbe(identifier: "settings-vocabulary-entry-frame-\(entry.id.uuidString)")
+      )
+      .accessibilityIdentifier("settings-vocabulary-entry-\(entry.id.uuidString)")
+      .accessibilityLabel("Edit \(entry.preferredForm)")
+      .accessibilityValue(entryAccessibilityValue(entry))
+      .accessibilityHint("Opens this vocabulary word for editing")
+    }
+
+    private func entryTitle(_ entry: PersonalDictionaryEntry) -> String {
+      entry.aliases.first.map { first in
+        let remaining = entry.aliases.count - 1
+        let summary = remaining > 0 ? "\(first) +\(remaining) more" : first
+        return "\(summary) → \(entry.preferredForm)"
+      } ?? entry.preferredForm
+    }
+
+    private func entryAccessibilityValue(_ entry: PersonalDictionaryEntry) -> String {
+      var values: [String]
+      if entry.aliases.isEmpty {
+        values = ["Preferred form \(entry.preferredForm)"]
+      } else {
+        values = [
+          "Misheard spellings \(entry.aliases.joined(separator: ", "))",
+          "Desired spelling \(entry.preferredForm)",
+        ]
+      }
+      values.append(entry.isEnabled ? "Enabled" : "Disabled")
+      if entry.isPriority {
+        values.append("Prioritized")
+      }
+      return values.joined(separator: ", ")
     }
 
     private func suggestionRow(
@@ -1597,10 +2023,12 @@
     ) -> some View {
       VStack(alignment: .leading, spacing: 6) {
         Text(suggestion.preferredForm)
+          .fixedSize(horizontal: false, vertical: true)
         if !suggestion.observedForms.isEmpty {
           Text(suggestion.observedForms.joined(separator: ", "))
             .font(.caption)
             .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
         }
         HStack {
           Button("Approve") {
@@ -1632,55 +2060,8 @@
           .accessibilityHint("Removes this pending suggestion")
         }
       }
+      .padding(.vertical, 8)
       .accessibilityElement(children: .contain)
-    }
-
-    private var transfer: some View {
-      DisclosureGroup("Transfer") {
-        VStack(alignment: .leading, spacing: 8) {
-          Button("Export Dictionary") {
-            Task { @MainActor in
-              await viewModel.prepareCanonicalExport()
-              showsDictionaryExporter = viewModel.canonicalExportData != nil
-            }
-          }
-          .accessibilityLabel("Export complete personal dictionary")
-          .accessibilityHint("Exports entries and pending suggestions in a restorable format")
-
-          Button("Export Entries (CSV)") {
-            Task { @MainActor in
-              await viewModel.prepareCSVExport()
-              showsCSVExporter = viewModel.csvExportData != nil
-            }
-          }
-          .accessibilityLabel("Export visible entries as CSV")
-          .accessibilityHint("Exports only the currently visible entries")
-
-          Text(
-            "CSV excludes pending suggestions and cannot restore a complete personal dictionary."
-          )
-          .font(.caption)
-          .foregroundStyle(.secondary)
-
-          Button("Import Dictionary") { showsImporter = true }
-            .accessibilityLabel("Import personal dictionary")
-            .accessibilityHint("Selects a Fleck dictionary or compatible JSON file to preview")
-        }
-        .padding(.vertical, 4)
-      }
-    }
-
-    private var searchTrigger: some View {
-      Button {
-        openSearch(source: .pointer)
-      } label: {
-        Image(systemName: "magnifyingglass")
-      }
-      .buttonStyle(.plain)
-      .keyboardShortcut("f", modifiers: .command)
-      .help("Search vocabulary (⌘F)")
-      .accessibilityLabel("Search vocabulary")
-      .accessibilityHint("Focuses the vocabulary search field")
     }
 
     private var searchSurface: some View {
@@ -1689,11 +2070,13 @@
           .foregroundStyle(.secondary)
           .accessibilityHidden(true)
         TextField("Search vocabulary", text: $viewModel.query)
-          .textFieldStyle(.plain)
+          .textFieldStyle(.roundedBorder)
           .focused($isSearchFocused)
-          .accessibilityLabel("Search vocabulary")
-          .accessibilityValue(viewModel.query.isEmpty ? "No search" : viewModel.query)
-          .accessibilityHint("Searches saved words and corrections")
+        .accessibilityLabel("Search vocabulary")
+        .accessibilityValue(viewModel.query.isEmpty ? "No search" : viewModel.query)
+        .accessibilityHint("Searches saved words and corrections")
+        .settingsSearchAnchor(.vocabularySearch, request: visibleSearchRequest)
+        .accessibilityIdentifier("settings-vocabulary-local-search-field")
         Button {
           closeSearch(source: .pointer)
         } label: {
@@ -1704,33 +2087,227 @@
         .accessibilityLabel("Clear vocabulary search")
         .accessibilityHint("Clears search and closes vocabulary search")
       }
-      .padding(.horizontal, 10)
-      .frame(width: 236, height: 30)
-      .background {
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
-        if reduceTransparency {
-          shape.fill(Color(nsColor: .controlBackgroundColor))
-            .overlay { shape.fill(Color.primary.opacity(0.03)) }
-            .overlay { shape.stroke(Color.primary.opacity(0.10), lineWidth: 1) }
-        } else if #available(macOS 26, *) {
-          shape.fill(.clear)
-            .glassEffect(
-              Glass.regular.tint(Color.black.opacity(0.18)),
-              in: shape
-            )
-        } else {
-          shape.fill(.ultraThinMaterial)
-            .overlay { shape.fill(Color.black.opacity(0.10)) }
+      .frame(maxWidth: .infinity)
+      .background(SettingsSearchProbe(identifier: "settings-vocabulary-local-search-field"))
+    }
+
+    private var hasModalPresentation: Bool {
+      viewModel.entryEdit != nil
+        || viewModel.suggestionEdit != nil
+        || viewModel.isImportPreviewPresented
+        || showsImporter
+        || showsDictionaryExporter
+        || showsCSVExporter
+    }
+
+    private var isSettingsSearchFieldFocused: Bool {
+      guard let window = NSApp.keyWindow,
+        let searchField = settingsSearchField(in: window.contentView)
+      else { return false }
+      if window.firstResponder === searchField { return true }
+      guard let fieldEditor = searchField.currentEditor() else { return false }
+      return window.firstResponder === fieldEditor
+    }
+
+    private func settingsSearchField(in view: NSView?) -> NSSearchField? {
+      guard let view else { return nil }
+      if let searchField = view as? NSSearchField,
+        searchField.accessibilityIdentifier() == "settings-search-field"
+      {
+        return searchField
+      }
+      for subview in view.subviews {
+        if let searchField = settingsSearchField(in: subview) {
+          return searchField
         }
       }
-      .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .stroke(.separator.opacity(0.5), lineWidth: 1)
+      return nil
+    }
+
+    private var visibleSearchRequest: SettingsSearchRequest? {
+      guard isViewPresent,
+        selectedSection == .vocabulary,
+        !hasModalPresentation,
+        searchRequest?.id == pageScrollReadyRequestID
+      else { return nil }
+      return searchRequest
+    }
+
+    private var optionsSearchRequest: SettingsSearchRequest? {
+      guard isViewPresent,
+        selectedSection == .vocabulary,
+        !hasModalPresentation,
+        let request = searchRequest,
+        request.id == focusedOptionsRevealID
+      else { return nil }
+      return request
+    }
+
+    private var optionsScrollRequest: SettingsSearchRequest? {
+      guard isViewPresent,
+        selectedSection == .vocabulary,
+        !hasModalPresentation,
+        let request = searchRequest,
+        request.id == activeOptionsRevealID
+      else { return nil }
+      return request
+    }
+
+    private func revealSearchTarget() {
+      guard isViewPresent, selectedSection == .vocabulary else { return }
+      guard let request = searchRequest else {
+        deferredSearchRequest = nil
+        activeOptionsRevealID = nil
+        return
+      }
+      guard request.target.usesVocabularyFocusLifecycle else {
+        deferredSearchRequest = nil
+        activeOptionsRevealID = nil
+        return
+      }
+      guard pageScrollReadyRequestID == request.id else {
+        deferredSearchRequest = request
+        activeOptionsRevealID = nil
+        focusedOptionsRevealID = nil
+        return
+      }
+      guard !hasModalPresentation else {
+        deferredSearchRequest = request
+        activeOptionsRevealID = nil
+        focusedOptionsRevealID = nil
+        return
+      }
+
+      deferredSearchRequest = nil
+      switch request.anchor {
+      case .vocabularySearch:
+        presentAfterClosingOptions {
+          openSearch(source: .keyboard)
+        }
+      case .section(.vocabulary), .vocabularyAdd:
+        dismissOptionsForNewPresentation()
+        isSearchFocused = false
+      case .vocabularyFilter, .vocabularySort, .vocabularyReload, .vocabularyTransfer,
+        .vocabularyExportDictionary, .vocabularyExportCSV, .vocabularyImportDictionary:
+        isSearchFocused = false
+        activeOptionsRevealID = request.id
+        focusedOptionsRevealID = nil
+        isOptionsPresented = true
+      default:
+        break
       }
     }
 
+    private func revealDeferredSearchTarget() {
+      guard let deferredSearchRequest,
+        deferredSearchRequest.id == searchRequest?.id
+      else {
+        deferredSearchRequest = nil
+        return
+      }
+      self.deferredSearchRequest = nil
+      revealSearchTarget()
+    }
+
+    private func dismissOptionsForNewPresentation() {
+      activeOptionsRevealID = nil
+      focusedOptionsRevealID = nil
+      guard isOptionsPresented else { return }
+      beginOptionsDismissal(returnFocus: false)
+    }
+
+    private func presentAfterClosingOptions(_ presentation: @escaping () -> Void) {
+      guard isOptionsPresented else {
+        guard isViewPresent, selectedSection == .vocabulary, !hasModalPresentation else {
+          return
+        }
+        presentation()
+        return
+      }
+      searchPresentationGeneration += 1
+      presentationGeneration += 1
+      pendingOptionsPresentation = presentation
+      pendingOptionsPresentationGeneration = presentationGeneration
+      pendingOptionsPresentationRequestID = searchRequest?.id
+      beginOptionsDismissal(returnFocus: false)
+    }
+
+    private var optionsPresentation: Binding<Bool> {
+      Binding(
+        get: { isOptionsPresented },
+        set: { isPresented in
+          guard isPresented != isOptionsPresented else { return }
+          if isPresented {
+            isOptionsPresented = true
+          } else {
+            beginOptionsDismissal(returnFocus: false)
+          }
+        }
+      )
+    }
+
+    private func toggleOptions() {
+      if isOptionsPresented {
+        beginOptionsDismissal(returnFocus: true)
+        return
+      }
+      searchPresentationGeneration += 1
+      presentationGeneration += 1
+      clearPendingOptionsPresentation()
+      optionsDismissalGeneration = nil
+      activeOptionsRevealID = nil
+      focusedOptionsRevealID = nil
+      returnsFocusAfterOptionsDismissal = false
+      isOptionsPresented = true
+    }
+
+    private func beginOptionsDismissal(returnFocus: Bool) {
+      optionsDismissalGeneration = presentationGeneration
+      optionsDismissalRequestID = searchRequest?.id
+      returnsFocusAfterOptionsDismissal = returnFocus
+      isOptionsPresented = false
+    }
+
+    private func optionsPopoverDidDisappear() {
+      let presentation = pendingOptionsPresentation
+      let queuedGeneration = pendingOptionsPresentationGeneration
+      let queuedRequestID = pendingOptionsPresentationRequestID
+      clearPendingOptionsPresentation()
+
+      let dismissalGeneration = optionsDismissalGeneration
+      let dismissalRequestID = optionsDismissalRequestID
+      let shouldReturnFocus = returnsFocusAfterOptionsDismissal
+      optionsDismissalGeneration = nil
+      optionsDismissalRequestID = nil
+      returnsFocusAfterOptionsDismissal = false
+
+      guard isViewPresent, selectedSection == .vocabulary else { return }
+      if let presentation {
+        guard queuedGeneration == presentationGeneration,
+          queuedRequestID == searchRequest?.id,
+          !hasModalPresentation
+        else { return }
+        presentation()
+        return
+      }
+      guard shouldReturnFocus,
+        dismissalGeneration == self.presentationGeneration,
+        dismissalRequestID == searchRequest?.id,
+        !hasModalPresentation
+      else { return }
+      isOptionsTriggerFocused = true
+    }
+
+    private func clearPendingOptionsPresentation() {
+      pendingOptionsPresentation = nil
+      pendingOptionsPresentationGeneration = nil
+      pendingOptionsPresentationRequestID = nil
+    }
+
     private func openSearch(source: AppInteractionSource) {
+      searchPresentationGeneration += 1
+      presentationGeneration += 1
+      isOptionsTriggerFocused = false
       withAnimation(motion.presentationAnimation(for: source)) {
         isSearchExpanded = true
         isSearchFocused = true
@@ -1738,17 +2315,27 @@
     }
 
     private func closeSearch(source: AppInteractionSource) {
+      searchPresentationGeneration += 1
       withAnimation(motion.presentationAnimation(for: source)) {
         isSearchExpanded = false
         isSearchFocused = false
       }
+      isOptionsTriggerFocused = true
       clearSearchQueryAfterTeardown()
     }
 
     private func clearSearchQueryAfterTeardown() {
+      let generation = searchPresentationGeneration
+      let requestID = searchRequest?.id
       let viewModel = viewModel
       Task { @MainActor in
         await Task.yield()
+        guard generation == searchPresentationGeneration,
+          requestID == searchRequest?.id,
+          isViewPresent,
+          selectedSection == .vocabulary,
+          !isSearchExpanded
+        else { return }
         viewModel.query = ""
       }
     }

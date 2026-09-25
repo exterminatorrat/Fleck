@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import FleckCore
+import SwiftUI
 import Testing
 
 @testable import FleckApp
@@ -682,11 +684,13 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
     "let personalDictionarySettingsViewModel = PersonalDictionarySettingsViewModel("
   ))
   #expect(runtimeSource.contains("store: personalDictionaryStore"))
-  #expect(settingsSource.contains("let expectedRevision = viewModel.revision"))
+  #expect(settingsSource.contains("suggestionRow(suggestion, expectedRevision: viewModel.revision)"))
   #expect(settingsSource.contains("expectedRevision: expectedRevision"))
   #expect(settingsSource.contains("case vocabulary = \"Vocabulary\""))
-  #expect(settingsSource.contains("Button(\"Add New\")"))
-  #expect(settingsSource.contains("Text(\"Corrects: \\(entry.aliases.joined(separator: \", \"))\")"))
+  #expect(settingsSource.contains("Text(\"Dictionary\")"))
+  #expect(settingsSource.contains("Button(\"Options\")"))
+  #expect(settingsSource.contains("Button(\"Add new\")"))
+  #expect(settingsSource.contains("private func entryTitle("))
   #expect(settingsSource.contains("viewModel.beginEditingEntry(entry)"))
   #expect(settingsSource.contains("PersonalDictionaryEntryEditSheet("))
   #expect(settingsSource.contains("Toggle(\"Correct a misspelling\""))
@@ -694,8 +698,8 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
   #expect(settingsSource.contains("Button(\"Delete Word\", role: .destructive)"))
   #expect(settingsSource.contains("Image(systemName: \"xmark\")"))
   #expect(!settingsSource.contains(".searchable("))
-  #expect(settingsSource.contains("private var filterTabs: some View"))
-  #expect(settingsSource.contains("Button(filter.rawValue)"))
+  #expect(settingsSource.contains("private var optionsPopover: some View"))
+  #expect(settingsSource.contains("ForEach(PersonalDictionarySettingsViewModel.Filter.allCases)"))
   #expect(settingsSource.contains("Button(\"Approve\""))
   #expect(settingsSource.contains("Button(\"Edit and Approve\""))
   #expect(settingsSource.contains("Button(\"Dismiss\""))
@@ -723,12 +727,10 @@ func personalDictionaryBooleanControlsUseCompactNativeSwitches() throws {
     encoding: .utf8
   )
 
-  #expect(settingsSource.contains("Toggle(\"Use \\(entry.preferredForm)\""))
+  #expect(settingsSource.contains("Text(\"Disabled\")"))
   #expect(settingsSource.contains("Toggle(\"Correct a misspelling\""))
   #expect(settingsSource.contains("Toggle(\"Use this word in dictation\""))
-  #expect(
-    settingsSource.components(separatedBy: ".toggleStyle(.switch)").count - 1 >= 4
-  )
+  #expect(settingsSource.contains(".toggleStyle(.switch)"))
   #expect(settingsSource.contains(".controlSize(.small)"))
 }
 
@@ -743,8 +745,10 @@ func personalDictionaryVocabularyUsesTheTaskFlowAndLocalSortControls() throws {
     encoding: .utf8
   )
 
-  #expect(settingsSource.contains("Teach Fleck the words and phrases that matter to you"))
-  #expect(settingsSource.contains("Button(\"Add New\")"))
+  #expect(settingsSource.contains("Text(\"Dictionary\")"))
+  #expect(settingsSource.contains("Button(\"Options\")"))
+  #expect(settingsSource.contains("Button(\"Add new\")"))
+  #expect(!settingsSource.contains("Teach Fleck the words and phrases that matter to you"))
   #expect(settingsSource.contains("Picker(\"Sort\""))
   #expect(settingsSource.contains("SettingsVocabularySortOrder"))
   #expect(settingsSource.contains("case aToZ"))
@@ -752,7 +756,10 @@ func personalDictionaryVocabularyUsesTheTaskFlowAndLocalSortControls() throws {
   #expect(settingsSource.contains("viewModel.load()"))
   #expect(settingsSource.contains("isReloading"))
   #expect(settingsSource.contains("isSearchExpanded"))
-  #expect(settingsSource.contains("keyboardShortcut(\"f\", modifiers: .command)"))
+  #expect(settingsSource.contains(".keyboardShortcut(\"f\", modifiers: .command)"))
+  #expect(settingsSource.contains("!hasModalPresentation"))
+  #expect(settingsSource.contains("isSettingsSearchFieldFocused"))
+  #expect(!settingsSource.contains(".onKeyPress(phases: .down)"))
   #expect(settingsSource.contains("Section(isNew ? \"Add New\" : \"Edit Word\")"))
   #expect(settingsSource.contains("Use this word in dictation"))
   #expect(!settingsSource.contains("Sync"))
@@ -772,11 +779,8 @@ func personalDictionaryVocabularySearchUsesFixedCustomOverlayAndAccessibleDismis
 
   #expect(!settingsSource.contains("ViewThatFits(in: .horizontal)"))
   #expect(!settingsSource.contains("private var toolbarRows: some View"))
-  #expect(!settingsSource.contains(".textFieldStyle(.roundedBorder)"))
+  #expect(settingsSource.contains(".textFieldStyle(.roundedBorder)"))
   #expect(settingsSource.contains("private var searchSurface: some View"))
-  #expect(settingsSource.contains(".textFieldStyle(.plain)"))
-  #expect(settingsSource.contains(".frame(height: 30)"))
-  #expect(settingsSource.contains("RoundedRectangle(cornerRadius: 10, style: .continuous)"))
   #expect(settingsSource.contains("@Environment(\\.accessibilityReduceMotion) private var reduceMotion"))
   #expect(settingsSource.contains("AppMotion(reduceMotion: reduceMotion)"))
   #expect(settingsSource.contains("openSearch(source: .pointer)"))
@@ -787,19 +791,19 @@ func personalDictionaryVocabularySearchUsesFixedCustomOverlayAndAccessibleDismis
   #expect(settingsSource.contains("Clear vocabulary search"))
   #expect(settingsSource.contains("xmark"))
 
-  let toolbarStart = try #require(settingsSource.range(of: "private var toolbar: some View"))
-  let summaryStart = try #require(
-    settingsSource.range(
-      of: "private var summaryLabel: some View",
-      range: toolbarStart.upperBound..<settingsSource.endIndex
-    )
-  )
-  let toolbarSource = settingsSource[toolbarStart.lowerBound..<summaryStart.lowerBound]
-  #expect(toolbarSource.contains("HStack(spacing: 8)"))
-  #expect(toolbarSource.contains("filterTabs"))
-  #expect(toolbarSource.contains("toolbarTrailingContent"))
-  #expect(toolbarSource.contains("ZStack(alignment: .trailing)"))
-  #expect(!toolbarSource.contains("toolbarRow"))
+  let optionsStart = try #require(settingsSource.range(of: "private var optionsPopover: some View"))
+  let sortStart = try #require(settingsSource.range(
+    of: "private var sortControl: some View",
+    range: optionsStart.upperBound..<settingsSource.endIndex
+  ))
+  let optionsSource = settingsSource[optionsStart.lowerBound..<sortStart.lowerBound]
+  #expect(optionsSource.contains("ForEach(PersonalDictionarySettingsViewModel.Filter.allCases)"))
+  #expect(optionsSource.contains("Text(filter.rawValue)"))
+  #expect(optionsSource.contains("Button(\"Find in Dictionary\")"))
+  #expect(optionsSource.contains("settingsSearchAnchor(.vocabularyTransfer"))
+  #expect(optionsSource.contains("presentAfterClosingOptions"))
+  #expect(settingsSource.contains("private var optionsPresentation: Binding<Bool>"))
+  #expect(settingsSource.contains("private func optionsPopoverDidDisappear()"))
 }
 
 @Test
@@ -821,6 +825,108 @@ func personalDictionaryVocabularySearchDefersQueryClearUntilFieldTeardown() thro
   #expect(settingsSource.contains("closeSearch(source: .keyboard)"))
 }
 
+@Test @MainActor
+func personalDictionaryCommandFRoutesFromSidebarAndContentWithoutBreakingSearchOrSheets()
+  async throws
+{
+  let root = temporarySettingsDictionaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let appState = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in .committed }
+  )
+  await appState.waitUntilInitialLoad()
+  appState.preferences.dictationCapsuleEnabled = false
+  let runtime = DictationRuntime(appState: appState, applicationSupportURL: root)
+  runtime.requestSettings(.vocabulary)
+
+  let host = NSHostingView(
+    rootView: SettingsView(runtime: runtime)
+      .environmentObject(appState)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 840, height: 600),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settlePersonalDictionarySettingsHost(host)
+
+  let settingsSearchField = try #require(
+    personalDictionarySettingsView(
+      withAccessibilityIdentifier: "settings-search-field",
+      in: host
+    ) as? NSSearchField
+  )
+  let sidebarList = try #require(personalDictionarySettingsTableView(in: host))
+  #expect(runtime.pendingSettingsSection == nil)
+  #expect(personalDictionarySettingsView(
+    withAccessibilityIdentifier: "settings-vocabulary-local-search-field",
+    in: host
+  ) == nil)
+
+  #expect(window.makeFirstResponder(sidebarList))
+  #expect(window.firstResponder === sidebarList)
+  window.sendEvent(try #require(personalDictionaryCommandFEvent(for: window)))
+  await settlePersonalDictionarySettingsHost(host)
+  #expect(personalDictionarySettingsView(
+    withAccessibilityIdentifier: "settings-vocabulary-local-search-field",
+    in: host
+  ) != nil)
+
+  window.sendEvent(try #require(personalDictionaryEscapeEvent(for: window)))
+  await settlePersonalDictionarySettingsHost(host)
+  #expect(personalDictionarySettingsView(
+    withAccessibilityIdentifier: "settings-vocabulary-local-search-field",
+    in: host
+  ) == nil)
+
+  #expect(window.makeFirstResponder(settingsSearchField))
+  await settlePersonalDictionarySettingsHost(host)
+  #expect(personalDictionarySettingsFieldIsFocused(settingsSearchField, in: window))
+  window.sendEvent(try #require(personalDictionaryCommandFEvent(for: window)))
+  await settlePersonalDictionarySettingsHost(host)
+  #expect(personalDictionarySettingsFieldIsFocused(settingsSearchField, in: window))
+  #expect(settingsSearchField.stringValue.isEmpty)
+  #expect(personalDictionarySettingsView(
+    withAccessibilityIdentifier: "settings-vocabulary-local-search-field",
+    in: host
+  ) == nil)
+
+  #expect(window.makeFirstResponder(host))
+  #expect(window.firstResponder === host)
+  window.sendEvent(try #require(personalDictionaryCommandFEvent(for: window)))
+  await settlePersonalDictionarySettingsHost(host)
+  #expect(personalDictionarySettingsView(
+    withAccessibilityIdentifier: "settings-vocabulary-local-search-field",
+    in: host
+  ) != nil)
+
+  window.sendEvent(try #require(personalDictionaryEscapeEvent(for: window)))
+  await settlePersonalDictionarySettingsHost(host)
+  #expect(personalDictionarySettingsView(
+    withAccessibilityIdentifier: "settings-vocabulary-local-search-field",
+    in: host
+  ) == nil)
+  runtime.personalDictionarySettingsViewModel.beginAddingEntry()
+  await settlePersonalDictionarySettingsHost(host)
+  let sheet = try #require(window.attachedSheet)
+  sheet.sendEvent(try #require(personalDictionaryCommandFEvent(for: sheet)))
+  await settlePersonalDictionarySettingsHost(host)
+  #expect(personalDictionarySettingsView(
+    withAccessibilityIdentifier: "settings-vocabulary-local-search-field",
+    in: host
+  ) == nil)
+
+  runtime.personalDictionarySettingsViewModel.cancelEntryEdit()
+  await settlePersonalDictionarySettingsHost(host)
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
 @Test
 func personalDictionaryUsesOneLargeGlassPanelWithAccessibleFilterTabs() throws {
   let repository = URL(fileURLWithPath: #filePath)
@@ -832,20 +938,18 @@ func personalDictionaryUsesOneLargeGlassPanelWithAccessibleFilterTabs() throws {
     encoding: .utf8
   )
 
-  #expect(settingsSource.contains("private var dictionaryPanel: some View"))
-  #expect(settingsSource.contains("private var filterTabs: some View"))
-  #expect(settingsSource.contains(
-    "ForEach(PersonalDictionarySettingsViewModel.Filter.allCases)"
-  ))
-  #expect(settingsSource.contains("Button(filter.rawValue)"))
+  #expect(settingsSource.contains("private var optionsPopover: some View"))
+  #expect(settingsSource.contains("ForEach(PersonalDictionarySettingsViewModel.Filter.allCases)"))
+  #expect(settingsSource.contains("Text(filter.rawValue)"))
   #expect(settingsSource.contains("if filter == viewModel.filter"))
-  #expect(settingsSource.contains(".accessibilityLabel(\"Personal dictionary filter\")"))
-  #expect(settingsSource.contains(".frame(maxWidth: .infinity, minHeight: 280"))
-  #expect(!settingsSource.contains("shape.fill(.quaternary.opacity(0.28))"))
-  #expect(!settingsSource.contains(#"Picker("Show""#))
-  #expect(settingsSource.contains("Label(\"Reload\", systemImage: \"arrow.clockwise\")"))
-  #expect(settingsSource.contains(#"Picker("Sort""#))
-  #expect(settingsSource.contains("DisclosureGroup(\"Transfer\")"))
+  #expect(settingsSource.contains(".popover(isPresented: optionsPresentation"))
+  #expect(settingsSource.contains(".frame(maxWidth: .infinity, minHeight: 48"))
+  #expect(settingsSource.contains("Divider().padding(.leading, 12)"))
+  #expect(!settingsSource.contains(".frame(maxWidth: .infinity, minHeight: 280"))
+  #expect(!settingsSource.contains("private var dictionaryPanel: some View"))
+  #expect(!settingsSource.contains("private var filterTabs: some View"))
+  #expect(settingsSource.contains("Text(\"Transfer\")"))
+  #expect(!settingsSource.contains("DisclosureGroup(\"Transfer\""))
 }
 
 @Test
@@ -937,4 +1041,86 @@ private func settingsUUID(_ number: UInt8) -> UUID {
 private func temporarySettingsDictionaryRoot() -> URL {
   FileManager.default.temporaryDirectory
     .appendingPathComponent("FleckSettingsTests-\(UUID().uuidString)", isDirectory: true)
+}
+
+@MainActor
+private func personalDictionarySettingsView(
+  withAccessibilityIdentifier identifier: String,
+  in view: NSView
+) -> NSView? {
+  if view.accessibilityIdentifier() == identifier {
+    return view
+  }
+  for subview in view.subviews {
+    if let match = personalDictionarySettingsView(
+      withAccessibilityIdentifier: identifier,
+      in: subview
+    ) {
+      return match
+    }
+  }
+  return nil
+}
+
+@MainActor
+private func personalDictionarySettingsTableView(in view: NSView) -> NSTableView? {
+  if let tableView = view as? NSTableView {
+    return tableView
+  }
+  for subview in view.subviews {
+    if let tableView = personalDictionarySettingsTableView(in: subview) {
+      return tableView
+    }
+  }
+  return nil
+}
+
+@MainActor
+private func personalDictionarySettingsFieldIsFocused(
+  _ field: NSTextField,
+  in window: NSWindow
+) -> Bool {
+  if window.firstResponder === field { return true }
+  guard let fieldEditor = field.currentEditor() else { return false }
+  return window.firstResponder === fieldEditor
+}
+
+@MainActor
+private func personalDictionaryCommandFEvent(for window: NSWindow) -> NSEvent? {
+  NSEvent.keyEvent(
+    with: .keyDown,
+    location: .zero,
+    modifierFlags: [.command],
+    timestamp: ProcessInfo.processInfo.systemUptime,
+    windowNumber: window.windowNumber,
+    context: nil,
+    characters: "f",
+    charactersIgnoringModifiers: "f",
+    isARepeat: false,
+    keyCode: 3
+  )
+}
+
+@MainActor
+private func personalDictionaryEscapeEvent(for window: NSWindow) -> NSEvent? {
+  NSEvent.keyEvent(
+    with: .keyDown,
+    location: .zero,
+    modifierFlags: [],
+    timestamp: ProcessInfo.processInfo.systemUptime,
+    windowNumber: window.windowNumber,
+    context: nil,
+    characters: "\u{1b}",
+    charactersIgnoringModifiers: "\u{1b}",
+    isARepeat: false,
+    keyCode: 53
+  )
+}
+
+@MainActor
+private func settlePersonalDictionarySettingsHost(_ view: NSView) async {
+  for _ in 0..<40 {
+    view.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
 }

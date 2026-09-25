@@ -68,13 +68,19 @@ struct AgentPresentationTests {
     #expect(settings.contains("appState.addAgentProfile(named: integration.displayName)"))
     #expect(settings.contains("Connected Profiles"))
     #expect(settings.contains("Set up a local integration"))
-    #expect(settings.contains("DisclosureGroup(\"Activity\")"))
+    #expect(
+      settings.contains(
+        "DisclosureGroup(\"Activity\", isExpanded: $isActivityExpanded)"
+      ))
     #expect(settings.contains("Show agent update banners"))
     #expect(settings.contains("appState.preferences.showAgentUpdateBanners"))
     #expect(settings.contains("banners for future agent changes"))
     #expect(settings.contains("does not replay earlier changes"))
     #expect(settings.contains("Agent Activity remains available"))
-    #expect(settings.contains("DisclosureGroup(\"Access\")"))
+    #expect(
+      settings.contains(
+        "DisclosureGroup(\"Access\", isExpanded: $isAccessExpanded)"
+      ))
     #expect(!settings.contains("HStack {\n            addButton(\"Add Codex\""))
   }
 
@@ -95,7 +101,28 @@ struct AgentPresentationTests {
     ))
     #expect(settings.contains("SettingsPreferenceRow(integration.displayName"))
     #expect(settings.contains("SettingsPreferenceRow(profile.displayName"))
-    #expect(settings.contains("SettingsPreferenceRow(\n        \"Set up a local integration\""))
+    let setupStart = try #require(settings.range(of: "private var setupInstructions:"))
+    let setupEnd = try #require(
+      settings.range(of: "private func setupStep", range: setupStart.upperBound..<settings.endIndex)
+    )
+    let setup = settings[setupStart.lowerBound..<setupEnd.lowerBound]
+    #expect(setup.contains("VStack(alignment: .leading, spacing: 10)"))
+    #expect(!setup.contains("SettingsPreferenceRow("))
+    #expect(setup.contains("Text(\"Set up a local integration\")"))
+    #expect(setup.contains(".font(.headline)"))
+    #expect(setup.contains("Connect a local tool and grant only the access it needs."))
+    #expect(setup.contains(".font(.caption)"))
+    #expect(setup.contains(".foregroundStyle(.secondary)"))
+    #expect(setup.contains(".fixedSize(horizontal: false, vertical: true)"))
+    #expect(setup.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
+    #expect(setup.contains(".settingsSearchAnchor(.agentsSetup, request: searchRequest)"))
+    #expect(setup.components(separatedBy: "setupStep(").count - 1 == 3)
+    #expect(setup.contains("title: \"Install the local connector\""))
+    #expect(setup.contains("The connector stays on this Mac and opens no network listener."))
+    #expect(setup.contains("title: \"Add an integration\""))
+    #expect(setup.contains("Choose one of the available integrations above."))
+    #expect(setup.contains("title: \"Use the generated local snippet\""))
+    #expect(setup.contains("Copy the snippet and grant only the note capabilities you need."))
   }
 
   @Test func agentConnectorActionDecisionMatchesInstalledStateAndIsDispatched() throws {

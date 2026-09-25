@@ -3,6 +3,28 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.2.0-beta.1] - 2026-09-25
+
+Local development candidate only. This entry is not an accepted or public
+release and makes no model release, model admission, or runtime claim.
+
+### Added
+
+- Added global Settings search across sections and controls, with keyboard navigation and
+  in-context targeting for Dictionary, About metadata, and Agent controls.
+
+### Changed
+
+- Refined Settings and Dictionary presentation, grouping Dictionary filters and transfer actions
+  under Options while keeping search reveal distinct from performing a control action.
+- Retained the native disclosure style and made search targets expand relevant About, Agent, and
+  Privacy disclosures.
+
+### Fixed
+
+- Restored window-scoped Dictionary `⌘F` routing while Vocabulary is selected. The shortcut leaves
+  global Settings search undisturbed and does not present local search over an active modal sheet.
+
 ## [1.1.2-beta.2] - 2026-09-18
 
 First public **Developer Preview** release. This entry is the public preview record for
