@@ -110,6 +110,41 @@ import Testing
   #expect(sidebar.contains("opacity(glassOpacity)"))
 }
 
+@Test func settingsFocusAndGlassOpacityControlUseNeutralAccessibleOutlines() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+  let settingsSource = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+  let themeSource = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/FleckThemeSnapshot.swift"),
+    encoding: .utf8
+  )
+  let sortOption = try #require(
+    settingsSource.components(separatedBy: "private func sortOption(").last?
+      .components(separatedBy: "private var sortControl").first
+  )
+  let opacitySlider = settingsSource.components(separatedBy: "struct SettingsGlassOpacitySlider: View").last ?? ""
+
+  #expect(sortOption.contains(".focusEffectDisabled()"))
+  #expect(sortOption.contains(
+    ".fleckNeutralControlOutline(isFocused: isFocused, cornerRadius: 7)"
+  ))
+  #expect(!sortOption.contains("theme.color(.focusRing)"))
+  #expect(settingsSource.contains("SettingsGlassOpacitySlider(value: preferenceBinding(\\.panelOpacity))"))
+  #expect(themeSource.contains("private struct FleckNeutralControlOutline: ViewModifier"))
+  #expect(themeSource.contains("@Environment(\\.fleckThemeSnapshot) private var theme"))
+  #expect(themeSource.contains("Color.primary.opacity(isHighContrast ? 1 : 0.72)"))
+  #expect(themeSource.contains("lineWidth: isHighContrast ? 2 : 1.5"))
+  #expect(opacitySlider.contains("Slider(value: $value, in: 0.55...1)"))
+  #expect(opacitySlider.contains(".focusEffectDisabled()"))
+  #expect(opacitySlider.contains(".accessibilityLabel(\"Glass opacity\")"))
+  #expect(opacitySlider.contains(".accessibilityValue("))
+  #expect(opacitySlider.contains("Capsule()"))
+  #expect(opacitySlider.contains("Circle()"))
+}
+
 @Test func systemAndExplicitAppearanceResolveIndependentlyFromColorTheme() {
   let light = FleckThemeSnapshot.resolve(
     colorTheme: .oled,
@@ -396,6 +431,74 @@ func settingsContentKeepsOpaquePaletteSurfacesUnderGlassAndAccessibilityOverride
   }
 }
 
+@Test @MainActor
+func settingsGlassOpacitySliderRendersNeutralTrackAcrossAppearancesAndContrast() async throws {
+  let application = NSApplication.shared
+  let previousApplicationAppearance = application.appearance
+  defer { application.appearance = previousApplicationAppearance }
+  let captureDirectory = ProcessInfo.processInfo.environment["FLECK_CONTROL_FOCUS_CAPTURE_DIR"]
+    .map { URL(fileURLWithPath: $0, isDirectory: true) }
+  if let captureDirectory {
+    try FileManager.default.createDirectory(
+      at: captureDirectory,
+      withIntermediateDirectories: true
+    )
+  }
+
+  for (mode, isHighContrast) in [
+    (AppTheme.light, false),
+    (AppTheme.dark, false),
+    (AppTheme.light, true),
+    (AppTheme.dark, true),
+  ] {
+    let theme = FleckThemeSnapshot.resolve(
+      colorTheme: .monochrome,
+      mode: mode,
+      systemAppearance: .light,
+      reduceTransparency: false,
+      increasedContrast: isHighContrast
+    )
+    let windowAppearance: NSAppearance.Name =
+      theme.appearance == .dark ? .darkAqua : .aqua
+    let host = NSHostingView(
+      rootView: SettingsGlassOpacitySlider(value: .constant(0.82))
+        .environment(\.fleckThemeSnapshot, theme)
+        .environment(\.colorScheme, theme.colorScheme)
+        .background(theme.color(.window))
+        .frame(width: 180, height: 36)
+    )
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 180, height: 36),
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false
+    )
+    window.appearance = NSAppearance(named: windowAppearance)
+    window.backgroundColor = theme.nsColor(.window)
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+    for _ in 0..<30 {
+      host.layoutSubtreeIfNeeded()
+      await Task.yield()
+    }
+    let image = try settingsHostedCapture(in: host)
+
+    #expect(settingsNonBackgroundPixelCount(in: image, against: theme.nsColor(.window)) > 40)
+
+    if let captureDirectory {
+      let appearanceName = theme.appearance == .dark ? "dark" : "light"
+      let contrastName = isHighContrast ? "increased" : "standard"
+      let url = captureDirectory
+        .appendingPathComponent("opacity-slider-\(appearanceName)-\(contrastName).png")
+      let png = try #require(image.representation(using: .png, properties: [:]))
+      try png.write(to: url)
+    }
+
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+}
+
 @MainActor
 private func settingsSurfacePixelCount(
   in image: NSBitmapImageRep,
@@ -416,6 +519,55 @@ private func settingsSurfacePixelCount(
         )
       )
       if distance < 0.04 { matches += 1 }
+    }
+  }
+  return matches
+}
+
+@MainActor
+private func settingsHostedCapture<Content: View>(
+  in host: NSHostingView<Content>
+) throws -> NSBitmapImageRep {
+  let scale = host.window?.backingScaleFactor ?? 1
+  let image = try #require(
+    NSBitmapImageRep(
+      bitmapDataPlanes: nil,
+      pixelsWide: Int(host.bounds.width * scale),
+      pixelsHigh: Int(host.bounds.height * scale),
+      bitsPerSample: 8,
+      samplesPerPixel: 4,
+      hasAlpha: true,
+      isPlanar: false,
+      colorSpaceName: .calibratedRGB,
+      bytesPerRow: 0,
+      bitsPerPixel: 0
+    )
+  )
+  image.size = host.bounds.size
+  host.cacheDisplay(in: host.bounds, to: image)
+  return image
+}
+
+@MainActor
+private func settingsNonBackgroundPixelCount(
+  in image: NSBitmapImageRep,
+  against targetColor: NSColor
+) -> Int {
+  guard let target = targetColor.usingColorSpace(.sRGB) else { return 0 }
+  var matches = 0
+  for y in 0..<image.pixelsHigh {
+    for x in 0..<image.pixelsWide {
+      guard let color = image.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+        color.alphaComponent > 0.5
+      else { continue }
+      let distance = max(
+        abs(color.redComponent - target.redComponent),
+        max(
+          abs(color.greenComponent - target.greenComponent),
+          abs(color.blueComponent - target.blueComponent)
+        )
+      )
+      if distance > 0.12 { matches += 1 }
     }
   }
   return matches

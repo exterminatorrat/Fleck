@@ -601,6 +601,69 @@
     }
   }
 
+  struct SettingsGlassOpacitySlider: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
+    @Environment(\.isEnabled) private var isEnabled
+    @FocusState private var isFocused: Bool
+    @Binding var value: Double
+
+    var body: some View {
+      Slider(value: $value, in: 0.55...1) {
+        Text("Glass opacity")
+      }
+      .labelsHidden()
+      .tint(.clear)
+      .focused($isFocused)
+      .focusEffectDisabled()
+      .overlay {
+        GeometryReader { geometry in
+          let isHighContrast = theme.increasedContrast
+          let enabledOpacity = isEnabled ? 1.0 : 0.45
+          let fraction = CGFloat(min(max((value - 0.55) / 0.45, 0), 1))
+          let trackInset: CGFloat = 8
+          let trackWidth = max(geometry.size.width - trackInset * 2, 0)
+          let trackHeight: CGFloat = isHighContrast ? 4 : 3
+
+          ZStack {
+            Capsule()
+              .fill(Color.primary.opacity((isHighContrast ? 0.5 : 0.32) * enabledOpacity))
+              .frame(width: trackWidth, height: trackHeight)
+              .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+            Capsule()
+              .fill(Color.primary.opacity((isHighContrast ? 1 : 0.76) * enabledOpacity))
+              .frame(width: trackWidth * fraction, height: trackHeight)
+              .position(
+                x: trackInset + trackWidth * fraction / 2,
+                y: geometry.size.height / 2
+              )
+            Circle()
+              .fill(theme.color(.raised).opacity(enabledOpacity))
+              .overlay {
+                Circle()
+                  .strokeBorder(
+                    Color.primary.opacity(
+                      (isFocused || isHighContrast ? 1 : 0.55) * enabledOpacity
+                    ),
+                    lineWidth: isFocused || isHighContrast ? 2 : 1
+                  )
+              }
+              .frame(width: 16, height: 16)
+              .position(
+                x: trackInset + trackWidth * fraction,
+                y: geometry.size.height / 2
+              )
+          }
+          .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+      }
+      .accessibilityLabel("Glass opacity")
+      .accessibilityValue(value.formatted(.percent.precision(.fractionLength(0))))
+      .frame(width: 150)
+    }
+  }
+
   struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.fleckThemeSnapshot) private var theme
@@ -652,15 +715,10 @@
               onFocusChange: { isSettingsSearchFieldFocused = $0 }
             )
             .frame(height: 28)
-            .overlay {
-              if isSettingsSearchFieldFocused {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                  .strokeBorder(Color.primary.opacity(0.72), lineWidth: 1.5)
-                  .padding(1)
-                  .allowsHitTesting(false)
-                  .accessibilityHidden(true)
-              }
-            }
+            .fleckNeutralControlOutline(
+              isFocused: isSettingsSearchFieldFocused,
+              cornerRadius: 7
+            )
             if isSearching {
               SettingsSearchResultsView(
                 results: searchResults,
@@ -916,12 +974,8 @@
           "Glass opacity",
           detail: "Adjust how much of the window shows through when Glass is selected."
         ) {
-          Slider(value: preferenceBinding(\.panelOpacity), in: 0.55...1) {
-            Text("Glass opacity")
-          }
-          .labelsHidden()
-          .frame(width: 150)
-          .disabled(appState.preferences.chromeAppearance == .solid)
+          SettingsGlassOpacitySlider(value: preferenceBinding(\.panelOpacity))
+            .disabled(appState.preferences.chromeAppearance == .solid)
         }
         .settingsSearchAnchor(.appearanceGlassOpacity, request: searchRequest)
 
@@ -1768,14 +1822,7 @@
             .fill(Color(nsColor: .unemphasizedSelectedContentBackgroundColor))
         }
       }
-      .overlay {
-        if isSearchTriggerFocused {
-          RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .strokeBorder(Color.primary.opacity(0.72), lineWidth: 1.5)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-        }
-      }
+      .fleckNeutralControlOutline(isFocused: isSearchTriggerFocused, cornerRadius: 7)
       .disabled(hasModalPresentation)
       .help("Search vocabulary (⌘F)")
       .accessibilityLabel("Search vocabulary")
@@ -1962,6 +2009,7 @@
         .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
       }
       .buttonStyle(.plain)
+      .focusEffectDisabled()
       .padding(.horizontal, 8)
       .padding(.vertical, 5)
       .background {
@@ -1972,12 +2020,7 @@
               : isHovered || isFocused ? theme.color(.hoverFill) : Color.clear
           )
       }
-      .overlay {
-        if isFocused {
-          RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .strokeBorder(theme.color(.focusRing), lineWidth: 1)
-        }
-      }
+      .fleckNeutralControlOutline(isFocused: isFocused, cornerRadius: 7)
       .onHover { isHovering in
         if isHovering {
           hoveredSortOrder = order

@@ -104,6 +104,16 @@ import Testing
   #expect(!notes.contains("TabColorOption"))
 }
 
+@Test func hexColorFieldUsesNeutralKeyboardFocusStyling() throws {
+  let picker = try fleckSource("Sources/FleckApp/FleckColorPicker.swift")
+
+  #expect(picker.contains(".textFieldStyle(.plain)"))
+  #expect(picker.contains(".focusEffectDisabled()"))
+  #expect(picker.contains(".fleckNeutralControlOutline("))
+  #expect(picker.contains("isFocused: isHexFocused"))
+  #expect(!picker.contains(".textFieldStyle(.roundedBorder)"))
+}
+
 @Test func tabColorTriggerAnnouncesTheCurrentNoteColor() throws {
   let source = try fleckSource("Sources/FleckApp/NotesPanel.swift")
   let trigger = try #require(source.components(separatedBy: "Button(\"Tab Color...\"").dropFirst().first)

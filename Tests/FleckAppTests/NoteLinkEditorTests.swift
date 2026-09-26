@@ -5,6 +5,25 @@ import Testing
 
 @testable import FleckApp
 
+@Test
+func noteLinkPickerFieldUsesNeutralKeyboardFocusStyling() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let picker = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/NoteLinkPicker.swift"),
+    encoding: .utf8
+  )
+
+  #expect(picker.contains(".textFieldStyle(.plain)"))
+  #expect(picker.contains(".focusEffectDisabled()"))
+  #expect(picker.contains(".fleckNeutralControlOutline("))
+  #expect(picker.contains("isFocused: isQueryFocused"))
+  #expect(picker.contains("idleOpacity: 0.22"))
+  #expect(!picker.contains(".textFieldStyle(.roundedBorder)"))
+}
+
 @Test @MainActor func editorBodyLinkCaretAndSelectionInkFollowCanvasAcrossInverseAppearances() throws {
   let target = UUID()
   let token = NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)

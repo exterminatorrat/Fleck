@@ -414,8 +414,14 @@
               .foregroundStyle(.secondary)
               .accessibilityHidden(true)
             TextField("Link to note", text: $controller.query)
-              .textFieldStyle(.roundedBorder)
+              .textFieldStyle(.plain)
+              .focusEffectDisabled()
               .focused($isQueryFocused)
+              .fleckNeutralControlOutline(
+                isFocused: isQueryFocused,
+                cornerRadius: 6,
+                idleOpacity: 0.22
+              )
               .accessibilityLabel("Link to note")
               .onKeyPress(.upArrow) {
                 controller.moveHighlight(.up)

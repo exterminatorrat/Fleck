@@ -661,8 +661,14 @@
               .foregroundStyle(.secondary)
               .accessibilityHidden(true)
             TextField("Search notes", text: $controller.query)
-              .textFieldStyle(.roundedBorder)
+              .textFieldStyle(.plain)
+              .focusEffectDisabled()
               .focused($isQueryFocused)
+              .fleckNeutralControlOutline(
+                isFocused: isQueryFocused,
+                cornerRadius: 6,
+                idleOpacity: 0.22
+              )
               .accessibilityLabel("Search notes")
               .accessibilityHint("Search note titles and bodies")
               .onKeyPress(.upArrow) {

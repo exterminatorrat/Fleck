@@ -70,6 +70,25 @@ func WorkspaceSearchHostingUsesNoMatchedGeometryWiring() throws {
   #expect(!searchView.contains("matchedGeometryEffect"))
 }
 
+@Test
+func WorkspaceSearchFieldUsesNeutralKeyboardFocusStyling() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let searchView = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/WorkspaceSearchView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(searchView.contains(".textFieldStyle(.plain)"))
+  #expect(searchView.contains(".focusEffectDisabled()"))
+  #expect(searchView.contains(".fleckNeutralControlOutline("))
+  #expect(searchView.contains("isFocused: isQueryFocused"))
+  #expect(searchView.contains("idleOpacity: 0.22"))
+  #expect(!searchView.contains(".textFieldStyle(.roundedBorder)"))
+}
+
 @Test @MainActor
 func WorkspaceSearchSelectedResultUsesPalettePairedTextAcrossThemes() async throws {
   let application = NSApplication.shared

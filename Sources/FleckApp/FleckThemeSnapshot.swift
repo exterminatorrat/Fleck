@@ -79,6 +79,38 @@
     }
   }
 
+  private struct FleckNeutralControlOutline: ViewModifier {
+    @Environment(\.fleckThemeSnapshot) private var theme
+    let isFocused: Bool
+    let cornerRadius: CGFloat
+    let idleOpacity: Double
+
+    func body(content: Content) -> some View {
+      let isHighContrast = theme.increasedContrast
+      return content.overlay {
+        if isFocused {
+          RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .strokeBorder(
+              Color.primary.opacity(isHighContrast ? 1 : 0.72),
+              lineWidth: isHighContrast ? 2 : 1.5
+            )
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        } else if idleOpacity > 0 {
+          RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .strokeBorder(
+              Color.primary.opacity(
+                isHighContrast ? max(idleOpacity, 0.4) : idleOpacity
+              ),
+              lineWidth: 1
+            )
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+      }
+    }
+  }
+
   @MainActor
   final class FleckThemeSystemObserver {
     private let didChange: @MainActor () -> Void
@@ -143,6 +175,20 @@
   }
 
   extension View {
+    func fleckNeutralControlOutline(
+      isFocused: Bool,
+      cornerRadius: CGFloat,
+      idleOpacity: Double = 0
+    ) -> some View {
+      modifier(
+        FleckNeutralControlOutline(
+          isFocused: isFocused,
+          cornerRadius: cornerRadius,
+          idleOpacity: idleOpacity
+        )
+      )
+    }
+
     func fleckTheme(_ appState: AppState) -> some View {
       environment(\.fleckThemeSnapshot, appState.themeSnapshot)
         .environment(\.colorScheme, appState.themeSnapshot.colorScheme)

@@ -279,6 +279,7 @@
     let onCommit: (String?) -> Void
     let onCancel: () -> Void
     @State private var draft: FleckColorDraft
+    @FocusState private var isHexFocused: Bool
 
     init(
       currentHex: String?,
@@ -376,7 +377,14 @@
             set: { draft.setHex($0) }
           )
         )
-        .textFieldStyle(.roundedBorder)
+        .textFieldStyle(.plain)
+        .focusEffectDisabled()
+        .focused($isHexFocused)
+        .fleckNeutralControlOutline(
+          isFocused: isHexFocused,
+          cornerRadius: 6,
+          idleOpacity: 0.22
+        )
         .accessibilityLabel("Hex color")
         .accessibilityHint("Enter a six-digit #RRGGBB value.")
         .accessibilityValue(draft.isHexInvalid ? "Invalid" : draft.hexText)
