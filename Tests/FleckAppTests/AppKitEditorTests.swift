@@ -4833,7 +4833,7 @@ private func withHostedTitleEditors(
   #expect(rowLabelBody.contains(".overlay"))
   #expect(
     rowLabelBody.contains(
-      ".strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1)"
+      ".strokeBorder(Color.primary, lineWidth: 1)"
     )
   )
 }
@@ -4954,9 +4954,10 @@ private func withHostedTitleEditors(
   #expect(window.makeFirstResponder(unfiledControl))
   await settleHostedView(host)
 
-  let before = try hostedNavigatorAccentGeometry(
+  let folderRowFrame = try #require(hostedSchoolFolderFrame(in: host))
+  let before = try hostedNeutralFocusOutlinePixelCount(
     in: host,
-    accentHex: "#00FF00"
+    rowFrame: folderRowFrame
   )
   try sendHostedKeyDown(
     String(UnicodeScalar(NSDownArrowFunctionKey)!),
@@ -4964,12 +4965,15 @@ private func withHostedTitleEditors(
     to: window
   )
   await settleHostedView(host)
-  let after = try hostedNavigatorAccentGeometry(
+  let focusedFolderRowFrame = try #require(hostedSchoolFolderFrame(in: host))
+  #expect(focusedFolderRowFrame == folderRowFrame)
+  let after = try hostedNeutralFocusOutlinePixelCount(
     in: host,
-    accentHex: "#00FF00"
+    rowFrame: focusedFolderRowFrame
   )
 
-  #expect(after.pixelCount > before.pixelCount)
+  #expect(after > before, "keyboard focus should render a neutral outline on the folder row")
+  #expect(state.workspace.selectedNoteID == note.id)
 
   try sendHostedKeyDown("\r", keyCode: 36, to: window)
   await settleHostedView(host)
@@ -5016,19 +5020,67 @@ private func hostedFolderSelectionGeometry(
 }
 
 @MainActor
-private func hostedNavigatorAccentGeometry(
+private func hostedNeutralFocusOutlinePixelCount(
   in host: NSHostingView<AnyView>,
-  accentHex: String
-) throws -> HostedAccentPillGeometry {
+  rowFrame: CGRect
+) throws -> Int {
   let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
   host.cacheDisplay(in: host.bounds, to: imageRep)
-  return try #require(
-    hostedAccentFillBounds(
-      in: imageRep,
-      hostSize: host.bounds.size,
-      accentHex: accentHex
-    )
+
+  let scaleX = CGFloat(imageRep.pixelsWide) / host.bounds.width
+  let scaleY = CGFloat(imageRep.pixelsHigh) / host.bounds.height
+  let cornerInset: CGFloat = 8
+  let borderBand: CGFloat = 2
+  let horizontalStart = max(0, Int(floor((rowFrame.minX + cornerInset) * scaleX)))
+  let horizontalEnd = min(
+    imageRep.pixelsWide,
+    Int(ceil((rowFrame.maxX - cornerInset) * scaleX))
   )
+  let verticalStart = max(0, Int(floor((rowFrame.minY + cornerInset) * scaleY)))
+  let verticalEnd = min(
+    imageRep.pixelsHigh,
+    Int(ceil((rowFrame.maxY - cornerInset) * scaleY))
+  )
+  let topStart = max(0, Int(floor(rowFrame.minY * scaleY)))
+  let topEnd = min(imageRep.pixelsHigh, Int(ceil((rowFrame.minY + borderBand) * scaleY)))
+  let bottomStart = max(
+    0,
+    Int(floor((rowFrame.maxY - borderBand) * scaleY))
+  )
+  let bottomEnd = min(imageRep.pixelsHigh, Int(ceil(rowFrame.maxY * scaleY)))
+  let leftStart = max(0, Int(floor(rowFrame.minX * scaleX)))
+  let leftEnd = min(imageRep.pixelsWide, Int(ceil((rowFrame.minX + borderBand) * scaleX)))
+  let rightStart = max(
+    0,
+    Int(floor((rowFrame.maxX - borderBand) * scaleX))
+  )
+  let rightEnd = min(imageRep.pixelsWide, Int(ceil(rowFrame.maxX * scaleX)))
+  let borderBands = [
+    (horizontalStart..<horizontalEnd, topStart..<topEnd),
+    (horizontalStart..<horizontalEnd, bottomStart..<bottomEnd),
+    (leftStart..<leftEnd, verticalStart..<verticalEnd),
+    (rightStart..<rightEnd, verticalStart..<verticalEnd),
+  ]
+
+  var matchCount = 0
+  for (xs, ys) in borderBands where !xs.isEmpty && !ys.isEmpty {
+    for y in ys {
+      for x in xs {
+        guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+        else { continue }
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        let minimum = min(red, min(green, blue))
+        let maximum = max(red, max(green, blue))
+        guard alpha > 0.5, minimum > 0.5, maximum - minimum < 0.12 else { continue }
+        matchCount += 1
+      }
+    }
+  }
+  return matchCount
 }
 
 @Test @MainActor func hostedNotesPanelEvacuatesTitleFocusWithoutRestoringBody() async throws {
