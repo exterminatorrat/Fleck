@@ -64,12 +64,14 @@ import Testing
 
   #expect(titleArea.contains("AgentActivityIndicator("))
   #expect(activityIndicator[mark.upperBound...].contains("Image(nsImage: mark)"))
+  #expect(!activityIndicator.contains("MCP"))
   #expect(activityIndicator.contains("case .missingPackagedResource:"))
   #expect(activityIndicator.contains("Text(\"!\")"))
   #expect(activityIndicator.contains(".foregroundStyle(theme.color(.error))"))
   #expect(!activityIndicator.contains(".foregroundStyle(.red)"))
   #expect(!titleArea.contains("Text(\"Fleck\")"))
   #expect(!titleArea.contains(".accessibilityLabel(\"Fleck\")"))
+  #expect(activityIndicator.contains("Button(action: action)"))
   #expect(activityIndicator.contains(".accessibilityLabel(presentation.state.accessibilityLabel)"))
   #expect(activityIndicator.contains(".accessibilityHint(\"Open Agent Activity\")"))
 }

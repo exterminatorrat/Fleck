@@ -243,14 +243,10 @@ private func requiredIndicatorContentWidth() -> CGFloat {
       switch FleckMark.load(template: true) {
       case .image(let mark):
         Image(nsImage: mark)
-          .resizable()
           .frame(width: 18, height: 18)
       case .missingPackagedResource:
         Text("!")
       }
-      Text("MCP")
-        .font(.caption2.weight(.semibold))
-        .fixedSize(horizontal: true, vertical: false)
       Image(systemName: "checkmark.circle.fill")
         .font(.system(size: 7, weight: .semibold))
         .frame(width: 9, height: 9)

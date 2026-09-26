@@ -148,23 +148,18 @@
           switch FleckMark.load(template: true) {
           case .image(let mark):
             Image(nsImage: mark)
-              .resizable()
               .frame(width: 18, height: 18)
           case .missingPackagedResource:
             Text("!")
               .foregroundStyle(theme.color(.error))
           }
-          Text("MCP")
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(theme.color(.caption))
-            .fixedSize(horizontal: true, vertical: false)
           Image(systemName: presentation.state.statusSymbol ?? "circle.fill")
             .font(.system(size: 7, weight: .semibold))
             .foregroundStyle(presentation.state.statusColor(in: theme))
             .opacity(presentation.state.statusSymbol == nil ? 0 : 1)
             .frame(width: 9, height: 9)
         }
-        .frame(width: 64, height: 22, alignment: .leading)
+        .frame(width: 32, height: 22, alignment: .leading)
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
