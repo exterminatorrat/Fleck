@@ -5567,6 +5567,7 @@
       wantsLayer = true
       if selectionHighlightLayer.superlayer == nil {
         selectionHighlightLayer.isHidden = true
+        selectionHighlightLayer.zPosition = -1
         layer?.insertSublayer(selectionHighlightLayer, at: 0)
       }
       let changed = selectedID != noteID
