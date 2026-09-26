@@ -1,8 +1,9 @@
-<p align="center">
-  <img src="Assets/fleck-mark.png" alt="Fleck mark" width="96">
-</p>
-
-<h1 align="center">Fleck</h1>
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="Assets/Brand/fleck-lockup-white.png">
+    <img src="Assets/Brand/fleck-lockup-black.png" alt="Fleck Fragment logo" width="240">
+  </picture>
+</h1>
 
 <p align="center">A native, local-first macOS notes workspace for quick capture, focused editing, on-device dictation, and explicitly granted local agent access.</p>
 
