@@ -601,9 +601,39 @@
     }
   }
 
+  struct SettingsGlassOpacitySliderMetrics: Equatable {
+    let thumbX: CGFloat
+    let filledTrackMinX: CGFloat
+    let filledTrackWidth: CGFloat
+
+    var filledTrackMidX: CGFloat {
+      filledTrackMinX + filledTrackWidth / 2
+    }
+
+    static func resolve(
+      value: Double,
+      width: CGFloat,
+      trackInset: CGFloat,
+      layoutDirection: LayoutDirection
+    ) -> Self {
+      let fraction = CGFloat(min(max((value - 0.55) / 0.45, 0), 1))
+      let trackWidth = max(width - trackInset * 2, 0)
+      let filledTrackWidth = trackWidth * fraction
+      let trackEndX = trackInset + trackWidth
+      let isRightToLeft = layoutDirection == .rightToLeft
+
+      return Self(
+        thumbX: isRightToLeft ? trackEndX - filledTrackWidth : trackInset + filledTrackWidth,
+        filledTrackMinX: isRightToLeft ? trackEndX - filledTrackWidth : trackInset,
+        filledTrackWidth: filledTrackWidth
+      )
+    }
+  }
+
   struct SettingsGlassOpacitySlider: View {
     @Environment(\.fleckThemeSnapshot) private var theme
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.layoutDirection) private var layoutDirection
     @FocusState private var isFocused: Bool
     @Binding var value: Double
 
@@ -615,14 +645,20 @@
       .tint(.clear)
       .focused($isFocused)
       .focusEffectDisabled()
+      .opacity(0.001)
       .overlay {
         GeometryReader { geometry in
           let isHighContrast = theme.increasedContrast
           let enabledOpacity = isEnabled ? 1.0 : 0.45
-          let fraction = CGFloat(min(max((value - 0.55) / 0.45, 0), 1))
           let trackInset: CGFloat = 8
           let trackWidth = max(geometry.size.width - trackInset * 2, 0)
           let trackHeight: CGFloat = isHighContrast ? 4 : 3
+          let sliderMetrics = SettingsGlassOpacitySliderMetrics.resolve(
+            value: value,
+            width: geometry.size.width,
+            trackInset: trackInset,
+            layoutDirection: layoutDirection
+          )
 
           ZStack {
             Capsule()
@@ -631,9 +667,9 @@
               .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
             Capsule()
               .fill(Color.primary.opacity((isHighContrast ? 1 : 0.76) * enabledOpacity))
-              .frame(width: trackWidth * fraction, height: trackHeight)
+              .frame(width: sliderMetrics.filledTrackWidth, height: trackHeight)
               .position(
-                x: trackInset + trackWidth * fraction / 2,
+                x: sliderMetrics.filledTrackMidX,
                 y: geometry.size.height / 2
               )
             Circle()
@@ -648,13 +684,11 @@
                   )
               }
               .frame(width: 16, height: 16)
-              .position(
-                x: trackInset + trackWidth * fraction,
-                y: geometry.size.height / 2
-              )
+              .position(x: sliderMetrics.thumbX, y: geometry.size.height / 2)
           }
           .frame(width: geometry.size.width, height: geometry.size.height)
         }
+        .environment(\.layoutDirection, .leftToRight)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
       }

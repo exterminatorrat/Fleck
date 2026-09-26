@@ -126,6 +126,7 @@ import Testing
       .components(separatedBy: "private var sortControl").first
   )
   let opacitySlider = settingsSource.components(separatedBy: "struct SettingsGlassOpacitySlider: View").last ?? ""
+  let opacitySliderControl = opacitySlider.components(separatedBy: ".overlay {").first ?? ""
 
   #expect(sortOption.contains(".focusEffectDisabled()"))
   #expect(sortOption.contains(
@@ -139,10 +140,41 @@ import Testing
   #expect(themeSource.contains("lineWidth: isHighContrast ? 2 : 1.5"))
   #expect(opacitySlider.contains("Slider(value: $value, in: 0.55...1)"))
   #expect(opacitySlider.contains(".focusEffectDisabled()"))
+  #expect(opacitySlider.contains("@Environment(\\.layoutDirection) private var layoutDirection"))
+  #expect(opacitySlider.contains("SettingsGlassOpacitySliderMetrics.resolve("))
+  #expect(!opacitySliderControl.contains(".environment(\\.layoutDirection, .leftToRight)"))
+  #expect(opacitySlider.contains(".environment(\\.layoutDirection, .leftToRight)"))
   #expect(opacitySlider.contains(".accessibilityLabel(\"Glass opacity\")"))
   #expect(opacitySlider.contains(".accessibilityValue("))
   #expect(opacitySlider.contains("Capsule()"))
   #expect(opacitySlider.contains("Circle()"))
+}
+
+@Test func settingsGlassOpacitySliderMetricsMirrorNonMidpointFillAndThumb() {
+  let value = 0.7
+  let width: CGFloat = 150
+  let trackInset: CGFloat = 8
+  let leftToRight = SettingsGlassOpacitySliderMetrics.resolve(
+    value: value,
+    width: width,
+    trackInset: trackInset,
+    layoutDirection: .leftToRight
+  )
+  let rightToLeft = SettingsGlassOpacitySliderMetrics.resolve(
+    value: value,
+    width: width,
+    trackInset: trackInset,
+    layoutDirection: .rightToLeft
+  )
+
+  #expect(leftToRight.thumbX < width / 2)
+  #expect(rightToLeft.thumbX > width / 2)
+  #expect(abs(leftToRight.thumbX + rightToLeft.thumbX - width) < 0.001)
+  #expect(abs(leftToRight.thumbX - (leftToRight.filledTrackMinX + leftToRight.filledTrackWidth)) < 0.001)
+  #expect(abs(rightToLeft.thumbX - rightToLeft.filledTrackMinX) < 0.001)
+  #expect(leftToRight.filledTrackMinX == trackInset)
+  #expect(abs(rightToLeft.filledTrackMinX + rightToLeft.filledTrackWidth - (width - trackInset)) < 0.001)
+  #expect(leftToRight.filledTrackWidth == rightToLeft.filledTrackWidth)
 }
 
 @Test func systemAndExplicitAppearanceResolveIndependentlyFromColorTheme() {
@@ -445,11 +477,15 @@ func settingsGlassOpacitySliderRendersNeutralTrackAcrossAppearancesAndContrast()
     )
   }
 
-  for (mode, isHighContrast) in [
-    (AppTheme.light, false),
-    (AppTheme.dark, false),
-    (AppTheme.light, true),
-    (AppTheme.dark, true),
+  for (mode, isHighContrast, layoutDirection) in [
+    (AppTheme.light, false, LayoutDirection.leftToRight),
+    (AppTheme.light, false, .rightToLeft),
+    (AppTheme.dark, false, .leftToRight),
+    (AppTheme.dark, false, .rightToLeft),
+    (AppTheme.light, true, .leftToRight),
+    (AppTheme.light, true, .rightToLeft),
+    (AppTheme.dark, true, .leftToRight),
+    (AppTheme.dark, true, .rightToLeft),
   ] {
     let theme = FleckThemeSnapshot.resolve(
       colorTheme: .monochrome,
@@ -464,6 +500,7 @@ func settingsGlassOpacitySliderRendersNeutralTrackAcrossAppearancesAndContrast()
       rootView: SettingsGlassOpacitySlider(value: .constant(0.82))
         .environment(\.fleckThemeSnapshot, theme)
         .environment(\.colorScheme, theme.colorScheme)
+        .environment(\.layoutDirection, layoutDirection)
         .background(theme.color(.window))
         .frame(width: 180, height: 36)
     )
@@ -482,14 +519,34 @@ func settingsGlassOpacitySliderRendersNeutralTrackAcrossAppearancesAndContrast()
       await Task.yield()
     }
     let image = try settingsHostedCapture(in: host)
+    let sliderMetrics = SettingsGlassOpacitySliderMetrics.resolve(
+      value: 0.82,
+      width: 150,
+      trackInset: 8,
+      layoutDirection: layoutDirection
+    )
+    let scale = CGFloat(image.pixelsWide) / 180
+    let expectedThumbX = (15 + sliderMetrics.thumbX) * scale
+    let thumbCenters = settingsSliderThumbTopCenters(
+      in: image,
+      against: theme.nsColor(.window),
+      containerHeight: 36
+    )
 
     #expect(settingsNonBackgroundPixelCount(in: image, against: theme.nsColor(.window)) > 40)
+    #expect(thumbCenters.count == 1)
+    if let thumbCenter = thumbCenters.first {
+      #expect(abs(thumbCenter - expectedThumbX) <= 2 * scale)
+    }
 
     if let captureDirectory {
       let appearanceName = theme.appearance == .dark ? "dark" : "light"
       let contrastName = isHighContrast ? "increased" : "standard"
+      let directionName = layoutDirection == .rightToLeft ? "rtl" : "ltr"
       let url = captureDirectory
-        .appendingPathComponent("opacity-slider-\(appearanceName)-\(contrastName).png")
+        .appendingPathComponent(
+          "opacity-slider-\(appearanceName)-\(contrastName)-\(directionName).png"
+        )
       let png = try #require(image.representation(using: .png, properties: [:]))
       try png.write(to: url)
     }
@@ -571,4 +628,56 @@ private func settingsNonBackgroundPixelCount(
     }
   }
   return matches
+}
+
+@MainActor
+private func settingsSliderThumbTopCenters(
+  in image: NSBitmapImageRep,
+  against targetColor: NSColor,
+  containerHeight: CGFloat
+) -> [CGFloat] {
+  guard let target = targetColor.usingColorSpace(.sRGB) else { return [] }
+  let scale = CGFloat(image.pixelsHigh) / containerHeight
+  let y = image.pixelsHigh / 2 - Int((8 * scale).rounded())
+  guard (0..<image.pixelsHigh).contains(y) else { return [] }
+
+  var centers: [CGFloat] = []
+  var runStart: Int?
+  var runEnd: Int?
+  let minimumRunWidth = max(2, Int((3 * scale).rounded()))
+
+  func finishRun() {
+    guard let start = runStart, let end = runEnd, end - start + 1 >= minimumRunWidth else {
+      runStart = nil
+      runEnd = nil
+      return
+    }
+    centers.append(CGFloat(start + end) / 2)
+    runStart = nil
+    runEnd = nil
+  }
+
+  for x in 0..<image.pixelsWide {
+    guard let color = image.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+      color.alphaComponent > 0.5
+    else {
+      finishRun()
+      continue
+    }
+    let distance = max(
+      abs(color.redComponent - target.redComponent),
+      max(
+        abs(color.greenComponent - target.greenComponent),
+        abs(color.blueComponent - target.blueComponent)
+      )
+    )
+    if distance > 0.12 {
+      if runStart == nil { runStart = x }
+      runEnd = x
+    } else {
+      finishRun()
+    }
+  }
+  finishRun()
+  return centers
 }
