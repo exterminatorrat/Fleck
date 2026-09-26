@@ -3302,8 +3302,14 @@
       let accent = theme.color(.accent)
       HStack(spacing: 5) {
         TextField(label, text: $folderNameDraft)
-          .textFieldStyle(.roundedBorder)
+          .textFieldStyle(.plain)
+          .focusEffectDisabled()
           .focused($focusedRow, equals: focus)
+          .fleckNeutralControlOutline(
+            isFocused: focusedRow == focus,
+            cornerRadius: 6,
+            idleOpacity: 0.22
+          )
           .onSubmit { commitFolderEditing() }
           .onExitCommand { cancelFolderEditing() }
         Button("Save") { commitFolderEditing() }
@@ -3380,12 +3386,10 @@
       )
       .foregroundStyle(isSelected ? theme.color(.selectionText) : theme.color(.textPrimary))
       .contentShape(RoundedRectangle(cornerRadius: 6))
-      .overlay {
-        if isFocused && !isSelected {
-          RoundedRectangle(cornerRadius: 6)
-            .strokeBorder(theme.color(.focusRing), lineWidth: 1)
-        }
-      }
+      .fleckNeutralControlOutline(
+        isFocused: isFocused && !isSelected,
+        cornerRadius: 6
+      )
       .accessibilityHint(isEmpty ? "Empty folder" : "")
     }
 
@@ -4940,9 +4944,15 @@
 
     private func fontSizeField(targetNoteID: UUID? = nil) -> some View {
       TextField("Font size", text: $fontSizeText)
-        .textFieldStyle(.roundedBorder)
+        .textFieldStyle(.plain)
+        .focusEffectDisabled()
         .frame(width: 48)
         .focused($isFontSizeFocused)
+        .fleckNeutralControlOutline(
+          isFocused: isFontSizeFocused,
+          cornerRadius: 6,
+          idleOpacity: 0.22
+        )
         .onChange(of: isFontSizeFocused) { wasFocused, isFocused in
           if wasFocused && !isFocused { applyFontSizeText(targetNoteID: targetNoteID) }
         }

@@ -83,11 +83,31 @@ struct FolderNavigatorPresentationTests {
 
   @Test func focusedUnselectedFolderRowsUseAdaptiveNeutralOutlines() throws {
     let source = try folderNavigatorSource()
-    #expect(source.contains("if isFocused && !isSelected {"))
-    #expect(source.contains(".strokeBorder(theme.color(.focusRing), lineWidth: 1)"))
+    #expect(source.contains(".fleckNeutralControlOutline("))
+    #expect(source.contains("isFocused: isFocused && !isSelected"))
+    #expect(source.contains("cornerRadius: 6"))
+    #expect(!source.contains(".strokeBorder(theme.color(.focusRing), lineWidth: 1)"))
     #expect(source.contains("? theme.color(.hoverFill)"))
     #expect(source.contains("isSelected ? theme.color(.selectionFill) : .clear"))
     #expect(source.contains(".accessibilityHint(isEmpty ? \"Empty folder\" : \"\")"))
+  }
+
+  @Test func folderRenameFieldUsesNeutralKeyboardFocusStyling() throws {
+    let source = try folderNavigatorSource()
+    let editor = try #require(
+      source.components(separatedBy: "private func folderEditor(").last?
+        .components(separatedBy: "private struct FolderRowFocusPublisher").first
+    )
+
+    #expect(editor.contains(".textFieldStyle(.plain)"))
+    #expect(editor.contains(".focusEffectDisabled()"))
+    #expect(editor.contains(".focused($focusedRow, equals: focus)"))
+    #expect(editor.contains(".fleckNeutralControlOutline("))
+    #expect(editor.contains("isFocused: focusedRow == focus"))
+    #expect(editor.contains("idleOpacity: 0.22"))
+    #expect(!editor.contains(".textFieldStyle(.roundedBorder)"))
+    #expect(editor.contains(".onSubmit { commitFolderEditing() }"))
+    #expect(editor.contains(".onExitCommand { cancelFolderEditing() }"))
   }
 
   @Test(arguments: [
