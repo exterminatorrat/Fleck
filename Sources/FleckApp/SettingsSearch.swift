@@ -35,7 +35,6 @@
 
     case vocabularyAdd
     case vocabularySearch
-    case vocabularyFilter(PersonalDictionarySettingsViewModel.Filter)
     case vocabularySort
     case vocabularyReload
     case vocabularyTransfer
@@ -88,7 +87,6 @@
       case .dictationPrivacy: "dictation-privacy"
       case .vocabularyAdd: "vocabulary-add"
       case .vocabularySearch: "vocabulary-search"
-      case .vocabularyFilter(let filter): "vocabulary-filter-\(filter.rawValue)"
       case .vocabularySort: "vocabulary-sort"
       case .vocabularyReload: "vocabulary-reload"
       case .vocabularyTransfer: "vocabulary-transfer"
@@ -123,8 +121,7 @@
       case .vocabularyTransfer, .vocabularyExportDictionary, .vocabularyExportCSV,
         .vocabularyImportDictionary:
         .vocabularyTransferFooter
-      case .vocabularyAdd, .vocabularySearch, .vocabularyFilter, .vocabularySort,
-        .vocabularyReload:
+      case .vocabularyAdd, .vocabularySearch, .vocabularySort, .vocabularyReload:
         .section(.vocabulary)
       default:
         self
@@ -133,8 +130,8 @@
 
     var usesVocabularyFocusLifecycle: Bool {
       switch self {
-      case .section(.vocabulary), .vocabularyAdd, .vocabularySearch, .vocabularyFilter,
-        .vocabularySort, .vocabularyReload, .vocabularyTransfer,
+      case .section(.vocabulary), .vocabularyAdd, .vocabularySearch, .vocabularySort,
+        .vocabularyReload, .vocabularyTransfer,
         .vocabularyExportDictionary, .vocabularyExportCSV, .vocabularyImportDictionary:
         true
       default:
@@ -362,17 +359,9 @@
       add(.dictationClearHistory, "Clear History", to: .dictation, aliases: ["delete history"])
       add(.dictationPrivacy, DictationSettingsGroup.privacy.rawValue, to: .dictation)
 
-      addSection(.vocabulary)
+      addSection(.vocabulary, aliases: ["suggestions"])
       add(.vocabularyAdd, "Add New", to: .vocabulary, aliases: ["new word phrase correction"])
       add(.vocabularySearch, "Search vocabulary", to: .vocabulary)
-      for filter in PersonalDictionarySettingsViewModel.Filter.allCases {
-        add(
-          .vocabularyFilter(filter),
-          filter.rawValue,
-          to: .vocabulary,
-          aliases: ["vocabulary filter"]
-        )
-      }
       add(
         .vocabularySort,
         "Sort",
@@ -912,16 +901,9 @@
       request?.anchor == target
     }
 
-    private var usesFilterUnderlineFocusStyle: Bool {
-      switch target {
-      case .vocabularyFilter: true
-      default: false
-      }
-    }
-
     private var usesNeutralKeyboardFocus: Bool {
       switch target {
-      case .vocabularySearch, .vocabularyFilter, .vocabularySort, .vocabularyReload,
+      case .vocabularySearch, .vocabularySort, .vocabularyReload,
         .vocabularyTransfer, .vocabularyExportDictionary, .vocabularyExportCSV,
         .vocabularyImportDictionary:
         true
@@ -946,13 +928,7 @@
           }
         }
         .overlay(alignment: .bottom) {
-          if usesFilterUnderlineFocusStyle && (isRevealed || isKeyboardFocused || isFocused) {
-            Rectangle()
-              .fill(Color.primary)
-              .frame(height: 3)
-              .allowsHitTesting(false)
-              .accessibilityHidden(true)
-          } else if isRevealed {
+          if isRevealed {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
               .strokeBorder(
                 Color.primary.opacity(0.72),
@@ -968,7 +944,7 @@
           }
         }
         .overlay(alignment: .topTrailing) {
-          if isRevealed && !usesFilterUnderlineFocusStyle {
+          if isRevealed {
             Image(systemName: "scope")
               .padding(4)
               .background(.regularMaterial, in: Circle())

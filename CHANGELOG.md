@@ -3,6 +3,18 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.2.4-beta.1] - 2026-09-26
+
+Private local QA candidate only; this change is not an accepted build or public release. It adds no
+automatic suggestion generation and makes no model or runtime claim.
+
+### Changed
+
+- Removed the permanent All, Enabled, Disabled, and Suggestions tabs. Moved search, sort, and
+  reload into the Dictionary header beside Add new. Show Review suggestions (N) only when a
+  suggestions queue exists, and Back to words while that queue is active. Retained the real enable
+  switch, Disabled label, and imported-suggestions flow.
+
 ## [1.2.3-beta.1] - 2026-09-25
 
 Private local QA candidate only; this change is not an accepted build or public release. It makes

@@ -7,7 +7,7 @@ import Testing
 @testable import FleckApp
 
 @Test @MainActor
-func personalDictionarySettingsLoadsAndFiltersEntriesAndSuggestionsInStableOrder() async throws {
+func personalDictionarySettingsLoadsAllEntriesAndSuggestionsInStableOrder() async throws {
   let root = temporarySettingsDictionaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
   let store = PersonalDictionaryStore(rootURL: root)
@@ -22,13 +22,12 @@ func personalDictionarySettingsLoadsAndFiltersEntriesAndSuggestionsInStableOrder
   #expect(viewModel.revision == 4)
   #expect(viewModel.entries.map(\.id) == [settingsUUID(2), settingsUUID(1), settingsUUID(3)])
   #expect(viewModel.suggestions.map(\.preferredForm) == ["Beta"])
-  #expect(viewModel.visibleEntries.count == 3)
+  #expect(
+    viewModel.visibleEntries.map(\.id) == [settingsUUID(2), settingsUUID(1), settingsUUID(3)]
+  )
+  #expect(viewModel.visibleEntries.map(\.isEnabled) == [false, true, true])
   #expect(viewModel.visibleSuggestions.isEmpty)
 
-  viewModel.filter = .disabled
-  #expect(viewModel.visibleEntries.map(\.preferredForm) == ["Alpha"])
-
-  viewModel.filter = .all
   viewModel.query = "FIRST TERM"
   #expect(viewModel.visibleEntries.map(\.preferredForm) == ["alpha"])
 
@@ -37,6 +36,40 @@ func personalDictionarySettingsLoadsAndFiltersEntriesAndSuggestionsInStableOrder
   #expect(viewModel.visibleEntries.isEmpty)
   #expect(viewModel.visibleSuggestions.map(\.preferredForm) == ["Beta"])
   #expect(viewModel.errorMessage == nil)
+}
+
+@Test @MainActor
+func personalDictionarySuggestionHeaderActionTracksQueueAndKeepsAnExitAfterDismissal() async throws {
+  let root = temporarySettingsDictionaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = PersonalDictionaryStore(rootURL: root)
+  let firstSuggestion = settingsSuggestion(1, "First suggestion")
+  let lastSuggestion = settingsSuggestion(2, "Last suggestion")
+  try await store.recordSuggestion(firstSuggestion)
+  try await store.recordSuggestion(lastSuggestion)
+  let viewModel = PersonalDictionarySettingsViewModel(store: store)
+
+  #expect(viewModel.suggestionsHeaderActionTitle == nil)
+  await viewModel.load()
+  #expect(viewModel.suggestionsHeaderActionTitle == "Review suggestions (2)")
+
+  await viewModel.dismissSuggestion(
+    id: firstSuggestion.id,
+    expectedRevision: viewModel.revision
+  )
+  #expect(viewModel.suggestionsHeaderActionTitle == "Review suggestions (1)")
+
+  viewModel.filter = .suggestions
+  #expect(viewModel.suggestionsHeaderActionTitle == "Back to words")
+  await viewModel.dismissSuggestion(
+    id: lastSuggestion.id,
+    expectedRevision: viewModel.revision
+  )
+  #expect(viewModel.suggestions.isEmpty)
+  #expect(viewModel.suggestionsHeaderActionTitle == "Back to words")
+
+  viewModel.filter = .all
+  #expect(viewModel.suggestionsHeaderActionTitle == nil)
 }
 
 @Test @MainActor
@@ -808,7 +841,7 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
   #expect(settingsSource.contains("Image(systemName: \"xmark\")"))
   #expect(!settingsSource.contains(".searchable("))
   #expect(settingsSource.contains("private var optionsPopover: some View"))
-  #expect(settingsSource.contains("ForEach(PersonalDictionarySettingsViewModel.Filter.allCases)"))
+  #expect(settingsSource.contains("viewModel.suggestionsHeaderActionTitle"))
   #expect(settingsSource.contains("private var transferFooter: some View"))
   #expect(settingsSource.contains("Button(\"Approve\""))
   #expect(settingsSource.contains("Button(\"Edit and Approve\""))
@@ -917,7 +950,7 @@ func personalDictionaryVocabularySearchUsesFixedCustomOverlayAndAccessibleDismis
   #expect(!optionsSource.contains("reloadControl"))
   #expect(optionsSource.contains("settingsSearchAnchor(.vocabularyTransfer"))
   #expect(optionsSource.contains("presentAfterClosingOptions"))
-  #expect(settingsSource.contains(".settingsSearchAnchor(.vocabularyFilter(filter), request: visibleSearchRequest)"))
+  #expect(!settingsSource.contains("vocabularyFilter"))
   #expect(settingsSource.contains("private var optionsPresentation: Binding<Bool>"))
   #expect(settingsSource.contains("private func optionsPopoverDidDisappear()"))
 }
@@ -960,9 +993,9 @@ func personalDictionaryFocusIsNeutralAndKeepsControlsKeyboardAccessible() throws
   #expect(searchSource.contains("onFocusChange(true)"))
   #expect(searchSource.contains(".focusEffectDisabled(usesNeutralKeyboardFocus)"))
   #expect(searchSource.contains("Color.primary.opacity(0.72)"))
-  #expect(searchSource.contains("usesFilterUnderlineFocusStyle"))
   #expect(searchSource.contains(".overlay(alignment: .bottom)"))
-  #expect(searchSource.contains("isRevealed || isKeyboardFocused || isFocused"))
+  #expect(!searchSource.contains("vocabularyFilter"))
+  #expect(!searchSource.contains("usesFilterUnderlineFocusStyle"))
   #expect(settingsSource.contains(".focused($focusedAction"))
   #expect(
     settingsSource.contains(
@@ -977,9 +1010,8 @@ func personalDictionaryFocusIsNeutralAndKeepsControlsKeyboardAccessible() throws
   #expect(settingsSource.contains(": \"Star \\(entry.preferredForm)\""))
   #expect(settingsSource.contains(".accessibilityHidden(true)"))
   #expect(settingsSource.contains(".accessibilityLabel(\"Edit \\(entry.preferredForm)\")"))
-  #expect(settingsSource.contains("accessibilityLabel(\"Personal dictionary filter\")"))
-  #expect(settingsSource.contains("background(alignment: .bottom)"))
-  #expect(settingsSource.contains(".fill(Color.primary.opacity(0.72))"))
+  #expect(settingsSource.contains("suggestionsHeaderActionTitle"))
+  #expect(!settingsSource.contains("Personal dictionary filter"))
   #expect(!settingsSource.contains("Color.accentColor.opacity(0.12)"))
 }
 
@@ -1086,7 +1118,7 @@ func personalDictionaryCommandFRoutesFromSidebarAndContentWithoutBreakingSearchO
 }
 
 @Test
-func personalDictionaryUsesOneLargeGlassPanelWithAccessibleFilterTabs() throws {
+func personalDictionaryUsesACompactHeaderAndRetainsSuggestionReviewSurfaces() throws {
   let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
@@ -1096,10 +1128,29 @@ func personalDictionaryUsesOneLargeGlassPanelWithAccessibleFilterTabs() throws {
     encoding: .utf8
   )
 
-  #expect(settingsSource.contains("private var optionsPopover: some View"))
-  #expect(settingsSource.contains("private var dictionaryToolbar: some View"))
-  #expect(settingsSource.contains("ForEach(PersonalDictionarySettingsViewModel.Filter.allCases)"))
-  #expect(settingsSource.contains("Text(filter.rawValue)"))
+  let headerStart = try #require(
+    settingsSource.range(of: "private var dictionaryHeader: some View")
+  )
+  let searchControlStart = try #require(
+    settingsSource.range(
+      of: "private var searchTrigger: some View",
+      range: headerStart.upperBound..<settingsSource.endIndex
+    )
+  )
+  let headerSource = settingsSource[headerStart.lowerBound..<searchControlStart.lowerBound]
+
+  #expect(!settingsSource.contains("private var dictionaryToolbar: some View"))
+  #expect(!settingsSource.contains("ForEach(PersonalDictionarySettingsViewModel.Filter.allCases)"))
+  #expect(headerSource.contains("if let title = viewModel.suggestionsHeaderActionTitle"))
+  #expect(headerSource.contains("Button(title)"))
+  #expect(headerSource.contains(".controlSize(.small)"))
+  #expect(headerSource.contains(".accessibilityLabel(title)"))
+  #expect(headerSource.contains(".accessibilityHint("))
+  #expect(headerSource.contains("searchTrigger"))
+  #expect(headerSource.contains("sortControl"))
+  #expect(headerSource.contains("reloadControl"))
+  #expect(headerSource.contains("Button(\"Add new\")"))
+  #expect(!settingsSource.contains("vocabularyFilter"))
   #expect(settingsSource.contains(".popover(isPresented: optionsPresentation"))
   #expect(settingsSource.contains("Color(nsColor: .controlBackgroundColor)"))
   #expect(settingsSource.contains("RoundedRectangle(cornerRadius: 12, style: .continuous)"))

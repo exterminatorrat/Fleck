@@ -1585,7 +1585,6 @@
     var body: some View {
       VStack(alignment: .leading, spacing: 14) {
         dictionaryHeader
-        dictionaryToolbar
         if isSearchExpanded {
           searchSurface
             .transition(.opacity)
@@ -1763,6 +1762,23 @@
           .background(SettingsPageHeaderProbe())
           .settingsSearchAnchor(.section(.vocabulary), request: visibleSearchRequest)
         Spacer(minLength: 8)
+        if let title = viewModel.suggestionsHeaderActionTitle {
+          Button(title) {
+            viewModel.filter = viewModel.filter == .suggestions ? .all : .suggestions
+          }
+          .font(.footnote.weight(.medium))
+          .buttonStyle(.bordered)
+          .controlSize(.small)
+          .accessibilityLabel(title)
+          .accessibilityHint(
+            viewModel.filter == .suggestions
+              ? "Returns to all dictionary entries"
+              : "Opens the review queue for pending suggestions"
+          )
+        }
+        searchTrigger
+        sortControl
+        reloadControl
         Button("Add new") {
           presentAfterClosingOptions {
             viewModel.beginAddingEntry()
@@ -1775,44 +1791,6 @@
         .settingsSearchAnchor(.vocabularyAdd, request: visibleSearchRequest)
       }
       .frame(maxWidth: .infinity, minHeight: 40)
-    }
-
-    private var dictionaryToolbar: some View {
-      HStack(spacing: 12) {
-        HStack(spacing: 4) {
-          ForEach(PersonalDictionarySettingsViewModel.Filter.allCases) { filter in
-            Button {
-              viewModel.filter = filter
-            } label: {
-              Text(filter.rawValue)
-                .font(.subheadline.weight(filter == viewModel.filter ? .semibold : .regular))
-                .foregroundStyle(filter == viewModel.filter ? .primary : .secondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(alignment: .bottom) {
-                  if filter == viewModel.filter {
-                    Rectangle()
-                      .fill(Color.primary.opacity(0.72))
-                      .frame(height: 2)
-                  }
-                }
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(filter.rawValue) filter")
-            .accessibilityValue(filter == viewModel.filter ? "Selected" : "Available")
-            .accessibilityHint("Shows \(filter.rawValue.lowercased()) vocabulary")
-            .settingsSearchAnchor(.vocabularyFilter(filter), request: visibleSearchRequest)
-          }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Personal dictionary filter")
-        .accessibilityHint("Choose which vocabulary entries are shown")
-        Spacer(minLength: 8)
-        searchTrigger
-        sortControl
-        reloadControl
-      }
-      .frame(maxWidth: .infinity)
     }
 
     private var searchTrigger: some View {
@@ -2198,10 +2176,7 @@
           Text("No entries yet. Use Add new to add a word, phrase, or correction.")
             .foregroundStyle(.secondary)
         } else if !viewModel.query.isEmpty {
-          Text("No matching entries. Clear search or choose another filter.")
-            .foregroundStyle(.secondary)
-        } else if viewModel.filter != .all {
-          Text("No entries match this filter. Choose All or use Add new.")
+          Text("No matching entries. Clear search or use Add new.")
             .foregroundStyle(.secondary)
         }
       }
@@ -2437,7 +2412,7 @@
       case .section(.vocabulary), .vocabularyAdd:
         dismissOptionsForNewPresentation()
         isSearchFocused = false
-      case .vocabularyFilter, .vocabularySort, .vocabularyReload:
+      case .vocabularySort, .vocabularyReload:
         isSearchFocused = false
         dismissOptionsForNewPresentation()
       case .vocabularyTransfer, .vocabularyExportDictionary, .vocabularyExportCSV,

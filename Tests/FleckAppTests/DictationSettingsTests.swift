@@ -1409,7 +1409,12 @@ private func settingsColorDistance(_ lhs: NSColor, _ rhs: NSColor) -> CGFloat {
   #expect(settings.contains(".environment(\\.settingsSearchRequest, searchRequest)"))
   #expect(settings.contains(".settingsSearchAnchor(.appearanceTheme, request: searchRequest)"))
   #expect(settings.contains(".settingsSearchAnchor(.dictationPrivacy, request: searchRequest)"))
-  #expect(settings.contains(".settingsSearchAnchor(.vocabularyFilter(filter), request: visibleSearchRequest)"))
+  #expect(
+    settings.contains(
+      ".settingsSearchAnchor(.section(.vocabulary), request: visibleSearchRequest)"
+    )
+  )
+  #expect(!settings.contains("vocabularyFilter"))
   #expect(settings.contains(".settingsSearchAnchor(.vocabularySort, request: visibleSearchRequest)"))
   #expect(settings.contains(".settingsSearchAnchor(.vocabularyReload, request: visibleSearchRequest)"))
   #expect(settings.contains("settingsSearchAnchor(.vocabularyTransfer, request: optionsSearchRequest)"))

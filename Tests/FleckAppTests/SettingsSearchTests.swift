@@ -95,9 +95,6 @@
             .vocabularyAdd,
             .vocabularySearch,
           ]
-          + PersonalDictionarySettingsViewModel.Filter.allCases.map(
-            SettingsSearchTarget.vocabularyFilter
-          )
           + [
             .vocabularySort,
             .vocabularyReload,
@@ -131,14 +128,11 @@
       #expect(SettingsSearchIndex.catalog.allSatisfy { expected.contains($0.anchor) })
     }
 
-    @Test func vocabularyActionsRemainAvailableInGlobalSettingsSearch() {
+    @Test func vocabularyActionsAndSuggestionsRemainDiscoverableInGlobalSettingsSearch() {
       let queries: [(String, SettingsSearchTarget)] = [
         ("Add New", .vocabularyAdd),
         ("Search vocabulary", .vocabularySearch),
-        ("All", .vocabularyFilter(.all)),
-        ("Enabled", .vocabularyFilter(.enabled)),
-        ("Disabled", .vocabularyFilter(.disabled)),
-        ("Suggestions", .vocabularyFilter(.suggestions)),
+        ("Suggestions", .section(.vocabulary)),
         ("Sort", .vocabularySort),
         ("Reload", .vocabularyReload),
         ("Transfer", .vocabularyTransfer),
@@ -150,6 +144,19 @@
       for (query, target) in queries {
         #expect(SettingsSearchIndex.results(for: query).first?.target == target)
       }
+    }
+
+    @Test func suggestionsSearchUsesTheDictionarySectionInsteadOfADeadFilterTarget() throws {
+      let result = try #require(SettingsSearchIndex.results(for: "suggestions").first)
+
+      #expect(result.target == .section(.vocabulary))
+      #expect(result.anchor == .section(.vocabulary))
+      #expect(result.destination == .vocabulary)
+      #expect(
+        !SettingsSearchIndex.catalog.contains {
+          $0.target.identifier.hasPrefix("vocabulary-filter-")
+        }
+      )
     }
 
     @Test func labelsComeFromTheirAuthoritativeTypes() throws {
@@ -220,12 +227,9 @@
 
     @Test func vocabularyTargetsScrollThePageToTheDictionaryHeader() {
       let vocabularyTargets: [SettingsSearchTarget] = [
+        .section(.vocabulary),
         .vocabularyAdd,
         .vocabularySearch,
-        .vocabularyFilter(.all),
-        .vocabularyFilter(.enabled),
-        .vocabularyFilter(.disabled),
-        .vocabularyFilter(.suggestions),
         .vocabularySort,
         .vocabularyReload,
         .vocabularyTransfer,

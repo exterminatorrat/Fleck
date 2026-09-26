@@ -2374,9 +2374,14 @@ private actor AccessibilitySleepGate {
     contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
     encoding: .utf8
   )
+  let viewModelSource = try String(
+    contentsOf: repository.appendingPathComponent(
+      "Sources/FleckApp/PersonalDictionarySettingsViewModel.swift"
+    ),
+    encoding: .utf8
+  )
 
   for label in [
-    "Personal dictionary filter",
     "Add a new vocabulary word or phrase",
     "Search vocabulary",
     "Clear vocabulary search",
@@ -2392,6 +2397,23 @@ private actor AccessibilitySleepGate {
   ] {
     #expect(settingsSource.contains("accessibilityLabel(\"\(label)\")"))
   }
+  let headerStart = try #require(
+    settingsSource.range(of: "private var dictionaryHeader: some View")
+  )
+  let searchTriggerStart = try #require(
+    settingsSource.range(
+      of: "private var searchTrigger: some View",
+      range: headerStart.upperBound..<settingsSource.endIndex
+    )
+  )
+  let headerSource = settingsSource[headerStart.lowerBound..<searchTriggerStart.lowerBound]
+  #expect(headerSource.contains("if let title = viewModel.suggestionsHeaderActionTitle"))
+  #expect(headerSource.contains("Button(title)"))
+  #expect(headerSource.contains(".accessibilityLabel(title)"))
+  #expect(headerSource.contains("Opens the review queue for pending suggestions"))
+  #expect(headerSource.contains("Returns to all dictionary entries"))
+  #expect(viewModelSource.contains("if filter == .suggestions { return \"Back to words\" }"))
+  #expect(viewModelSource.contains("return \"Review suggestions (\\(suggestions.count))\""))
   #expect(settingsSource.contains("Toggle(\"Use this word in dictation\", isOn: $isEnabled)"))
   #expect(settingsSource.contains(
     ".accessibilityHint(\"Keeps this vocabulary entry active for dictation\")"

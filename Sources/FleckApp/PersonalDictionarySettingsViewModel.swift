@@ -9,13 +9,9 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     PersonalDictionaryMutation
   ) async throws -> PersonalDictionaryPublishedSnapshot
 
-  enum Filter: String, CaseIterable, Identifiable {
-    case all = "All"
-    case enabled = "Enabled"
-    case disabled = "Disabled"
-    case suggestions = "Suggestions"
-
-    var id: Self { self }
+  enum Filter: Equatable {
+    case all
+    case suggestions
   }
 
   struct State: Equatable {
@@ -196,16 +192,16 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     set { state.filter = newValue }
   }
 
+  var suggestionsHeaderActionTitle: String? {
+    if filter == .suggestions { return "Back to words" }
+    guard !suggestions.isEmpty else { return nil }
+    return "Review suggestions (\(suggestions.count))"
+  }
+
   var visibleEntries: [PersonalDictionaryEntry] {
-    guard filter != .suggestions else { return [] }
-    return entries.filter { entry in
-      let matchesFilter = switch filter {
-      case .all: true
-      case .enabled: entry.isEnabled
-      case .disabled: !entry.isEnabled
-      case .suggestions: false
-      }
-      return matchesFilter && matchesQuery([entry.preferredForm] + entry.aliases)
+    guard filter == .all else { return [] }
+    return entries.filter {
+      matchesQuery([$0.preferredForm] + $0.aliases)
     }
   }
 
