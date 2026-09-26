@@ -1352,9 +1352,54 @@ func personalDictionarySortPopoverKeepsSearchAndKeyboardInteractionsAccessible()
       ".settingsSearchAnchor(.vocabularySort, request: visibleSearchRequest)"
     )
   )
-  #expect(settingsSource.contains("!isSortPresented"))
+  #expect(
+    settingsSource.contains(
+      "if isSortPresented {\n          isSortPresented = false\n          return\n        }"
+    )
+  )
   #expect(settingsSource.contains(".onChange(of: searchRequest?.id, initial: true)"))
   #expect(settingsSource.contains(".onChange(of: hasModalPresentation)"))
+  guard let sortEscapeStart = settingsSource.range(
+    of: ".onExitCommand {\n        if isSortPresented {"
+  ) else {
+    Issue.record("The parent Escape handler must dismiss Sort by before search.")
+    return
+  }
+  guard let sortEscapeEnd = settingsSource.range(
+    of: "      .onAppear {",
+    range: sortEscapeStart.upperBound..<settingsSource.endIndex
+  ) else {
+    Issue.record("The parent Escape handler must remain within the settings body.")
+    return
+  }
+  let sortEscapeSource = settingsSource[sortEscapeStart.lowerBound..<sortEscapeEnd.lowerBound]
+  let sortDismissal = try #require(sortEscapeSource.range(of: "if isSortPresented"))
+  let searchDismissal = try #require(sortEscapeSource.range(of: "guard isSearchExpanded"))
+
+  #expect(sortDismissal.lowerBound < searchDismissal.lowerBound)
+  #expect(sortEscapeSource.contains("closeSearch(source: .keyboard)"))
+
+  let optionsStart = try #require(
+    settingsSource.range(of: "private var optionsPopover: some View")
+  )
+  let sortPopoverStart = try #require(
+    settingsSource.range(
+      of: "private var sortPopover: some View",
+      range: optionsStart.upperBound..<settingsSource.endIndex
+    )
+  )
+  let optionsSource = settingsSource[optionsStart.lowerBound..<sortPopoverStart.lowerBound]
+  let optionsEscapeStart = try #require(optionsSource.range(of: ".onExitCommand {"))
+  let optionsEscapeDismissal = try #require(
+    optionsSource.range(
+      of: "beginOptionsDismissal(returnFocus: true)",
+      range: optionsEscapeStart.upperBound..<optionsSource.endIndex
+    )
+  )
+  let optionsEscapeSource = optionsSource[
+    optionsEscapeStart.lowerBound..<optionsEscapeDismissal.upperBound
+  ]
+  #expect(optionsEscapeSource.contains("guard isOptionsPresented, !hasModalPresentation"))
 }
 
 private func settingsEntry(

@@ -1628,8 +1628,11 @@
         isSortPresented = false
       }
       .onExitCommand {
-        guard isSearchExpanded, !isOptionsPresented, !isSortPresented, !hasModalPresentation
-        else { return }
+        if isSortPresented {
+          isSortPresented = false
+          return
+        }
+        guard isSearchExpanded, !isOptionsPresented, !hasModalPresentation else { return }
         closeSearch(source: .keyboard)
       }
       .onAppear {

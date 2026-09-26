@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.2.5-beta.1] - 2026-09-26
+
+Private local QA candidate only; this correction is not an accepted build or public release.
+
+### Fixed
+
+- Close the Dictionary Sort by popover on Escape before handling search dismissal when the sort
+  trigger retains keyboard focus.
+
 ## [1.2.4-beta.1] - 2026-09-26
 
 Private local QA candidate only; this change is not an accepted build or public release. It adds no
