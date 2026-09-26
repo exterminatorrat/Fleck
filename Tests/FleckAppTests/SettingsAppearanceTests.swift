@@ -370,8 +370,17 @@ func staleLightWindowAppearanceCannotReplaceSystemDarkSnapshot() async throws {
   #expect(activityRow.contains("theme.color(.textSecondary)"))
   #expect(activityRow.contains("theme.color(.caption)"))
   #expect(activityPatch.contains("theme.color(.caption)"))
-  #expect(agentIndicatorSource.contains("Text(\"MCP\")"))
-  #expect(agentIndicatorSource.contains("theme.color(.caption)"))
+  #expect(!agentIndicatorSource.contains("Text(\"MCP\")"))
+  #expect(
+    agentIndicatorSource.contains(
+      ".accessibilityLabel(presentation.state.accessibilityLabel)"
+    )
+  )
+  #expect(
+    agentIndicatorSource.contains(
+      ".foregroundStyle(presentation.state.statusColor(in: theme))"
+    )
+  )
 }
 
 @Test @MainActor
