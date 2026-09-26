@@ -171,6 +171,12 @@ private func makeFakeFixture(
     at: sourceRoot.appendingPathComponent("Assets/fleck-mark.png"),
     to: root.appendingPathComponent("Assets/fleck-mark.png")
   )
+  for iconName in ["FleckAppIcon.icns", "FleckAppIconDark.icns"] {
+    try fileManager.copyItem(
+      at: sourceRoot.appendingPathComponent("Assets/\(iconName)"),
+      to: root.appendingPathComponent("Assets/\(iconName)")
+    )
+  }
   try fileManager.copyItem(
     at: sourceRoot.appendingPathComponent("Sources/FleckApp/Resources/EnhancedModelManifest.json"),
     to: sources.appendingPathComponent("EnhancedModelManifest.json")
@@ -1213,6 +1219,14 @@ func parakeetPackagersSerializeSharedResolutionAndPublication() throws {
     )
   }
   let appContents = fileManager.subpaths(atPath: app.path) ?? []
+  for iconName in ["FleckAppIcon.icns", "FleckAppIconDark.icns"] {
+    let relativePath = "Contents/Resources/\(iconName)"
+    #expect(appContents.filter { $0 == relativePath }.count == 1)
+    #expect(
+      try Data(contentsOf: app.appendingPathComponent(relativePath))
+        == Data(contentsOf: fixture.root.appendingPathComponent("Assets/\(iconName)"))
+    )
+  }
   #expect(appContents.filter { $0 == "Contents/SharedSupport/gemma-cleanup-helper" }.count == 1)
   #expect(appContents.filter {
     $0 == "Contents/SharedSupport/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"

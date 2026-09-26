@@ -6,6 +6,8 @@ readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
 readonly build_root="$repo_root/.build"
 readonly info_plist="$repo_root/Sources/FleckApp/Info.plist"
 readonly canonical_mark="$repo_root/Assets/fleck-mark.png"
+readonly canonical_app_icon="$repo_root/Assets/FleckAppIcon.icns"
+readonly canonical_dark_app_icon="$repo_root/Assets/FleckAppIconDark.icns"
 readonly identity_tool="$script_dir/fleck-build-identity.py"
 readonly identity_mode="${FLECK_BUILD_IDENTITY_MODE:-local}"
 
@@ -92,7 +94,13 @@ swift build -c release --product fleck-agent --disable-automatic-resolution
 readonly release_directory="$repo_root/.build/release"
 readonly app_executable="$release_directory/Fleck"
 readonly helper_executable="$release_directory/fleck-agent"
-for required_file in "$app_executable" "$helper_executable" "$info_plist" "$canonical_mark"; do
+for required_file in \
+  "$app_executable" \
+  "$helper_executable" \
+  "$info_plist" \
+  "$canonical_mark" \
+  "$canonical_app_icon" \
+  "$canonical_dark_app_icon"; do
   if [[ ! -f "$required_file" ]]; then
     printf 'error: required release input not found: %s\n' "$required_file" >&2
     exit 2
@@ -107,6 +115,8 @@ readonly staged_app="$staging_root/Fleck.app"
 /bin/cp "$helper_executable" "$staged_app/Contents/SharedSupport/fleck-agent"
 /bin/cp "$info_plist" "$staged_app/Contents/Info.plist"
 /bin/cp "$canonical_mark" "$staged_app/Contents/Resources/fleck-mark.png"
+/bin/cp "$canonical_app_icon" "$staged_app/Contents/Resources/FleckAppIcon.icns"
+/bin/cp "$canonical_dark_app_icon" "$staged_app/Contents/Resources/FleckAppIconDark.icns"
 /usr/bin/plutil -insert FleckDevelopmentAccess -bool true "$staged_app/Contents/Info.plist"
 "$identity_tool" stamp \
   --capture "$identity_capture" \

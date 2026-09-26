@@ -3,6 +3,29 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.3.0-beta.1] - 2026-09-26
+
+Private local QA candidate only; this change is not an accepted build or public release.
+
+### Added
+
+- Added eight semantic native palette families with System, Light, and Dark appearance modes across
+  notes, the pinned editor, Settings, the dictation capsule, and agent/MCP surfaces.
+
+### Changed
+
+- Made palette snapshots the source of native appearance colors, while retaining legacy global color
+  preference values unchanged and dormant and keeping per-note tab colors local to their notes.
+
+## [1.2.6-beta.1] - 2026-09-26
+
+Private local QA candidate only; this change is not an accepted build or public release.
+
+### Changed
+
+- Introduced B2 Fragment monochrome Fleck branding with neutral, solid surfaces by default.
+- Added optional glass chrome with accessibility-aware opaque fallbacks.
+
 ## [1.2.5-beta.1] - 2026-09-26
 
 Private local QA candidate only; this correction is not an accepted build or public release.

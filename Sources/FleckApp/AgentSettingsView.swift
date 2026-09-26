@@ -65,6 +65,7 @@
   struct AgentSettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.settingsSearchRequest) private var searchRequest
+    @Environment(\.fleckThemeSnapshot) private var theme
     @State private var showsClearConfirmation = false
     @State private var showsAgentActivity = false
     @State private var profileForCapabilities: AgentIntegrationProfile?
@@ -209,7 +210,7 @@
           }
         }
         if let error = appState.agentCleanupError {
-          Text(error).font(.caption).foregroundStyle(.orange)
+          Text(error).font(.caption).foregroundStyle(theme.color(.error))
         }
       }
       .task {

@@ -12,9 +12,8 @@
     case generalConfirmTrash
 
     case appearanceTheme
-    case appearanceAccent
-    case appearanceEditorText
-    case appearanceEditorBackground
+    case appearanceColorTheme
+    case appearanceChromeAppearance
     case appearanceGlassOpacity
     case appearanceWidth
     case appearanceHeight
@@ -67,9 +66,8 @@
       case .generalAutomaticLists: "general-automatic-lists"
       case .generalConfirmTrash: "general-confirm-trash"
       case .appearanceTheme: "appearance-theme"
-      case .appearanceAccent: "appearance-accent"
-      case .appearanceEditorText: "appearance-editor-text"
-      case .appearanceEditorBackground: "appearance-editor-background"
+      case .appearanceColorTheme: "appearance-color-theme"
+      case .appearanceChromeAppearance: "appearance-chrome-appearance"
       case .appearanceGlassOpacity: "appearance-glass-opacity"
       case .appearanceWidth: "appearance-width"
       case .appearanceHeight: "appearance-height"
@@ -200,69 +198,16 @@
   struct SettingsAccentPresentation {
     let color: Color
     let selectionColor: Color
-    let selectionFillColor: NSColor
     let contrastingColor: Color
-    let usesDarkContent: Bool
-    let contrastRatio: CGFloat
+    let primaryTextColor: Color
+    let secondaryTextColor: Color
 
-    init(
-      hex: String,
-      colorScheme: ColorScheme = .light,
-      increasedContrast: Bool = false
-    ) {
-      let savedColor = NSColor(hex: hex)
-      let appearanceName: NSAppearance.Name =
-        switch (colorScheme, increasedContrast) {
-        case (.light, false): .aqua
-        case (.light, true): .accessibilityHighContrastAqua
-        case (.dark, false): .darkAqua
-        case (.dark, true): .accessibilityHighContrastDarkAqua
-        @unknown default: .aqua
-        }
-      let appearance = NSAppearance(named: appearanceName) ?? NSAppearance(named: .aqua)!
-      var base = NSColor.controlBackgroundColor
-      var accent = savedColor ?? .controlAccentColor
-      appearance.performAsCurrentDrawingAppearance {
-        base = NSColor.controlBackgroundColor.usingColorSpace(.sRGB) ?? .white
-        accent = (savedColor ?? .controlAccentColor).usingColorSpace(.sRGB) ?? .systemBlue
-      }
-      color = Color(nsColor: accent)
-      let accentFraction: CGFloat = colorScheme == .dark ? 0.28 : 0.22
-      let fill = Self.mixing(base, with: accent, fraction: accentFraction)
-      selectionFillColor = fill
-      selectionColor = Color(nsColor: fill)
-      let luminance = Self.relativeLuminance(of: fill)
-      let darkContrast = (luminance + 0.05) / 0.05
-      let lightContrast = 1.05 / (luminance + 0.05)
-      usesDarkContent = darkContrast >= lightContrast
-      contrastingColor = usesDarkContent ? .black : .white
-      contrastRatio = max(darkContrast, lightContrast)
-    }
-
-    private static func mixing(_ base: NSColor, with accent: NSColor, fraction: CGFloat)
-      -> NSColor
-    {
-      guard let base = base.usingColorSpace(.sRGB), let accent = accent.usingColorSpace(.sRGB)
-      else { return base }
-      let baseFraction = 1 - fraction
-      return NSColor(
-        srgbRed: base.redComponent * baseFraction + accent.redComponent * fraction,
-        green: base.greenComponent * baseFraction + accent.greenComponent * fraction,
-        blue: base.blueComponent * baseFraction + accent.blueComponent * fraction,
-        alpha: 1
-      )
-    }
-
-    private static func relativeLuminance(of color: NSColor) -> CGFloat {
-      guard let color = color.usingColorSpace(.sRGB) else { return 0 }
-      func linear(_ component: CGFloat) -> CGFloat {
-        component <= 0.04045
-          ? component / 12.92
-          : pow((component + 0.055) / 1.055, 2.4)
-      }
-      return 0.2126 * linear(color.redComponent)
-        + 0.7152 * linear(color.greenComponent)
-        + 0.0722 * linear(color.blueComponent)
+    init(theme: FleckThemeSnapshot) {
+      color = theme.color(.accent)
+      selectionColor = theme.color(.selectionFill)
+      contrastingColor = theme.color(.selectionText)
+      primaryTextColor = theme.color(.textPrimary)
+      secondaryTextColor = theme.color(.caption)
     }
   }
 
@@ -318,15 +263,19 @@
       )
 
       addSection(.appearance)
-      add(.appearanceTheme, "Theme", to: .appearance, aliases: ["light dark system"])
+      add(.appearanceTheme, "Appearance", to: .appearance, aliases: ["light dark system"])
       add(
-        .appearanceAccent,
-        "Accent color",
+        .appearanceColorTheme,
+        "Color theme",
         to: .appearance,
-        aliases: ["selection tint", "colour"]
+        aliases: ["palette", "color palette", "colour theme"]
       )
-      add(.appearanceEditorText, "Editor text color", to: .appearance)
-      add(.appearanceEditorBackground, "Editor background", to: .appearance)
+      add(
+        .appearanceChromeAppearance,
+        "Glass appearance",
+        to: .appearance,
+        aliases: ["window appearance", "solid", "surface", "translucency", "material"]
+      )
       add(
         .appearanceGlassOpacity,
         "Glass opacity",
@@ -678,7 +627,7 @@
               .foregroundStyle(
                 result.target == highlightedTarget
                   ? accentPresentation.contrastingColor
-                  : Color.secondary
+                  : accentPresentation.secondaryTextColor
               )
           }
           Spacer(minLength: 0)
@@ -695,7 +644,7 @@
       .foregroundStyle(
         result.target == highlightedTarget
           ? accentPresentation.contrastingColor
-          : Color.primary
+          : accentPresentation.primaryTextColor
       )
       .background(
         result.target == highlightedTarget

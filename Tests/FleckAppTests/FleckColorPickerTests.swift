@@ -87,7 +87,7 @@ import Testing
   #expect(!source.contains("Picker(\"Font\""))
   #expect(!source.contains("Font size:"))
   #expect(!source.contains("Show formatting bar"))
-  #expect(source.contains("FleckColorPicker"))
+  #expect(!source.contains("FleckColorPicker"))
 }
 
 @Test func productionUsesOneFleckPickerWithoutSystemPanelOrColorHistory() throws {
@@ -135,22 +135,21 @@ import Testing
 
   #expect(!formattingBar.contains(".background(.bar)"))
   #expect(normalizedFormattingBar.contains(
-    "frame(maxWidth: .infinity) .modifier(FormattingBarSurface(isPinned: isPinned)) "
+    "frame(maxWidth: .infinity) .modifier(FormattingBarSurface()) "
       + ".padding(.horizontal, 10) .padding(.top, 8)"
   ))
-  #expect(surface.contains("let isPinned: Bool"))
-  #expect(surface.contains("if isPinned && (reduceTransparency || colorSchemeContrast == .increased)"))
-  #expect(surface.contains(".fill(Color(nsColor: .windowBackgroundColor))"))
+  #expect(surface.contains("@Environment(\\.fleckThemeSnapshot) private var theme"))
+  #expect(surface.contains("FleckChromeMaterialPolicy.current("))
   #expect(surface.contains("if #available(macOS 26, *)"))
   #expect(normalizedSurface.contains(
-    "content.glassEffect( Glass.regular.tint(Color.black.opacity(0.18)), "
-      + "in: RoundedRectangle(cornerRadius: 12, style: .continuous) )"
+    "let shape = RoundedRectangle(cornerRadius: 12, style: .continuous) "
+      + "switch materialPolicy { case .liquidGlass: if #available(macOS 26, *) { "
+      + "content.glassEffect( Glass.regular.tint(theme.color(.accent).opacity(0.08)), "
+      + "in: shape )"
   ))
-  #expect(normalizedSurface.contains(
-    "content .background { RoundedRectangle(cornerRadius: 12, style: .continuous) "
-      + ".fill(.ultraThinMaterial) .overlay { RoundedRectangle(cornerRadius: 12, style: .continuous) "
-      + ".fill(Color.black.opacity(0.10)) } }"
-  ))
+  #expect(surface.contains("content.background { shape.fill(.ultraThinMaterial) }"))
+  #expect(surface.contains("content.background { shape.fill(theme.color(.card)) }"))
+  #expect(!surface.contains("Color.black.opacity"))
   #expect(!surface.contains("GlassEffectContainer"))
 }
 

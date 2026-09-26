@@ -57,7 +57,7 @@
       case .editing:
         "Choose how Fleck edits and organizes your notes."
       case .appearance:
-        "Adjust Fleck’s editor theme, type, and accent."
+        "Choose Fleck’s appearance mode, color theme, and window surfaces."
       case .shortcuts:
         "Set the keyboard shortcuts you use across Fleck."
       case .dictation:
@@ -146,9 +146,14 @@
 
   struct SettingsSidebarSurface<Content: View>: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.fleckChromeAppearance) private var appearance
+    @Environment(\.fleckThemeSnapshot) private var theme
+    private let glassOpacity: Double
     private let content: Content
 
-    init(@ViewBuilder content: () -> Content) {
+    init(glassOpacity: Double = 1, @ViewBuilder content: () -> Content) {
+      self.glassOpacity = glassOpacity
       self.content = content()
     }
 
@@ -160,21 +165,26 @@
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background {
           let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
-          if reduceTransparency {
-            shape.fill(Color(nsColor: .windowBackgroundColor))
-              .overlay { shape.fill(Color.primary.opacity(0.06)) }
-              .overlay { shape.stroke(Color.primary.opacity(0.12), lineWidth: 1) }
-          } else if #available(macOS 26, *) {
-            shape.fill(.clear)
-              .glassEffect(
-                Glass.regular.tint(Color.black.opacity(0.18)),
-                in: shape
-              )
-          } else {
+          switch FleckChromeMaterialPolicy.current(
+            appearance: appearance,
+            reduceTransparency: reduceTransparency,
+            increasedContrast: colorSchemeContrast == .increased
+          ) {
+          case .opaque:
+            shape.fill(theme.color(.sidebar))
+              .overlay { shape.stroke(theme.color(.border), lineWidth: 1) }
+          case .liquidGlass:
+            if #available(macOS 26, *) {
+              shape.fill(.clear)
+                .glassEffect(.regular, in: shape)
+                .opacity(glassOpacity)
+            } else {
+              shape.fill(.ultraThinMaterial)
+                .opacity(glassOpacity)
+            }
+          case .legacyMaterial:
             shape.fill(.ultraThinMaterial)
-              .overlay {
-                shape.fill(Color.black.opacity(0.10))
-              }
+              .opacity(glassOpacity)
           }
         }
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -365,6 +375,7 @@
   }
 
   struct SettingsPageHeader: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     @ScaledMetric(relativeTo: .title2) private var generalTitleSize = 20
     let section: SettingsSection
     let searchRequest: SettingsSearchRequest?
@@ -381,7 +392,7 @@
         if section != .editing {
           Text(section.description)
             .font(.callout)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.color(.textSecondary))
             .fixedSize(horizontal: false, vertical: true)
         }
       }
@@ -391,7 +402,7 @@
   }
 
   struct SettingsSectionCard<Content: View>: View {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.fleckThemeSnapshot) private var theme
     private let title: String
     private let content: Content
 
@@ -412,22 +423,8 @@
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
           let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
-          if reduceTransparency {
-            shape.fill(Color(nsColor: .controlBackgroundColor))
-              .overlay { shape.fill(Color.primary.opacity(0.03)) }
-              .overlay { shape.stroke(Color.primary.opacity(0.10), lineWidth: 1) }
-          } else if #available(macOS 26, *) {
-            shape.fill(.clear)
-              .glassEffect(
-                Glass.regular.tint(Color.black.opacity(0.18)),
-                in: shape
-              )
-          } else {
-            shape.fill(.ultraThinMaterial)
-              .overlay {
-                shape.fill(Color.black.opacity(0.10))
-              }
-          }
+          shape.fill(theme.color(.card))
+            .overlay { shape.stroke(theme.color(.border), lineWidth: 1) }
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -435,7 +432,7 @@
   }
 
   struct SettingsPreferenceRow<Accessory: View>: View {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.fleckThemeSnapshot) private var theme
     private let title: String
     private let detail: String
     private let accessory: Accessory
@@ -457,7 +454,7 @@
             .font(.body.weight(.semibold))
           Text(detail)
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.color(.caption))
             .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -470,20 +467,8 @@
       .frame(maxWidth: .infinity, alignment: .leading)
       .background {
         let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
-        if reduceTransparency {
-          shape.fill(Color(nsColor: .controlBackgroundColor))
-            .overlay { shape.fill(Color.primary.opacity(0.03)) }
-            .overlay { shape.stroke(Color.primary.opacity(0.10), lineWidth: 1) }
-        } else if #available(macOS 26, *) {
-          shape.fill(.clear)
-            .glassEffect(
-              Glass.regular.tint(Color.black.opacity(0.18)),
-              in: shape
-            )
-        } else {
-          shape.fill(.ultraThinMaterial)
-            .overlay { shape.fill(Color.black.opacity(0.10)) }
-        }
+        shape.fill(theme.color(.raised))
+          .overlay { shape.stroke(theme.color(.border), lineWidth: 1) }
       }
       .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
@@ -495,6 +480,7 @@
   }
 
   private struct SettingsToggleRow: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     @ScaledMetric(relativeTo: .body) private var generalTitleSize = 13
     @ScaledMetric(relativeTo: .callout) private var generalDetailSize = 12
     let title: String
@@ -529,7 +515,7 @@
             )
           Text(detail)
             .font(.system(size: generalDetailSize, weight: .regular))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.color(.textSecondary))
             .fixedSize(horizontal: false, vertical: true)
             .background(
               SettingsTypographyProbe(identifier: "settings-general-detail-\(title)")
@@ -562,7 +548,7 @@
   }
 
   private struct GeneralSettingsGroup<Content: View>: View {
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.fleckThemeSnapshot) private var theme
     @ScaledMetric(relativeTo: .callout) private var titleSize = 12
     let title: String
     let content: Content
@@ -584,10 +570,8 @@
         }
         .background {
           let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
-          shape.fill(Color(nsColor: .controlBackgroundColor))
-            .overlay {
-              shape.fill(Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.025))
-            }
+          shape.fill(theme.color(.card))
+            .overlay { shape.stroke(theme.color(.border), lineWidth: 1) }
         }
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
       }
@@ -619,9 +603,7 @@
 
   struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.fleckThemeSnapshot) private var theme
     @ObservedObject var runtime: DictationRuntime
     @ObservedObject private var admittedModelSettingsViewModel: AdmittedModelSettingsViewModel
     @ObservedObject private var cleanupAdmittedModelSettingsViewModel: AdmittedModelSettingsViewModel
@@ -659,7 +641,7 @@
 
     var body: some View {
       HStack(alignment: .top, spacing: 12) {
-        SettingsSidebarSurface {
+        SettingsSidebarSurface(glassOpacity: appState.preferences.panelOpacity) {
           VStack(alignment: .leading, spacing: 4) {
             SettingsSearchField(
               query: $searchQuery,
@@ -751,20 +733,10 @@
       .padding(.leading, 8)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .ignoresSafeArea(.container, edges: .top)
-      .background {
-        if reduceTransparency {
-          Color(nsColor: .windowBackgroundColor)
-            .overlay(Color.primary.opacity(0.02))
-        } else {
-          Rectangle()
-            .fill(.ultraThinMaterial)
-            .overlay {
-              Color.black.opacity(0.10)
-            }
-        }
-      }
+      .background(theme.color(.window))
       .background(SettingsWindowChromeConfigurator())
-      .tint(accentPresentation.color)
+      .environment(\.fleckChromeAppearance, appState.preferences.chromeAppearance)
+      .tint(theme.color(.accent))
       .onChange(of: selectedSection) { _, newSection in
         recordingSelection.transition(to: newSection)
       }
@@ -837,11 +809,7 @@
     }
 
     private var accentPresentation: SettingsAccentPresentation {
-      SettingsAccentPresentation(
-        hex: appState.preferences.accentHex,
-        colorScheme: colorScheme,
-        increasedContrast: colorSchemeContrast == .increased
-      )
+      SettingsAccentPresentation(theme: theme)
     }
 
     private func cancelSettingsSearch() {
@@ -906,10 +874,10 @@
         Text("Interface")
           .font(.headline)
         SettingsPreferenceRow(
-          "Theme",
-          detail: "Choose the overall look for Fleck."
+          "Appearance",
+          detail: "Follow macOS, or keep Fleck in Light or Dark mode."
         ) {
-          Picker("Theme", selection: preferenceBinding(\.theme)) {
+          Picker("Appearance", selection: preferenceBinding(\.theme)) {
             ForEach(AppTheme.allCases, id: \.self) { theme in
               Text(theme.rawValue.capitalized).tag(theme)
             }
@@ -919,61 +887,41 @@
         }
         .settingsSearchAnchor(.appearanceTheme, request: searchRequest)
         SettingsPreferenceRow(
-          "Accent color",
-          detail: "Choose the color used for selections and actions."
+          "Color theme",
+          detail: "Choose Fleck’s named palette."
         ) {
-          SettingsColorButton(
-            title: "Accent color",
-            currentHex: appState.preferences.accentHex,
-            fallbackColor: .controlAccentColor
-          ) { hex in
-            guard let hex else { return }
-            appState.updatePreferences { $0.accentHex = hex }
-            runtime.preferencesDidChange()
+          Picker("Color theme", selection: preferenceBinding(\.colorTheme)) {
+            ForEach(FleckColorTheme.allCases) { theme in
+              Text(theme.title).tag(theme)
+            }
           }
+          .labelsHidden()
+          .pickerStyle(.menu)
         }
-        .settingsSearchAnchor(.appearanceAccent, request: searchRequest)
-
-        Text("Editor canvas")
-          .font(.headline)
-          .padding(.top, 12)
+        .settingsSearchAnchor(.appearanceColorTheme, request: searchRequest)
         SettingsPreferenceRow(
-          "Editor text color",
-          detail: "Choose the color used for note text."
+          "Window appearance",
+          detail: "Use solid chrome or subtle glass while keeping the editor canvas opaque."
         ) {
-          SettingsColorButton(
-            title: "Editor text color",
-            currentHex: appState.preferences.editorTextHex,
-            resetTitle: "Use System",
-            fallbackColor: .labelColor
-          ) { hex in
-            appState.updatePreferences { $0.editorTextHex = hex }
+          Picker("Window appearance", selection: preferenceBinding(\.chromeAppearance)) {
+            ForEach(FleckChromeAppearance.allCases, id: \.self) { appearance in
+              Text(appearance.rawValue.capitalized).tag(appearance)
+            }
           }
+          .labelsHidden()
+          .pickerStyle(.menu)
         }
-        .settingsSearchAnchor(.appearanceEditorText, request: searchRequest)
-        SettingsPreferenceRow(
-          "Editor background",
-          detail: "Choose the canvas color behind your notes."
-        ) {
-          SettingsColorButton(
-            title: "Editor background",
-            currentHex: appState.preferences.editorBackgroundHex,
-            resetTitle: "Use System",
-            fallbackColor: .textBackgroundColor
-          ) { hex in
-            appState.updatePreferences { $0.editorBackgroundHex = hex }
-          }
-        }
-        .settingsSearchAnchor(.appearanceEditorBackground, request: searchRequest)
+        .settingsSearchAnchor(.appearanceChromeAppearance, request: searchRequest)
         SettingsPreferenceRow(
           "Glass opacity",
-          detail: "Adjust how much of the window shows through Fleck surfaces."
+          detail: "Adjust how much of the window shows through when Glass is selected."
         ) {
           Slider(value: preferenceBinding(\.panelOpacity), in: 0.55...1) {
             Text("Glass opacity")
           }
           .labelsHidden()
           .frame(width: 150)
+          .disabled(appState.preferences.chromeAppearance == .solid)
         }
         .settingsSearchAnchor(.appearanceGlassOpacity, request: searchRequest)
 
@@ -1101,13 +1049,13 @@
                   "This shortcut may replace normal typing or navigation while Fleck is active."
                 )
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.color(.caption))
                 .multilineTextAlignment(.trailing)
               }
               if conflicts.contains(action) {
                 Label("Conflicts with another shortcut", systemImage: "exclamationmark.triangle.fill")
                   .font(.caption)
-                  .foregroundStyle(.orange)
+                  .foregroundStyle(theme.color(.warning))
               }
             }
           }
@@ -1117,7 +1065,7 @@
           "Click a shortcut, then press the key combination. Conflicts are highlighted. Restore brings back the default shortcut."
         )
         .font(.caption)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.color(.caption))
       }
     }
 
@@ -1132,7 +1080,7 @@
             "Audio stays in memory only and is discarded when capture finishes, is cancelled, is interrupted, or fails. History is local, contains no audio, and expires after 30 days. Turning history off affects future successful captures only."
           )
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.color(.caption))
           .padding(.top, 4)
           .accessibilityIdentifier("settings-dictation-privacy-content")
           .background(SettingsSearchProbe(identifier: "settings-dictation-privacy-content"))
@@ -1162,7 +1110,7 @@
             ForEach(availabilityIssues, id: \.title) { row in
               Text("\(row.title) — \(row.detail)")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.color(.caption))
                 .multilineTextAlignment(.trailing)
             }
             ForEach(recoveryActions, id: \.pane) { action in
@@ -1199,7 +1147,7 @@
             if let guidance = dictationModifierPresentation.guidanceCopy {
               Text(guidance)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.color(.caption))
                 .multilineTextAlignment(.trailing)
             }
             if let action = dictationModifierPresentation.recoveryAction {
@@ -1240,7 +1188,7 @@
           detail: "Choose the language used to recognize your dictation."
         ) {
           Text("English")
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.color(.textSecondary))
         }
         .settingsSearchAnchor(.dictationRecognitionLanguage, request: searchRequest)
       }
@@ -1337,12 +1285,12 @@
         if presentation.showsStatus {
           Text(presentation.compactStatus)
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.color(.caption))
         }
         if presentation.showsDetail {
           Text(presentation.detail)
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.color(.caption))
             .fixedSize(horizontal: false, vertical: true)
         }
 
@@ -1543,6 +1491,7 @@
   }
 
   private struct PersonalDictionarySettingsSection: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .title2) private var titleSize = 23
     @ObservedObject var viewModel: PersonalDictionarySettingsViewModel
@@ -1841,7 +1790,7 @@
         }
         .font(.footnote)
         .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.color(.textSecondary))
         .focused($isOptionsTriggerFocused)
         .accessibilityIdentifier("settings-vocabulary-options-trigger")
         .accessibilityHint("Imports or exports your personal dictionary")
@@ -1892,7 +1841,7 @@
               "CSV excludes pending suggestions and cannot restore a complete personal dictionary."
             )
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.color(.caption))
             .fixedSize(horizontal: false, vertical: true)
 
             Button("Import Dictionary") {
@@ -1937,7 +1886,7 @@
         Text("SORT BY")
           .font(.system(size: 10, weight: .bold, design: .rounded))
           .tracking(1.2)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.color(.caption))
           .padding(.horizontal, 8)
           .padding(.top, 3)
 
@@ -1950,7 +1899,7 @@
         if viewModel.filter != .suggestions {
           Text("Usage reflects saved data, not live dictation.")
             .font(.caption2)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.color(.caption))
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 8)
         }
@@ -1993,7 +1942,7 @@
         HStack(spacing: 9) {
           Image(systemName: order.symbolName)
             .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+            .foregroundStyle(isSelected ? theme.color(.accent) : theme.color(.textSecondary))
             .frame(width: 16)
             .accessibilityHidden(true)
 
@@ -2005,7 +1954,7 @@
           if isSelected {
             Image(systemName: "checkmark")
               .font(.system(size: 11, weight: .bold))
-              .foregroundStyle(Color.accentColor)
+              .foregroundStyle(theme.color(.accent))
               .accessibilityHidden(true)
           }
         }
@@ -2019,14 +1968,14 @@
         RoundedRectangle(cornerRadius: 7, style: .continuous)
           .fill(
             isSelected
-              ? Color.accentColor.opacity(0.14)
-              : isHovered || isFocused ? Color.primary.opacity(0.07) : Color.clear
+              ? theme.color(.selectionFill)
+              : isHovered || isFocused ? theme.color(.hoverFill) : Color.clear
           )
       }
       .overlay {
         if isFocused {
           RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .strokeBorder(Color.accentColor.opacity(0.82), lineWidth: 1)
+            .strokeBorder(theme.color(.focusRing), lineWidth: 1)
         }
       }
       .onHover { isHovering in
@@ -2091,20 +2040,20 @@
           ProgressView()
             .controlSize(.small)
           Text("Reloading dictionary…")
+            .foregroundStyle(theme.color(.caption))
         }
         .font(.caption)
-        .foregroundStyle(.secondary)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Reloading dictionary")
       } else if let errorMessage = viewModel.errorMessage {
         Label(errorMessage, systemImage: "exclamationmark.triangle")
-          .foregroundStyle(.red)
+          .foregroundStyle(theme.color(.error))
           .font(.caption)
           .accessibilityLabel("Personal dictionary error")
           .accessibilityValue(errorMessage)
       } else if let statusMessage = viewModel.statusMessage {
         Label(statusMessage, systemImage: "checkmark.circle")
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.color(.caption))
           .font(.caption)
           .accessibilityLabel("Personal dictionary status")
           .accessibilityValue(statusMessage)
@@ -2170,20 +2119,21 @@
         if viewModel.filter == .suggestions {
           if viewModel.suggestions.isEmpty {
             Text("No pending suggestions.")
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.color(.textSecondary))
           } else {
             Text("No suggestions match your search. Clear search to review the queue.")
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.color(.textSecondary))
           }
         } else if viewModel.entries.isEmpty {
           Text("No entries yet. Use Add new to add a word, phrase, or correction.")
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.color(.textSecondary))
         } else if !viewModel.query.isEmpty {
           Text("No matching entries. Clear search or use Add new.")
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.color(.textSecondary))
         }
       }
       .font(.callout)
+      .foregroundStyle(theme.color(.textSecondary))
       .padding(16)
       .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -2245,7 +2195,7 @@
         if !suggestion.observedForms.isEmpty {
           Text(suggestion.observedForms.joined(separator: ", "))
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.color(.caption))
             .fixedSize(horizontal: false, vertical: true)
         }
         HStack {
@@ -2616,6 +2566,7 @@
   }
 
   private struct PersonalDictionaryEntryRow: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     private enum Action: Hashable {
       case edit
       case delete
@@ -2652,13 +2603,13 @@
             if entry.isPriority {
               Image(systemName: "star.fill")
                 .font(.caption2)
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(theme.color(.accent))
                 .accessibilityHidden(true)
             }
             if !entry.isEnabled {
               Text("Disabled")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.color(.textSecondary))
             }
             Spacer(minLength: 8)
           }
@@ -2728,7 +2679,7 @@
       Button(role: role, action: perform) {
         Image(systemName: systemImage)
           .font(.system(size: 13, weight: .medium))
-          .foregroundStyle(isPriority ? Color.accentColor : Color.secondary)
+          .foregroundStyle(isPriority ? theme.color(.accent) : theme.color(.textSecondary))
           .frame(width: 24, height: 24)
           .background {
             if focusedAction == action || accessibilityFocusedAction == action {
@@ -2758,6 +2709,7 @@
   }
 
   private struct PersonalDictionaryEntryEditSheet: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     let isNew: Bool
     @Binding var preferredForm: String
     @Binding var aliases: String
@@ -2787,7 +2739,7 @@
               .accessibilityHint("The spelling or phrase Fleck should replace")
             Text("For multiple corrections, separate each one with a comma or new line.")
               .font(.caption)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.color(.caption))
           }
 
           Toggle("Use this word in dictation", isOn: $isEnabled)
@@ -2800,7 +2752,7 @@
         if let errorMessage {
           Label(errorMessage, systemImage: "exclamationmark.triangle")
             .font(.caption)
-            .foregroundStyle(.red)
+            .foregroundStyle(theme.color(.error))
             .accessibilityLabel("Vocabulary editor error")
             .accessibilityValue(errorMessage)
         }
@@ -2850,6 +2802,7 @@
   }
 
   private struct PersonalDictionarySuggestionEditSheet: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     @Binding var preferredForm: String
     @Binding var aliases: String
     let errorMessage: String?
@@ -2863,16 +2816,16 @@
         TextField("Aliases", text: $aliases)
         Text("Separate aliases with commas or new lines.")
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.color(.caption))
         if let errorMessage {
           Label(errorMessage, systemImage: "exclamationmark.triangle")
-            .foregroundStyle(.red)
+            .foregroundStyle(theme.color(.error))
             .font(.caption)
             .accessibilityLabel("Suggestion edit error")
             .accessibilityValue(errorMessage)
         } else if let statusMessage {
           Label(statusMessage, systemImage: "info.circle")
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.color(.caption))
             .font(.caption)
             .accessibilityLabel("Suggestion edit status")
             .accessibilityValue(statusMessage)
@@ -2895,6 +2848,7 @@
   }
 
   private struct PersonalDictionaryImportPreviewSheet: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     @ObservedObject var viewModel: PersonalDictionarySettingsViewModel
     @State private var omissionPreview: PersonalDictionaryImportPreview?
 
@@ -2904,13 +2858,13 @@
           .font(.title2.weight(.semibold))
         if let errorMessage = viewModel.errorMessage {
           Label(errorMessage, systemImage: "exclamationmark.triangle")
-            .foregroundStyle(.red)
+            .foregroundStyle(theme.color(.error))
             .font(.caption)
             .accessibilityLabel("Dictionary import error")
             .accessibilityValue(errorMessage)
         } else if let statusMessage = viewModel.statusMessage {
           Label(statusMessage, systemImage: "info.circle")
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.color(.caption))
             .font(.caption)
             .accessibilityLabel("Dictionary import status")
             .accessibilityValue(statusMessage)
@@ -2926,14 +2880,14 @@
           List {
             if viewModel.importPreviewRows.isEmpty {
               Text("No dictionary changes.")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.color(.textSecondary))
             } else {
               ForEach(viewModel.importPreviewRows) { row in
                 LabeledContent {
                   VStack(alignment: .trailing, spacing: 2) {
                     Text(row.title)
                     if let detail = row.detail {
-                      Text(detail).font(.caption).foregroundStyle(.secondary)
+                      Text(detail).font(.caption).foregroundStyle(theme.color(.caption))
                     }
                   }
                 } label: {
@@ -3020,72 +2974,6 @@
         exportedAs: "com.harryjin.fleck.personal-dictionary",
         conformingTo: .json
       )
-  }
-
-  private struct SettingsColorButton: View {
-    let title: String
-    let currentHex: String?
-    let resetTitle: String?
-    let fallbackColor: NSColor
-    let onCommit: (String?) -> Void
-    @State private var isPresented = false
-
-    init(
-      title: String,
-      currentHex: String?,
-      resetTitle: String? = nil,
-      fallbackColor: NSColor,
-      onCommit: @escaping (String?) -> Void
-    ) {
-      self.title = title
-      self.currentHex = currentHex
-      self.resetTitle = resetTitle
-      self.fallbackColor = fallbackColor
-      self.onCommit = onCommit
-    }
-
-    var body: some View {
-      Button {
-        isPresented = true
-      } label: {
-        HStack(spacing: 10) {
-          RoundedRectangle(cornerRadius: 5)
-            .fill(currentColor)
-            .frame(width: 24, height: 18)
-            .overlay(RoundedRectangle(cornerRadius: 5).stroke(.quaternary))
-          Text(currentValue)
-            .foregroundStyle(.secondary)
-        }
-      }
-      .buttonStyle(.plain)
-      .accessibilityLabel(title)
-      .accessibilityValue(currentValue)
-      .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-        FleckColorPicker(
-          currentHex: currentHex,
-          currentLabel: currentValue,
-          resetTitle: resetTitle,
-          fallbackHex: FleckColorHex.hex(from: fallbackColor) ?? "#7C6CF2",
-          onCommit: { value in
-            onCommit(value)
-            isPresented = false
-          },
-          onCancel: { isPresented = false }
-        )
-      }
-    }
-
-    private var currentColor: Color {
-      if let currentHex, let color = Color(hex: currentHex) {
-        return color
-      }
-      return Color(nsColor: fallbackColor)
-    }
-
-    private var currentValue: String {
-      guard let currentHex else { return resetTitle ?? "Automatic" }
-      return FleckPaletteOption.paletteName(for: NSColor(hex: currentHex)) ?? "Custom"
-    }
   }
 
   private struct DictationMicrophoneOption: Identifiable {

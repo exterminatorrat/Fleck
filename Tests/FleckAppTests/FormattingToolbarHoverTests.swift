@@ -38,7 +38,7 @@ struct FormattingToolbarHoverTests {
     #expect(marker.contains(".frame(width: 28, height: 26)"))
     #expect(marker.contains(".contentShape(RoundedRectangle(cornerRadius: 5))"))
     #expect(icon.contains(".frame(width: 28, height: 26)"))
-    #expect(icon.contains("isActive ? Color.accentColor.opacity(0.24) : .clear"))
+    #expect(icon.contains("isActive ? theme.color(.selectionFill) : .clear"))
     #expect(icon.contains(".contentShape(RoundedRectangle(cornerRadius: 5))"))
   }
 

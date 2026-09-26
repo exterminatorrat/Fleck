@@ -85,6 +85,10 @@ readonly app_binary="$app_bundle/Contents/MacOS/Fleck"
 readonly bundled_helper="$app_bundle/Contents/SharedSupport/fleck-agent"
 readonly bundled_mark="$app_bundle/Contents/Resources/fleck-mark.png"
 readonly canonical_mark="$repo_root/Assets/fleck-mark.png"
+readonly bundled_app_icon="$app_bundle/Contents/Resources/FleckAppIcon.icns"
+readonly canonical_app_icon="$repo_root/Assets/FleckAppIcon.icns"
+readonly bundled_dark_app_icon="$app_bundle/Contents/Resources/FleckAppIconDark.icns"
+readonly canonical_dark_app_icon="$repo_root/Assets/FleckAppIconDark.icns"
 readonly expected_bundle_identifier="com.harryjin.fleck"
 
 bundle_identifier="$(
@@ -109,6 +113,24 @@ if ! /usr/bin/cmp -s "$canonical_mark" "$bundled_mark"; then
   printf '%s\n' 'error: bundled Fleck mark differs from Assets/fleck-mark.png' >&2
   exit 1
 fi
+if [[ "$(/usr/bin/plutil -extract CFBundleIconFile raw -o - \
+  "$app_bundle/Contents/Info.plist")" != "FleckAppIcon.icns" ]]; then
+  printf '%s\n' 'error: packaged Fleck does not name its native app icon' >&2
+  exit 1
+fi
+for icon_pair in \
+  "$canonical_app_icon|$bundled_app_icon" \
+  "$canonical_dark_app_icon|$bundled_dark_app_icon"; do
+  IFS='|' read -r canonical_icon bundled_icon <<<"$icon_pair"
+  if [[ ! -s "$bundled_icon" ]]; then
+    printf 'error: bundled Fleck app icon not found: %s\n' "$bundled_icon" >&2
+    exit 1
+  fi
+  if ! /usr/bin/cmp -s "$canonical_icon" "$bundled_icon"; then
+    printf 'error: bundled Fleck app icon differs from %s\n' "$canonical_icon" >&2
+    exit 1
+  fi
+done
 /usr/bin/codesign --verify --deep --strict "$app_bundle"
 signature_details="$(/usr/bin/codesign -dv --verbose=4 "$app_bundle" 2>&1)"
 signature_identifier="$(

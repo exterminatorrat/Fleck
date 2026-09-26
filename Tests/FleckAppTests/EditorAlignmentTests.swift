@@ -43,7 +43,10 @@
           #expect(resolvedEditorColor(title.textColor, appearance: appearance)?.alpha == 1)
           #expect(
             resolvedEditorColor(title.textColor, appearance: appearance)
-              == resolvedEditorColor(.textColor, appearance: appearance)
+              == resolvedEditorColor(
+                pinned.state.themeSnapshot.nsColor(.textPrimary),
+                appearance: appearance
+              )
           )
           let titleInkAlpha = try maximumEditorInkAlpha(in: title)
           title.stringValue = ""
@@ -98,7 +101,10 @@
           let bodyFrame = body.convert(body.bounds, to: ordinary.host)
           #expect(
             resolvedEditorColor(title.textColor, appearance: appearance)
-              == resolvedEditorColor(.labelColor, appearance: appearance)
+              == resolvedEditorColor(
+                ordinary.state.themeSnapshot.nsColor(.textPrimary),
+                appearance: appearance
+              )
           )
           #expect(abs(titleFrame.maxX - (bodyFrame.maxX - 16)) < 0.01)
 
@@ -297,6 +303,7 @@
   @MainActor
   private struct EditorAlignmentPanelFixture {
     let root: URL
+    let state: AppState
     let window: NSWindow
     let host: NSHostingView<AnyView>
     let runtime: DictationRuntime
@@ -336,7 +343,11 @@
       sizing: .container
     )
     let host = NSHostingView(
-      rootView: AnyView(panel.environmentObject(state).frame(width: 640, height: 430))
+      rootView: AnyView(
+        FleckThemeTestRoot(state: state) {
+          panel.frame(width: 640, height: 430)
+        }
+      )
     )
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
@@ -346,7 +357,13 @@
     )
     window.contentView = host
     await settleEditorAlignmentView(host)
-    return EditorAlignmentPanelFixture(root: root, window: window, host: host, runtime: runtime)
+    return EditorAlignmentPanelFixture(
+      root: root,
+      state: state,
+      window: window,
+      host: host,
+      runtime: runtime
+    )
   }
 
   @MainActor

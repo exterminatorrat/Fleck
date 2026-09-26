@@ -147,6 +147,8 @@ run_preservation_fixture() {
     "$gate_log"
   /bin/cp "$validator_source" "$fixture_root/Scripts/validate-macos.sh"
   printf '%s\n' 'fixture mark' > "$fixture_root/Assets/fleck-mark.png"
+  printf '%s\n' 'fixture light icon' > "$fixture_root/Assets/FleckAppIcon.icns"
+  printf '%s\n' 'fixture dark icon' > "$fixture_root/Assets/FleckAppIconDark.icns"
 
   local relative
   for relative in "${sentinel_paths[@]}"; do
@@ -209,8 +211,11 @@ SOURCE
 /usr/bin/clang -arch arm64 "$repo_root/.build/fixture.c" -o "$app/Contents/MacOS/Fleck"
 /usr/bin/clang -arch arm64 "$repo_root/.build/fixture.c" -o "$app/Contents/SharedSupport/fleck-agent"
 /bin/cp "$repo_root/Assets/fleck-mark.png" "$app/Contents/Resources/fleck-mark.png"
+/bin/cp "$repo_root/Assets/FleckAppIcon.icns" "$app/Contents/Resources/FleckAppIcon.icns"
+/bin/cp "$repo_root/Assets/FleckAppIconDark.icns" "$app/Contents/Resources/FleckAppIconDark.icns"
 /usr/bin/plutil -create xml1 "$plist"
 /usr/bin/plutil -insert CFBundleIdentifier -string com.harryjin.fleck "$plist"
+/usr/bin/plutil -insert CFBundleIconFile -string FleckAppIcon.icns "$plist"
 /usr/bin/plutil -insert CFBundlePackageType -string APPL "$plist"
 /usr/bin/plutil -insert LSUIElement -bool true "$plist"
 /usr/bin/plutil -insert NSPrincipalClass -string NSApplication "$plist"

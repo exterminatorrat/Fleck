@@ -21,7 +21,7 @@ func WorkspaceSearchSourceAuditUsesTheProductionPanelAndNativeOverlay() throws {
   for required in [
     "WorkspaceSearchView(",
     "searchController.present(for: appState.workspace.selectedNoteID)",
-    "accent: Color(hex: appState.preferences.accentHex) ?? .accentColor",
+    "accent: theme.color(.accent)",
     ".keyboardShortcut(\"f\", modifiers: .command)",
     ".accessibilityLabel(\"Search notes\")",
     ".help(\"Search notes",
@@ -54,7 +54,12 @@ func WorkspaceSearchSourceAuditUsesTheProductionPanelAndNativeOverlay() throws {
       separatedBy: "Text(\n                          workspaceSearchHighlightedAttributedString("
     ).count - 1 == 2
   )
-  #expect(searchView.components(separatedBy: "accent: accent").count - 1 == 2)
+  #expect(searchView.components(separatedBy: "underlineMatches: isSelected").count - 1 == 2)
+  #expect(
+    searchView.components(
+      separatedBy: "accent: isSelected ? theme.color(.selectionText) : accent"
+    ).count - 1 == 2
+  )
   #expect(
     searchView.contains(#".accessibilityLabel("\(result.displayTitle), \(result.snippet)")"#)
   )
@@ -81,13 +86,11 @@ func WorkspaceSearchSourceAuditUsesTheProductionPanelAndNativeOverlay() throws {
       .first
   )
   #expect(!formattingBar.contains(".background(.bar)"))
-  #expect(formattingBar.contains(".modifier(FormattingBarSurface(isPinned: isPinned))"))
-  #expect(formattingBarSurface.contains("let isPinned: Bool"))
-  #expect(
-    formattingBarSurface.contains(
-      "if isPinned && (reduceTransparency || colorSchemeContrast == .increased)"
-    )
-  )
+  #expect(formattingBar.contains(".modifier(FormattingBarSurface())"))
+  #expect(formattingBarSurface.contains("@Environment(\\.fleckThemeSnapshot) private var theme"))
+  #expect(formattingBarSurface.contains("FleckChromeMaterialPolicy.current("))
+  #expect(formattingBarSurface.contains("case .liquidGlass"))
+  #expect(formattingBarSurface.contains("case .opaque"))
 }
 
 @Test

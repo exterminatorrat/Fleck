@@ -36,6 +36,13 @@ private func nativeTabDragReadableForegroundFraction(in image: NSImage,
   return Double(foregroundCount) / Double(pixelCount)
 }
 
+private func nativeTabDragForegroundIsLight(_ color: NSColor) -> Bool {
+  guard let color = color.usingColorSpace(.sRGB) else { return false }
+  return 0.2126 * color.redComponent
+    + 0.7152 * color.greenComponent
+    + 0.0722 * color.blueComponent > 0.55
+}
+
 private func nativeTabDragMaximumPixelComponentDelta(from source: NSImage, to result: NSImage,
   outside excludedRect: NSRect? = nil) -> CGFloat {
   guard let sourceBitmap = source.representations.first as? NSBitmapImageRep,
@@ -636,7 +643,7 @@ private func assertContextMoves(folderID: UUID?, folders: [Folder]) async throws
   #expect(navigator.contains("private struct NoteDropDelegate: DropDelegate"))
   #expect(navigator.contains("delegate: noteDropDelegate("))
   #expect(navigator.contains("dragSession.id == expectedSource.dragSessionID"))
-  #expect(navigator.contains("Color.accentColor.opacity"))
+  #expect(navigator.contains("theme.color(.hoverFill)"))
   #expect(navigator.contains("noteDropTarget = nil"))
   #expect(navigator.contains("sourceFolderID"))
   #expect(navigator.contains("targetFolderID"))
@@ -1245,7 +1252,9 @@ func hostedUnselectedTabBuildsVisibleDragItemBeforeNativeWillBegin() async throw
   state.workspace = Workspace(notes: [dragged, selected], selectedNoteID: selected.id)
   let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
   let host = NSHostingView(
-    rootView: NotesPanel(dictationRuntime: runtime, sizing: .container).environmentObject(state)
+    rootView: FleckThemeTestRoot(state: state) {
+      NotesPanel(dictationRuntime: runtime, sizing: .container)
+    }
   )
   let window = NSWindow(
     contentRect: NSRect(x: 0, y: 0, width: 800, height: 430),
@@ -1270,8 +1279,9 @@ func hostedUnselectedTabBuildsVisibleDragItemBeforeNativeWillBegin() async throw
       (.vibrantDark, .aqua, true, selected.id, true),
       (.vibrantLight, .darkAqua, false, dragged.id, false),
       (.vibrantLight, .darkAqua, false, selected.id, true),
-    ]
+  ]
   for captureCase in captureCases {
+    state.updatePreferences { $0.theme = captureCase.dark ? .dark : .light }
     window.appearance = NSAppearance(named: captureCase.appearance)
     await settleTabStripHost(host)
     let destination = try #require(findDestination(host))
@@ -1371,7 +1381,13 @@ func hostedUnselectedTabBuildsVisibleDragItemBeforeNativeWillBegin() async throw
         from: renderedSource, to: previewImage
       ) < 0.02)
     }
-    let expectedLightForeground = captureCase.selected || captureCase.dark
+    let expectedForeground = captureCase.selected
+      ? NoteTabInk.selectedLabelColor(
+        tabColor: state.themeSnapshot.nsColor(.accent),
+        surfaceColor: state.themeSnapshot.nsColor(.window)
+      )
+      : state.themeSnapshot.nsColor(.textPrimary)
+    let expectedLightForeground = nativeTabDragForegroundIsLight(expectedForeground)
     #expect(nativeTabDragReadableForegroundFraction(
       in: previewImage, lightForeground: expectedLightForeground
     ) > 0.01,

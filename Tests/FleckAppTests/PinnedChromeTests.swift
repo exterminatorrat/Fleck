@@ -7,7 +7,8 @@ import Testing
 
 @Test func pinnedChromeMaterialPolicyUsesNativeGlassWhenAvailable() {
   #expect(
-    PinnedChromeMaterialPolicy.resolve(
+    FleckChromeMaterialPolicy.resolve(
+      appearance: .glass,
       supportsLiquidGlass: true,
       reduceTransparency: false,
       increasedContrast: false
@@ -17,7 +18,8 @@ import Testing
 
 @Test func pinnedChromeMaterialPolicyUsesLegacyMaterialWithoutGlass() {
   #expect(
-    PinnedChromeMaterialPolicy.resolve(
+    FleckChromeMaterialPolicy.resolve(
+      appearance: .glass,
       supportsLiquidGlass: false,
       reduceTransparency: false,
       increasedContrast: false
@@ -27,25 +29,47 @@ import Testing
 
 @Test func pinnedChromeMaterialPolicyUsesOpaqueAccessibilitySurface() {
   #expect(
-    PinnedChromeMaterialPolicy.resolve(
+    FleckChromeMaterialPolicy.resolve(
+      appearance: .glass,
       supportsLiquidGlass: true,
       reduceTransparency: true,
       increasedContrast: false
     ) == .opaque
   )
   #expect(
-    PinnedChromeMaterialPolicy.resolve(
+    FleckChromeMaterialPolicy.resolve(
+      appearance: .glass,
       supportsLiquidGlass: true,
       reduceTransparency: false,
       increasedContrast: true
     ) == .opaque
   )
   #expect(
-    PinnedChromeMaterialPolicy.resolve(
+    FleckChromeMaterialPolicy.resolve(
+      appearance: .glass,
       supportsLiquidGlass: true,
       reduceTransparency: true,
       increasedContrast: true
     ) == .opaque
+  )
+}
+
+@Test func pinnedChromeDefaultsToSolidAndOnlyUsesGlassWhenSelected() {
+  #expect(
+    FleckChromeMaterialPolicy.resolve(
+      appearance: .solid,
+      supportsLiquidGlass: true,
+      reduceTransparency: false,
+      increasedContrast: false
+    ) == .opaque
+  )
+  #expect(
+    FleckChromeMaterialPolicy.resolve(
+      appearance: .glass,
+      supportsLiquidGlass: true,
+      reduceTransparency: false,
+      increasedContrast: false
+    ) == .liquidGlass
   )
 }
 
@@ -151,13 +175,14 @@ private func hostedPinnedPanel() async throws -> PinnedChromeFixture {
   state.workspace = Workspace(notes: [note], selectedNoteID: note.id, folders: [])
   state.updatePreferences { $0.showFormattingBar = true }
   let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
-  let rootView = AnyView(NotesPanel(
-    dictationRuntime: runtime,
-    isPinned: true,
-    sizing: .container
-  )
-  .environmentObject(state)
-  .frame(width: 640, height: 430))
+  let rootView = AnyView(FleckThemeTestRoot(state: state) {
+    NotesPanel(
+      dictationRuntime: runtime,
+      isPinned: true,
+      sizing: .container
+    )
+    .frame(width: 640, height: 430)
+  })
   let host = NSHostingView(rootView: rootView)
   let window = NSWindow(
     contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),

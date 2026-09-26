@@ -84,10 +84,9 @@ struct FolderNavigatorPresentationTests {
   @Test func focusedUnselectedFolderRowsUseAdaptiveNeutralOutlines() throws {
     let source = try folderNavigatorSource()
     #expect(source.contains("if isFocused && !isSelected {"))
-    #expect(source.contains(".strokeBorder(Color.primary, lineWidth: 1)"))
-    #expect(!source.contains(".strokeBorder(Color.accentColor"))
-    #expect(source.contains("? Color.accentColor.opacity(0.28)"))
-    #expect(source.contains("isSelected ? Color.accentColor.opacity(0.18) : .clear"))
+    #expect(source.contains(".strokeBorder(theme.color(.focusRing), lineWidth: 1)"))
+    #expect(source.contains("? theme.color(.hoverFill)"))
+    #expect(source.contains("isSelected ? theme.color(.selectionFill) : .clear"))
     #expect(source.contains(".accessibilityHint(isEmpty ? \"Empty folder\" : \"\")"))
   }
 

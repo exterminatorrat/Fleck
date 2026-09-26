@@ -101,11 +101,20 @@ private func brightPixelBounds<Content: View>(
 @Test @MainActor func DictationAccessibilityKeepsActiveProgressTileAtCrispBaseSize() throws {
   let padding: CGFloat = 10
   let activeTile = 1
+  let theme = FleckThemeSnapshot.resolve(
+    colorTheme: .codex,
+    mode: .dark,
+    systemAppearance: .light,
+    reduceTransparency: false,
+    increasedContrast: false
+  )
+  let colors = FleckRailColors(theme: theme)
   let painted = try #require(
     try brightPixelBounds(
       of: FleckRailMark(
         layout: .rail(reversed: false),
-        treatments: [.pending, .active, .pending, .pending]
+        treatments: [.pending, .active, .pending, .pending],
+        colors: colors
       )
       .padding(padding)
       .background(Color.black),
@@ -1142,21 +1151,44 @@ private func brightPixelBounds<Content: View>(
   controller.dismiss()
 }
 
-@Test func DictationAccessibilityResolvesContrastSafeFleckColors() {
-  let colors = FleckRailColors()
-  #expect(colors.accentHex == "#7C6CF2")
-  #expect(colors.displayCoreHex == "#7C6CF2")
-  #expect(colors.displayLiveHex == "#A79DFF")
-  #expect(colors.shellHex == "#17151C")
-  #expect(colors.shellOpacity == 0.96)
-  #expect(FleckRailColors.contrastRatio(colors.displayCore, against: colors.shell) >= 3)
-  #expect(FleckRailColors.contrastRatio(colors.displayLive, against: colors.shell) >= 3)
+@Test func DictationAccessibilityResolvesContrastSafeFleckColorsForEveryPalette() {
+  for family in FleckColorTheme.allCases {
+    for (mode, appearance) in [(AppTheme.light, FleckThemeAppearance.light), (.dark, .dark)] {
+      let theme = FleckThemeSnapshot.resolve(
+        colorTheme: family,
+        mode: mode,
+        systemAppearance: appearance,
+        reduceTransparency: false,
+        increasedContrast: false
+      )
+      let colors = FleckRailColors(theme: theme)
 
-  let custom = FleckRailColors(accentHex: "#302040")
-  #expect(custom.accentHex == "#302040")
-  #expect(custom.displayCoreHex != custom.accentHex)
-  #expect(FleckRailColors.contrastRatio(custom.displayCore, against: custom.shell) >= 3)
-  #expect(FleckRailColors.contrastRatio(custom.displayLive, against: custom.shell) >= 3)
+      #expect(theme.appearance == appearance)
+      #expect(colors.accentHex == theme.palette[.accent])
+      #expect(colors.displayCoreHex == theme.palette[.accent])
+      #expect(colors.displayLiveHex == theme.palette[.focusRing])
+      #expect(colors.shell.hex == theme.palette[.capsuleSurface])
+      #expect(colors.primaryText.hex == theme.palette[.capsuleText])
+      #expect(colors.effectiveShellOpacity == FleckRailColors.shellOpacity)
+      #expect(FleckRailColors.contrastRatio(colors.primaryText, against: colors.shell) >= 4.5)
+      #expect(FleckRailColors.contrastRatio(colors.displayCore, against: colors.shell) >= 3)
+      #expect(FleckRailColors.contrastRatio(colors.displayLive, against: colors.shell) >= 3)
+      #expect(FleckRailColors.contrastRatio(colors.success, against: colors.shell) >= 3)
+      #expect(FleckRailColors.contrastRatio(colors.warning, against: colors.shell) >= 3)
+      #expect(FleckRailColors.contrastRatio(colors.failure, against: colors.shell) >= 3)
+
+      let opaqueTheme = FleckThemeSnapshot.resolve(
+        colorTheme: family,
+        mode: mode,
+        systemAppearance: appearance,
+        reduceTransparency: true,
+        increasedContrast: false
+      )
+      let opaqueColors = FleckRailColors(theme: opaqueTheme)
+      #expect(opaqueColors.reduceTransparency)
+      #expect(opaqueColors.effectiveShellOpacity == 1)
+    }
+  }
 }
 
 @Test func DictationAccessibilityMapsIncreaseContrastWithoutColorDifferentiation() {

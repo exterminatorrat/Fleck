@@ -5,6 +5,67 @@ import Testing
 
 @testable import FleckApp
 
+@Test @MainActor func editorBodyLinkCaretAndSelectionInkFollowCanvasAcrossInverseAppearances() throws {
+  let target = UUID()
+  let token = NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)
+  let text = "Body \(token)"
+  let cases: [(NSAppearance.Name, String)] = [
+    (.darkAqua, "#FFFFFF"),
+    (.aqua, "#000000"),
+  ]
+
+  for (appearanceName, canvasHex) in cases {
+    let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 160))
+    textView.appearance = NSAppearance(named: appearanceName)
+    textView.string = text
+    let expectedCanvas = try #require(NSColor(hex: canvasHex))
+    NativeRichTextEditor.applyAppearance(
+      to: textView,
+      textColorHex: nil,
+      backgroundColorHex: canvasHex
+    )
+    NativeRichTextEditor.applyAccentAppearance(to: textView, accentColorHex: "#FFD600")
+    textView.refreshNoteLinks(
+      accentColorHex: "#FFD600",
+      liveNoteIDs: [target]
+    )
+
+    let actualCanvas = EditorCanvasInk.canvasColor(for: textView)
+    #expect(actualCanvas.isEqual(expectedCanvas))
+    let link = try #require(NoteLinkParser.links(in: text).first)
+    let bodyInk = try #require(
+      textView.layoutManager?.temporaryAttribute(
+        .foregroundColor,
+        atCharacterIndex: 0,
+        effectiveRange: nil
+      ) as? NSColor
+    )
+    let linkInk = try #require(
+      textView.layoutManager?.temporaryAttribute(
+        .foregroundColor,
+        atCharacterIndex: link.range.location,
+        effectiveRange: nil
+      ) as? NSColor
+    )
+    let selectionFill = try #require(
+      textView.selectedTextAttributes[.backgroundColor] as? NSColor
+    )
+    let selectionInk = try #require(
+      textView.selectedTextAttributes[.foregroundColor] as? NSColor
+    )
+
+    #expect(FleckColorContrast.contrastRatio(bodyInk, against: actualCanvas) >= 4.5)
+    #expect(FleckColorContrast.contrastRatio(linkInk, against: actualCanvas) >= 4.5)
+    #expect(FleckColorContrast.contrastRatio(textView.insertionPointColor, against: actualCanvas) >= 3)
+    #expect(
+      FleckColorContrast.contrastRatio(
+        selectionInk,
+        against: FleckColorContrast.composite(selectionFill, over: actualCanvas)
+      ) >= 4.5
+    )
+  }
+}
+
 @Test @MainActor func NoteLinkEditorInsertionIsOneUndoableRealTextViewEdit() throws {
   let textView = ListAwareTextView(frame: .zero)
   let window = NSWindow(
@@ -402,7 +463,12 @@ import Testing
         atCharacterIndex: link.range.location,
         effectiveRange: nil
       ) as? NSColor
-    ) == sRGBColor(.systemOrange)
+    ) == sRGBColor(
+      FleckColorContrast.accessibleForeground(
+        FleckThemeSnapshot.initial.nsColor(.warning),
+        against: EditorCanvasInk.canvasColor(for: textView)
+      )
+    )
   )
   let underline = try #require(
     textView.layoutManager?.temporaryAttribute(

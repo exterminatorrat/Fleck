@@ -2096,17 +2096,25 @@ private final class UndoRoutingResponder: NSView {
   let undoManager = try #require(textView.undoManager)
   undoManager.registerUndo(withTarget: textView) { _ in }
   let originalCanUndo = undoManager.canUndo
+  let canvasColor = EditorCanvasInk.canvasColor(for: textView)
 
   NativeRichTextEditor.applyAccentAppearance(to: textView, accentColorHex: "#FFD600")
   let yellow = try #require(NSColor(hex: "#FFD600"))
   let yellowSelection = try #require(
     textView.selectedTextAttributes[.backgroundColor] as? NSColor
   )
-  let yellowComponents = try #require(sRGB(yellow))
   let selectedYellowComponents = try #require(sRGB(yellowSelection))
-  #expect(sRGB(textView.insertionPointColor) == yellowComponents)
+  let yellowSelectionForeground = try #require(
+    textView.selectedTextAttributes[.foregroundColor] as? NSColor
+  )
+  #expect(FleckColorContrast.contrastRatio(textView.insertionPointColor, against: canvasColor) >= 3)
   #expect(textView.selectedTextAttributes.count == 3)
-  #expect(sRGB(textView.selectedTextAttributes[.foregroundColor] as? NSColor) == sRGB(selectionForeground))
+  #expect(
+    FleckColorContrast.contrastRatio(
+      yellowSelectionForeground,
+      against: FleckColorContrast.composite(yellowSelection, over: canvasColor)
+    ) >= 4.5
+  )
   #expect(textView.selectedTextAttributes[.underlineStyle] as? Int == selectionUnderline)
   #expect(selectedYellowComponents == sRGB(yellow.withAlphaComponent(0.35)))
 
@@ -2115,11 +2123,18 @@ private final class UndoRoutingResponder: NSView {
   let greenSelection = try #require(
     textView.selectedTextAttributes[.backgroundColor] as? NSColor
   )
-  let greenComponents = try #require(sRGB(green))
   let selectedGreenComponents = try #require(sRGB(greenSelection))
-  #expect(sRGB(textView.insertionPointColor) == greenComponents)
+  let greenSelectionForeground = try #require(
+    textView.selectedTextAttributes[.foregroundColor] as? NSColor
+  )
+  #expect(FleckColorContrast.contrastRatio(textView.insertionPointColor, against: canvasColor) >= 3)
   #expect(textView.selectedTextAttributes.count == 3)
-  #expect(sRGB(textView.selectedTextAttributes[.foregroundColor] as? NSColor) == sRGB(selectionForeground))
+  #expect(
+    FleckColorContrast.contrastRatio(
+      greenSelectionForeground,
+      against: FleckColorContrast.composite(greenSelection, over: canvasColor)
+    ) >= 4.5
+  )
   #expect(textView.selectedTextAttributes[.underlineStyle] as? Int == selectionUnderline)
   #expect(selectedGreenComponents == sRGB(green.withAlphaComponent(0.35)))
 
@@ -2511,6 +2526,20 @@ private func sRGB(_ color: NSColor?) -> [Int]? {
     Int((color.blueComponent * 255).rounded()),
     Int((color.alphaComponent * 255).rounded()),
   ]
+}
+
+private func hasEditorInk(_ color: NSColor?, against background: NSColor) -> Bool {
+  guard let color = color?.usingColorSpace(.sRGB),
+    let background = background.usingColorSpace(.sRGB)
+  else { return false }
+  let alpha = color.alphaComponent
+  let red = color.redComponent * alpha + background.redComponent * (1 - alpha)
+  let green = color.greenComponent * alpha + background.greenComponent * (1 - alpha)
+  let blue = color.blueComponent * alpha + background.blueComponent * (1 - alpha)
+  return max(
+    abs(red - background.redComponent),
+    max(abs(green - background.greenComponent), abs(blue - background.blueComponent))
+  ) > 0.1
 }
 
 @MainActor
@@ -3763,7 +3792,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   #expect(navigator.contains("if reduceMotion { return .opacity.animation(motion.state) }"))
   #expect(!body.contains(".animation(motion.spatial, value: isCreatingFolder)"))
 
-  #expect(editor.contains("let accent = Color(hex: appState.preferences.accentHex) ?? .accentColor"))
+  #expect(editor.contains("let accent = theme.color(.accent)"))
   #expect(
     normalizedEditor.contains(
       ".buttonStyle(FolderActionButtonStyle(role: .save, accent: accent, motion: motion))"
@@ -3823,7 +3852,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   #expect(navigator.contains("canAccept(expectedSource, target.folderID)"))
   #expect(navigator.contains("guard let expectedSource = matchingSource(info)"))
   #expect(navigator.contains("draggedSource == expectedSource"))
-  #expect(navigator.contains("Color.accentColor.opacity"))
+  #expect(navigator.contains("theme.color(.hoverFill)"))
   #expect(navigator.contains(".contentShape"))
   #expect(navigator.contains("accessibilityAction"))
   #expect(navigator.contains("noteDropTarget = nil"))
@@ -4400,8 +4429,9 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
         let rows = max(0, Int((top - 10) * scale))..<min(bitmap.pixelsHigh, Int((top + originalFrame.height) * scale))
         // The first N is common to the placeholder and typed text; exclude the caret at x=2.
         let columns = Int((originalFrame.minX + 5) * scale)..<Int((originalFrame.minX + 13) * scale)
+        let canvasColor = state.themeSnapshot.nsColor(.editorOpaque)
         let ink = rows.filter { y in columns.contains { x in
-          (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.1
+          hasEditorInk(bitmap.colorAt(x: x, y: y), against: canvasColor)
         } }
         let first = try #require(ink.first)
         let last = try #require(ink.last)
@@ -4483,7 +4513,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
     try await withHostedTitleEditors(
       isPinned: isPinned, titleText: titleText, fontFamily: font,
       bodyText: String(repeating: "Caret body\n", count: 50)
-    ) { _, window, host, title, body in
+    ) { state, window, host, title, body in
       let scrollView = try #require(body.enclosingScrollView)
       do {
         #expect(window.makeFirstResponder(body))
@@ -4509,8 +4539,9 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
             let right = sourceRect.maxX - source.bounds.minX
             let xs = max(0, Int(left * scale))..<min(bitmap.pixelsWide, Int(right * scale))
             let ys = max(0, Int(top * scale))..<min(bitmap.pixelsHigh, Int((top + sourceRect.height) * scale))
+            let canvasColor = state.themeSnapshot.nsColor(.editorOpaque)
             let rows = ys.filter { y in xs.contains { x in
-              (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.2
+              hasEditorInk(bitmap.colorAt(x: x, y: y), against: canvasColor)
             } }
             let first = try #require(rows.first)
             let last = try #require(rows.last)
@@ -4580,20 +4611,30 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   }
 }
 
-@Test @MainActor func hostedTitleCaretMatchesBodyAccent() async throws {
-  try await withHostedTitleEditors { _, window, host, titleField, bodyEditor in
-    let accent = try #require(NSColor(hex: "#FFD600"))
+@Test @MainActor func hostedTitleCaretKeepsAccentWhileBodyCaretFollowsCanvasContrast() async throws {
+  try await withHostedTitleEditors { state, window, host, titleField, bodyEditor in
+    let canvasColor = EditorCanvasInk.canvasColor(for: bodyEditor)
+    let expectedCaretColor = FleckColorContrast.accessibleForeground(
+      state.themeSnapshot.nsColor(.focusRing),
+      against: canvasColor,
+      minimumContrast: 3
+    )
     for _ in 0..<2 {
       #expect(window.makeFirstResponder(bodyEditor))
-      #expect(sRGB(bodyEditor.insertionPointColor) == sRGB(accent))
+      #expect(
+        FleckColorContrast.contrastRatio(
+          bodyEditor.insertionPointColor,
+          against: EditorCanvasInk.canvasColor(for: bodyEditor)
+        ) >= 3
+      )
       #expect(window.makeFirstResponder(titleField))
       let fieldEditor = try #require(titleField.currentEditor() as? NSTextView)
       #expect(window.firstResponder === fieldEditor)
-      // Check immediately: merely focusing an empty selection must style the caret.
       fieldEditor.setSelectedRange(NSRange(location: 2, length: 0))
-      #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(bodyEditor.insertionPointColor))
+      #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(expectedCaretColor))
+      #expect(FleckColorContrast.contrastRatio(fieldEditor.insertionPointColor, against: canvasColor) >= 3)
       await settleHostedView(host)
-      #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(accent))
+      #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(expectedCaretColor))
     }
   }
 }
@@ -4607,11 +4648,25 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
     let typing = NSDictionary(dictionary: fieldEditor.typingAttributes)
     let selectedAppearance = NSDictionary(dictionary: fieldEditor.selectedTextAttributes)
     let originalTitle = fieldEditor.string
+    let expectedCaretColor = FleckColorContrast.accessibleForeground(
+      state.themeSnapshot.nsColor(.focusRing),
+      against: EditorCanvasInk.canvasColor(for: bodyEditor),
+      minimumContrast: 3
+    )
     state.updatePreferences { $0.accentHex = "#30D158" }
     await settleHostedView(host)
     #expect(window.firstResponder === fieldEditor)
-    #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(NSColor(hex: "#30D158")))
-    #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(bodyEditor.insertionPointColor))
+    #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(expectedCaretColor))
+    #expect(FleckColorContrast.contrastRatio(
+      fieldEditor.insertionPointColor,
+      against: EditorCanvasInk.canvasColor(for: bodyEditor)
+    ) >= 3)
+    #expect(
+      FleckColorContrast.contrastRatio(
+        bodyEditor.insertionPointColor,
+        against: EditorCanvasInk.canvasColor(for: bodyEditor)
+      ) >= 3
+    )
     #expect(fieldEditor.selectedRange() == selection)
     #expect(NSDictionary(dictionary: fieldEditor.typingAttributes).isEqual(to: typing))
     #expect(NSDictionary(dictionary: fieldEditor.selectedTextAttributes).isEqual(to: selectedAppearance))
@@ -4623,8 +4678,65 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   }
 }
 
+@Test @MainActor func hostedTitleInkAndCaretFollowInverseCanvasOnCreateUpdateAndFocus() async throws {
+  let authoredRTF = try hostedPanelRTF(text: "Caret body")
+  try await withHostedTitleEditors(
+    richTextRTF: authoredRTF,
+    editorBackgroundHexForAppearance: { appearance in
+      appearance == .aqua ? "#000000" : "#FFFFFF"
+    }
+  ) { state, window, host, titleField, bodyEditor in
+    let originalTitle = titleField.stringValue
+    let originalRichTextRTF = try #require(state.workspace.notes.first?.richTextRTF)
+    let snapshot = state.themeSnapshot
+    @MainActor func expectPaletteColors() throws -> NSColor {
+      let canvasColor = EditorCanvasInk.canvasColor(for: bodyEditor)
+      #expect(sRGB(canvasColor) == sRGB(snapshot.nsColor(.editorOpaque)))
+      let titleInk = try #require(titleField.textColor)
+      #expect(sRGB(titleInk) == sRGB(snapshot.nsColor(.textPrimary)))
+      #expect(FleckColorContrast.contrastRatio(titleInk, against: canvasColor) >= 4.5)
+      return canvasColor
+    }
+    @MainActor func expectFieldEditorContrast(_ fieldEditor: NSTextView, against canvasColor: NSColor) throws {
+      let titleInk = try #require(fieldEditor.textColor)
+      #expect(FleckColorContrast.contrastRatio(
+        titleInk,
+        against: canvasColor
+      ) >= 4.5)
+      let caretInk = FleckColorContrast.accessibleForeground(
+        snapshot.nsColor(.focusRing),
+        against: canvasColor,
+        minimumContrast: 3
+      )
+      #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(caretInk))
+      #expect(FleckColorContrast.contrastRatio(fieldEditor.insertionPointColor, against: canvasColor) >= 3)
+    }
+
+    var canvasColor = try expectPaletteColors()
+    #expect(window.makeFirstResponder(titleField))
+    var fieldEditor = try #require(titleField.currentEditor() as? NSTextView)
+    try expectFieldEditorContrast(fieldEditor, against: canvasColor)
+
+    state.updatePreferences { $0.editorBackgroundHex = "#00FF00" }
+    await settleHostedView(host)
+    #expect(state.themeSnapshot == snapshot)
+    canvasColor = try expectPaletteColors()
+    #expect(window.firstResponder === fieldEditor)
+    try expectFieldEditorContrast(fieldEditor, against: canvasColor)
+
+    #expect(window.makeFirstResponder(bodyEditor))
+    #expect(window.makeFirstResponder(titleField))
+    fieldEditor = try #require(titleField.currentEditor() as? NSTextView)
+    try expectFieldEditorContrast(fieldEditor, against: canvasColor)
+    #expect(fieldEditor.string == originalTitle)
+    #expect(state.workspace.notes.first?.title == originalTitle)
+    #expect(state.workspace.notes.first?.body == "Caret body")
+    #expect(state.workspace.notes.first?.richTextRTF == originalRichTextRTF)
+  }
+}
+
 @Test @MainActor func hostedTitleAccentDoesNotLeakToOtherFields() async throws {
-  try await withHostedTitleEditors { state, window, host, titleField, _ in
+  try await withHostedTitleEditors { state, window, host, titleField, bodyEditor in
     let otherField = NSTextField(string: "Unrelated input")
     otherField.frame = NSRect(x: 0, y: 0, width: 200, height: 24)
     host.addSubview(otherField)
@@ -4635,7 +4747,11 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
     #expect(window.makeFirstResponder(titleField))
     let titleEditor = try #require(titleField.currentEditor() as? NSTextView)
     #expect(titleEditor !== ordinaryEditor)
-    #expect(sRGB(titleEditor.insertionPointColor) == sRGB(NSColor(hex: "#FFD600")))
+    #expect(sRGB(titleEditor.insertionPointColor) == sRGB(FleckColorContrast.accessibleForeground(
+      state.themeSnapshot.nsColor(.focusRing),
+      against: EditorCanvasInk.canvasColor(for: bodyEditor),
+      minimumContrast: 3
+    )))
     #expect(window.makeFirstResponder(otherField))
     #expect(otherField.currentEditor() === ordinaryEditor)
     #expect(sRGB(ordinaryEditor.insertionPointColor) == sRGB(originalCaret))
@@ -4644,7 +4760,11 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
     await settleHostedView(host)
     #expect(sRGB(ordinaryEditor.insertionPointColor) == sRGB(originalCaret))
     #expect(window.makeFirstResponder(titleField))
-    #expect(sRGB(titleEditor.insertionPointColor) == sRGB(NSColor(hex: "#30D158")))
+    #expect(sRGB(titleEditor.insertionPointColor) == sRGB(FleckColorContrast.accessibleForeground(
+      state.themeSnapshot.nsColor(.focusRing),
+      against: EditorCanvasInk.canvasColor(for: bodyEditor),
+      minimumContrast: 3
+    )))
     #expect(window.makeFirstResponder(otherField))
     #expect(otherField.currentEditor() === ordinaryEditor)
     #expect(sRGB(ordinaryEditor.insertionPointColor) == sRGB(originalCaret))
@@ -4657,12 +4777,19 @@ private func withHostedTitleEditors(
   titleText: String = "Caret title",
   fontFamily: String = "Avenir Next",
   bodyText: String = "Caret body",
+  richTextRTF: Data? = nil,
+  editorBackgroundHexForAppearance: (NSAppearance.Name) -> String? = { _ in nil },
   _ check: @MainActor (AppState, NSWindow, NSHostingView<AnyView>, NSTextField, ListAwareTextView) async throws -> Void
 ) async throws {
   for appearance in [NSAppearance.Name.aqua, .darkAqua] {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     defer { try? FileManager.default.removeItem(at: root) }
-    let note = Note(title: titleText, body: bodyText, folderID: nil)
+    let note = Note(
+      title: titleText,
+      body: bodyText,
+      richTextRTF: richTextRTF,
+      folderID: nil
+    )
     let state = await hostedPanelState(
       root: root,
       workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
@@ -4670,6 +4797,7 @@ private func withHostedTitleEditors(
     state.updatePreferences {
       $0.accentHex = "#FFD600"
       $0.fontFamily = fontFamily
+      $0.editorBackgroundHex = editorBackgroundHexForAppearance(appearance)
     }
     let (window, host) = hostedPanel(root: root, state: state, commands: EditorCommands(), isPinned: isPinned)
     defer { window.orderOut(nil) }
@@ -4755,16 +4883,13 @@ private func withHostedTitleEditors(
   )
   var namedWorkspace = unfiledWorkspace
   namedWorkspace.selectedNoteID = namedNote.id
-  let accentHex = "#00FF00"
   let unfiledPill = try await hostedFolderSelectionGeometry(
     root: unfiledRoot,
-    workspace: unfiledWorkspace,
-    accentHex: accentHex
+    workspace: unfiledWorkspace
   )
   let namedPill = try await hostedFolderSelectionGeometry(
     root: namedRoot,
-    workspace: namedWorkspace,
-    accentHex: accentHex
+    workspace: namedWorkspace
   )
 
   let navigatorBand = CGRect(x: 0, y: 42, width: 640, height: 40)
@@ -4782,7 +4907,7 @@ private func withHostedTitleEditors(
 
   #expect(abs(namedPill.bounds.minY - unfiledPill.bounds.minY) <= 2)
   #expect(abs(namedPill.bounds.height - unfiledPill.bounds.height) <= 5)
-  #expect(namedPill.bounds.width > unfiledPill.bounds.width)
+  #expect(namedPill.labelBounds.width > unfiledPill.labelBounds.width)
 
   let focusDestination = FolderNavigatorFocus.nextIndex(
     currentIndex: 0,
@@ -4813,7 +4938,7 @@ private func withHostedTitleEditors(
       .components(separatedBy: "private struct FolderActionButtonStyle").first
   )
   #expect(rowLabelBody.contains("RoundedRectangle(cornerRadius: 6)"))
-  #expect(rowLabelBody.contains("isSelected ? Color.accentColor.opacity(0.18)"))
+  #expect(rowLabelBody.contains("isSelected ? theme.color(.selectionFill) : .clear"))
   #expect(rootRow.contains("isFocused: focusedRow == .unfiled"))
   #expect(folderRow.contains("isFocused: focusedRow == .folder(folder.id)"))
   #expect(rootRow.contains(".focusEffectDisabled()"))
@@ -4833,7 +4958,7 @@ private func withHostedTitleEditors(
   #expect(rowLabelBody.contains(".overlay"))
   #expect(
     rowLabelBody.contains(
-      ".strokeBorder(Color.primary, lineWidth: 1)"
+      ".strokeBorder(theme.color(.focusRing), lineWidth: 1)"
     )
   )
 }
@@ -4858,17 +4983,11 @@ private func withHostedTitleEditors(
     )
   )
   state.updatePreferences {
-    $0.accentHex = "#00FF00"
     $0.isUnfiledCompact = true
     $0.showFormattingBar = false
   }
   let commands = EditorCommands()
-  let (window, host) = hostedPanel(
-    root: root,
-    state: state,
-    commands: commands,
-    accentHex: "#00FF00"
-  )
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
   window.appearance = NSAppearance(named: .darkAqua)
   defer { window.orderOut(nil) }
   await settleHostedView(host)
@@ -4934,7 +5053,6 @@ private func withHostedTitleEditors(
   )
   let state = await hostedPanelState(root: root, workspace: workspace)
   state.updatePreferences {
-    $0.accentHex = "#00FF00"
     $0.isUnfiledCompact = false
     $0.showFormattingBar = false
   }
@@ -4942,8 +5060,7 @@ private func withHostedTitleEditors(
   let (window, host) = hostedPanel(
     root: root,
     state: state,
-    commands: commands,
-    accentHex: "#00FF00"
+    commands: commands
   )
   window.appearance = NSAppearance(named: .darkAqua)
   defer { window.orderOut(nil) }
@@ -4980,7 +5097,13 @@ private func withHostedTitleEditors(
   #expect(state.workspace.selectedNoteID == folderNote.id)
 }
 
-private struct HostedAccentPillGeometry {
+private struct HostedSelectionPillGeometry {
+  let bounds: CGRect
+  let labelBounds: CGRect
+  let pixelCount: Int
+}
+
+private struct HostedSelectionPixelBounds {
   let bounds: CGRect
   let pixelCount: Int
 }
@@ -4988,34 +5111,39 @@ private struct HostedAccentPillGeometry {
 @MainActor
 private func hostedFolderSelectionGeometry(
   root: URL,
-  workspace: Workspace,
-  accentHex: String
-) async throws -> HostedAccentPillGeometry {
+  workspace: Workspace
+) async throws -> HostedSelectionPillGeometry {
   let state = await hostedPanelState(root: root, workspace: workspace)
   state.updatePreferences {
-    $0.accentHex = accentHex
     $0.isUnfiledCompact = true
     $0.showFormattingBar = false
   }
   let commands = EditorCommands()
-  let (window, host) = hostedPanel(
-    root: root,
-    state: state,
-    commands: commands,
-    accentHex: accentHex
-  )
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
   window.appearance = NSAppearance(named: .darkAqua)
   defer { window.orderOut(nil) }
   await settleHostedView(host)
 
   let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
   host.cacheDisplay(in: host.bounds, to: imageRep)
-  return try #require(
-    hostedAccentFillBounds(
-      in: imageRep,
-      hostSize: host.bounds.size,
-      accentHex: accentHex
-    )
+  func sourceView(_ noteID: UUID, in view: NSView) -> ReorderSourceHostingView? {
+    if let source = view as? ReorderSourceHostingView, source.noteID == noteID { return source }
+    return view.subviews.lazy.compactMap { sourceView(noteID, in: $0) }.first
+  }
+  let selectedNoteID = try #require(workspace.selectedNoteID)
+  let source = try #require(sourceView(selectedNoteID, in: host))
+  let labelBounds = source.convert(source.labelCapsuleRect, to: host)
+  let selectedFill = FleckColorContrast.composite(
+    state.themeSnapshot.nsColor(.accent).withAlphaComponent(NoteTabInk.selectedCapsuleOpacity),
+    over: state.themeSnapshot.nsColor(.window)
+  )
+  let pixels = try #require(
+    hostedSelectionFillBounds(in: imageRep, hostSize: host.bounds.size, color: selectedFill)
+  )
+  return HostedSelectionPillGeometry(
+    bounds: pixels.bounds,
+    labelBounds: labelBounds,
+    pixelCount: pixels.pixelCount
   )
 }
 
@@ -5081,6 +5209,170 @@ private func hostedNeutralFocusOutlinePixelCount(
     }
   }
   return matchCount
+}
+
+@Test @MainActor func hostedSettingsLabelsUsePaletteRolesAcrossAppearances() async throws {
+  let previousApplicationAppearance = NSApp.appearance
+  defer { NSApp.appearance = previousApplicationAppearance }
+
+  for palette in [FleckColorTheme.capy, .absolutely] {
+    for (appearance, mode) in [
+      (FleckThemeAppearance.light, AppTheme.light),
+      (FleckThemeAppearance.dark, AppTheme.dark),
+    ] {
+      let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+      defer { try? FileManager.default.removeItem(at: root) }
+      let state = await hostedPanelState(root: root, workspace: Workspace())
+      state.updatePreferences {
+        $0.colorTheme = palette
+        $0.theme = mode
+      }
+      let theme = state.themeSnapshot
+      #expect(theme.colorTheme == palette)
+      #expect(theme.appearance == appearance)
+      let header = FleckThemeTestRoot(state: state) {
+        SettingsPageHeader(section: .about, searchRequest: nil)
+        .padding(12)
+        .frame(width: 640, height: 100, alignment: .topLeading)
+        .background(theme.color(.window))
+      }
+      let headerHost = NSHostingView(rootView: AnyView(header))
+      let headerWindow = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 640, height: 100),
+        styleMask: [.borderless], backing: .buffered, defer: false
+      )
+      headerWindow.appearance = NSAppearance(named: mode == .light ? .aqua : .darkAqua)
+      headerWindow.backgroundColor = theme.nsColor(.window)
+      headerWindow.contentView = headerHost
+      headerWindow.makeKeyAndOrderFront(nil)
+      defer { headerWindow.orderOut(nil) }
+      await settleHostedView(headerHost)
+
+      let headerImageRep = try #require(
+        headerHost.bitmapImageRepForCachingDisplay(in: headerHost.bounds)
+      )
+      headerHost.cacheDisplay(in: headerHost.bounds, to: headerImageRep)
+      #expect(
+        hostedThemePixelCount(in: headerImageRep, matching: theme.nsColor(.textSecondary)) > 0
+      )
+
+      let row = FleckThemeTestRoot(state: state) {
+        SettingsPreferenceRow(
+          "Palette label",
+          detail: "This caption follows the selected theme snapshot in every appearance."
+        ) {
+          Text("Current")
+        }
+        .padding(12)
+        .frame(width: 640, height: 100, alignment: .topLeading)
+        .background(theme.color(.window))
+      }
+      let rowHost = NSHostingView(rootView: AnyView(row))
+      let rowWindow = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 640, height: 100),
+        styleMask: [.borderless], backing: .buffered, defer: false
+      )
+      rowWindow.appearance = NSAppearance(named: mode == .light ? .aqua : .darkAqua)
+      rowWindow.backgroundColor = theme.nsColor(.window)
+      rowWindow.contentView = rowHost
+      rowWindow.makeKeyAndOrderFront(nil)
+      defer { rowWindow.orderOut(nil) }
+      await settleHostedView(rowHost)
+      let rowImageRep = try #require(rowHost.bitmapImageRepForCachingDisplay(in: rowHost.bounds))
+      rowHost.cacheDisplay(in: rowHost.bounds, to: rowImageRep)
+      #expect(hostedThemePixelCount(in: rowImageRep, matching: theme.nsColor(.caption)) > 0)
+    }
+  }
+
+  #expect(
+    FleckThemePalette.resolve(family: .capy, appearance: .dark)[.textSecondary]
+      != FleckThemePalette.resolve(family: .absolutely, appearance: .dark)[.textSecondary]
+  )
+}
+
+@Test @MainActor
+func hostedSelectedNoteTabUsesOpaqueTintFillAndPairedInkUnderGlass() async throws {
+  let previousApplicationAppearance = NSApp.appearance
+  defer { NSApp.appearance = previousApplicationAppearance }
+  let tintHexes = ["#F2F3F5", "#7030A0"]
+
+  for (mode, appearance, windowAppearance) in [
+    (AppTheme.light, FleckThemeAppearance.light, NSAppearance.Name.aqua),
+    (AppTheme.dark, FleckThemeAppearance.dark, NSAppearance.Name.darkAqua),
+  ] {
+    for backdrop in [NSColor.white, NSColor.black] {
+      for selectedTint in tintHexes {
+        let root = FileManager.default.temporaryDirectory
+          .appendingPathComponent("selected-note-tab-glass-" + UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let selected = Note(title: "Selected tint", tabColorHex: selectedTint)
+        let other = Note(title: "Other tint", tabColorHex: tintHexes.first { $0 != selectedTint })
+        let state = await hostedPanelState(
+          root: root,
+          workspace: Workspace(notes: [selected, other], selectedNoteID: selected.id, folders: [])
+        )
+        state.updatePreferences {
+          $0.colorTheme = .capy
+          $0.theme = mode
+          $0.chromeAppearance = .glass
+          $0.panelOpacity = 0.55
+        }
+        let theme = state.themeSnapshot
+        #expect(theme.appearance == appearance)
+        #expect(state.workspace.notes.map(\.tabColorHex) == [selectedTint, tintHexes.first { $0 != selectedTint }])
+
+        let commands = EditorCommands()
+        let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+        window.appearance = NSAppearance(named: windowAppearance)
+        window.backgroundColor = backdrop
+        window.isOpaque = false
+        await settleHostedView(host)
+
+        let tabHost = try #require(hostedDescendant(in: host, as: FluidTabDestinationView.self))
+        let source = try #require(
+          hostedDescendants(in: tabHost, as: ReorderSourceHostingView.self)
+            .first { $0.noteID == selected.id }
+        )
+        let expectedFill = NoteTabInk.selectedCapsuleFill(
+          tabColor: try #require(NSColor(hex: selectedTint)),
+          surfaceColor: theme.nsColor(.window)
+        )
+        let actualFill = try #require(tabHost.selectionHighlightLayer.backgroundColor)
+        let actualFillColor = try #require(NSColor(cgColor: actualFill))
+        #expect(actualFillColor.alphaComponent == 1)
+        #expect(hostedThemeColorsMatch(actualFillColor, expectedFill))
+
+        let expectedInk = NoteTabInk.selectedLabelColor(
+          tabColor: try #require(NSColor(hex: selectedTint)),
+          surfaceColor: theme.nsColor(.window)
+        )
+        #expect(FleckColorContrast.contrastRatio(expectedInk, against: expectedFill) >= 4.5)
+        let image = try hostedThemeCapture(in: host)
+        let capsuleRect = tabHost.convert(tabHost.selectionHighlightLayer.frame, to: host)
+        #expect(
+          hostedThemePixelCount(
+            in: image,
+            matching: expectedFill,
+            within: capsuleRect,
+            hostSize: host.bounds.size
+          ) > 40
+        )
+        let labelImage = try hostedThemeCapture(in: source)
+        #expect(
+          hostedThemePixelCount(
+            in: labelImage,
+            matching: expectedInk,
+            within: source.labelCapsuleRect,
+            hostSize: source.bounds.size
+          ) > 0
+        )
+
+        window.contentView = nil
+        window.orderOut(nil)
+      }
+    }
+  }
 }
 
 @Test @MainActor func hostedNotesPanelEvacuatesTitleFocusWithoutRestoringBody() async throws {
@@ -5525,7 +5817,6 @@ private func hostedPanel(
   root: URL,
   state: AppState,
   commands: EditorCommands,
-  accentHex: String? = nil,
   isPinned: Bool = false
 ) -> (NSWindow, NSHostingView<AnyView>) {
   let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
@@ -5535,12 +5826,7 @@ private func hostedPanel(
     sizing: .container,
     editorCommands: commands
   )
-  let rootView: AnyView
-  if let accentHex, let accent = Color(hex: accentHex) {
-    rootView = AnyView(panel.environmentObject(state).accentColor(accent))
-  } else {
-    rootView = AnyView(panel.environmentObject(state))
-  }
+  let rootView = AnyView(FleckThemeTestRoot(state: state) { panel })
   let host = NSHostingView(rootView: rootView)
   let window = NSWindow(
     contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
@@ -5614,26 +5900,20 @@ private func hostedPanelRTF(text: String) throws -> Data {
 }
 
 @MainActor
-private func hostedAccentFillBounds(
+private func hostedSelectionFillBounds(
   in imageRep: NSBitmapImageRep,
   hostSize: CGSize,
-  accentHex: String
-) -> HostedAccentPillGeometry? {
+  color targetColor: NSColor
+) -> HostedSelectionPixelBounds? {
   guard hostSize.width > 0, hostSize.height > 0,
-    let accent = NSColor(hex: accentHex)?.usingColorSpace(.sRGB)
+    let targetColor = targetColor.usingColorSpace(.sRGB)
   else { return nil }
 
-  var accentRed: CGFloat = 0
-  var accentGreen: CGFloat = 0
-  var accentBlue: CGFloat = 0
-  var accentAlpha: CGFloat = 0
-  accent.getRed(
-    &accentRed,
-    green: &accentGreen,
-    blue: &accentBlue,
-    alpha: &accentAlpha
-  )
-  guard accentRed < 0.01, accentGreen > 0.99, accentBlue < 0.01 else { return nil }
+  let target = [
+    targetColor.redComponent,
+    targetColor.greenComponent,
+    targetColor.blueComponent,
+  ]
 
   let scaleX = CGFloat(imageRep.pixelsWide) / hostSize.width
   let scaleY = CGFloat(imageRep.pixelsHigh) / hostSize.height
@@ -5658,7 +5938,11 @@ private func hostedAccentFillBounds(
       var alpha: CGFloat = 0
       color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
       guard alpha > 0.5 else { continue }
-      guard green > 0.05, green > red + 0.05, green > blue + 0.05 else { continue }
+      let distance = max(
+        abs(red - target[0]),
+        max(abs(green - target[1]), abs(blue - target[2]))
+      )
+      guard distance < 0.04 else { continue }
       matchCount += 1
       minX = min(minX, x)
       minY = min(minY, y)
@@ -5669,7 +5953,7 @@ private func hostedAccentFillBounds(
 
   let minimumPixels = max(32, Int(20 * scaleX * scaleY))
   guard matchCount >= minimumPixels else { return nil }
-  return HostedAccentPillGeometry(
+  return HostedSelectionPixelBounds(
     bounds: CGRect(
       x: CGFloat(minX) / scaleX,
       y: CGFloat(minY) / scaleY,
@@ -5678,6 +5962,32 @@ private func hostedAccentFillBounds(
     ),
     pixelCount: matchCount
   )
+}
+
+@MainActor
+private func hostedThemePixelCount(
+  in imageRep: NSBitmapImageRep,
+  matching targetColor: NSColor
+) -> Int {
+  guard let target = targetColor.usingColorSpace(.sRGB) else { return 0 }
+  let targetComponents = [target.redComponent, target.greenComponent, target.blueComponent]
+  var matchCount = 0
+  for y in 0..<imageRep.pixelsHigh {
+    for x in 0..<imageRep.pixelsWide {
+      guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+        color.alphaComponent > 0.5
+      else { continue }
+      let distance = max(
+        abs(color.redComponent - targetComponents[0]),
+        max(
+          abs(color.greenComponent - targetComponents[1]),
+          abs(color.blueComponent - targetComponents[2])
+        )
+      )
+      if distance < 0.04 { matchCount += 1 }
+    }
+  }
+  return matchCount
 }
 
 @MainActor
@@ -5892,6 +6202,75 @@ private func sendHostedKeyDown(
     matches.append(contentsOf: fontPickerAccessibilityElements(child, label: label))
   }
   return matches
+}
+
+@MainActor
+private func hostedThemePixelCount(
+  in imageRep: NSBitmapImageRep,
+  matching targetColor: NSColor,
+  within rect: CGRect,
+  hostSize: CGSize
+) -> Int {
+  guard hostSize.width > 0, hostSize.height > 0,
+    let target = targetColor.usingColorSpace(imageRep.colorSpace)
+  else { return 0 }
+  let scaleX = CGFloat(imageRep.pixelsWide) / hostSize.width
+  let scaleY = CGFloat(imageRep.pixelsHigh) / hostSize.height
+  let xStart = max(0, Int(floor(rect.minX * scaleX)))
+  let xEnd = min(imageRep.pixelsWide, Int(ceil(rect.maxX * scaleX)))
+  let yStart = max(0, Int(floor(rect.minY * scaleY)))
+  let yEnd = min(imageRep.pixelsHigh, Int(ceil(rect.maxY * scaleY)))
+  guard xStart < xEnd, yStart < yEnd else { return 0 }
+  var matches = 0
+  for y in yStart..<yEnd {
+    for x in xStart..<xEnd {
+      guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(imageRep.colorSpace),
+        color.alphaComponent > 0.5
+      else { continue }
+      let distance = max(
+        abs(color.redComponent - target.redComponent),
+        max(
+          abs(color.greenComponent - target.greenComponent),
+          abs(color.blueComponent - target.blueComponent)
+        )
+      )
+      if distance < 0.04 { matches += 1 }
+    }
+  }
+  return matches
+}
+
+@MainActor
+private func hostedThemeColorsMatch(_ lhs: NSColor, _ rhs: NSColor) -> Bool {
+  guard let lhs = lhs.usingColorSpace(.sRGB), let rhs = rhs.usingColorSpace(.sRGB) else {
+    return false
+  }
+  return abs(lhs.redComponent - rhs.redComponent) < 0.005
+    && abs(lhs.greenComponent - rhs.greenComponent) < 0.005
+    && abs(lhs.blueComponent - rhs.blueComponent) < 0.005
+    && abs(lhs.alphaComponent - rhs.alphaComponent) < 0.005
+}
+
+@MainActor
+private func hostedThemeCapture(in view: NSView) throws -> NSBitmapImageRep {
+  let scale = view.window?.backingScaleFactor ?? 2
+  let image = try #require(
+    NSBitmapImageRep(
+      bitmapDataPlanes: nil,
+      pixelsWide: Int(view.bounds.width * scale),
+      pixelsHigh: Int(view.bounds.height * scale),
+      bitsPerSample: 8,
+      samplesPerPixel: 4,
+      hasAlpha: true,
+      isPlanar: false,
+      colorSpaceName: .calibratedRGB,
+      bytesPerRow: 0,
+      bitsPerPixel: 0
+    )
+  )
+  image.size = view.bounds.size
+  view.cacheDisplay(in: view.bounds, to: image)
+  return image
 }
 
 @MainActor

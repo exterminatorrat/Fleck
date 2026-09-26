@@ -314,6 +314,7 @@
   }
 
   struct EditorWebLinkPopover: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     let target: EditorWebLinkTarget
     let onApply: (String, String?) -> Bool
     let onRemove: () -> Bool
@@ -354,7 +355,7 @@
         if let validationMessage {
           Text(validationMessage)
             .font(.caption)
-            .foregroundStyle(.red)
+            .foregroundStyle(theme.color(.error))
             .accessibilityLabel("Web link error: \(validationMessage)")
         }
         HStack {

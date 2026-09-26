@@ -47,8 +47,8 @@ import Testing
   #expect(source.contains("presentation.modelLabel"))
   #expect(source.contains("if presentation.showsStatus"))
   #expect(source.contains("if presentation.showsDetail"))
-  #expect(source.contains("SettingsPreferenceRow(\n          \"Theme\""))
-  #expect(source.contains("SettingsPreferenceRow(\n          \"Editor text color\""))
+  #expect(source.contains("SettingsPreferenceRow(\n          \"Appearance\""))
+  #expect(source.contains("SettingsPreferenceRow(\n          \"Color theme\""))
   #expect(source.contains("SettingsPreferenceRow(\n          \"Width\""))
   #expect(source.contains("ScrollView"))
   #expect(runtimeSource.contains(".defaultSize(width: 840, height: 600)"))
@@ -317,7 +317,7 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   #expect(settingsSource.contains("SettingsToggleRow(\n          title: \"Create lists automatically\""))
   #expect(settingsSource.contains("SettingsToggleRow(\n          title: \"Confirm before moving notes to Trash\""))
   #expect(settingsSource.contains("SettingsToggleRow(\n          title: \"Launch at login\""))
-  #expect(settingsSource.contains("SettingsPreferenceRow(\n          \"Theme\""))
+  #expect(settingsSource.contains("SettingsPreferenceRow(\n          \"Appearance\""))
   #expect(settingsSource.contains("SettingsPreferenceRow(\n          \"Modifier key\""))
   #expect(settingsSource.contains("SettingsToggleRow(\n          title: \"Show status capsule\""))
   #expect(!settingsSource.contains("SettingsSectionCard(\"Behavior\")"))
@@ -340,11 +340,15 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
     encoding: .utf8
   )
 
-  #expect(source.contains("Color.black.opacity(0.10)"))
-  #expect(source.contains("Glass.regular.tint(Color.black.opacity(0.18))"))
+  #expect(!source.contains("Glass.regular.tint(Color.primary.opacity"))
+  #expect(!source.contains("Color.primary.opacity(0.04)"))
+  #expect(source.contains(".glassEffect(.regular, in: shape)"))
   #expect(source.contains("shape.fill(.ultraThinMaterial)"))
-  #expect(source.contains("if reduceTransparency"))
-  #expect(source.contains("Color(nsColor: .windowBackgroundColor)"))
+  #expect(source.contains("FleckChromeMaterialPolicy.current("))
+  #expect(source.contains("reduceTransparency: reduceTransparency"))
+  #expect(source.contains("increasedContrast: colorSchemeContrast == .increased"))
+  #expect(source.contains("theme.color(.window)"))
+  #expect(source.contains("theme.color(.sidebar)"))
 }
 
 @Test func DictationSettingsUsesReadinessCaptureAndHistoryGroups() throws {
@@ -1501,12 +1505,18 @@ private func settleSettingsHost(_ view: NSView) async {
   let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
   await fixture.runtime.awaitStartupAssessment()
 
-  let accentHex = "#E64A19"
-  fixture.appState.updatePreferences { $0.accentHex = accentHex }
+  let legacyAccentHex = "#E64A19"
+  fixture.appState.updatePreferences {
+    $0.accentHex = legacyAccentHex
+    $0.colorTheme = .capy
+  }
   fixture.runtime.preferencesDidChange()
 
-  #expect(fixture.runtime.capsuleController.presentationModel.colors.accentHex == accentHex)
-  #expect(fixture.appState.preferences.accentHex == accentHex)
+  #expect(
+    fixture.runtime.capsuleController.presentationModel.colors.accentHex
+      == fixture.appState.themeSnapshot.palette[.accent]
+  )
+  #expect(fixture.appState.preferences.accentHex == legacyAccentHex)
 }
 
 @Test @MainActor func DictationRuntimeMapsTheRealSaveBoundaryToSaving() {

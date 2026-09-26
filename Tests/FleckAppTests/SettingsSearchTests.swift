@@ -14,9 +14,14 @@
       #expect(SettingsSearchIndex.results(for: "  \n\t ").isEmpty)
     }
 
-    @Test func matchingIsCaseAndDiacriticInsensitive() {
-      #expect(SettingsSearchIndex.results(for: "ACCENT COLOR").first?.target == .appearanceAccent)
-      #expect(SettingsSearchIndex.results(for: "sélection tint").first?.target == .appearanceAccent)
+    @Test func colorThemeRemainsSearchableWithoutDormantColorControls() {
+      #expect(
+        SettingsSearchIndex.results(for: "COLOR THEME").first?.target
+          == .appearanceColorTheme
+      )
+      #expect(SettingsSearchIndex.results(for: "accent color").isEmpty)
+      #expect(SettingsSearchIndex.results(for: "editor text color").isEmpty)
+      #expect(SettingsSearchIndex.results(for: "editor background").isEmpty)
     }
 
     @Test func aliasesAndAllQueryTokensMustMatch() {
@@ -29,6 +34,16 @@
           == .dictationStatus
       )
       #expect(SettingsSearchIndex.results(for: "automatic microphone").isEmpty)
+    }
+
+    @Test func glassAndOpacityRemainSearchableAsSeparateSettings() throws {
+      let glass = try #require(SettingsSearchIndex.results(for: "glass").first)
+      let opacity = try #require(SettingsSearchIndex.results(for: "glass opacity").first)
+
+      #expect(glass.target == .appearanceChromeAppearance)
+      #expect(glass.anchor == .appearanceChromeAppearance)
+      #expect(opacity.target == .appearanceGlassOpacity)
+      #expect(opacity.anchor == .appearanceGlassOpacity)
     }
 
     @Test func noMatchReturnsAnEmptyDeterministicResultList() {
@@ -72,9 +87,8 @@
             .generalAutomaticLists,
             .generalConfirmTrash,
             .appearanceTheme,
-            .appearanceAccent,
-            .appearanceEditorText,
-            .appearanceEditorBackground,
+            .appearanceColorTheme,
+            .appearanceChromeAppearance,
             .appearanceGlassOpacity,
             .appearanceWidth,
             .appearanceHeight,
@@ -265,20 +279,22 @@
       #expect(!SettingsSearchTarget.dictationPrivacy.usesVocabularyFocusLifecycle)
     }
 
-    @Test func savedAccentPresentationMaintainsNormalTextContrastOnOpaqueSelections() {
-      for colorScheme in [ColorScheme.light, .dark] {
-        for increasedContrast in [false, true] {
-          for hex in ["#7C6CF2", "#808080", "#FF0000", "#00FF00", "#0000FF"] {
-            let presentation = SettingsAccentPresentation(
-              hex: hex,
-              colorScheme: colorScheme,
-              increasedContrast: increasedContrast
-            )
-            #expect(presentation.selectionFillColor.alphaComponent == 1)
-            #expect(presentation.contrastRatio >= 4.5)
-            #expect(presentation.usesDarkContent == (colorScheme == .light))
-            #expect(presentation.selectionFillColor != NSColor(hex: hex))
-          }
+    @Test func searchSelectionUsesThePaletteAccentAndPairedSelectionTokens() {
+      for family in FleckColorTheme.allCases {
+        for appearance in FleckThemeAppearance.allCases {
+          let snapshot = FleckThemeSnapshot.resolve(
+            colorTheme: family,
+            mode: appearance == .light ? .light : .dark,
+            systemAppearance: appearance,
+            reduceTransparency: false,
+            increasedContrast: false
+          )
+          let presentation = SettingsAccentPresentation(theme: snapshot)
+          #expect(presentation.color == snapshot.color(.accent))
+          #expect(presentation.selectionColor == snapshot.color(.selectionFill))
+          #expect(presentation.contrastingColor == snapshot.color(.selectionText))
+          #expect(presentation.primaryTextColor == snapshot.color(.textPrimary))
+          #expect(presentation.secondaryTextColor == snapshot.color(.caption))
         }
       }
     }

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import FleckCore
 import SwiftUI
 import Testing
 
@@ -22,6 +23,32 @@ struct AgentActivityIndicatorTests {
         == "Agent request cancelled"
     )
     #expect(AgentActivityIndicatorState.idle.statusSymbol == nil)
+  }
+
+  @Test
+  func statusColorsUseTheSharedPaletteRoles() {
+    for family in FleckColorTheme.allCases {
+      for mode in AppTheme.allCases {
+        let theme = FleckThemeSnapshot.resolve(
+          colorTheme: family,
+          mode: mode,
+          systemAppearance: .dark,
+          reduceTransparency: false,
+          increasedContrast: false
+        )
+
+        #expect(AgentActivityIndicatorState.working.statusColor(in: theme) == theme.color(.accent))
+        #expect(
+          AgentActivityIndicatorState.recentlyUsed.statusColor(in: theme)
+            == theme.color(.success)
+        )
+        #expect(AgentActivityIndicatorState.failed.statusColor(in: theme) == theme.color(.error))
+        #expect(
+          AgentActivityIndicatorState.cancelled.statusColor(in: theme)
+            == theme.color(.textSecondary)
+        )
+      }
+    }
   }
 
   @Test
