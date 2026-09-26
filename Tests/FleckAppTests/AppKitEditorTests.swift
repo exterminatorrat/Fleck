@@ -4954,12 +4954,11 @@ private func withHostedTitleEditors(
   #expect(rootFocusable.lowerBound < rootFocused.lowerBound)
   #expect(folderFocusable.lowerBound < folderFocused.lowerBound)
   #expect(rowLabelBody.contains("isFocused: Bool"))
-  #expect(rowLabelBody.contains("isFocused && !isSelected"))
-  #expect(rowLabelBody.contains(".overlay"))
+  #expect(rowLabelBody.contains(".fleckNeutralControlOutline("))
+  #expect(rowLabelBody.contains("isFocused: isFocused && !isSelected"))
+  #expect(rowLabelBody.contains("cornerRadius: 6"))
   #expect(
-    rowLabelBody.contains(
-      ".strokeBorder(theme.color(.focusRing), lineWidth: 1)"
-    )
+    !rowLabelBody.contains(".focusRing")
   )
 }
 

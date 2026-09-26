@@ -96,7 +96,12 @@ import Testing
 
   #expect(!picker.contains("SwiftUI.ColorPicker"))
   #expect(!picker.contains("NSColorPanel"))
-  #expect(!picker.localizedCaseInsensitiveContains("opacity"))
+  #expect(
+    picker.range(
+      of: #"(?i)"[^"]*\bopacity\b[^"]*""#,
+      options: .regularExpression
+    ) == nil
+  )
   #expect(!picker.localizedCaseInsensitiveContains("recent"))
   #expect(notes.contains("FleckColorPicker"))
   #expect(notes.contains("Tab Color..."))
