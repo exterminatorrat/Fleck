@@ -101,6 +101,7 @@
   }
 
   struct SettingsSectionSidebar: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     @Binding var selection: SettingsSection
 
     var body: some View {
@@ -111,6 +112,7 @@
           Text("Fleck")
             .padding(.bottom, 4)
             .background(SettingsSearchProbe(identifier: "settings-fleck-sidebar-heading"))
+            .background(SettingsSidebarSelectionConfigurator())
         }
         sectionGroup("Voice & Writing", sections: SettingsSection.voiceAndWritingCases)
         sectionGroup("Connections", sections: SettingsSection.connectionCases)
@@ -127,6 +129,13 @@
       ForEach(sections) { section in
         Label(section.title, systemImage: section.systemImage)
           .tag(section)
+          .foregroundStyle(selection == section ? theme.color(.selectionText) : .primary)
+          .listRowBackground(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+              .fill(selection == section ? theme.color(.selectionFill) : Color.clear)
+              .padding(.horizontal, 8)
+              .padding(.vertical, 2)
+          )
       }
     }
 
@@ -140,6 +149,36 @@
       } header: {
         Text(title)
           .padding(.bottom, 4)
+      }
+    }
+  }
+
+  private struct SettingsSidebarSelectionConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> SettingsSidebarSelectionView {
+      SettingsSidebarSelectionView()
+    }
+
+    func updateNSView(_ view: SettingsSidebarSelectionView, context: Context) {
+      view.configureSelection()
+    }
+  }
+
+  private final class SettingsSidebarSelectionView: NSView {
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      configureSelection()
+    }
+
+    func configureSelection() {
+      DispatchQueue.main.async { [weak self] in
+        var ancestor = self?.superview
+        while let view = ancestor {
+          if let outline = view as? NSOutlineView {
+            outline.selectionHighlightStyle = .none
+            return
+          }
+          ancestor = view.superview
+        }
       }
     }
   }

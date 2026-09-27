@@ -233,6 +233,129 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   }
 }
 
+@Test @MainActor
+func DictationSettingsHostedSidebarSelectionUsesPaletteInKeyWindow() async throws {
+  let application = NSApplication.shared
+  let previousActivationPolicy = application.activationPolicy()
+  let wasActive = application.isActive
+  defer {
+    if !wasActive { application.deactivate() }
+    application.setActivationPolicy(previousActivationPolicy)
+  }
+  if previousActivationPolicy != .regular {
+    #expect(application.setActivationPolicy(.regular))
+  }
+  application.activate(ignoringOtherApps: true)
+  for family in [FleckColorTheme.monochrome, .capy] {
+    let theme = FleckThemeSnapshot.resolve(
+      colorTheme: family,
+      mode: .dark,
+      systemAppearance: .dark,
+      reduceTransparency: false,
+      increasedContrast: false
+    )
+    let host = NSHostingView(
+      rootView: SettingsSidebarThemeTestHost()
+      .environment(\.fleckThemeSnapshot, theme)
+      .environment(\.colorScheme, .dark)
+      .frame(width: 220, height: 520)
+      .background(theme.color(.sidebar))
+    )
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 220, height: 520),
+      styleMask: [.titled, .closable],
+      backing: .buffered,
+      defer: false
+    )
+    window.appearance = NSAppearance(named: .darkAqua)
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+    await settleSettingsHost(host)
+
+    let outline = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
+    let row = try #require(settingsSidebarRow(.appearance, in: outline))
+
+    #expect(window.isKeyWindow)
+    #expect(outline.selectedRow == row)
+    #expect(outline.accessibilitySelectedRows()?.count == 1)
+    #expect(outline.selectionHighlightStyle == .none)
+    let rowView = try #require(outline.rowView(atRow: row, makeIfNecessary: true))
+    let image = try #require(rowView.bitmapImageRepForCachingDisplay(in: rowView.bounds))
+    rowView.cacheDisplay(in: rowView.bounds, to: image)
+    let fill = try #require(image.colorAt(
+      x: Int(CGFloat(image.pixelsWide) * 0.85),
+      y: image.pixelsHigh / 2
+    ))
+    let expectedFill = theme.nsColor(.selectionFill)
+    #expect(abs(fill.redComponent - expectedFill.redComponent) < 0.12)
+    #expect(abs(fill.greenComponent - expectedFill.greenComponent) < 0.12)
+    #expect(abs(fill.blueComponent - expectedFill.blueComponent) < 0.12)
+    #expect(fill.blueComponent < 0.5)
+    let expectedInk = theme.nsColor(.selectionText)
+    func hasSelectedInk(_ image: NSBitmapImageRep) -> Bool {
+      (0..<image.pixelsHigh).contains { y in
+        (20..<Int(CGFloat(image.pixelsWide) * 0.65)).contains { x in
+          guard let pixel = image.colorAt(x: x, y: y) else { return false }
+          return abs(pixel.redComponent - expectedInk.redComponent) < 0.05
+            && abs(pixel.greenComponent - expectedInk.greenComponent) < 0.05
+            && abs(pixel.blueComponent - expectedInk.blueComponent) < 0.05
+        }
+      }
+    }
+    #expect(hasSelectedInk(image))
+    if family == .monochrome {
+      #expect(abs(fill.redComponent - fill.greenComponent) < 0.04)
+    } else {
+      #expect(fill.greenComponent > fill.redComponent + 0.07)
+    }
+
+    if let captureDirectory = ProcessInfo.processInfo.environment[
+      "FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR"
+    ] {
+      let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      let screenshot = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+      host.cacheDisplay(in: host.bounds, to: screenshot)
+      let png = try #require(screenshot.representation(using: .png, properties: [:]))
+      try png.write(to: directory.appendingPathComponent("settings-sidebar-\(family.rawValue).png"))
+    }
+
+    let otherWindow = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 180, height: 120),
+      styleMask: [.titled],
+      backing: .buffered,
+      defer: false
+    )
+    otherWindow.makeKeyAndOrderFront(nil)
+    await settleSettingsHost(host)
+    #expect(!window.isKeyWindow)
+    #expect(outline.selectedRow == row)
+    #expect(outline.accessibilitySelectedRows()?.count == 1)
+    let inactiveImage = try #require(rowView.bitmapImageRepForCachingDisplay(in: rowView.bounds))
+    rowView.cacheDisplay(in: rowView.bounds, to: inactiveImage)
+    let inactiveFill = try #require(inactiveImage.colorAt(
+      x: Int(CGFloat(inactiveImage.pixelsWide) * 0.85),
+      y: inactiveImage.pixelsHigh / 2
+    ))
+    #expect(abs(inactiveFill.redComponent - fill.redComponent) < 0.04)
+    #expect(abs(inactiveFill.greenComponent - fill.greenComponent) < 0.04)
+    #expect(abs(inactiveFill.blueComponent - fill.blueComponent) < 0.04)
+    #expect(hasSelectedInk(inactiveImage))
+    otherWindow.orderOut(nil)
+
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+}
+
+private struct SettingsSidebarThemeTestHost: View {
+  @State private var selection = SettingsSection.appearance
+
+  var body: some View {
+    SettingsSectionSidebar(selection: $selection)
+  }
+}
+
 @Test func DictationSettingsUsesNativeSidebarAccessibilityAndSelectionContracts() throws {
   let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()

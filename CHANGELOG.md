@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.3.1-beta.1] - 2026-09-27
+
+Private local QA candidate only; this correction is not an accepted build or public release.
+
+### Fixed
+
+- Use each theme's selection fill and text in the active Settings sidebar instead of macOS blue,
+  while retaining native keyboard selection and accessibility semantics.
+
 ## [1.3.0-beta.1] - 2026-09-26
 
 Private local QA candidate only; this change is not an accepted build or public release.
