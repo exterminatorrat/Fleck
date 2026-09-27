@@ -720,6 +720,118 @@
     }
   }
 
+  struct SettingsColorThemePicker: View {
+    @Binding var selection: FleckColorTheme
+    let appearance: FleckThemeAppearance
+
+    var body: some View {
+      Picker("Color theme", selection: $selection) {
+        ForEach(FleckColorTheme.allCases) { theme in
+          Label {
+            Text(theme.title)
+          } icon: {
+            Image(nsImage: Self.previewImage(for: theme, appearance: appearance))
+              .renderingMode(.original)
+          }
+          .tag(theme)
+        }
+      }
+      .labelsHidden()
+      .pickerStyle(.menu)
+    }
+
+    static func previewImage(
+      for theme: FleckColorTheme,
+      appearance: FleckThemeAppearance
+    ) -> NSImage {
+      let size = NSSize(width: 15, height: 15)
+      let palette = FleckThemePalette.resolve(family: theme, appearance: appearance)
+      let image = NSImage(size: size)
+
+      for scale in [1, 2] {
+        let representation = NSBitmapImageRep(
+          bitmapDataPlanes: nil,
+          pixelsWide: Int(size.width) * scale,
+          pixelsHigh: Int(size.height) * scale,
+          bitsPerSample: 8,
+          samplesPerPixel: 4,
+          hasAlpha: true,
+          isPlanar: false,
+          colorSpaceName: .deviceRGB,
+          bytesPerRow: 0,
+          bitsPerPixel: 0
+        )!
+        representation.size = size
+        let context = NSGraphicsContext(bitmapImageRep: representation)!
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        context.imageInterpolation = .high
+        context.cgContext.clear(NSRect(origin: .zero, size: size))
+
+        func draw(
+          _ rect: NSRect,
+          radius: CGFloat,
+          fill: FleckThemeColor,
+          stroke: FleckThemeColor? = nil
+        ) {
+          let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+          NSColor(hex: palette[fill])!.setFill()
+          path.fill()
+          if let stroke {
+            NSColor(hex: palette[stroke])!.setStroke()
+            path.lineWidth = 0.75
+            path.stroke()
+          }
+        }
+
+        draw(
+          NSRect(x: 0.4, y: 0.4, width: 14.2, height: 14.2),
+          radius: 3,
+          fill: .window,
+          stroke: .border
+        )
+        draw(
+          NSRect(x: 1.8, y: 1.8, width: 11.4, height: 11.4),
+          radius: 2,
+          fill: .card,
+          stroke: .border
+        )
+        draw(
+          NSRect(x: 3.4, y: 10.4, width: 5.8, height: 0.9),
+          radius: 0.45,
+          fill: .textPrimary
+        )
+        draw(
+          NSRect(x: 3.4, y: 7.4, width: 8.2, height: 2.0),
+          radius: 0.8,
+          fill: .accent
+        )
+        draw(
+          NSRect(x: 4.0, y: 8.05, width: 3.1, height: 0.7),
+          radius: 0.35,
+          fill: .accentText
+        )
+        draw(
+          NSRect(x: 3.4, y: 4.2, width: 8.2, height: 2.0),
+          radius: 0.8,
+          fill: .selectionFill
+        )
+        draw(
+          NSRect(x: 4.0, y: 4.85, width: 3.1, height: 0.7),
+          radius: 0.35,
+          fill: .selectionText
+        )
+
+        context.flushGraphics()
+        NSGraphicsContext.restoreGraphicsState()
+        image.addRepresentation(representation)
+      }
+
+      image.isTemplate = false
+      return image
+    }
+  }
+
   struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.fleckThemeSnapshot) private var theme
@@ -1004,13 +1116,10 @@
           "Color theme",
           detail: "Choose Fleck’s named palette."
         ) {
-          Picker("Color theme", selection: preferenceBinding(\.colorTheme)) {
-            ForEach(FleckColorTheme.allCases) { theme in
-              Text(theme.title).tag(theme)
-            }
-          }
-          .labelsHidden()
-          .pickerStyle(.menu)
+          SettingsColorThemePicker(
+            selection: preferenceBinding(\.colorTheme),
+            appearance: theme.appearance
+          )
         }
         .settingsSearchAnchor(.appearanceColorTheme, request: searchRequest)
         SettingsPreferenceRow(

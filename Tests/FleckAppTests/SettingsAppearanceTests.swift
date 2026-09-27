@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Combine
+import CoreGraphics
 import FleckCore
 import SwiftUI
 import Testing
@@ -222,6 +223,247 @@ import Testing
   #expect(fixedDark.appearance == .dark)
   #expect(fixedDark.reduceTransparency)
   #expect(fixedDark.increasedContrast)
+}
+
+@Test
+func settingsColorThemePickerRetainsEightNamedNativeOptions() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+  let settingsSource = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+  let pickerSource = try #require(
+    settingsSource.components(separatedBy: "  struct SettingsColorThemePicker: View").last?
+      .components(separatedBy: "\n  struct SettingsView: View").first
+  )
+
+  #expect(FleckColorTheme.allCases.map(\.rawValue) == [
+    "monochrome", "capy", "absolutely", "oled", "codex", "github", "linear", "notion",
+  ])
+  #expect(FleckColorTheme.allCases.map(\.title) == [
+    "Fleck Monochrome", "Capy", "Absolutely", "OLED", "Codex", "GitHub", "Linear", "Notion",
+  ])
+  #expect(pickerSource.contains("Picker(\"Color theme\", selection: $selection)"))
+  #expect(pickerSource.contains("ForEach(FleckColorTheme.allCases) { theme in"))
+  #expect(pickerSource.contains("Text(theme.title)"))
+  #expect(pickerSource.contains(".renderingMode(.original)"))
+  #expect(pickerSource.contains(".tag(theme)"))
+  #expect(pickerSource.contains(".labelsHidden()"))
+  #expect(pickerSource.contains(".pickerStyle(.menu)"))
+  #expect(!pickerSource.contains("selectionDisabled"))
+  #expect(settingsSource.contains("selection: preferenceBinding(\\.colorTheme)"))
+  #expect(settingsSource.contains("appearance: theme.appearance"))
+}
+
+@Test @MainActor
+func settingsThemeMenuPreviewUsesEightPaletteRolesAtOneAndTwoScale() throws {
+  let roles: [FleckThemeColor] = [
+    .window, .card, .border, .textPrimary, .accent, .accentText, .selectionFill, .selectionText,
+  ]
+
+  for theme in FleckColorTheme.allCases {
+    for appearance in [FleckThemeAppearance.light, .dark] {
+      let palette = FleckThemePalette.resolve(family: theme, appearance: appearance)
+      let preview = SettingsColorThemePicker.previewImage(for: theme, appearance: appearance)
+      let representations = preview.representations
+        .compactMap { $0 as? NSBitmapImageRep }
+        .sorted { $0.pixelsWide < $1.pixelsWide }
+
+      #expect(preview.size == NSSize(width: 15, height: 15))
+      #expect(!preview.isTemplate)
+      #expect(representations.map(\.pixelsWide) == [15, 30])
+      #expect(representations.map(\.pixelsHigh) == [15, 30])
+      for representation in representations {
+        #expect(representation.size == NSSize(width: 15, height: 15))
+        let scale = representation.pixelsWide / 15
+        for role in roles {
+          let expected = try #require(NSColor(hex: palette[role]))
+          let region = try #require(settingsThemePreviewRoleRegion(role))
+          let minimumDistance = settingsThemePreviewMinimumPixelDistance(
+            in: representation,
+            matching: expected,
+            within: region
+          )
+
+          if scale == 1,
+            let backgroundRole = settingsThemePreviewBlendBackgroundRole(role)
+          {
+            let background = try #require(NSColor(hex: palette[backgroundRole]))
+            let blendError = settingsThemePreviewMinimumBlendError(
+              in: representation,
+              foreground: expected,
+              background: background,
+              within: region
+            )
+            #expect(
+              blendError.map { $0 <= 0.04 } == true,
+              "missing antialiased \(role.rawValue) blend over \(backgroundRole.rawValue) in \(theme.rawValue)/\(appearance.rawValue) at 1×"
+            )
+          } else if scale == 1, role == .window {
+            continue
+          } else {
+            #expect(
+              minimumDistance <= 0.1,
+              "\(role.rawValue) is \(minimumDistance) from its expected color in \(theme.rawValue)/\(appearance.rawValue) at \(scale)×"
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+@Test @MainActor
+func settingsColorThemePickerRendersOpenAndSelectedNativePreviewsAcrossAppearances()
+  async throws
+{
+  let application = NSApplication.shared
+  let previousActivationPolicy = application.activationPolicy()
+  #expect(application.setActivationPolicy(.regular))
+  defer { _ = application.setActivationPolicy(previousActivationPolicy) }
+  application.activate(ignoringOtherApps: true)
+
+  let captureDirectory = ProcessInfo.processInfo.environment["FLECK_THEME_PICKER_CAPTURE_DIR"]
+    .map { URL(fileURLWithPath: $0, isDirectory: true) }
+  if let captureDirectory {
+    try FileManager.default.createDirectory(
+      at: captureDirectory,
+      withIntermediateDirectories: true
+    )
+  }
+
+  for appearance in [FleckThemeAppearance.light, .dark] {
+    let state = SettingsThemePickerSelectionProbe()
+    let theme = FleckThemeSnapshot.resolve(
+      colorTheme: .monochrome,
+      mode: appearance == .dark ? .dark : .light,
+      systemAppearance: appearance,
+      reduceTransparency: false,
+      increasedContrast: false
+    )
+    let host = NSHostingView(
+      rootView: SettingsThemePickerFixture(state: state, appearance: appearance)
+        .environment(\.fleckThemeSnapshot, theme)
+        .environment(\.colorScheme, theme.colorScheme)
+        .background(theme.color(.window))
+    )
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 460, height: 72),
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false
+    )
+    window.appearance = NSAppearance(named: appearance == .dark ? .darkAqua : .aqua)
+    window.backgroundColor = theme.nsColor(.window)
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+    defer {
+      window.contentView = nil
+      window.orderOut(nil)
+    }
+    for _ in 0..<30 {
+      host.layoutSubtreeIfNeeded()
+      await Task.yield()
+    }
+
+    let picker = try #require(settingsThemePickerPopup(in: host))
+    let expectedNames = FleckColorTheme.allCases.map(\.title)
+    let items = try #require(picker.menu?.items)
+    #expect(items.count == 8)
+    #expect(items.map(\.title) == expectedNames)
+    #expect(items.allSatisfy { $0.accessibilityLabel() == $0.title })
+    #expect(items.allSatisfy { $0.image?.size == NSSize(width: 15, height: 15) })
+    #expect(items.allSatisfy { $0.image?.isTemplate == false })
+
+    #expect(picker.titleOfSelectedItem == FleckColorTheme.monochrome.title)
+    #expect(picker.selectedItem?.image?.size == NSSize(width: 15, height: 15))
+    #expect(picker.selectedItem?.image?.isTemplate == false)
+    #expect(picker.cell?.image?.size == NSSize(width: 15, height: 15))
+
+    for scale in [1, 2] {
+      let closedFrame = try settingsThemePickerCapture(in: host, scale: scale)
+      #expect(closedFrame.pixelsWide == Int(host.bounds.width) * scale)
+      #expect(closedFrame.pixelsHigh == Int(host.bounds.height) * scale)
+      try settingsThemePickerWriteCapture(
+        closedFrame,
+        name: "theme-picker-\(appearance.rawValue)-closed-monochrome-\(scale)x.png",
+        directory: captureDirectory
+      )
+    }
+
+    let openMenuProbe = SettingsThemePickerOpenMenuProbe()
+    let menuTimer = Timer(timeInterval: 0.15, repeats: false) { _ in
+      MainActor.assumeIsolated {
+        do {
+          openMenuProbe.captures = try settingsThemePickerCaptureOpenWindows(
+            excluding: window,
+            appearance: appearance,
+            directory: captureDirectory
+          )
+        } catch {
+          openMenuProbe.captureError = String(describing: error)
+        }
+        settingsThemePickerPostKey(
+          keyCode: 125,
+          characters: "\u{F701}",
+          windowNumber: window.windowNumber
+        )
+        settingsThemePickerPostKey(
+          keyCode: 36,
+          characters: "\r",
+          windowNumber: window.windowNumber
+        )
+      }
+    }
+    RunLoop.main.add(menuTimer, forMode: .eventTracking)
+    RunLoop.main.add(menuTimer, forMode: .default)
+    picker.performClick(nil)
+
+    #expect(openMenuProbe.captureError == nil)
+    #expect(!openMenuProbe.captures.isEmpty)
+    #expect(state.selection == .capy)
+    #expect(picker.titleOfSelectedItem == FleckColorTheme.capy.title)
+    #expect(picker.selectedItem?.image?.size == NSSize(width: 15, height: 15))
+    for scale in [1, 2] {
+      let closedFrame = try settingsThemePickerCapture(in: host, scale: scale)
+      try settingsThemePickerWriteCapture(
+        closedFrame,
+        name: "theme-picker-\(appearance.rawValue)-closed-capy-\(scale)x.png",
+        directory: captureDirectory
+      )
+    }
+
+    let activationProbe = SettingsThemePickerOpenMenuProbe()
+    let activationTimer = Timer(timeInterval: 0.15, repeats: false) { _ in
+      MainActor.assumeIsolated {
+        guard let menu = picker.menu else { return }
+        menu.performActionForItem(at: 4)
+        activationProbe.didActivateMenuItem = true
+      }
+    }
+    let dismissTimer = Timer(timeInterval: 1.2, repeats: false) { _ in
+      MainActor.assumeIsolated {
+        settingsThemePickerPostKey(
+          keyCode: 53,
+          characters: "\u{1B}",
+          windowNumber: window.windowNumber
+        )
+      }
+    }
+    RunLoop.main.add(activationTimer, forMode: .eventTracking)
+    RunLoop.main.add(activationTimer, forMode: .default)
+    RunLoop.main.add(dismissTimer, forMode: .eventTracking)
+    RunLoop.main.add(dismissTimer, forMode: .default)
+    picker.performClick(nil)
+    dismissTimer.invalidate()
+    #expect(activationProbe.didActivateMenuItem)
+    #expect(state.selection == .codex)
+    #expect(picker.titleOfSelectedItem == FleckColorTheme.codex.title)
+    #expect(picker.selectedItem?.image?.isTemplate == false)
+
+    #expect(picker.menu?.items.map(\.title) == expectedNames)
+  }
 }
 
 @Test @MainActor
@@ -798,6 +1040,127 @@ func settingsSearchAnchorKeepsAppearanceCardFocusedWithoutSystemHalo() async thr
 }
 
 @MainActor
+private final class SettingsThemePickerSelectionProbe: ObservableObject {
+  @Published var selection: FleckColorTheme = .monochrome
+}
+
+@MainActor
+private final class SettingsThemePickerOpenMenuProbe {
+  var captures: [NSBitmapImageRep] = []
+  var captureError: String?
+  var didActivateMenuItem = false
+}
+
+private struct SettingsThemePickerFixture: View {
+  @ObservedObject var state: SettingsThemePickerSelectionProbe
+  let appearance: FleckThemeAppearance
+
+  var body: some View {
+    SettingsColorThemePicker(selection: $state.selection, appearance: appearance)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, 16)
+      .frame(width: 460, height: 72, alignment: .leading)
+  }
+}
+
+@MainActor
+private func settingsThemePickerPopup(in view: NSView) -> NSPopUpButton? {
+  if let picker = view as? NSPopUpButton { return picker }
+  for subview in view.subviews {
+    if let picker = settingsThemePickerPopup(in: subview) {
+      return picker
+    }
+  }
+  return nil
+}
+
+@MainActor
+private func settingsThemePickerCapture<Content: View>(
+  in host: NSHostingView<Content>,
+  scale: Int
+) throws -> NSBitmapImageRep {
+  let image = try #require(
+    NSBitmapImageRep(
+      bitmapDataPlanes: nil,
+      pixelsWide: Int(host.bounds.width) * scale,
+      pixelsHigh: Int(host.bounds.height) * scale,
+      bitsPerSample: 8,
+      samplesPerPixel: 4,
+      hasAlpha: true,
+      isPlanar: false,
+      colorSpaceName: .deviceRGB,
+      bytesPerRow: 0,
+      bitsPerPixel: 0
+    )
+  )
+  image.size = host.bounds.size
+  host.cacheDisplay(in: host.bounds, to: image)
+  return image
+}
+
+@MainActor
+private func settingsThemePickerWriteCapture(
+  _ image: NSBitmapImageRep,
+  name: String,
+  directory: URL?
+) throws {
+  guard let directory else { return }
+  let data = try #require(image.representation(using: .png, properties: [:]))
+  try data.write(to: directory.appendingPathComponent(name))
+}
+
+@MainActor
+private func settingsThemePickerCaptureOpenWindows(
+  excluding hostWindow: NSWindow,
+  appearance: FleckThemeAppearance,
+  directory: URL?
+) throws -> [NSBitmapImageRep] {
+  let menuWindows = NSApp.windows.filter {
+    $0 !== hostWindow && $0.isVisible && $0.frame.height > hostWindow.frame.height
+  }
+  var captures: [NSBitmapImageRep] = []
+  for menuWindow in menuWindows {
+    guard let number = UInt32(exactly: menuWindow.windowNumber),
+      let image = CGWindowListCreateImage(
+        .null,
+        .optionIncludingWindow,
+        number,
+        .bestResolution
+      )
+    else { continue }
+    let representation = NSBitmapImageRep(cgImage: image)
+    captures.append(representation)
+    try settingsThemePickerWriteCapture(
+      representation,
+      name: "theme-picker-\(appearance.rawValue)-open-menu-\(number).png",
+      directory: directory
+    )
+  }
+  return captures
+}
+
+@MainActor
+private func settingsThemePickerPostKey(
+  keyCode: UInt16,
+  characters: String,
+  windowNumber: Int
+) {
+  guard let event = NSEvent.keyEvent(
+    with: .keyDown,
+    location: .zero,
+    modifierFlags: [],
+    timestamp: ProcessInfo.processInfo.systemUptime,
+    windowNumber: windowNumber,
+    context: nil,
+    characters: characters,
+    charactersIgnoringModifiers: characters,
+    isARepeat: false,
+    keyCode: keyCode
+  ) else { return }
+  NSApp.postEvent(event, atStart: false)
+}
+
+@MainActor
 private func settingsSurfacePixelCount(
   in image: NSBitmapImageRep,
   matching targetColor: NSColor
@@ -820,6 +1183,112 @@ private func settingsSurfacePixelCount(
     }
   }
   return matches
+}
+
+@MainActor
+private func settingsThemePreviewMinimumPixelDistance(
+  in image: NSBitmapImageRep,
+  matching targetColor: NSColor,
+  within rect: CGRect
+) -> CGFloat {
+  guard let target = targetColor.usingColorSpace(.sRGB) else { return .infinity }
+  let scale = CGFloat(image.pixelsWide) / 15
+  let minX = max(0, Int(floor(rect.minX * scale)))
+  let maxX = min(image.pixelsWide - 1, Int(ceil(rect.maxX * scale)) - 1)
+  let minY = max(0, Int(floor(CGFloat(image.pixelsHigh) - rect.maxY * scale)))
+  let maxY = min(image.pixelsHigh - 1, Int(ceil(CGFloat(image.pixelsHigh) - rect.minY * scale)) - 1)
+  var minimum = CGFloat.infinity
+  for y in minY...maxY {
+    for x in minX...maxX {
+      guard let color = image.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+        color.alphaComponent > 0.05
+      else { continue }
+      minimum = min(minimum, settingsThemePreviewRGBDistance(color, target))
+    }
+  }
+  return minimum
+}
+
+@MainActor
+private func settingsThemePreviewMinimumBlendError(
+  in image: NSBitmapImageRep,
+  foreground foregroundColor: NSColor,
+  background backgroundColor: NSColor,
+  within rect: CGRect
+) -> CGFloat? {
+  guard let foreground = foregroundColor.usingColorSpace(.sRGB),
+    let background = backgroundColor.usingColorSpace(.sRGB)
+  else { return nil }
+  let scale = CGFloat(image.pixelsWide) / 15
+  let minX = max(0, Int(floor(rect.minX * scale)))
+  let maxX = min(image.pixelsWide - 1, Int(ceil(rect.maxX * scale)) - 1)
+  let minY = max(0, Int(floor(CGFloat(image.pixelsHigh) - rect.maxY * scale)))
+  let maxY = min(image.pixelsHigh - 1, Int(ceil(CGFloat(image.pixelsHigh) - rect.minY * scale)) - 1)
+  let foregroundComponents = [
+    foreground.redComponent, foreground.greenComponent, foreground.blueComponent,
+  ]
+  let backgroundComponents = [
+    background.redComponent, background.greenComponent, background.blueComponent,
+  ]
+  let direction = zip(foregroundComponents, backgroundComponents).map { $0.0 - $0.1 }
+  let magnitude = direction.reduce(CGFloat.zero) { $0 + $1 * $1 }
+  guard magnitude > 0 else { return nil }
+
+  var minimum = CGFloat.infinity
+  for y in minY...maxY {
+    for x in minX...maxX {
+      guard let color = image.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+        color.alphaComponent > 0.05
+      else { continue }
+      let colorComponents = [color.redComponent, color.greenComponent, color.blueComponent]
+      let coverage = (0..<3).reduce(CGFloat.zero) { result, index in
+        result + (colorComponents[index] - backgroundComponents[index]) * direction[index]
+      } / magnitude
+      guard coverage > 0.05, coverage <= 1.05 else { continue }
+      let error = (0..<3).reduce(CGFloat.zero) { result, index in
+        let projected = backgroundComponents[index] + coverage * direction[index]
+        return max(result, abs(colorComponents[index] - projected))
+      }
+      minimum = min(minimum, error)
+    }
+  }
+  return minimum.isFinite ? minimum : nil
+}
+
+private func settingsThemePreviewRGBDistance(_ lhs: NSColor, _ rhs: NSColor) -> CGFloat {
+  max(
+    abs(lhs.redComponent - rhs.redComponent),
+    max(
+      abs(lhs.greenComponent - rhs.greenComponent),
+      abs(lhs.blueComponent - rhs.blueComponent)
+    )
+  )
+}
+
+private func settingsThemePreviewRoleRegion(_ role: FleckThemeColor) -> CGRect? {
+  switch role {
+  case .window: NSRect(x: 0.85, y: 7, width: 0.45, height: 1)
+  case .card: NSRect(x: 5.5, y: 11.8, width: 4, height: 0.7)
+  case .border: NSRect(x: 3.5, y: 14.2, width: 8, height: 0.6)
+  case .textPrimary: NSRect(x: 3.4, y: 10.4, width: 5.8, height: 0.9)
+  case .accent: NSRect(x: 8, y: 7.4, width: 2.5, height: 2)
+  case .accentText: NSRect(x: 4, y: 8.05, width: 3.1, height: 0.7)
+  case .selectionFill: NSRect(x: 8, y: 4.2, width: 2.5, height: 2)
+  case .selectionText: NSRect(x: 4, y: 4.85, width: 3.1, height: 0.7)
+  default: nil
+  }
+}
+
+private func settingsThemePreviewBlendBackgroundRole(
+  _ role: FleckThemeColor
+) -> FleckThemeColor? {
+  switch role {
+  case .border: .window
+  case .textPrimary: .card
+  case .accentText: .accent
+  case .selectionText: .selectionFill
+  default: nil
+  }
 }
 
 @MainActor
