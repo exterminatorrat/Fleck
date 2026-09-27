@@ -92,6 +92,64 @@ private func noteTabImageContainsInk(
   #expect(!tabStrip.contains("note.id == appState.workspace.selectedNoteID || colorScheme == .dark"))
 }
 
+@Test func menuPanelUsesOneNativeGlassSurfaceWithoutPerimeterEffect() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+  let source = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
+    encoding: .utf8
+  )
+  let panelStart = try #require(source.range(of: "  struct NotesPanel: View"))
+  let panel = source[panelStart.lowerBound...]
+  let bodyStart = try #require(panel.range(of: "    var body: some View {\n      ZStack {"))
+  let bodyEnd = try #require(
+    panel.range(of: "\n    private var pinnedNavigationChrome", range: bodyStart.upperBound..<panel.endIndex)
+  )
+  let body = panel[bodyStart.lowerBound..<bodyEnd.lowerBound]
+  let formattingStart = try #require(source.range(of: "  private struct FormattingBarSurface: ViewModifier"))
+  let formattingEnd = try #require(
+    source.range(of: "  private struct PinnedWritingSurface: NSViewRepresentable", range: formattingStart.upperBound..<source.endIndex)
+  )
+  let formatting = source[formattingStart.lowerBound..<formattingEnd.lowerBound]
+
+  #expect(body.contains("switch chromeMaterialPolicy"))
+  #expect(body.contains(".fill(.regularMaterial)"))
+  #expect(body.contains("appState.preferences.panelOpacity"))
+  #expect(body.contains("case .opaque:"))
+  #expect(!body.contains(".glassEffect("))
+  #expect(formatting.contains("let isPinned: Bool"))
+  #expect(formatting.contains("if isPinned"))
+  #expect(formatting.contains("content.glassEffect("))
+  #expect(!source.contains("MenuNavigationChromeSurface"))
+}
+
+@Test func glassChromeUsesOpaqueSurfaceForAccessibilityFallbacks() {
+  #expect(
+    FleckChromeMaterialPolicy.resolve(
+      appearance: .glass,
+      supportsLiquidGlass: true,
+      reduceTransparency: false,
+      increasedContrast: false
+    ) == .liquidGlass
+  )
+  #expect(
+    FleckChromeMaterialPolicy.resolve(
+      appearance: .glass,
+      supportsLiquidGlass: true,
+      reduceTransparency: true,
+      increasedContrast: false
+    ) == .opaque
+  )
+  #expect(
+    FleckChromeMaterialPolicy.resolve(
+      appearance: .glass,
+      supportsLiquidGlass: true,
+      reduceTransparency: false,
+      increasedContrast: true
+    ) == .opaque
+  )
+}
+
 @Test @MainActor
 func selectedNoteTabTitleRendersAboveItsCapsuleInLightAndDark() async throws {
   let application = NSApplication.shared

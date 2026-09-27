@@ -125,7 +125,10 @@ import Testing
     settingsSource.components(separatedBy: "private func sortOption(").last?
       .components(separatedBy: "private var sortControl").first
   )
-  let opacitySlider = settingsSource.components(separatedBy: "struct SettingsGlassOpacitySlider: View").last ?? ""
+  let opacitySlider = try #require(
+    settingsSource.components(separatedBy: "struct SettingsGlassOpacitySlider: View").last?
+      .components(separatedBy: "\n  struct SettingsView").first
+  )
   let opacitySliderControl = opacitySlider.components(separatedBy: ".overlay {").first ?? ""
 
   #expect(sortOption.contains(".focusEffectDisabled()"))
@@ -134,11 +137,15 @@ import Testing
   ))
   #expect(!sortOption.contains("theme.color(.focusRing)"))
   #expect(settingsSource.contains("SettingsGlassOpacitySlider(value: preferenceBinding(\\.panelOpacity))"))
+  #expect(settingsSource.contains(".disabled(appState.preferences.chromeAppearance == .solid)"))
   #expect(themeSource.contains("private struct FleckNeutralControlOutline: ViewModifier"))
   #expect(themeSource.contains("@Environment(\\.fleckThemeSnapshot) private var theme"))
   #expect(themeSource.contains("Color.primary.opacity(isHighContrast ? 1 : 0.72)"))
   #expect(themeSource.contains("lineWidth: isHighContrast ? 2 : 1.5"))
   #expect(opacitySlider.contains("Slider(value: $value, in: 0.55...1)"))
+  #expect(opacitySlider.contains("DragGesture(minimumDistance: 0)"))
+  #expect(opacitySlider.contains("guard isEnabled, trackWidth > 0 else { return }"))
+  #expect(!opacitySlider.contains(".allowsHitTesting(false)"))
   #expect(opacitySlider.contains(".focusEffectDisabled()"))
   #expect(opacitySlider.contains("@Environment(\\.layoutDirection) private var layoutDirection"))
   #expect(opacitySlider.contains("SettingsGlassOpacitySliderMetrics.resolve("))
@@ -565,6 +572,231 @@ func settingsGlassOpacitySliderRendersNeutralTrackAcrossAppearancesAndContrast()
   }
 }
 
+@Test @MainActor
+func settingsGlassOpacitySliderRespondsToThumbDragAndTrackClickAtAnchoredSettingsRow()
+  async throws
+{
+  let application = NSApplication.shared
+  let previousActivationPolicy = application.activationPolicy()
+  #expect(application.setActivationPolicy(.regular))
+  defer { _ = application.setActivationPolicy(previousActivationPolicy) }
+
+  let theme = FleckThemeSnapshot.resolve(
+    colorTheme: .monochrome,
+    mode: .light,
+    systemAppearance: .light,
+    reduceTransparency: false,
+    increasedContrast: false
+  )
+
+  for layoutDirection in [LayoutDirection.leftToRight, .rightToLeft] {
+    let state = SettingsGlassOpacityBindingProbe(value: 0.68)
+    let host = NSHostingView(
+      rootView: SettingsGlassOpacityRowFixture(
+        state: state,
+        isEnabled: true,
+        request: nil
+      )
+      .environment(\.fleckThemeSnapshot, theme)
+      .environment(\.colorScheme, theme.colorScheme)
+      .environment(\.layoutDirection, layoutDirection)
+    )
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 420, height: 96),
+      styleMask: [.titled],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = host
+    NSApp.activate(ignoringOtherApps: true)
+    window.makeKeyAndOrderFront(nil)
+    defer {
+      window.contentView = nil
+      window.orderOut(nil)
+    }
+    for _ in 0..<30 {
+      host.layoutSubtreeIfNeeded()
+      await Task.yield()
+    }
+
+    let slider = try #require(settingsNativeSlider(in: host))
+    let sliderRect = slider.convert(slider.bounds, to: host)
+    func sliderPoint(for value: Double) -> NSPoint {
+      let metrics = SettingsGlassOpacitySliderMetrics.resolve(
+        value: value,
+        width: sliderRect.width,
+        trackInset: 8,
+        layoutDirection: layoutDirection
+      )
+      return host.convert(
+        NSPoint(x: sliderRect.minX + metrics.thumbX, y: sliderRect.midY),
+        to: nil
+      )
+    }
+
+    try settingsSendMouseSequence(
+      [
+        (.leftMouseDown, sliderPoint(for: state.value)),
+        (.leftMouseDragged, sliderPoint(for: 0.9)),
+        (.leftMouseUp, sliderPoint(for: 0.9)),
+      ],
+      to: window
+    )
+    for _ in 0..<20 {
+      host.layoutSubtreeIfNeeded()
+      await Task.yield()
+    }
+    #expect(state.value > 0.82)
+    let valueAfterDrag = state.value
+    let clickedValue = 0.6
+    let trackPoint = sliderPoint(for: clickedValue)
+    try settingsSendMouseSequence(
+      [(.leftMouseDown, trackPoint), (.leftMouseUp, trackPoint)],
+      to: window
+    )
+    for _ in 0..<20 {
+      host.layoutSubtreeIfNeeded()
+      await Task.yield()
+    }
+
+    #expect(valueAfterDrag > 0.82)
+    #expect(state.value < valueAfterDrag)
+    #expect(abs(state.value - clickedValue) < 0.04)
+  }
+}
+
+@Test @MainActor
+func settingsGlassOpacitySliderRemainsDisabledForSolidAppearance() async throws {
+  let application = NSApplication.shared
+  let previousActivationPolicy = application.activationPolicy()
+  #expect(application.setActivationPolicy(.regular))
+  defer { _ = application.setActivationPolicy(previousActivationPolicy) }
+
+  let theme = FleckThemeSnapshot.resolve(
+    colorTheme: .monochrome,
+    mode: .light,
+    systemAppearance: .light,
+    reduceTransparency: false,
+    increasedContrast: false
+  )
+  let state = SettingsGlassOpacityBindingProbe(value: 0.68)
+  let host = NSHostingView(
+    rootView: SettingsGlassOpacityRowFixture(
+      state: state,
+      isEnabled: false,
+      request: nil
+    )
+    .environment(\.fleckThemeSnapshot, theme)
+    .environment(\.colorScheme, theme.colorScheme)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 420, height: 96),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  NSApp.activate(ignoringOtherApps: true)
+  window.makeKeyAndOrderFront(nil)
+  defer {
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+  for _ in 0..<30 {
+    host.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
+
+  let slider = try #require(settingsNativeSlider(in: host))
+  let sliderRect = slider.convert(slider.bounds, to: host)
+  func sliderPoint(for value: Double) -> NSPoint {
+    let metrics = SettingsGlassOpacitySliderMetrics.resolve(
+      value: value,
+      width: sliderRect.width,
+      trackInset: 8,
+      layoutDirection: .leftToRight
+    )
+    return host.convert(
+      NSPoint(x: sliderRect.minX + metrics.thumbX, y: sliderRect.midY),
+      to: nil
+    )
+  }
+  try settingsSendMouseSequence(
+    [
+      (.leftMouseDown, sliderPoint(for: state.value)),
+      (.leftMouseDragged, sliderPoint(for: 0.9)),
+      (.leftMouseUp, sliderPoint(for: 0.9)),
+    ],
+    to: window
+  )
+  for _ in 0..<20 {
+    host.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
+
+  #expect(state.value == 0.68)
+}
+
+@Test @MainActor
+func settingsSearchAnchorKeepsAppearanceCardFocusedWithoutSystemHalo() async throws {
+  let application = NSApplication.shared
+  let previousActivationPolicy = application.activationPolicy()
+  #expect(application.setActivationPolicy(.regular))
+  defer { _ = application.setActivationPolicy(previousActivationPolicy) }
+
+  let theme = FleckThemeSnapshot.resolve(
+    colorTheme: .monochrome,
+    mode: .light,
+    systemAppearance: .light,
+    reduceTransparency: false,
+    increasedContrast: false
+  )
+  let state = SettingsGlassOpacityBindingProbe(value: 0.68)
+  let request = SettingsSearchRequest(target: .appearanceGlassOpacity)
+  let host = NSHostingView(
+    rootView: SettingsGlassOpacityRowFixture(
+      state: state,
+      isEnabled: true,
+      request: request
+    )
+    .environment(\.fleckThemeSnapshot, theme)
+    .environment(\.colorScheme, theme.colorScheme)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 420, height: 96),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  NSApp.activate(ignoringOtherApps: true)
+  window.makeKeyAndOrderFront(nil)
+  defer {
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+  for _ in 0..<30 {
+    host.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
+
+  let focusIdentifier =
+    "settings-keyboard-focus-\(SettingsSearchTarget.appearanceGlassOpacity.identifier)"
+  #expect(settingsNativeView(withAccessibilityIdentifier: focusIdentifier, in: host) != nil)
+  let image = try settingsHostedCapture(in: host)
+  #expect(settingsSurfacePixelCount(in: image, matching: NSColor.keyboardFocusIndicatorColor) == 0)
+
+  if let capturePath = ProcessInfo.processInfo.environment["FLECK_CONTROL_FOCUS_CAPTURE_DIR"] {
+    let captureDirectory = URL(fileURLWithPath: capturePath, isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: captureDirectory,
+      withIntermediateDirectories: true
+    )
+    let png = try #require(image.representation(using: .png, properties: [:]))
+    try png.write(to: captureDirectory.appendingPathComponent("appearance-card-focus.png"))
+  }
+}
+
 @MainActor
 private func settingsSurfacePixelCount(
   in image: NSBitmapImageRep,
@@ -689,4 +921,83 @@ private func settingsSliderThumbTopCenters(
   }
   finishRun()
   return centers
+}
+
+@MainActor
+private final class SettingsGlassOpacityBindingProbe: ObservableObject {
+  @Published var value: Double
+
+  init(value: Double) {
+    self.value = value
+  }
+}
+
+private struct SettingsGlassOpacityRowFixture: View {
+  @ObservedObject var state: SettingsGlassOpacityBindingProbe
+  let isEnabled: Bool
+  let request: SettingsSearchRequest?
+
+  var body: some View {
+    SettingsPreferenceRow(
+      "Glass opacity",
+      detail: "Adjust how much of the window shows through when Glass is selected."
+    ) {
+      SettingsGlassOpacitySlider(value: $state.value)
+        .disabled(!isEnabled)
+    }
+    .settingsSearchAnchor(.appearanceGlassOpacity, request: request)
+    .padding(12)
+    .frame(width: 420, height: 96)
+  }
+}
+
+@MainActor
+private func settingsNativeSlider(in view: NSView) -> NSSlider? {
+  if let slider = view as? NSSlider { return slider }
+  for subview in view.subviews {
+    if let slider = settingsNativeSlider(in: subview) {
+      return slider
+    }
+  }
+  return nil
+}
+
+@MainActor
+private func settingsNativeView(withAccessibilityIdentifier identifier: String, in view: NSView)
+  -> NSView?
+{
+  if view.accessibilityIdentifier() == identifier { return view }
+  for subview in view.subviews {
+    if let match = settingsNativeView(withAccessibilityIdentifier: identifier, in: subview) {
+      return match
+    }
+  }
+  return nil
+}
+
+@MainActor
+private func settingsSendMouseSequence(
+  _ events: [(NSEvent.EventType, NSPoint)],
+  to window: NSWindow
+) throws {
+  let timestamp = ProcessInfo.processInfo.systemUptime
+  let nativeEvents = try events.enumerated().map { index, event in
+    let (type, point) = event
+    return try #require(
+      NSEvent.mouseEvent(
+        with: type,
+        location: point,
+        modifierFlags: [],
+        timestamp: timestamp + Double(index) * 0.01,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: index,
+        clickCount: 1,
+        pressure: type == .leftMouseUp ? 0 : 1
+      )
+    )
+  }
+  for event in nativeEvents {
+    window.sendEvent(event)
+  }
 }

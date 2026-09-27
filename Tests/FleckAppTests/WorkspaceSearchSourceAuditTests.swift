@@ -94,6 +94,34 @@ func WorkspaceSearchSourceAuditUsesTheProductionPanelAndNativeOverlay() throws {
 }
 
 @Test
+func WorkspaceSearchSourceAuditDoesNotOutlineTheQueryFieldSeparatelyFromItsPanel() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let searchView = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/WorkspaceSearchView.swift"),
+    encoding: .utf8
+  )
+  let queryField = try #require(
+    searchView
+      .components(separatedBy: "TextField(\"Search notes\"")
+      .dropFirst()
+      .first?
+      .components(separatedBy: ".onKeyPress(.upArrow)")
+      .first
+  )
+
+  #expect(queryField.contains(".textFieldStyle(.plain)"))
+  #expect(queryField.contains(".focused($isQueryFocused)"))
+  #expect(queryField.contains(".accessibilityLabel(\"Search notes\")"))
+  #expect(queryField.contains(".accessibilityHint(\"Search note titles and bodies\")"))
+  #expect(!queryField.contains(".fleckNeutralControlOutline("))
+  #expect(searchView.contains(".fill(.regularMaterial)"))
+  #expect(searchView.contains(".strokeBorder(.quaternary)"))
+}
+
+@Test
 func WorkspaceSearchSourceAuditRetainsFolderAwareUnderlayAndNewNoteRouting() throws {
   let root = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()

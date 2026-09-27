@@ -1077,19 +1077,9 @@
         if !isPinned {
           switch chromeMaterialPolicy {
           case .liquidGlass:
-            if #available(macOS 26, *) {
-              Rectangle()
-                .fill(.clear)
-                .glassEffect(
-                  .regular.tint(theme.color(.accent).opacity(0.08)),
-                  in: Rectangle()
-                )
-                .opacity(appState.preferences.panelOpacity)
-            } else {
-              Rectangle()
-                .fill(.ultraThinMaterial)
-                .opacity(appState.preferences.panelOpacity)
-            }
+            Rectangle()
+              .fill(.regularMaterial)
+              .opacity(appState.preferences.panelOpacity)
           case .legacyMaterial:
             Rectangle()
               .fill(.ultraThinMaterial)
@@ -4076,7 +4066,7 @@
       .frame(maxWidth: .infinity, alignment: .leading)
       .frame(height: 44)
       .frame(maxWidth: .infinity)
-      .modifier(FormattingBarSurface())
+      .modifier(FormattingBarSurface(isPinned: isPinned))
       .padding(.horizontal, 10)
       .padding(.top, 8)
       .disabled(!isEditorVisible)
@@ -5124,23 +5114,33 @@
     @Environment(\.fleckChromeAppearance) private var appearance
     @Environment(\.fleckThemeSnapshot) private var theme
 
+    let isPinned: Bool
+
     func body(content: Content) -> some View {
       let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
       switch materialPolicy {
       case .liquidGlass:
-        if #available(macOS 26, *) {
-          content.glassEffect(
-            Glass.regular.tint(theme.color(.accent).opacity(0.08)),
-            in: shape
-          )
+        if isPinned {
+          if #available(macOS 26, *) {
+            content.glassEffect(
+              Glass.regular.tint(theme.color(.accent).opacity(0.08)),
+              in: shape
+            )
+          } else {
+            content
+              .background {
+                shape.fill(.ultraThinMaterial)
+              }
+          }
         } else {
           content
-            .background {
-              shape.fill(.ultraThinMaterial)
-            }
         }
       case .legacyMaterial:
-        content.background { shape.fill(.ultraThinMaterial) }
+        if isPinned {
+          content.background { shape.fill(.ultraThinMaterial) }
+        } else {
+          content
+        }
       case .opaque:
         content.background { shape.fill(theme.color(.card)) }
       }

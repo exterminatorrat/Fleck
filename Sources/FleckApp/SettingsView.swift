@@ -687,9 +687,20 @@
               .position(x: sliderMetrics.thumbX, y: geometry.size.height / 2)
           }
           .frame(width: geometry.size.width, height: geometry.size.height)
+          .contentShape(Rectangle())
+          .gesture(
+            DragGesture(minimumDistance: 0)
+              .onChanged { gesture in
+                guard isEnabled, trackWidth > 0 else { return }
+                let trackProgress = min(max((gesture.location.x - trackInset) / trackWidth, 0), 1)
+                let valueProgress = layoutDirection == .rightToLeft
+                  ? 1 - trackProgress
+                  : trackProgress
+                value = 0.55 + Double(valueProgress) * 0.45
+              }
+          )
         }
         .environment(\.layoutDirection, .leftToRight)
-        .allowsHitTesting(false)
         .accessibilityHidden(true)
       }
       .accessibilityLabel("Glass opacity")

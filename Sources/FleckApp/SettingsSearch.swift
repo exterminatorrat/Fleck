@@ -850,24 +850,13 @@
       request?.anchor == target
     }
 
-    private var usesNeutralKeyboardFocus: Bool {
-      switch target {
-      case .vocabularySearch, .vocabularySort, .vocabularyReload,
-        .vocabularyTransfer, .vocabularyExportDictionary, .vocabularyExportCSV,
-        .vocabularyImportDictionary:
-        true
-      default:
-        false
-      }
-    }
-
     func body(content: Content) -> some View {
       content
         .id(target)
         .accessibilityIdentifier(target.accessibilityIdentifier)
         .accessibilityLabel(target.focusLabel)
         .focusable()
-        .focusEffectDisabled(usesNeutralKeyboardFocus)
+        .focusEffectDisabled()
         .focused($isKeyboardFocused)
         .accessibilityFocused($isFocused)
         .background {
@@ -885,7 +874,7 @@
               )
               .allowsHitTesting(false)
               .accessibilityHidden(true)
-          } else if usesNeutralKeyboardFocus && isKeyboardFocused {
+          } else if isKeyboardFocused {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
               .strokeBorder(Color.primary.opacity(0.72), lineWidth: 1.5)
               .allowsHitTesting(false)

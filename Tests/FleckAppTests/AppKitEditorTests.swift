@@ -1,5 +1,6 @@
 import AppKit
 import FleckCore
+import ScreenCaptureKit
 import SwiftUI
 import Testing
 
@@ -5374,6 +5375,88 @@ func hostedSelectedNoteTabUsesOpaqueTintFillAndPairedInkUnderGlass() async throw
   }
 }
 
+@Test @MainActor
+func hostedGlassAndSolidMenuPanelsCaptureSyntheticChromeAndOpaqueEditor() async throws {
+  try #require(CGPreflightScreenCaptureAccess())
+  let previousApplicationAppearance = NSApp.appearance
+  defer { NSApp.appearance = previousApplicationAppearance }
+
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("synthetic-glass-menu-panel-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Synthetic note", body: "Synthetic editor canvas.")
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  state.updatePreferences {
+    $0.colorTheme = .capy
+    $0.theme = .dark
+    $0.panelOpacity = 0.55
+  }
+
+  let backdrop = NSWindow(
+    contentRect: NSRect(x: 90, y: 240, width: 640, height: 430),
+    styleMask: [.borderless],
+    backing: .buffered,
+    defer: false
+  )
+  backdrop.isOpaque = true
+  backdrop.hasShadow = false
+  backdrop.backgroundColor = NSColor(calibratedWhite: 0.24, alpha: 1)
+  backdrop.orderFront(nil)
+  defer { backdrop.orderOut(nil) }
+
+  var captures: [(FleckChromeAppearance, NSBitmapImageRep)] = []
+  for appearance in [FleckChromeAppearance.glass, .solid] {
+    state.updatePreferences { $0.chromeAppearance = appearance }
+    let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+    let panel = NotesPanel(dictationRuntime: runtime, sizing: .container)
+    let host = NSHostingView(rootView: AnyView(FleckThemeTestRoot(state: state) { panel }))
+    let window = NSWindow(
+      contentRect: backdrop.frame,
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false
+    )
+    window.isReleasedWhenClosed = false
+    window.level = .floating
+    window.appearance = NSAppearance(named: .darkAqua)
+    window.backgroundColor = .clear
+    window.isOpaque = false
+    window.hasShadow = false
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+    await settleHostedView(host)
+
+    let editor = try #require(hostedDescendant(in: host, as: NativeEditorDocumentView.self))
+    #expect(editor.isOpaque)
+    let canvasCGColor = try #require(editor.layer?.backgroundColor)
+    let canvasColor = try #require(NSColor(cgColor: canvasCGColor))
+    #expect(hostedThemeColorsMatch(canvasColor, state.themeSnapshot.nsColor(.editorOpaque)))
+
+    let image = try await hostedNativeWindowCapture(window)
+    captures.append((appearance, image))
+    if let captureDirectory = ProcessInfo.processInfo.environment[
+      "FLECK_GLASS_SYNTHETIC_CAPTURE_DIR"
+    ] {
+      let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      let file = directory.appendingPathComponent("\(appearance).png")
+      let png = try #require(image.representation(using: .png, properties: [:]))
+      try png.write(to: file, options: .atomic)
+    }
+
+    window.orderOut(nil)
+    window.contentView = nil
+    await runtime.shutdown()
+  }
+
+  let glass = try #require(captures.first { $0.0 == .glass }?.1)
+  let solid = try #require(captures.first { $0.0 == .solid }?.1)
+  #expect(hostedWindowCapturesDiffer(glass, solid))
+}
+
 @Test @MainActor func hostedNotesPanelEvacuatesTitleFocusWithoutRestoringBody() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -6270,6 +6353,52 @@ private func hostedThemeCapture(in view: NSView) throws -> NSBitmapImageRep {
   image.size = view.bounds.size
   view.cacheDisplay(in: view.bounds, to: image)
   return image
+}
+
+@MainActor
+private func hostedNativeWindowCapture(_ window: NSWindow) async throws -> NSBitmapImageRep {
+  let shareableContent = try await SCShareableContent.excludingDesktopWindows(
+    true,
+    onScreenWindowsOnly: true
+  )
+  let shareableWindow = try #require(
+    shareableContent.windows.first { $0.windowID == CGWindowID(window.windowNumber) }
+  )
+  let filter = SCContentFilter(desktopIndependentWindow: shareableWindow)
+  let configuration = SCStreamConfiguration()
+  configuration.width = Int(window.frame.width * window.backingScaleFactor)
+  configuration.height = Int(window.frame.height * window.backingScaleFactor)
+  configuration.showsCursor = false
+  let image = try await SCScreenshotManager.captureImage(
+    contentFilter: filter,
+    configuration: configuration
+  )
+  return NSBitmapImageRep(cgImage: image)
+}
+
+@MainActor
+private func hostedWindowCapturesDiffer(
+  _ lhs: NSBitmapImageRep,
+  _ rhs: NSBitmapImageRep
+) -> Bool {
+  guard lhs.pixelsWide == rhs.pixelsWide, lhs.pixelsHigh == rhs.pixelsHigh else { return false }
+  for y in 0..<lhs.pixelsHigh {
+    for x in 0..<lhs.pixelsWide {
+      guard let lhsColor = lhs.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+        let rhsColor = rhs.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+      else { continue }
+      if max(
+        abs(lhsColor.redComponent - rhsColor.redComponent),
+        max(
+          abs(lhsColor.greenComponent - rhsColor.greenComponent),
+          abs(lhsColor.blueComponent - rhsColor.blueComponent)
+        )
+      ) > 0.04 {
+        return true
+      }
+    }
+  }
+  return false
 }
 
 @MainActor

@@ -991,7 +991,8 @@ func personalDictionaryFocusIsNeutralAndKeepsControlsKeyboardAccessible() throws
 
   #expect(searchSource.contains("field.focusRingType = .none"))
   #expect(searchSource.contains("onFocusChange(true)"))
-  #expect(searchSource.contains(".focusEffectDisabled(usesNeutralKeyboardFocus)"))
+  #expect(searchSource.contains(".focusEffectDisabled()"))
+  #expect(!searchSource.contains("usesNeutralKeyboardFocus"))
   #expect(searchSource.contains("Color.primary.opacity(0.72)"))
   #expect(searchSource.contains(".overlay(alignment: .bottom)"))
   #expect(!searchSource.contains("vocabularyFilter"))

@@ -83,9 +83,8 @@ func WorkspaceSearchFieldUsesNeutralKeyboardFocusStyling() throws {
 
   #expect(searchView.contains(".textFieldStyle(.plain)"))
   #expect(searchView.contains(".focusEffectDisabled()"))
-  #expect(searchView.contains(".fleckNeutralControlOutline("))
-  #expect(searchView.contains("isFocused: isQueryFocused"))
-  #expect(searchView.contains("idleOpacity: 0.22"))
+  #expect(searchView.contains(".focused($isQueryFocused)"))
+  #expect(searchView.contains("isQueryFocused = true"))
   #expect(!searchView.contains(".textFieldStyle(.roundedBorder)"))
 }
 
@@ -164,7 +163,31 @@ func WorkspaceSearchSelectedResultUsesPalettePairedTextAcrossThemes() async thro
       try await Task.sleep(for: .milliseconds(20))
       await settleWorkspaceSearchHost(host)
       #expect(controller.resultsAreCurrent)
+      let queryField = try #require(
+        hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+          .first { $0.placeholderString == "Search notes" }
+      )
+      #expect(queryField.stringValue == "Selected")
+      let queryFrame = queryField.convert(queryField.bounds, to: host)
+      #expect(queryFrame.width > 100)
+      #expect(queryFrame.height >= 16)
+      #expect(queryFrame.maxX <= host.bounds.maxX - 10)
+      #expect(window.makeFirstResponder(queryField))
+      let queryFieldEditor = try #require(window.firstResponder as? NSTextView)
+      #expect(queryField.currentEditor() === queryFieldEditor)
       let image = try workspaceSearchHostedCapture(in: host)
+      if let captureDirectory = ProcessInfo.processInfo.environment["FLECK_SEARCH_TEST_CAPTURE_DIR"],
+        palette == .capy
+      {
+        let suffix = mode == .light ? "light" : "dark"
+        let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
+        try FileManager.default.createDirectory(
+          at: directory,
+          withIntermediateDirectories: true
+        )
+        let captureURL = directory.appendingPathComponent("workspace-search-\(suffix).png")
+        try #require(image.representation(using: .png, properties: [:])).write(to: captureURL)
+      }
 
       #expect(
         FleckColorContrast.contrastRatio(
