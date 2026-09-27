@@ -823,7 +823,9 @@ func personalDictionaryRuntimeAndSettingsUseOneStoreAndNativeFormSurface() throw
   #expect(settingsSource.contains("suggestionRow(suggestion, expectedRevision: viewModel.revision)"))
   #expect(settingsSource.contains("expectedRevision: expectedRevision"))
   #expect(settingsSource.contains("case vocabulary = \"Vocabulary\""))
-  #expect(settingsSource.contains("Text(\"Dictionary\")"))
+  #expect(settingsSource.contains("SettingsPageHeader("))
+  #expect(settingsSource.contains("section: .vocabulary,\n          title: \"Dictionary\""))
+  #expect(settingsSource.contains("Text(title ?? section.title)"))
   #expect(settingsSource.contains("Button(\"Import / Export…\")"))
   #expect(settingsSource.contains("Button(\"Add new\")"))
   #expect(settingsSource.contains("private func entryTitle("))
@@ -888,7 +890,8 @@ func personalDictionaryVocabularyUsesTheTaskFlowAndLocalSortControls() throws {
     encoding: .utf8
   )
 
-  #expect(settingsSource.contains("Text(\"Dictionary\")"))
+  #expect(settingsSource.contains("title: \"Dictionary\""))
+  #expect(settingsSource.contains("SettingsPageHeader("))
   #expect(settingsSource.contains("Button(\"Import / Export…\")"))
   #expect(settingsSource.contains("Button(\"Add new\")"))
   #expect(!settingsSource.contains("Teach Fleck the words and phrases that matter to you"))
@@ -905,6 +908,9 @@ func personalDictionaryVocabularyUsesTheTaskFlowAndLocalSortControls() throws {
   #expect(settingsSource.contains(".keyboardShortcut(\"f\", modifiers: .command)"))
   #expect(settingsSource.contains("!hasModalPresentation"))
   #expect(settingsSource.contains("isSettingsSearchFieldFocused"))
+  #expect(settingsSource.contains(".focusable()"))
+  #expect(settingsSource.contains(".focused($isSearchTriggerFocused)"))
+  #expect(settingsSource.contains("settings-keyboard-focus-vocabulary-search-trigger"))
   #expect(!settingsSource.contains(".onKeyPress(phases: .down)"))
   #expect(settingsSource.contains("Section(isNew ? \"Add New\" : \"Edit Word\")"))
   #expect(settingsSource.contains("Use this word in dictation"))
@@ -913,7 +919,7 @@ func personalDictionaryVocabularyUsesTheTaskFlowAndLocalSortControls() throws {
 }
 
 @Test
-func personalDictionaryVocabularySearchUsesFixedCustomOverlayAndAccessibleDismissal() throws {
+func personalDictionaryVocabularySearchUsesResponsiveInlineFieldAndAccessibleDismissal() throws {
   let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
@@ -923,12 +929,28 @@ func personalDictionaryVocabularySearchUsesFixedCustomOverlayAndAccessibleDismis
     encoding: .utf8
   )
 
-  #expect(!settingsSource.contains("ViewThatFits(in: .horizontal)"))
-  #expect(!settingsSource.contains("private var toolbarRows: some View"))
+  #expect(settingsSource.contains("ViewThatFits(in: .horizontal)"))
+  #expect(settingsSource.contains("private var dictionaryToolbar: some View"))
+  #expect(settingsSource.contains("private var searchControl: some View"))
   #expect(settingsSource.contains(".textFieldStyle(.plain)"))
   #expect(settingsSource.contains("private var searchSurface: some View"))
+  #expect(settingsSource.contains(".frame(minWidth: 64, maxWidth: 164"))
+  let searchSurfaceStart = try #require(
+    settingsSource.range(of: "private var searchSurface: some View")
+  )
+  let searchSurfaceEnd = try #require(
+    settingsSource.range(
+      of: "private var hasModalPresentation: Bool",
+      range: searchSurfaceStart.upperBound..<settingsSource.endIndex
+    )
+  )
+  let searchSurfaceSource = settingsSource[searchSurfaceStart.lowerBound..<searchSurfaceEnd.lowerBound]
+  #expect(!searchSurfaceSource.contains("magnifyingglass"))
+  #expect(searchSurfaceSource.contains("TextField(\"Search vocabulary\""))
+  #expect(searchSurfaceSource.contains("settings-vocabulary-local-search-field"))
   #expect(settingsSource.contains("@Environment(\\.accessibilityReduceMotion) private var reduceMotion"))
   #expect(settingsSource.contains("AppMotion(reduceMotion: reduceMotion)"))
+  #expect(settingsSource.contains("motion.allowsSpatialMotion(for: searchPresentationSource)"))
   #expect(settingsSource.contains("openSearch(source: isCommandF ? .keyboard : .pointer)"))
   #expect(settingsSource.contains("withAnimation(motion.presentationAnimation(for: source))"))
   #expect(settingsSource.contains(".onExitCommand"))
@@ -1118,8 +1140,378 @@ func personalDictionaryCommandFRoutesFromSidebarAndContentWithoutBreakingSearchO
   await runtime.shutdown()
 }
 
+@Test @MainActor
+func personalDictionaryToolbarUsesPaddedTargetsInlineSearchAndKeyboardDismissal() async throws {
+  let layouts: [(
+    name: String,
+    width: CGFloat,
+    height: CGFloat,
+    dynamicTypeSize: DynamicTypeSize,
+    appearance: FleckThemeAppearance,
+    reduceMotion: Bool
+  )] = [
+    ("wide-light", 620, 420, .large, .light, false),
+    ("narrow-dark", 360, 440, .large, .dark, false),
+    ("narrow-accessibility", 360, 500, .accessibility1, .light, true),
+  ]
+
+  for layout in layouts {
+    let root = temporarySettingsDictionaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = PersonalDictionaryStore(rootURL: root)
+    try await store.upsert(settingsEntry(75, "Synthetic phrase"))
+    let viewModel = PersonalDictionarySettingsViewModel(store: store)
+    await viewModel.load()
+
+    let (window, host) = await hostedPersonalDictionarySettingsSection(
+      viewModel: viewModel,
+      size: NSSize(width: layout.width, height: layout.height),
+      dynamicTypeSize: layout.dynamicTypeSize,
+      appearance: layout.appearance,
+      reduceMotion: layout.reduceMotion
+    )
+    defer {
+      window.contentView = nil
+      window.orderOut(nil)
+    }
+    await settlePersonalDictionarySettingsHost(host)
+
+    let actionIdentifiers = [
+      "settings-vocabulary-search-trigger",
+      "settings-search-target-vocabulary-sort",
+      "settings-search-target-vocabulary-reload",
+    ]
+    let accessibilityFrames = try actionIdentifiers.map {
+      try personalDictionarySettingsAccessibilityFrame($0, in: host)
+    }
+    for frame in accessibilityFrames {
+      #expect(abs(frame.width - 40) < 1)
+      #expect(abs(frame.height - 40) < 1)
+    }
+    for firstIndex in accessibilityFrames.indices {
+      for secondIndex in accessibilityFrames.indices where secondIndex > firstIndex {
+        #expect(!accessibilityFrames[firstIndex].intersects(accessibilityFrames[secondIndex]))
+      }
+    }
+
+    let divider = try #require(
+      personalDictionarySettingsView(
+        withAccessibilityIdentifier: "settings-vocabulary-toolbar-divider",
+        in: host
+      )
+    )
+    let dividerFrame = host.convert(divider.bounds, from: divider)
+    for identifier in actionIdentifiers {
+      let controlAccessibilityFrame = try personalDictionarySettingsAccessibilityFrame(
+        identifier,
+        in: host
+      )
+      let controlFrame = personalDictionaryHostFrame(
+        fromScreenFrame: controlAccessibilityFrame,
+        in: host
+      )
+      let clearance = host.isFlipped
+        ? dividerFrame.minY - controlFrame.maxY
+        : controlFrame.minY - dividerFrame.maxY
+      #expect(clearance >= 12)
+    }
+
+    _ = try capturePersonalDictionaryHost(host, name: "dictionary-toolbar-\(layout.name)")
+
+    let collapsedSearchFrame = try personalDictionarySettingsAccessibilityFrame(
+      "settings-vocabulary-search-trigger",
+      in: host
+    )
+    let localSearchFields = {
+      personalDictionarySettingsViews(in: host)
+        .compactMap { $0 as? NSTextField }
+        .filter { field in
+          !(field is NSSearchField) && field.placeholderString == "Search vocabulary"
+        }
+    }
+    try clickPersonalDictionaryControlAtPaddedEdge(
+      "settings-vocabulary-search-trigger",
+      in: host,
+      window: window
+    )
+    try await Task.sleep(for: .milliseconds(250))
+    await settlePersonalDictionarySettingsHost(host)
+
+    #expect(localSearchFields().count == 1)
+    let searchField = try #require(
+      personalDictionaryLocalSearchTextField(in: host)
+    )
+    #expect(!(searchField is NSSearchField))
+    #expect(searchField.placeholderString == "Search vocabulary")
+    let editor = try #require(searchField.currentEditor() as? NSTextView)
+    #expect(window.firstResponder === editor)
+    #expect(editor.selectedRange().length == 0)
+    let expandedSearchFrame = try personalDictionarySettingsAccessibilityFrame(
+      "settings-vocabulary-search-trigger",
+      in: host
+    )
+    #expect(expandedSearchFrame.midX < collapsedSearchFrame.midX - 12)
+
+    viewModel.query = "Direct"
+    #expect(viewModel.query == "Direct")
+    window.sendEvent(try #require(personalDictionaryEscapeEvent(for: window)))
+    await settlePersonalDictionarySettingsHost(host)
+    try await Task.sleep(for: .milliseconds(250))
+    await settlePersonalDictionarySettingsHost(host)
+    #expect(localSearchFields().isEmpty)
+    #expect(viewModel.query.isEmpty)
+
+    let searchTrigger = try #require(
+      personalDictionarySettingsAccessibilityElement(
+        withAccessibilityIdentifier: "settings-vocabulary-search-trigger",
+        in: host
+      )
+    )
+    #expect(
+      personalDictionaryAccessibilityString(searchTrigger, attribute: "accessibilityLabel")
+        == "Search vocabulary"
+    )
+    let closedSearchFrame = try personalDictionarySettingsAccessibilityFrame(
+      "settings-vocabulary-search-trigger",
+      in: host
+    )
+    #expect(abs(closedSearchFrame.width - 40) < 1)
+    #expect(abs(closedSearchFrame.height - 40) < 1)
+    let closedSearchHostFrame = personalDictionaryHostFrame(
+      fromScreenFrame: closedSearchFrame,
+      in: host
+    )
+    let closedSearchImage = try capturePersonalDictionaryHost(
+      host,
+      name: "dictionary-search-after-direct-escape-\(layout.name)"
+    )
+    #expect(
+      personalDictionaryAccentPixelCount(
+        in: closedSearchImage,
+        host: host,
+        frame: closedSearchHostFrame.insetBy(dx: -3, dy: -3),
+        accent: .keyboardFocusIndicatorColor,
+        matchingTolerance: 0.18
+      ) == 0
+    )
+
+    try clickPersonalDictionaryControlAtPaddedEdge(
+      "settings-vocabulary-search-trigger",
+      in: host,
+      window: window
+    )
+    try await Task.sleep(for: .milliseconds(250))
+    await settlePersonalDictionarySettingsHost(host)
+    #expect(localSearchFields().count == 1)
+    let reopenedSearchField = try #require(
+      personalDictionaryLocalSearchTextField(in: host)
+    )
+    #expect(!(reopenedSearchField is NSSearchField))
+    #expect(reopenedSearchField.placeholderString == "Search vocabulary")
+    let reopenedEditor = try #require(reopenedSearchField.currentEditor() as? NSTextView)
+    #expect(window.firstResponder === reopenedEditor)
+
+    viewModel.query = "Synthetic"
+    try clickPersonalDictionaryControlAtPaddedEdge(
+      "settings-search-target-vocabulary-sort",
+      in: host,
+      window: window
+    )
+    await settlePersonalDictionarySettingsHost(host)
+    #expect(!(window.childWindows ?? []).isEmpty)
+
+    let sortWindow = NSApp.keyWindow ?? window
+    sortWindow.sendEvent(try #require(personalDictionaryEscapeEvent(for: sortWindow)))
+    await settlePersonalDictionarySettingsHost(host)
+    #expect((window.childWindows ?? []).isEmpty)
+    #expect(localSearchFields().count == 1)
+    #expect(viewModel.query == "Synthetic")
+
+    window.sendEvent(try #require(personalDictionaryEscapeEvent(for: window)))
+    await settlePersonalDictionarySettingsHost(host)
+    try await Task.sleep(for: .milliseconds(80))
+    #expect(localSearchFields().isEmpty)
+    #expect(viewModel.query.isEmpty)
+
+    #expect(window.makeFirstResponder(host))
+    #expect(window.firstResponder === host)
+    window.sendEvent(try #require(personalDictionaryCommandFEvent(for: window)))
+    try await Task.sleep(for: .milliseconds(250))
+    await settlePersonalDictionarySettingsHost(host)
+    #expect(localSearchFields().count == 1)
+    let commandFSearchField = try #require(
+      personalDictionaryLocalSearchTextField(in: host)
+    )
+    #expect(!(commandFSearchField is NSSearchField))
+    let commandFEditor = try #require(commandFSearchField.currentEditor() as? NSTextView)
+    #expect(window.firstResponder === commandFEditor)
+
+    window.sendEvent(try #require(personalDictionaryEscapeEvent(for: window)))
+    await settlePersonalDictionarySettingsHost(host)
+    try await Task.sleep(for: .milliseconds(80))
+    #expect(localSearchFields().isEmpty)
+    #expect(viewModel.query.isEmpty)
+
+    let revisionBeforeExternalUpdate = viewModel.revision
+    try await store.upsert(settingsEntry(76, "Refresh edge target"))
+    #expect(viewModel.revision == revisionBeforeExternalUpdate)
+    try clickPersonalDictionaryControlAtPaddedEdge(
+      "settings-search-target-vocabulary-reload",
+      in: host,
+      window: window
+    )
+    await settlePersonalDictionarySettingsHost(host)
+    for _ in 0..<100 where viewModel.revision == revisionBeforeExternalUpdate {
+      await Task.yield()
+    }
+    #expect(viewModel.revision == revisionBeforeExternalUpdate + 1)
+    #expect(viewModel.entries.contains { $0.id == settingsUUID(76) })
+  }
+}
+
+@Test @MainActor
+func personalDictionaryPriorityStarStaysVisibleWithoutHoverAndDeleteRemainsHidden() async throws {
+  for appearance in [FleckThemeAppearance.light, .dark] {
+    let root = temporarySettingsDictionaryRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = PersonalDictionaryStore(rootURL: root)
+    let starredEntry = PersonalDictionaryEntry(
+      id: settingsUUID(81),
+      preferredForm: "Persistent star",
+      isPriority: true
+    )
+    let unstarredEntry = settingsEntry(82, "Hover target")
+    try await store.upsert(starredEntry)
+    try await store.upsert(unstarredEntry)
+    let viewModel = PersonalDictionarySettingsViewModel(store: store)
+    await viewModel.load()
+
+    let (window, host) = await hostedPersonalDictionarySettingsSection(
+      viewModel: viewModel,
+      size: NSSize(width: 540, height: 500),
+      appearance: appearance
+    )
+    defer {
+      window.contentView = nil
+      window.orderOut(nil)
+    }
+    await settlePersonalDictionarySettingsHost(host)
+
+    let starredPriorityID = "settings-vocabulary-entry-priority-\(starredEntry.id.uuidString)"
+    let starredDeleteID = "settings-vocabulary-entry-delete-\(starredEntry.id.uuidString)"
+    let starredRow = try #require(
+      personalDictionarySettingsView(
+        withAccessibilityIdentifier: "settings-vocabulary-entry-frame-\(starredEntry.id.uuidString)",
+        in: host
+      )
+    )
+    let starredRowFrame = host.convert(starredRow.bounds, from: starredRow)
+    let pointerOutsideRows = NSPoint(
+      x: host.bounds.minX + 8,
+      y: host.isFlipped ? host.bounds.minY + 8 : host.bounds.maxY - 8
+    )
+    try movePersonalDictionaryPointer(to: pointerOutsideRows, in: host, window: window)
+    await settlePersonalDictionarySettingsHost(host)
+    try await Task.sleep(for: .milliseconds(120))
+
+    let priorityFrame = try personalDictionarySettingsAccessibilityFrame(
+      starredPriorityID,
+      in: host
+    )
+    let priorityElement = try #require(
+      personalDictionarySettingsAccessibilityElement(
+        withAccessibilityIdentifier: starredPriorityID,
+        in: host
+      )
+    )
+    #expect(
+      personalDictionaryAccessibilityString(priorityElement, attribute: "accessibilityLabel")
+        == "Unstar \(starredEntry.preferredForm)"
+    )
+    #expect(
+      personalDictionaryAccessibilityString(priorityElement, attribute: "accessibilityValue")
+        == "Starred"
+    )
+    #expect(abs(priorityFrame.width - 32) < 1)
+    #expect(abs(priorityFrame.height - 32) < 1)
+    #expect(
+      personalDictionarySettingsAccessibilityElement(
+        withAccessibilityIdentifier: starredDeleteID,
+        in: host
+      ) == nil
+    )
+
+    let theme = FleckThemeSnapshot.resolve(
+      colorTheme: .capy,
+      mode: appearance == .dark ? .dark : .light,
+      systemAppearance: appearance,
+      reduceTransparency: false,
+      increasedContrast: false
+    )
+    let screenshot = try capturePersonalDictionaryHost(
+      host,
+      name: "dictionary-priority-star-\(appearance == .dark ? "dark" : "light")"
+    )
+    let goldFrame = CGRect(
+      x: host.bounds.maxX - 64,
+      y: host.bounds.minY,
+      width: 64,
+      height: host.bounds.height
+    )
+    #expect(
+      personalDictionaryAccentPixelCount(
+        in: screenshot,
+        host: host,
+        frame: goldFrame,
+        accent: personalDictionaryPriorityStarColor(
+          appearance: appearance,
+          windowAppearance: window.appearance
+        ),
+        matchingTolerance: 0.18
+      ) > 0
+    )
+    #expect(
+      personalDictionaryColorContrast(
+        personalDictionaryPriorityStarColor(
+          appearance: appearance,
+          windowAppearance: window.appearance
+        ),
+        theme.nsColor(.window)
+      ) > 3
+    )
+
+    try clickPersonalDictionaryTrailingStarAtPaddedEdge(
+      in: host,
+      rowFrame: starredRowFrame,
+      window: window
+    )
+    await settlePersonalDictionarySettingsHost(host)
+    try await Task.sleep(for: .milliseconds(120))
+    await settlePersonalDictionarySettingsHost(host)
+    #expect(viewModel.entries.first(where: { $0.id == starredEntry.id })?.isPriority == false)
+    #expect(viewModel.pendingEntryDeletion == nil)
+
+    let unstarredPriorityID = "settings-vocabulary-entry-priority-\(unstarredEntry.id.uuidString)"
+    let unstarredDeleteID = "settings-vocabulary-entry-delete-\(unstarredEntry.id.uuidString)"
+    #expect(
+      personalDictionarySettingsAccessibilityElement(
+        withAccessibilityIdentifier: unstarredPriorityID,
+        in: host
+      ) == nil
+    )
+    #expect(
+      personalDictionarySettingsAccessibilityElement(
+        withAccessibilityIdentifier: unstarredDeleteID,
+        in: host
+      ) == nil
+    )
+  }
+}
+
 @Test
-func personalDictionaryUsesACompactHeaderAndRetainsSuggestionReviewSurfaces() throws {
+func personalDictionaryUsesSharedHeaderAndResponsiveToolbarAndRetainsSuggestionReviewSurfaces()
+  throws
+{
   let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
@@ -1129,28 +1521,33 @@ func personalDictionaryUsesACompactHeaderAndRetainsSuggestionReviewSurfaces() th
     encoding: .utf8
   )
 
-  let headerStart = try #require(
-    settingsSource.range(of: "private var dictionaryHeader: some View")
+  let toolbarStart = try #require(
+    settingsSource.range(of: "private var dictionaryToolbar: some View")
   )
   let searchControlStart = try #require(
     settingsSource.range(
       of: "private var searchTrigger: some View",
-      range: headerStart.upperBound..<settingsSource.endIndex
+      range: toolbarStart.upperBound..<settingsSource.endIndex
     )
   )
-  let headerSource = settingsSource[headerStart.lowerBound..<searchControlStart.lowerBound]
+  let toolbarSource = settingsSource[toolbarStart.lowerBound..<searchControlStart.lowerBound]
 
-  #expect(!settingsSource.contains("private var dictionaryToolbar: some View"))
+  #expect(settingsSource.contains(
+    "SettingsPageHeader(\n          section: .vocabulary,\n          title: \"Dictionary\",\n          searchRequest: visibleSearchRequest"
+  ))
+  #expect(settingsSource.contains("SettingsSearchProbe(identifier: \"settings-vocabulary-toolbar-divider\")"))
+  #expect(!toolbarSource.contains("Text(\"Dictionary\")"))
   #expect(!settingsSource.contains("ForEach(PersonalDictionarySettingsViewModel.Filter.allCases)"))
-  #expect(headerSource.contains("if let title = viewModel.suggestionsHeaderActionTitle"))
-  #expect(headerSource.contains("Button(title)"))
-  #expect(headerSource.contains(".controlSize(.small)"))
-  #expect(headerSource.contains(".accessibilityLabel(title)"))
-  #expect(headerSource.contains(".accessibilityHint("))
-  #expect(headerSource.contains("searchTrigger"))
-  #expect(headerSource.contains("sortControl"))
-  #expect(headerSource.contains("reloadControl"))
-  #expect(headerSource.contains("Button(\"Add new\")"))
+  #expect(toolbarSource.contains("private var suggestionsHeaderAction: some View"))
+  #expect(toolbarSource.contains("Button(title)"))
+  #expect(toolbarSource.contains(".controlSize(.small)"))
+  #expect(toolbarSource.contains(".accessibilityLabel(title)"))
+  #expect(toolbarSource.contains(".accessibilityHint("))
+  #expect(toolbarSource.contains("searchActions"))
+  #expect(toolbarSource.contains("searchControl"))
+  #expect(toolbarSource.contains("sortControl"))
+  #expect(toolbarSource.contains("reloadControl"))
+  #expect(toolbarSource.contains("Button(\"Add new\")"))
   #expect(!settingsSource.contains("vocabularyFilter"))
   #expect(settingsSource.contains(".popover(isPresented: optionsPresentation"))
   #expect(settingsSource.contains("Color(nsColor: .controlBackgroundColor)"))
@@ -1168,6 +1565,42 @@ func personalDictionaryUsesACompactHeaderAndRetainsSuggestionReviewSurfaces() th
   #expect(settingsSource.contains("viewModel.confirmEntryDeletion()"))
   #expect(settingsSource.contains("accessibilityLabel: entry.isPriority\n"))
   #expect(settingsSource.contains(": \"Star \\(entry.preferredForm)\""))
+  #expect(settingsSource.contains(".opacity(showsActions || entry.isPriority ? 1 : 0)"))
+  #expect(settingsSource.contains(".allowsHitTesting(showsActions || entry.isPriority)"))
+  let rowStart = try #require(
+    settingsSource.range(of: "private struct PersonalDictionaryEntryRow: View")
+  )
+  let editStart = try #require(
+    settingsSource.range(
+      of: "Button(action: onEdit)",
+      range: rowStart.upperBound..<settingsSource.endIndex
+    )
+  )
+  let actionStart = try #require(
+    settingsSource.range(
+      of: "HStack(spacing: 4)",
+      range: editStart.upperBound..<settingsSource.endIndex
+    )
+  )
+  let editSource = settingsSource[editStart.lowerBound..<actionStart.lowerBound]
+  let rowActionsSource = settingsSource[actionStart.lowerBound...]
+  #expect(!editSource.contains("star.fill"))
+  #expect(rowActionsSource.contains("systemImage: entry.isPriority ? \"star.fill\" : \"star\""))
+  #expect(settingsSource.contains("isHovered || isFocused"))
+  #expect(rowActionsSource.contains(".opacity(showsActions ? 1 : 0)"))
+  #expect(rowActionsSource.contains(".allowsHitTesting(showsActions)"))
+  #expect(rowActionsSource.contains(".frame(width: 32, height: 32)"))
+  #expect(rowActionsSource.contains(".contentShape(Rectangle())"))
+  #expect(rowActionsSource.contains(".focused($focusedAction, equals: action)"))
+  #expect(
+    rowActionsSource.contains(".accessibilityFocused($accessibilityFocusedAction, equals: action)")
+  )
+  #expect(
+    rowActionsSource.contains("isPriority ? priorityStarColor : theme.color(.textSecondary)")
+  )
+  #expect(settingsSource.contains("NSColor.systemYellow"))
+  #expect(settingsSource.contains("theme.appearance == .light"))
+  #expect(settingsSource.contains("blended(withFraction: 0.35, of: .black)"))
   #expect(settingsSource.contains("Text(\"Transfer\")"))
   #expect(!settingsSource.contains("DisclosureGroup(\"Transfer\""))
 }
@@ -1514,6 +1947,361 @@ private func personalDictionarySettingsFieldIsFocused(
   if window.firstResponder === field { return true }
   guard let fieldEditor = field.currentEditor() else { return false }
   return window.firstResponder === fieldEditor
+}
+
+@MainActor
+private func hostedPersonalDictionarySettingsSection(
+  viewModel: PersonalDictionarySettingsViewModel,
+  size: NSSize,
+  dynamicTypeSize: DynamicTypeSize = .large,
+  appearance: FleckThemeAppearance = .light,
+  reduceMotion: Bool = false
+) async -> (NSWindow, NSHostingView<AnyView>) {
+  NSApplication.shared.accessibilitySetValue(
+    true,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+  let theme = FleckThemeSnapshot.resolve(
+    colorTheme: .capy,
+    mode: appearance == .dark ? .dark : .light,
+    systemAppearance: appearance,
+    reduceTransparency: false,
+    increasedContrast: false
+  )
+  let rootView = AnyView(
+    PersonalDictionarySettingsSection(
+      viewModel: viewModel,
+      searchRequest: .constant(nil),
+      pageScrollReadyRequestID: nil,
+      selectedSection: .constant(.vocabulary)
+    )
+    .environment(\.fleckThemeSnapshot, theme)
+    .environment(\.colorScheme, theme.colorScheme)
+    .environment(\.dynamicTypeSize, dynamicTypeSize)
+    .environment(\._accessibilityReduceMotion, reduceMotion)
+    .padding(12)
+  )
+  let host = NSHostingView(rootView: rootView)
+  let window = NSWindow(
+    contentRect: NSRect(origin: .zero, size: size),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.appearance = NSAppearance(named: appearance == .dark ? .darkAqua : .aqua)
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settlePersonalDictionarySettingsHost(host)
+  return (window, host)
+}
+
+@MainActor
+private func personalDictionarySettingsViews(in view: NSView) -> [NSView] {
+  [view] + view.subviews.flatMap(personalDictionarySettingsViews(in:))
+}
+
+@MainActor
+private func personalDictionaryLocalSearchTextField(in view: NSView) -> NSTextField? {
+  personalDictionarySettingsViews(in: view)
+    .compactMap { $0 as? NSTextField }
+    .first { field in
+      !(field is NSSearchField)
+        && (field.placeholderString == "Search vocabulary"
+          || field.accessibilityIdentifier() == "settings-search-target-vocabulary-search")
+    }
+}
+
+@MainActor
+private func personalDictionarySettingsAccessibilityFrame(
+  _ identifier: String,
+  in host: NSView
+) throws -> CGRect {
+  let element = try #require(
+    personalDictionarySettingsAccessibilityElement(
+      withAccessibilityIdentifier: identifier,
+      in: host
+    )
+  )
+  let frame = try #require(element.value(forKey: "accessibilityFrame") as? NSValue)
+  return frame.rectValue
+}
+
+@MainActor
+private func personalDictionarySettingsAccessibilityElement(
+  withAccessibilityIdentifier identifier: String,
+  in view: NSView
+) -> NSObject? {
+  var visited: Set<ObjectIdentifier> = []
+  return personalDictionaryAccessibilityElement(
+    withAccessibilityIdentifier: identifier,
+    in: view,
+    visited: &visited,
+    depth: 0
+  )
+}
+
+@MainActor
+private func personalDictionaryAccessibilityElement(
+  withAccessibilityIdentifier identifier: String,
+  in value: Any,
+  visited: inout Set<ObjectIdentifier>,
+  depth: Int
+) -> NSObject? {
+  guard depth < 48, let element = value as? NSObject,
+    visited.insert(ObjectIdentifier(element)).inserted
+  else {
+    return nil
+  }
+
+  let identifierSelector = NSSelectorFromString("accessibilityIdentifier")
+  let currentIdentifier = element.responds(to: identifierSelector)
+    ? element.perform(identifierSelector)?.takeUnretainedValue() as? String
+    : nil
+  if currentIdentifier == identifier { return element }
+
+  let childrenSelector = NSSelectorFromString("accessibilityChildren")
+  let children = element.responds(to: childrenSelector)
+    ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any]
+    : nil
+  for child in children ?? [] {
+    if let match = personalDictionaryAccessibilityElement(
+      withAccessibilityIdentifier: identifier,
+      in: child,
+      visited: &visited,
+      depth: depth + 1
+    ) {
+      return match
+    }
+  }
+  return nil
+}
+
+@MainActor
+private func personalDictionaryAccessibilityString(
+  _ element: NSObject,
+  attribute: String
+) -> String? {
+  let selector = NSSelectorFromString(attribute)
+  guard element.responds(to: selector) else { return nil }
+  return element.perform(selector)?.takeUnretainedValue() as? String
+}
+
+@MainActor
+private func personalDictionaryHostFrame(
+  fromScreenFrame frame: CGRect,
+  in host: NSView
+) -> CGRect {
+  guard let window = host.window else { return .zero }
+  return host.convert(window.convertFromScreen(frame), from: nil)
+}
+
+@MainActor
+private func clickPersonalDictionaryTrailingStarAtPaddedEdge(
+  in host: NSView,
+  rowFrame: CGRect,
+  window: NSWindow
+) throws {
+  try sendPersonalDictionaryMouseClick(
+    at: NSPoint(x: rowFrame.maxX - 13, y: rowFrame.midY),
+    in: host,
+    window: window
+  )
+}
+
+@MainActor
+private func clickPersonalDictionaryControlAtPaddedEdge(
+  _ identifier: String,
+  in host: NSView,
+  window: NSWindow
+) throws {
+  let frame = personalDictionaryHostFrame(
+    fromScreenFrame: try personalDictionarySettingsAccessibilityFrame(identifier, in: host),
+    in: host
+  )
+  let point = NSPoint(
+    x: frame.minX + 1,
+    y: host.isFlipped ? frame.minY + 1 : frame.maxY - 1
+  )
+  try sendPersonalDictionaryMouseClick(at: point, in: host, window: window)
+}
+
+@MainActor
+private func sendPersonalDictionaryMouseClick(
+  at point: NSPoint,
+  in host: NSView,
+  window: NSWindow
+) throws {
+  let location = host.convert(point, to: nil)
+  for (eventType, eventNumber, pressure) in [
+    (NSEvent.EventType.leftMouseDown, 1, 1.0),
+    (NSEvent.EventType.leftMouseUp, 2, 0.0),
+  ] {
+    let event = try #require(
+      NSEvent.mouseEvent(
+        with: eventType,
+        location: location,
+        modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: eventNumber,
+        clickCount: 1,
+        pressure: Float(pressure)
+      )
+    )
+    window.sendEvent(event)
+  }
+}
+
+@MainActor
+private func movePersonalDictionaryPointer(
+  to point: NSPoint,
+  in host: NSView,
+  window: NSWindow
+) throws {
+  let pointInWindow = host.convert(point, to: nil)
+  let pointOnScreen = window.convertToScreen(NSRect(origin: pointInWindow, size: .zero)).origin
+  let pointer = NSEvent.mouseLocation
+  window.setFrameOrigin(
+    NSPoint(
+      x: pointer.x - (pointOnScreen.x - window.frame.minX),
+      y: pointer.y - (pointOnScreen.y - window.frame.minY)
+    )
+  )
+  host.updateTrackingAreas()
+  window.displayIfNeeded()
+  let event = try #require(
+    NSEvent.mouseEvent(
+      with: .mouseMoved,
+      location: window.convertFromScreen(NSRect(origin: pointer, size: .zero)).origin,
+      modifierFlags: [],
+      timestamp: ProcessInfo.processInfo.systemUptime,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 0,
+      pressure: 0
+    )
+  )
+  window.sendEvent(event)
+}
+
+@MainActor
+private func capturePersonalDictionaryHost(
+  _ host: NSView,
+  name: String
+) throws -> NSBitmapImageRep {
+  host.layoutSubtreeIfNeeded()
+  host.displayIfNeeded()
+  host.window?.displayIfNeeded()
+  let scale = host.window?.backingScaleFactor ?? 1
+  let image = try #require(
+    NSBitmapImageRep(
+      bitmapDataPlanes: nil,
+      pixelsWide: max(Int((host.bounds.width * scale).rounded(.up)), 1),
+      pixelsHigh: max(Int((host.bounds.height * scale).rounded(.up)), 1),
+      bitsPerSample: 8,
+      samplesPerPixel: 4,
+      hasAlpha: true,
+      isPlanar: false,
+      colorSpaceName: .deviceRGB,
+      bytesPerRow: 0,
+      bitsPerPixel: 0
+    )
+  )
+  host.cacheDisplay(in: host.bounds, to: image)
+
+  if let directory = ProcessInfo.processInfo.environment[
+    "FLECK_DICTIONARY_SETTINGS_CAPTURE_DIR"
+  ] {
+    let captureDirectory = URL(fileURLWithPath: directory, isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: captureDirectory,
+      withIntermediateDirectories: true
+    )
+    let data = try #require(image.representation(using: .png, properties: [:]))
+    try data.write(
+      to: captureDirectory.appendingPathComponent("\(name).png"),
+      options: .atomic
+    )
+  }
+
+  return image
+}
+
+@MainActor
+private func personalDictionaryAccentPixelCount(
+  in image: NSBitmapImageRep,
+  host: NSView,
+  frame: CGRect,
+  accent: NSColor,
+  matchingTolerance: CGFloat = 0.45
+) -> Int {
+  guard
+    let target = accent.usingColorSpace(.deviceRGB),
+    host.bounds.width > 0,
+    host.bounds.height > 0
+  else {
+    return 0
+  }
+
+  let scaleX = CGFloat(image.pixelsWide) / host.bounds.width
+  let scaleY = CGFloat(image.pixelsHigh) / host.bounds.height
+  let minX = max(Int(((frame.minX - host.bounds.minX) * scaleX).rounded(.down)), 0)
+  let maxX = min(Int(((frame.maxX - host.bounds.minX) * scaleX).rounded(.up)), image.pixelsWide)
+  let originY = host.isFlipped ? host.bounds.maxY - frame.maxY : frame.minY - host.bounds.minY
+  let minY = max(Int((originY * scaleY).rounded(.down)), 0)
+  let maxY = min(Int(((originY + frame.height) * scaleY).rounded(.up)), image.pixelsHigh)
+  var matchingPixels = 0
+
+  for y in minY..<maxY {
+    for x in minX..<maxX {
+      guard let color = image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+      let distance = abs(color.redComponent - target.redComponent)
+        + abs(color.greenComponent - target.greenComponent)
+        + abs(color.blueComponent - target.blueComponent)
+      if color.alphaComponent > 0.5 && distance < matchingTolerance {
+        matchingPixels += 1
+      }
+    }
+  }
+  return matchingPixels
+}
+
+@MainActor
+private func personalDictionaryPriorityStarColor(
+  appearance: FleckThemeAppearance,
+  windowAppearance: NSAppearance?
+) -> NSColor {
+  var color = NSColor.systemYellow.usingColorSpace(.deviceRGB) ?? .yellow
+  windowAppearance?.performAsCurrentDrawingAppearance {
+    let yellow = NSColor.systemYellow
+    let visibleYellow = appearance == .light
+      ? yellow.blended(withFraction: 0.35, of: .black) ?? yellow
+      : yellow
+    color = visibleYellow.usingColorSpace(.deviceRGB) ?? color
+  }
+  return color
+}
+
+@MainActor
+private func personalDictionaryColorContrast(_ first: NSColor, _ second: NSColor) -> CGFloat {
+  func luminance(_ source: NSColor) -> CGFloat {
+    guard let color = source.usingColorSpace(.deviceRGB) else { return 0 }
+    func linearized(_ component: CGFloat) -> CGFloat {
+      component <= 0.04045
+        ? component / 12.92
+        : pow((component + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * linearized(color.redComponent)
+      + 0.7152 * linearized(color.greenComponent)
+      + 0.0722 * linearized(color.blueComponent)
+  }
+
+  let firstLuminance = luminance(first)
+  let secondLuminance = luminance(second)
+  return (max(firstLuminance, secondLuminance) + 0.05)
+    / (min(firstLuminance, secondLuminance) + 0.05)
 }
 
 @MainActor

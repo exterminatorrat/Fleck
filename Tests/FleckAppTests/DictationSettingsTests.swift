@@ -1414,9 +1414,30 @@ private func settingsColorDistance(_ lhs: NSColor, _ rhs: NSColor) -> CGFloat {
   #expect(settings.contains(".settingsSearchAnchor(.appearanceTheme, request: searchRequest)"))
   #expect(settings.contains(".settingsSearchAnchor(.dictationPrivacy, request: searchRequest)"))
   #expect(
-    settings.contains(
-      ".settingsSearchAnchor(.section(.vocabulary), request: visibleSearchRequest)"
+    settings.range(
+      of: #"SettingsPageHeader\(\s*section: \.vocabulary,\s*title: "Dictionary",\s*searchRequest: visibleSearchRequest\s*\)"#,
+      options: .regularExpression
+    ) != nil
+  )
+
+  let sharedHeaderStart = try #require(settings.range(of: "struct SettingsPageHeader: View"))
+  let sharedHeaderEnd = try #require(
+    settings.range(
+      of: "struct SettingsSectionCard<Content: View>",
+      range: sharedHeaderStart.upperBound..<settings.endIndex
     )
+  )
+  let sharedHeaderSource = settings[sharedHeaderStart.lowerBound..<sharedHeaderEnd.lowerBound]
+  #expect(
+    sharedHeaderSource.components(
+      separatedBy: ".settingsSearchAnchor(.section(section), request: searchRequest)"
+    ).count == 2
+  )
+  #expect(
+    settings.range(
+      of: #"if selectedSection != \.vocabulary\s*\{\s*SettingsPageHeader\(section: selectedSection, searchRequest: searchRequest\)\s*\}"#,
+      options: .regularExpression
+    ) != nil
   )
   #expect(!settings.contains("vocabularyFilter"))
   #expect(settings.contains(".settingsSearchAnchor(.vocabularySort, request: visibleSearchRequest)"))

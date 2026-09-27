@@ -2430,7 +2430,7 @@ private actor AccessibilitySleepGate {
     #expect(settingsSource.contains("accessibilityLabel(\"\(label)\")"))
   }
   let headerStart = try #require(
-    settingsSource.range(of: "private var dictionaryHeader: some View")
+    settingsSource.range(of: "private var suggestionsHeaderAction: some View")
   )
   let searchTriggerStart = try #require(
     settingsSource.range(

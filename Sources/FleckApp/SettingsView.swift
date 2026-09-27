@@ -379,10 +379,21 @@
     @ScaledMetric(relativeTo: .title2) private var generalTitleSize = 20
     let section: SettingsSection
     let searchRequest: SettingsSearchRequest?
+    let title: String?
+
+    init(
+      section: SettingsSection,
+      title: String? = nil,
+      searchRequest: SettingsSearchRequest?
+    ) {
+      self.section = section
+      self.title = title
+      self.searchRequest = searchRequest
+    }
 
     var body: some View {
       VStack(alignment: .leading, spacing: 4) {
-        Text(section.title)
+        Text(title ?? section.title)
           .font(
             section == .editing
               ? .system(size: generalTitleSize, weight: .semibold)
@@ -1589,10 +1600,9 @@
     }
   }
 
-  private struct PersonalDictionarySettingsSection: View {
+  struct PersonalDictionarySettingsSection: View {
     @Environment(\.fleckThemeSnapshot) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ScaledMetric(relativeTo: .title2) private var titleSize = 23
     @ObservedObject var viewModel: PersonalDictionarySettingsViewModel
     @Binding var searchRequest: SettingsSearchRequest?
     let pageScrollReadyRequestID: UUID?
@@ -1606,6 +1616,7 @@
     @FocusState private var focusedSortOrder: SettingsVocabularySortOrder?
     @State private var isViewPresent = false
     @State private var isSearchExpanded = false
+    @State private var searchPresentationSource: AppInteractionSource = .keyboard
     @State private var isOptionsPresented = false
     @State private var isSortPresented = false
     @State private var hoveredSortOrder: SettingsVocabularySortOrder?
@@ -1626,18 +1637,32 @@
 
     private let maximumTransferBytes = 64 * 1024 + 256
 
+    init(
+      viewModel: PersonalDictionarySettingsViewModel,
+      searchRequest: Binding<SettingsSearchRequest?>,
+      pageScrollReadyRequestID: UUID?,
+      selectedSection: Binding<SettingsSection>
+    ) {
+      _viewModel = ObservedObject(wrappedValue: viewModel)
+      _searchRequest = searchRequest
+      self.pageScrollReadyRequestID = pageScrollReadyRequestID
+      _selectedSection = selectedSection
+    }
+
     private var motion: AppMotion {
       AppMotion(reduceMotion: reduceMotion)
     }
 
     var body: some View {
       VStack(alignment: .leading, spacing: 14) {
-        dictionaryHeader
-        if isSearchExpanded {
-          searchSurface
-            .transition(.opacity)
-        }
+        SettingsPageHeader(
+          section: .vocabulary,
+          title: "Dictionary",
+          searchRequest: visibleSearchRequest
+        )
+        dictionaryToolbar
         Divider()
+          .background(SettingsSearchProbe(identifier: "settings-vocabulary-toolbar-divider"))
         messages
         listSurface
         transferFooter
@@ -1806,13 +1831,32 @@
       }
     }
 
-    private var dictionaryHeader: some View {
-      HStack(spacing: 10) {
-        Text("Dictionary")
-          .font(.system(size: titleSize, weight: .semibold))
-          .background(SettingsPageHeaderProbe())
-          .settingsSearchAnchor(.section(.vocabulary), request: visibleSearchRequest)
-        Spacer(minLength: 8)
+    private var dictionaryToolbar: some View {
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: 8) {
+          suggestionsHeaderAction
+          Spacer(minLength: 8)
+          searchActions
+          addControl
+        }
+
+        VStack(alignment: .leading, spacing: 8) {
+          HStack(spacing: 8) {
+            suggestionsHeaderAction
+            Spacer(minLength: 0)
+            addControl
+          }
+          HStack(spacing: 8) {
+            Spacer(minLength: 0)
+            searchActions
+          }
+        }
+      }
+      .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var suggestionsHeaderAction: some View {
         if let title = viewModel.suggestionsHeaderActionTitle {
           Button(title) {
             viewModel.filter = viewModel.filter == .suggestions ? .all : .suggestions
@@ -1827,21 +1871,42 @@
               : "Opens the review queue for pending suggestions"
           )
         }
-        searchTrigger
+    }
+
+    private var searchActions: some View {
+      HStack(spacing: 8) {
+        searchControl
         sortControl
         reloadControl
-        Button("Add new") {
-          presentAfterClosingOptions {
-            viewModel.beginAddingEntry()
-          }
-        }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .accessibilityLabel("Add a new vocabulary word or phrase")
-        .accessibilityHint("Opens the vocabulary word editor")
-        .settingsSearchAnchor(.vocabularyAdd, request: visibleSearchRequest)
       }
-      .frame(maxWidth: .infinity, minHeight: 40)
+    }
+
+    private var addControl: some View {
+      Button("Add new") {
+        presentAfterClosingOptions {
+          viewModel.beginAddingEntry()
+        }
+      }
+      .buttonStyle(.borderedProminent)
+      .controlSize(.large)
+      .accessibilityLabel("Add a new vocabulary word or phrase")
+      .accessibilityHint("Opens the vocabulary word editor")
+      .settingsSearchAnchor(.vocabularyAdd, request: visibleSearchRequest)
+    }
+
+    private var searchControl: some View {
+      HStack(spacing: 6) {
+        searchTrigger
+        if isSearchExpanded {
+          searchSurface
+            .layoutPriority(-1)
+            .transition(
+              motion.allowsSpatialMotion(for: searchPresentationSource)
+                ? .move(edge: .trailing).combined(with: .opacity)
+                : .opacity
+            )
+        }
+      }
     }
 
     private var searchTrigger: some View {
@@ -1856,8 +1921,11 @@
       } label: {
         Image(systemName: "magnifyingglass")
           .frame(width: 28, height: 28)
+          .padding(6)
+          .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
+      .contentShape(Rectangle())
       .focusEffectDisabled()
       .keyboardShortcut("f", modifiers: .command)
       .focused($isSearchTriggerFocused)
@@ -1865,6 +1933,7 @@
         if isSearchTriggerFocused {
           RoundedRectangle(cornerRadius: 7, style: .continuous)
             .fill(Color(nsColor: .unemphasizedSelectedContentBackgroundColor))
+          SettingsSearchProbe(identifier: "settings-keyboard-focus-vocabulary-search-trigger")
         }
       }
       .fleckNeutralControlOutline(isFocused: isSearchTriggerFocused, cornerRadius: 7)
@@ -2086,8 +2155,11 @@
       } label: {
         Image(systemName: "arrow.up.arrow.down")
           .frame(width: 28, height: 28)
+          .padding(6)
+          .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
+      .contentShape(Rectangle())
       .help("Sort \(sortOrderForCurrentFilter.rawValue)")
       .accessibilityLabel("Sort vocabulary")
       .accessibilityValue(sortOrderForCurrentFilter.rawValue)
@@ -2107,12 +2179,18 @@
         if isReloading {
           ProgressView()
             .controlSize(.small)
+            .frame(width: 28, height: 28)
+            .padding(6)
+            .contentShape(Rectangle())
         } else {
           Image(systemName: "arrow.clockwise")
             .frame(width: 28, height: 28)
+            .padding(6)
+            .contentShape(Rectangle())
         }
       }
       .buttonStyle(.plain)
+      .contentShape(Rectangle())
       .disabled(isReloading)
       .help("Refresh dictionary")
       .accessibilityLabel("Refresh dictionary")
@@ -2323,12 +2401,9 @@
     private var searchSurface: some View {
       let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
       return HStack(spacing: 7) {
-        Image(systemName: "magnifyingglass")
-          .foregroundStyle(.secondary)
-          .accessibilityHidden(true)
         TextField("Search vocabulary", text: $viewModel.query)
           .textFieldStyle(.plain)
-          .frame(maxWidth: .infinity)
+          .frame(minWidth: 0, maxWidth: .infinity)
           .focused($isSearchFocused)
           .accessibilityLabel("Search vocabulary")
           .accessibilityValue(viewModel.query.isEmpty ? "No search" : viewModel.query)
@@ -2347,11 +2422,12 @@
       }
       .frame(maxWidth: .infinity)
       .padding(.horizontal, 8)
-      .frame(height: 32)
+      .frame(minWidth: 64, maxWidth: 164, minHeight: 32, maxHeight: 32)
       .background(Color(nsColor: .controlBackgroundColor), in: shape)
       .overlay {
         shape.strokeBorder(Color(nsColor: .separatorColor).opacity(0.65), lineWidth: 0.8)
       }
+      .clipped()
       .background(SettingsSearchProbe(identifier: "settings-vocabulary-local-search-field"))
     }
 
@@ -2576,6 +2652,7 @@
     private func openSearch(source: AppInteractionSource) {
       searchPresentationGeneration += 1
       presentationGeneration += 1
+      searchPresentationSource = source
       isOptionsTriggerFocused = false
       isSearchTriggerFocused = false
       withAnimation(motion.presentationAnimation(for: source)) {
@@ -2586,6 +2663,7 @@
 
     private func closeSearch(source: AppInteractionSource) {
       searchPresentationGeneration += 1
+      searchPresentationSource = source
       withAnimation(motion.presentationAnimation(for: source)) {
         isSearchExpanded = false
         isSearchFocused = false
@@ -2679,6 +2757,14 @@
       isHovered || isFocused
     }
 
+    private var priorityStarColor: Color {
+      let yellow = NSColor.systemYellow
+      let visibleYellow = theme.appearance == .light
+        ? yellow.blended(withFraction: 0.35, of: .black) ?? yellow
+        : yellow
+      return Color(nsColor: visibleYellow)
+    }
+
     var body: some View {
       HStack(spacing: 10) {
         Button(action: onEdit) {
@@ -2688,12 +2774,6 @@
               .underline(focusedAction == .edit || accessibilityFocusedAction == .edit)
               .multilineTextAlignment(.leading)
               .fixedSize(horizontal: false, vertical: true)
-            if entry.isPriority {
-              Image(systemName: "star.fill")
-                .font(.caption2)
-                .foregroundStyle(theme.color(.accent))
-                .accessibilityHidden(true)
-            }
             if !entry.isEnabled {
               Text("Disabled")
                 .font(.caption)
@@ -2723,6 +2803,8 @@
             role: .destructive,
             action: onDelete
           )
+          .opacity(showsActions ? 1 : 0)
+          .allowsHitTesting(showsActions)
           actionButton(
             .priority,
             systemImage: entry.isPriority ? "star.fill" : "star",
@@ -2735,8 +2817,9 @@
             isPriority: entry.isPriority,
             action: { onPriorityToggle(!entry.isPriority) }
           )
+          .opacity(showsActions || entry.isPriority ? 1 : 0)
+          .allowsHitTesting(showsActions || entry.isPriority)
         }
-        .opacity(showsActions ? 1 : 0)
       }
       .padding(.horizontal, 12)
       .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
@@ -2767,8 +2850,12 @@
       Button(role: role, action: perform) {
         Image(systemName: systemImage)
           .font(.system(size: 13, weight: .medium))
-          .foregroundStyle(isPriority ? theme.color(.accent) : theme.color(.textSecondary))
+          .foregroundStyle(
+            isPriority ? priorityStarColor : theme.color(.textSecondary)
+          )
           .frame(width: 24, height: 24)
+          .frame(width: 32, height: 32)
+          .contentShape(Rectangle())
           .background {
             if focusedAction == action || accessibilityFocusedAction == action {
               RoundedRectangle(cornerRadius: 6, style: .continuous)
