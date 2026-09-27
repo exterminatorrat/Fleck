@@ -68,17 +68,35 @@ struct SettingsDisclosureGroupStyleTests {
     for (text, expectedCount) in [(settings, 1), (agents, 2), (about, 1)] {
       #expect(text.components(separatedBy: modifier).count - 1 == expectedCount)
     }
+    let agentGroupStart = try #require(
+      agents.range(
+        of: "        VStack(alignment: .leading, spacing: 4) {\n"
+          + "          DisclosureGroup(\"Activity\", isExpanded: $isActivityExpanded)"
+      )
+    )
+    let agentGroupEnd = try #require(
+      agents.range(
+        of: "\n        }\n      }\n      .onChange(of: searchRequest?.id",
+        range: agentGroupStart.upperBound..<agents.endIndex
+      )
+    )
+    let agentGroup = agents[agentGroupStart.lowerBound..<agentGroupEnd.lowerBound]
+    #expect(agentGroup.components(separatedBy: "DisclosureGroup(").count - 1 == 2)
+    #expect(agentGroup.components(separatedBy: modifier).count - 1 == 2)
+    #expect(agentGroup.contains(".settingsSearchAnchor(.agentsActivity, request: searchRequest)"))
+    #expect(agentGroup.contains(".settingsSearchAnchor(.agentsAccess, request: searchRequest)"))
+
     for (text, start, end) in [
       (
         settings, "        DisclosureGroup(isExpanded: $isDictationPrivacyExpanded)",
         "\n    private var readiness:"
       ),
       (
-        agents, "        DisclosureGroup(\"Activity\", isExpanded: $isActivityExpanded)",
-        "        DisclosureGroup(\"Access\", isExpanded: $isAccessExpanded)"
+        agents, "          DisclosureGroup(\"Activity\", isExpanded: $isActivityExpanded)",
+        "          DisclosureGroup(\"Access\", isExpanded: $isAccessExpanded)"
       ),
       (
-        agents, "        DisclosureGroup(\"Access\", isExpanded: $isAccessExpanded)",
+        agents, "          DisclosureGroup(\"Access\", isExpanded: $isAccessExpanded)",
         "\n    private var connectorStatus:"
       ),
       (

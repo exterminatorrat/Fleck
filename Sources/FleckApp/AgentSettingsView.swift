@@ -78,73 +78,75 @@
         availableIntegrations
         connectedProfiles
         setupInstructions
-        DisclosureGroup("Activity", isExpanded: $isActivityExpanded) {
-          VStack(alignment: .leading, spacing: 8) {
-            SettingsPreferenceRow(
-              "Show agent update banners",
-              detail: "Show banners for future agent changes. Turning this on does not replay earlier changes; Agent Activity remains available."
-            ) {
-              Toggle(
-                isOn: Binding(
-                  get: { appState.preferences.showAgentUpdateBanners },
-                  set: { enabled in
-                    appState.updatePreferences { $0.showAgentUpdateBanners = enabled }
-                  }
-                )
-              ) { EmptyView() }
-              .labelsHidden()
-              .toggleStyle(.switch)
-              .controlSize(.small)
-              .accessibilityLabel("Show agent update banners")
-            }
-            .settingsSearchAnchor(.agentsUpdateBanners, request: searchRequest)
-            Text("Review changes made by authorized local integrations.")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-            Button("Open Agent Activity") {
-              showsAgentActivity = true
-            }
-            .settingsSearchAnchor(.agentsOpenActivity, request: searchRequest)
-            .sheet(isPresented: $showsAgentActivity) {
-              AgentActivityView(
-                onOpenNote: { noteID in
-                  appState.select(noteID)
-                  showsAgentActivity = false
-                },
-                onDismiss: { showsAgentActivity = false }
-              )
-              .environmentObject(appState)
-              .frame(minWidth: 520, minHeight: 380)
-            }
-            Button("Clear Activity", role: .destructive) {
-              showsClearConfirmation = true
-            }
-            .settingsSearchAnchor(.agentsClearActivity, request: searchRequest)
-            .confirmationDialog("Clear Agent Activity?", isPresented: $showsClearConfirmation) {
-              Button("Clear Activity", role: .destructive) {
-                appState.clearAgentActivity()
+        VStack(alignment: .leading, spacing: 4) {
+          DisclosureGroup("Activity", isExpanded: $isActivityExpanded) {
+            VStack(alignment: .leading, spacing: 8) {
+              SettingsPreferenceRow(
+                "Show agent update banners",
+                detail: "Show banners for future agent changes. Turning this on does not replay earlier changes; Agent Activity remains available."
+              ) {
+                Toggle(
+                  isOn: Binding(
+                    get: { appState.preferences.showAgentUpdateBanners },
+                    set: { enabled in
+                      appState.updatePreferences { $0.showAgentUpdateBanners = enabled }
+                    }
+                  )
+                ) { EmptyView() }
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .accessibilityLabel("Show agent update banners")
               }
-              Button("Cancel", role: .cancel) {}
+              .settingsSearchAnchor(.agentsUpdateBanners, request: searchRequest)
+              Text("Review changes made by authorized local integrations.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+              Button("Open Agent Activity") {
+                showsAgentActivity = true
+              }
+              .settingsSearchAnchor(.agentsOpenActivity, request: searchRequest)
+              .sheet(isPresented: $showsAgentActivity) {
+                AgentActivityView(
+                  onOpenNote: { noteID in
+                    appState.select(noteID)
+                    showsAgentActivity = false
+                  },
+                  onDismiss: { showsAgentActivity = false }
+                )
+                .environmentObject(appState)
+                .frame(minWidth: 520, minHeight: 380)
+              }
+              Button("Clear Activity", role: .destructive) {
+                showsClearConfirmation = true
+              }
+              .settingsSearchAnchor(.agentsClearActivity, request: searchRequest)
+              .confirmationDialog("Clear Agent Activity?", isPresented: $showsClearConfirmation) {
+                Button("Clear Activity", role: .destructive) {
+                  appState.clearAgentActivity()
+                }
+                Button("Cancel", role: .cancel) {}
+              }
             }
+            .padding(.top, 4)
+            .accessibilityIdentifier("settings-agents-activity-content")
+            .background(SettingsSearchProbe(identifier: "settings-agents-activity-content"))
           }
-          .padding(.top, 4)
-          .accessibilityIdentifier("settings-agents-activity-content")
-          .background(SettingsSearchProbe(identifier: "settings-agents-activity-content"))
+          .disclosureGroupStyle(SettingsDisclosureGroupStyle())
+          .settingsSearchAnchor(.agentsActivity, request: searchRequest)
+          DisclosureGroup("Access", isExpanded: $isAccessExpanded) {
+            Text(
+              "Only notes with explicit capability grants can be read or edited by authorized integrations. This protects against cooperative tools, not malicious software already running as your macOS user."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.top, 4)
+            .accessibilityIdentifier("settings-agents-access-content")
+            .background(SettingsSearchProbe(identifier: "settings-agents-access-content"))
+          }
+          .disclosureGroupStyle(SettingsDisclosureGroupStyle())
+          .settingsSearchAnchor(.agentsAccess, request: searchRequest)
         }
-        .disclosureGroupStyle(SettingsDisclosureGroupStyle())
-        .settingsSearchAnchor(.agentsActivity, request: searchRequest)
-        DisclosureGroup("Access", isExpanded: $isAccessExpanded) {
-          Text(
-            "Only notes with explicit capability grants can be read or edited by authorized integrations. This protects against cooperative tools, not malicious software already running as your macOS user."
-          )
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .padding(.top, 4)
-          .accessibilityIdentifier("settings-agents-access-content")
-          .background(SettingsSearchProbe(identifier: "settings-agents-access-content"))
-        }
-        .disclosureGroupStyle(SettingsDisclosureGroupStyle())
-        .settingsSearchAnchor(.agentsAccess, request: searchRequest)
       }
       .onChange(of: searchRequest?.id, initial: true) { _, _ in
         revealSearchTarget()

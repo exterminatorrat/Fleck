@@ -84,6 +84,65 @@ struct AgentPresentationTests {
     #expect(!settings.contains("HStack {\n            addButton(\"Add Codex\""))
   }
 
+  @Test @MainActor
+  func agentSettingsDisclosureButtonsHaveSeparateHitboxesAndToggleIndependently() async throws {
+    NSApplication.shared.accessibilitySetValue(
+      true,
+      forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+    )
+    let state = AgentSettingsDisclosureState()
+    let (window, host) = await hostedWindow(
+      rootView: AgentSettingsDisclosureHarness(state: state),
+      size: NSSize(width: 720, height: 100)
+    )
+    defer {
+      window.contentView = nil
+      window.orderOut(nil)
+    }
+    await settleAgentActivityHost(host)
+
+    let activity = try #require(agentActivityAccessibilityElement(host, label: "Activity"))
+    let access = try #require(agentActivityAccessibilityElement(host, label: "Access"))
+    let activityFrame = try #require(
+      activity.value(forKey: "accessibilityFrame") as? NSValue
+    ).rectValue
+    let accessFrame = try #require(
+      access.value(forKey: "accessibilityFrame") as? NSValue
+    ).rectValue
+    let gap = activityFrame.midY > accessFrame.midY
+      ? activityFrame.minY - accessFrame.maxY
+      : accessFrame.minY - activityFrame.maxY
+    let press = NSSelectorFromString("accessibilityPerformPress")
+
+    print(
+      "Collapsed Settings disclosure frames: Activity=\(activityFrame), "
+        + "Access=\(accessFrame), gap=\(gap)pt"
+    )
+    #expect(!activityFrame.intersects(accessFrame))
+    #expect(gap > 0 && gap <= 4)
+    #expect(activity.value(forKey: "accessibilityRole") as? String == "AXDisclosureTriangle")
+    #expect(access.value(forKey: "accessibilityRole") as? String == "AXDisclosureTriangle")
+    #expect(activity.responds(to: press))
+    #expect(access.responds(to: press))
+    #expect(!state.activityExpanded)
+    #expect(!state.accessExpanded)
+
+    _ = activity.perform(press)
+    await settleAgentActivityHost(host)
+    #expect(state.activityExpanded)
+    #expect(!state.accessExpanded)
+
+    _ = try #require(agentActivityAccessibilityElement(host, label: "Activity")).perform(press)
+    await settleAgentActivityHost(host)
+    #expect(!state.activityExpanded)
+    #expect(!state.accessExpanded)
+
+    _ = try #require(agentActivityAccessibilityElement(host, label: "Access")).perform(press)
+    await settleAgentActivityHost(host)
+    #expect(!state.activityExpanded)
+    #expect(state.accessExpanded)
+  }
+
   @Test func agentSettingsUsesConsumerPreferenceRowsForVisibleConnectorContent() throws {
     let testFile = URL(fileURLWithPath: #filePath)
     let sourceRoot = testFile.deletingLastPathComponent()
@@ -908,6 +967,31 @@ private struct AgentActivitySheetHarness: View {
       .sheet(isPresented: $presentation.isPresented) {
         AgentActivityView(onOpenNote: { _ in }, onDismiss: presentation.dismiss)
       }
+  }
+}
+
+@MainActor
+private final class AgentSettingsDisclosureState: ObservableObject {
+  @Published var activityExpanded = false
+  @Published var accessExpanded = false
+}
+
+@MainActor
+private struct AgentSettingsDisclosureHarness: View {
+  @ObservedObject var state: AgentSettingsDisclosureState
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      DisclosureGroup("Activity", isExpanded: $state.activityExpanded) {
+        Text("Activity content")
+      }
+      .disclosureGroupStyle(SettingsDisclosureGroupStyle())
+      DisclosureGroup("Access", isExpanded: $state.accessExpanded) {
+        Text("Access content")
+      }
+      .disclosureGroupStyle(SettingsDisclosureGroupStyle())
+    }
+    .frame(width: 720, alignment: .leading)
   }
 }
 
