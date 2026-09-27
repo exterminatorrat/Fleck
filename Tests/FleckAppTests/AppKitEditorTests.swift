@@ -1564,20 +1564,24 @@ private func captureChecklist(_ textView: ListAwareTextView, name: String) throw
   )
 
   let accent = try #require(NSColor(hex: "#FFD600"))
+  let canvasColor = EditorCanvasInk.canvasColor(for: textView)
+  let accessibleAccent = FleckColorContrast.accessibleForeground(accent, against: canvasColor)
   textView.refreshNoteLinks(accentColorHex: "#FFD600", liveNoteIDs: [target])
   textView.refreshChecklistPresentation()
   textView.refreshChecklistPresentation()
 
-  func assertLayers() {
-    #expect(
-      sRGB(
-        layoutManager.temporaryAttribute(
-          .foregroundColor,
-          atCharacterIndex: link.range.location,
-          effectiveRange: nil
-        ) as? NSColor
-      ) == sRGB(accent)
+  func assertLayers() throws {
+    let temporaryAccent = try #require(
+      layoutManager.temporaryAttribute(
+        .foregroundColor,
+        atCharacterIndex: link.range.location,
+        effectiveRange: nil
+      ) as? NSColor
     )
+    #expect(
+      sRGB(temporaryAccent) == sRGB(accessibleAccent)
+    )
+    #expect(FleckColorContrast.contrastRatio(temporaryAccent, against: canvasColor) >= 4.5)
     #expect(
       layoutManager.temporaryAttribute(
         .underlineStyle,
@@ -1609,10 +1613,10 @@ private func captureChecklist(_ textView: ListAwareTextView, name: String) throw
     )
   }
 
-  assertLayers()
+  try assertLayers()
   textView.clearNoteLinkPresentation()
   textView.refreshNoteLinks(accentColorHex: "#FFD600", liveNoteIDs: [target])
-  assertLayers()
+  try assertLayers()
 }
 
 @Test @MainActor func clickingChecklistControlUsesSharedHitRect() throws {
@@ -4862,6 +4866,8 @@ private func withHostedTitleEditors(
 }
 
 @Test @MainActor func hostedCompactUnfiledKeepsNamedFolderPillInsideNavigator() async throws {
+  let previousNavigatorAccessibility = enableHostedNavigatorAccessibility()
+  defer { restoreHostedNavigatorAccessibility(previousNavigatorAccessibility) }
   let unfiledRoot = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)
   let namedRoot = FileManager.default.temporaryDirectory
@@ -4896,19 +4902,20 @@ private func withHostedTitleEditors(
   let navigatorBand = CGRect(x: 0, y: 42, width: 640, height: 40)
   let windowBounds = CGRect(x: 0, y: 0, width: 640, height: 430)
   for pill in [unfiledPill, namedPill] {
-    #expect(navigatorBand.contains(pill.bounds))
-    #expect(windowBounds.contains(pill.bounds))
-    #expect(pill.bounds.width >= 24)
-    #expect(pill.bounds.height >= 24)
-    #expect(pill.bounds.height <= 33)
+    #expect(navigatorBand.contains(pill.rowFrame))
+    #expect(windowBounds.contains(pill.rowFrame))
+    #expect(pill.rowFrame.width >= 24)
+    #expect(pill.rowFrame.height >= 24)
+    #expect(pill.rowFrame.height <= 33)
+    #expect(pill.rowFrame.insetBy(dx: 2, dy: 2).contains(pill.fillBounds))
     #expect(pill.pixelCount >= 32)
-    #expect(pill.bounds.minX >= 4)
-    #expect(pill.bounds.maxX <= 636)
+    #expect(pill.rowFrame.minX >= 4)
+    #expect(pill.rowFrame.maxX <= 636)
   }
 
-  #expect(abs(namedPill.bounds.minY - unfiledPill.bounds.minY) <= 2)
-  #expect(abs(namedPill.bounds.height - unfiledPill.bounds.height) <= 5)
-  #expect(namedPill.labelBounds.width > unfiledPill.labelBounds.width)
+  #expect(abs(namedPill.rowFrame.minY - unfiledPill.rowFrame.minY) <= 2)
+  #expect(abs(namedPill.rowFrame.height - unfiledPill.rowFrame.height) <= 5)
+  #expect(namedPill.rowFrame.width > unfiledPill.rowFrame.width)
 
   let focusDestination = FolderNavigatorFocus.nextIndex(
     currentIndex: 0,
@@ -5036,70 +5043,106 @@ private func withHostedTitleEditors(
 }
 
 @Test @MainActor func hostedFolderKeyboardFocusAddsOutlineToUnselectedRow() async throws {
-  let root = FileManager.default.temporaryDirectory
-    .appendingPathComponent(UUID().uuidString, isDirectory: true)
-  defer { try? FileManager.default.removeItem(at: root) }
-  let folder = try Folder(id: UUID(), name: "School")
-  let note = Note(title: "Selected Unfiled", body: "Body")
-  let folderNote = Note(
-    title: "Selected School",
-    body: "Body",
-    folderID: folder.id
-  )
-  let workspace = Workspace(
-    notes: [note, folderNote],
-    selectedNoteID: note.id,
-    folders: [folder]
-  )
-  let state = await hostedPanelState(root: root, workspace: workspace)
-  state.updatePreferences {
-    $0.isUnfiledCompact = false
-    $0.showFormattingBar = false
+  let previousNavigatorAccessibility = enableHostedNavigatorAccessibility()
+  defer { restoreHostedNavigatorAccessibility(previousNavigatorAccessibility) }
+  let previousApplicationAppearance = NSApp.appearance
+  defer { NSApp.appearance = previousApplicationAppearance }
+
+  for (theme, windowAppearance) in [
+    (AppTheme.light, NSAppearance.Name.aqua),
+    (AppTheme.dark, NSAppearance.Name.darkAqua),
+  ] {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let folder = try Folder(id: UUID(), name: "School")
+    let note = Note(title: "Selected Unfiled", body: "Body")
+    let folderNote = Note(
+      title: "Selected School",
+      body: "Body",
+      folderID: folder.id
+    )
+    let workspace = Workspace(
+      notes: [note, folderNote],
+      selectedNoteID: note.id,
+      folders: [folder]
+    )
+    let state = await hostedPanelState(root: root, workspace: workspace)
+    state.updatePreferences {
+      $0.isUnfiledCompact = false
+      $0.showFormattingBar = false
+      $0.theme = theme
+    }
+    let commands = EditorCommands()
+    let (window, host) = hostedPanel(
+      root: root,
+      state: state,
+      commands: commands
+    )
+    window.appearance = NSAppearance(named: windowAppearance)
+    defer { window.orderOut(nil) }
+    await settleHostedView(host)
+
+    let folderRowIdentifiers = ["folder-unfiled", "folder-\(folder.id.uuidString)"]
+    let folderRowViews = try folderRowIdentifiers.map { identifier in
+      (
+        identifier,
+        try #require(
+          hostedNavigatorKeyView(
+            matchingAccessibilityIdentifier: identifier,
+            in: host
+          )
+        )
+      )
+    }
+    #expect(Set(folderRowViews.map { ObjectIdentifier($0.1) }).count == folderRowIdentifiers.count)
+    let unfiledControl = try #require(
+      folderRowViews.first { $0.0 == "folder-unfiled" }?.1
+    )
+    let folderControl = try #require(
+      folderRowViews.first { $0.0 == "folder-\(folder.id.uuidString)" }?.1
+    )
+    #expect(unfiledControl !== folderControl)
+    #expect(window.makeFirstResponder(unfiledControl))
+    await settleHostedView(host)
+
+    let folderRowFrame = folderControl.convert(folderControl.bounds, to: host)
+    let navigatorBand = CGRect(x: 0, y: 42, width: host.bounds.width, height: 40)
+    #expect(navigatorBand.contains(folderRowFrame))
+    #expect(folderRowFrame.width >= 24)
+    #expect(folderRowFrame.height >= 24)
+    #expect(folderRowFrame.height <= 33)
+    let before = try hostedThemeCapture(in: host)
+    try sendHostedKeyDown(
+      String(UnicodeScalar(NSDownArrowFunctionKey)!),
+      keyCode: 125,
+      to: window
+    )
+    await settleHostedView(host)
+    let focusedFolderRowFrame = folderControl.convert(folderControl.bounds, to: host)
+    #expect(focusedFolderRowFrame == folderRowFrame)
+    let after = try hostedThemeCapture(in: host)
+    let changedNeutralPixels = hostedNeutralFocusOutlineChangedPixelCount(
+      before: before,
+      after: after,
+      rowFrame: focusedFolderRowFrame,
+      hostSize: host.bounds.size
+    )
+    #expect(
+      changedNeutralPixels >= 24,
+      "keyboard focus should change neutral pixels around the folder row (got \(changedNeutralPixels))"
+    )
+    #expect(state.workspace.selectedNoteID == note.id)
+
+    try sendHostedKeyDown("\r", keyCode: 36, to: window)
+    await settleHostedView(host)
+    #expect(state.workspace.selectedNoteID == folderNote.id)
   }
-  let commands = EditorCommands()
-  let (window, host) = hostedPanel(
-    root: root,
-    state: state,
-    commands: commands
-  )
-  window.appearance = NSAppearance(named: .darkAqua)
-  defer { window.orderOut(nil) }
-  await settleHostedView(host)
-
-  let keyViews = hostedNavigatorKeyViews(in: host)
-  let unfiledControl = try #require(keyViews.first)
-  #expect(window.makeFirstResponder(unfiledControl))
-  await settleHostedView(host)
-
-  let folderRowFrame = try #require(hostedSchoolFolderFrame(in: host))
-  let before = try hostedNeutralFocusOutlinePixelCount(
-    in: host,
-    rowFrame: folderRowFrame
-  )
-  try sendHostedKeyDown(
-    String(UnicodeScalar(NSDownArrowFunctionKey)!),
-    keyCode: 125,
-    to: window
-  )
-  await settleHostedView(host)
-  let focusedFolderRowFrame = try #require(hostedSchoolFolderFrame(in: host))
-  #expect(focusedFolderRowFrame == folderRowFrame)
-  let after = try hostedNeutralFocusOutlinePixelCount(
-    in: host,
-    rowFrame: focusedFolderRowFrame
-  )
-
-  #expect(after > before, "keyboard focus should render a neutral outline on the folder row")
-  #expect(state.workspace.selectedNoteID == note.id)
-
-  try sendHostedKeyDown("\r", keyCode: 36, to: window)
-  await settleHostedView(host)
-  #expect(state.workspace.selectedNoteID == folderNote.id)
 }
 
 private struct HostedSelectionPillGeometry {
-  let bounds: CGRect
-  let labelBounds: CGRect
+  let rowFrame: CGRect
+  let fillBounds: CGRect
   let pixelCount: Int
 }
 
@@ -5108,81 +5151,140 @@ private struct HostedSelectionPixelBounds {
   let pixelCount: Int
 }
 
+private struct HostedSelectionCapture {
+  let rowFrame: CGRect
+  let hostSize: CGSize
+  let image: NSBitmapImageRep
+  let theme: FleckThemeSnapshot
+}
+
 @MainActor
 private func hostedFolderSelectionGeometry(
   root: URL,
   workspace: Workspace
 ) async throws -> HostedSelectionPillGeometry {
-  let state = await hostedPanelState(root: root, workspace: workspace)
-  state.updatePreferences {
-    $0.isUnfiledCompact = true
-    $0.showFormattingBar = false
-  }
-  let commands = EditorCommands()
-  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
-  window.appearance = NSAppearance(named: .darkAqua)
-  defer { window.orderOut(nil) }
-  await settleHostedView(host)
+  let previousApplicationAppearance = NSApp.appearance
+  defer { NSApp.appearance = previousApplicationAppearance }
 
-  let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-  host.cacheDisplay(in: host.bounds, to: imageRep)
-  func sourceView(_ noteID: UUID, in view: NSView) -> ReorderSourceHostingView? {
-    if let source = view as? ReorderSourceHostingView, source.noteID == noteID { return source }
-    return view.subviews.lazy.compactMap { sourceView(noteID, in: $0) }.first
-  }
-  let selectedNoteID = try #require(workspace.selectedNoteID)
-  let source = try #require(sourceView(selectedNoteID, in: host))
-  let labelBounds = source.convert(source.labelCapsuleRect, to: host)
-  let selectedFill = FleckColorContrast.composite(
-    state.themeSnapshot.nsColor(.accent).withAlphaComponent(NoteTabInk.selectedCapsuleOpacity),
-    over: state.themeSnapshot.nsColor(.window)
+  let selectedNote = try #require(
+    workspace.notes.first { $0.id == workspace.selectedNoteID }
   )
+  let selectedRowIdentifier = selectedNote.folderID.map {
+    "folder-\($0.uuidString)"
+  } ?? "folder-unfiled"
+  let expectedFolderRowIdentifiers = ["folder-unfiled"] + workspace.folders.map {
+    "folder-\($0.id.uuidString)"
+  }
+  func capture(workspace: Workspace, root: URL) async throws -> HostedSelectionCapture {
+    let state = await hostedPanelState(root: root, workspace: workspace)
+    state.updatePreferences {
+      $0.isUnfiledCompact = true
+      $0.showFormattingBar = false
+      $0.theme = .dark
+    }
+    let commands = EditorCommands()
+    let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+    window.appearance = NSAppearance(named: .darkAqua)
+    defer { window.orderOut(nil) }
+    await settleHostedView(host)
+
+    let folderRowViews = try expectedFolderRowIdentifiers.map { identifier in
+      (
+        identifier,
+        try #require(
+          hostedNavigatorKeyView(
+            matchingAccessibilityIdentifier: identifier,
+            in: host
+          )
+        )
+      )
+    }
+    #expect(
+      Set(folderRowViews.map { ObjectIdentifier($0.1) }).count
+        == expectedFolderRowIdentifiers.count
+    )
+    let selectedRow = try #require(
+      folderRowViews.first { $0.0 == selectedRowIdentifier }?.1
+    )
+    let rowFrame = selectedRow.convert(selectedRow.bounds, to: host)
+    return HostedSelectionCapture(
+      rowFrame: rowFrame,
+      hostSize: host.bounds.size,
+      image: try hostedThemeCapture(in: host),
+      theme: state.themeSnapshot
+    )
+  }
+
+  let selected = try await capture(workspace: workspace, root: root)
+  var baselineWorkspace = workspace
+  baselineWorkspace.selectedNoteID = try #require(
+    workspace.notes.first { $0.id != selectedNote.id }?.id
+  )
+  let baseline = try await capture(
+    workspace: baselineWorkspace,
+    root: root.appendingPathComponent("selection-baseline", isDirectory: true)
+  )
+  #expect(selected.theme == baseline.theme)
+  #expect(selected.rowFrame == baseline.rowFrame)
+  let rowInterior = selected.rowFrame.insetBy(dx: 2, dy: 2)
+  let selectedFill = selected.theme.nsColor(.selectionFill)
   let pixels = try #require(
-    hostedSelectionFillBounds(in: imageRep, hostSize: host.bounds.size, color: selectedFill)
+    hostedSelectionFillTransitionBounds(
+      selected: selected.image,
+      baseline: baseline.image,
+      hostSize: selected.hostSize,
+      color: selectedFill,
+      within: rowInterior
+    )
   )
   return HostedSelectionPillGeometry(
-    bounds: pixels.bounds,
-    labelBounds: labelBounds,
+    rowFrame: selected.rowFrame,
+    fillBounds: pixels.bounds,
     pixelCount: pixels.pixelCount
   )
 }
 
 @MainActor
-private func hostedNeutralFocusOutlinePixelCount(
-  in host: NSHostingView<AnyView>,
-  rowFrame: CGRect
-) throws -> Int {
-  let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-  host.cacheDisplay(in: host.bounds, to: imageRep)
+private func hostedNeutralFocusOutlineChangedPixelCount(
+  before: NSBitmapImageRep,
+  after: NSBitmapImageRep,
+  rowFrame: CGRect,
+  hostSize: CGSize
+) -> Int {
+  guard before.pixelsWide == after.pixelsWide,
+    before.pixelsHigh == after.pixelsHigh,
+    hostSize.width > 0,
+    hostSize.height > 0
+  else { return 0 }
 
-  let scaleX = CGFloat(imageRep.pixelsWide) / host.bounds.width
-  let scaleY = CGFloat(imageRep.pixelsHigh) / host.bounds.height
+  let scaleX = CGFloat(after.pixelsWide) / hostSize.width
+  let scaleY = CGFloat(after.pixelsHigh) / hostSize.height
   let cornerInset: CGFloat = 8
   let borderBand: CGFloat = 2
   let horizontalStart = max(0, Int(floor((rowFrame.minX + cornerInset) * scaleX)))
   let horizontalEnd = min(
-    imageRep.pixelsWide,
+    after.pixelsWide,
     Int(ceil((rowFrame.maxX - cornerInset) * scaleX))
   )
   let verticalStart = max(0, Int(floor((rowFrame.minY + cornerInset) * scaleY)))
   let verticalEnd = min(
-    imageRep.pixelsHigh,
+    after.pixelsHigh,
     Int(ceil((rowFrame.maxY - cornerInset) * scaleY))
   )
   let topStart = max(0, Int(floor(rowFrame.minY * scaleY)))
-  let topEnd = min(imageRep.pixelsHigh, Int(ceil((rowFrame.minY + borderBand) * scaleY)))
+  let topEnd = min(after.pixelsHigh, Int(ceil((rowFrame.minY + borderBand) * scaleY)))
   let bottomStart = max(
     0,
     Int(floor((rowFrame.maxY - borderBand) * scaleY))
   )
-  let bottomEnd = min(imageRep.pixelsHigh, Int(ceil(rowFrame.maxY * scaleY)))
+  let bottomEnd = min(after.pixelsHigh, Int(ceil(rowFrame.maxY * scaleY)))
   let leftStart = max(0, Int(floor(rowFrame.minX * scaleX)))
-  let leftEnd = min(imageRep.pixelsWide, Int(ceil((rowFrame.minX + borderBand) * scaleX)))
+  let leftEnd = min(after.pixelsWide, Int(ceil((rowFrame.minX + borderBand) * scaleX)))
   let rightStart = max(
     0,
     Int(floor((rowFrame.maxX - borderBand) * scaleX))
   )
-  let rightEnd = min(imageRep.pixelsWide, Int(ceil(rowFrame.maxX * scaleX)))
+  let rightEnd = min(after.pixelsWide, Int(ceil(rowFrame.maxX * scaleX)))
   let borderBands = [
     (horizontalStart..<horizontalEnd, topStart..<topEnd),
     (horizontalStart..<horizontalEnd, bottomStart..<bottomEnd),
@@ -5190,25 +5292,36 @@ private func hostedNeutralFocusOutlinePixelCount(
     (rightStart..<rightEnd, verticalStart..<verticalEnd),
   ]
 
-  var matchCount = 0
+  var changedNeutralPixelCount = 0
   for (xs, ys) in borderBands where !xs.isEmpty && !ys.isEmpty {
     for y in ys {
       for x in xs {
-        guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+        guard let beforeColor = before.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+          let afterColor = after.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
         else { continue }
-        var red: CGFloat = 0
-        var green: CGFloat = 0
-        var blue: CGFloat = 0
-        var alpha: CGFloat = 0
-        color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-        let minimum = min(red, min(green, blue))
-        let maximum = max(red, max(green, blue))
-        guard alpha > 0.5, minimum > 0.5, maximum - minimum < 0.12 else { continue }
-        matchCount += 1
+        let beforeComponents = [
+          beforeColor.redComponent,
+          beforeColor.greenComponent,
+          beforeColor.blueComponent,
+        ]
+        let afterComponents = [
+          afterColor.redComponent,
+          afterColor.greenComponent,
+          afterColor.blueComponent,
+        ]
+        let change = zip(beforeComponents, afterComponents).map { abs($0 - $1) }.max() ?? 0
+        let minimum = afterComponents.min() ?? 0
+        let maximum = afterComponents.max() ?? 0
+        guard beforeColor.alphaComponent > 0.5,
+          afterColor.alphaComponent > 0.5,
+          change > 0.04,
+          maximum - minimum < 0.12
+        else { continue }
+        changedNeutralPixelCount += 1
       }
     }
   }
-  return matchCount
+  return changedNeutralPixelCount
 }
 
 @Test @MainActor func hostedSettingsLabelsUsePaletteRolesAcrossAppearances() async throws {
@@ -5822,6 +5935,70 @@ private func hostedNavigatorKeyViews(in view: NSView) -> [NSView] {
 }
 
 @MainActor
+private func enableHostedNavigatorAccessibility() -> Any? {
+  let application = NSApplication.shared
+  let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  let previousValue = application.accessibilityAttributeValue(attribute)
+  application.accessibilitySetValue(true, forAttribute: attribute)
+  return previousValue
+}
+
+@MainActor
+private func restoreHostedNavigatorAccessibility(_ value: Any?) {
+  NSApplication.shared.accessibilitySetValue(
+    value,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+}
+
+@MainActor
+private func hostedNavigatorKeyView(
+  matchingAccessibilityIdentifier identifier: String,
+  in view: NSView
+) -> NSView? {
+  let accessibilityElements = hostedAccessibilityElements(in: view, identifier: identifier)
+  #expect(accessibilityElements.count == 1)
+  guard accessibilityElements.count == 1,
+    let accessibilityFrame = accessibilityElements.first?.value(forKey: "accessibilityFrame") as? NSValue,
+    let window = view.window
+  else { return nil }
+
+  let screenFrame = accessibilityFrame.rectValue
+  let keyViews = hostedNavigatorKeyViews(in: view)
+  let candidateScreenFrames = keyViews.map { candidate in
+    let hostFrame = candidate.convert(candidate.bounds, to: view)
+    let windowFrame = view.convert(hostFrame, to: nil)
+    return window.convertToScreen(windowFrame)
+  }
+  let accessibilityCenter = CGPoint(x: screenFrame.midX, y: screenFrame.midY)
+  let matchingKeyViews = zip(keyViews, candidateScreenFrames).filter {
+    $0.1.contains(accessibilityCenter)
+  }.map(\.0)
+  #expect(!matchingKeyViews.isEmpty)
+  guard let matchingKeyView = matchingKeyViews.first else { return nil }
+  let matchingFrames = matchingKeyViews.map { $0.convert($0.bounds, to: view) }
+  let matchingFrame = matchingKeyView.convert(matchingKeyView.bounds, to: view)
+  #expect(matchingFrames.allSatisfy { $0 == matchingFrame })
+  return matchingKeyView
+}
+
+@MainActor
+private func hostedAccessibilityElements(in value: Any?, identifier: String) -> [NSObject] {
+  guard let element = value as? NSObject else { return [] }
+  let identifierSelector = NSSelectorFromString("accessibilityIdentifier")
+  let matchesIdentifier = element.responds(to: identifierSelector)
+    && element.perform(identifierSelector)?.takeUnretainedValue() as? String == identifier
+  var matches = matchesIdentifier ? [element] : []
+  let childrenSelector = NSSelectorFromString("accessibilityChildren")
+  let rawChildren = element.responds(to: childrenSelector)
+    ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+  for child in NSAccessibility.unignoredChildren(from: rawChildren ?? []) {
+    matches.append(contentsOf: hostedAccessibilityElements(in: child, identifier: identifier))
+  }
+  return matches
+}
+
+@MainActor
 private func settleHostedView(_ view: NSView) async {
   for _ in 0..<5 {
     view.layoutSubtreeIfNeeded()
@@ -5982,12 +6159,17 @@ private func hostedPanelRTF(text: String) throws -> Data {
 }
 
 @MainActor
-private func hostedSelectionFillBounds(
-  in imageRep: NSBitmapImageRep,
+private func hostedSelectionFillTransitionBounds(
+  selected imageRep: NSBitmapImageRep,
+  baseline: NSBitmapImageRep,
   hostSize: CGSize,
-  color targetColor: NSColor
+  color targetColor: NSColor,
+  within region: CGRect
 ) -> HostedSelectionPixelBounds? {
   guard hostSize.width > 0, hostSize.height > 0,
+    imageRep.pixelsWide == baseline.pixelsWide,
+    imageRep.pixelsHigh == baseline.pixelsHigh,
+    region.width > 0, region.height > 0,
     let targetColor = targetColor.usingColorSpace(.sRGB)
   else { return nil }
 
@@ -5999,37 +6181,62 @@ private func hostedSelectionFillBounds(
 
   let scaleX = CGFloat(imageRep.pixelsWide) / hostSize.width
   let scaleY = CGFloat(imageRep.pixelsHigh) / hostSize.height
-  let bandTop: CGFloat = 42
-  let bandBottom: CGFloat = 82
-  let bandStart = max(0, Int(floor(bandTop * scaleY)))
-  let bandEnd = min(imageRep.pixelsHigh, Int(ceil(bandBottom * scaleY)))
-  guard bandStart < bandEnd else { return nil }
+  let horizontalInset: CGFloat = 6
+  let bandHeight: CGFloat = 2
+  let probeBands = [
+    CGRect(
+      x: region.minX + horizontalInset,
+      y: region.minY,
+      width: region.width - 2 * horizontalInset,
+      height: bandHeight
+    ),
+    CGRect(
+      x: region.minX + horizontalInset,
+      y: region.maxY - bandHeight,
+      width: region.width - 2 * horizontalInset,
+      height: bandHeight
+    ),
+  ]
+  guard probeBands.allSatisfy({ region.contains($0) }) else { return nil }
   var matchCount = 0
   var minX = Int.max
   var minY = Int.max
   var maxX = Int.min
   var maxY = Int.min
 
-  for y in bandStart..<bandEnd {
-    for x in 0..<imageRep.pixelsWide {
-      guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
-      else { continue }
-      var red: CGFloat = 0
-      var green: CGFloat = 0
-      var blue: CGFloat = 0
-      var alpha: CGFloat = 0
-      color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-      guard alpha > 0.5 else { continue }
-      let distance = max(
-        abs(red - target[0]),
-        max(abs(green - target[1]), abs(blue - target[2]))
-      )
-      guard distance < 0.04 else { continue }
-      matchCount += 1
-      minX = min(minX, x)
-      minY = min(minY, y)
-      maxX = max(maxX, x)
-      maxY = max(maxY, y)
+  for band in probeBands {
+    let xStart = max(0, Int(floor(band.minX * scaleX)))
+    let xEnd = min(imageRep.pixelsWide, Int(ceil(band.maxX * scaleX)))
+    let yStart = max(0, Int(floor(band.minY * scaleY)))
+    let yEnd = min(imageRep.pixelsHigh, Int(ceil(band.maxY * scaleY)))
+    guard xStart < xEnd, yStart < yEnd else { continue }
+    for y in yStart..<yEnd {
+      for x in xStart..<xEnd {
+        guard let selectedColor = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+          let baselineColor = baseline.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+          selectedColor.alphaComponent > 0.5,
+          baselineColor.alphaComponent > 0.5
+        else { continue }
+        let selectedComponents = [
+          selectedColor.redComponent,
+          selectedColor.greenComponent,
+          selectedColor.blueComponent,
+        ]
+        let baselineComponents = [
+          baselineColor.redComponent,
+          baselineColor.greenComponent,
+          baselineColor.blueComponent,
+        ]
+        let selectedDistance = zip(selectedComponents, target).map { abs($0 - $1) }.max() ?? 1
+        let baselineDistance = zip(baselineComponents, target).map { abs($0 - $1) }.max() ?? 1
+        let stateChange = zip(selectedComponents, baselineComponents).map { abs($0 - $1) }.max() ?? 0
+        guard stateChange > 0.04, selectedDistance + 0.015 < baselineDistance else { continue }
+        matchCount += 1
+        minX = min(minX, x)
+        minY = min(minY, y)
+        maxX = max(maxX, x)
+        maxY = max(maxY, y)
+      }
     }
   }
 

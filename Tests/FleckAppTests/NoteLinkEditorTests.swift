@@ -139,12 +139,14 @@ func noteLinkPickerFieldUsesNeutralKeyboardFocusStyling() throws {
   let token = NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)
   let text = "Before \(token) after"
   let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 160))
+  textView.appearance = NSAppearance(named: .aqua)
   let window = NSWindow(
     contentRect: NSRect(x: 0, y: 0, width: 420, height: 160),
     styleMask: [.titled],
     backing: .buffered,
     defer: false
   )
+  window.appearance = NSAppearance(named: .aqua)
   window.contentView = textView
   textView.allowsUndo = true
   textView.string = text
@@ -181,15 +183,34 @@ func noteLinkPickerFieldUsesNeutralKeyboardFocusStyling() throws {
   let originalTypingAttributes = NSDictionary(dictionary: textView.typingAttributes)
   let originalCanUndo = try #require(textView.undoManager).canUndo
   let link = try #require(NoteLinkParser.links(in: text).first)
+  let canvasColor = EditorCanvasInk.canvasColor(for: textView)
 
   textView.refreshNoteLinks(accentColorHex: "#FFD600", liveNoteIDs: [target])
   let yellow = try #require(NSColor(hex: "#FFD600"))
-  #expect(sRGBColor(textView.layoutManager?.temporaryAttribute(.foregroundColor, atCharacterIndex: link.range.location, effectiveRange: nil) as? NSColor) == sRGBColor(yellow))
+  let accessibleYellow = FleckColorContrast.accessibleForeground(yellow, against: canvasColor)
+  let temporaryYellow = try #require(
+    textView.layoutManager?.temporaryAttribute(
+      .foregroundColor,
+      atCharacterIndex: link.range.location,
+      effectiveRange: nil
+    ) as? NSColor
+  )
+  #expect(sRGBColor(temporaryYellow) == sRGBColor(accessibleYellow))
+  #expect(FleckColorContrast.contrastRatio(temporaryYellow, against: canvasColor) >= 4.5)
   #expect((textView.layoutManager?.temporaryAttribute(.underlineStyle, atCharacterIndex: link.range.location, effectiveRange: nil) as? Int) == NSUnderlineStyle.single.rawValue)
 
   textView.refreshNoteLinks(accentColorHex: "#30D158", liveNoteIDs: [target])
   let green = try #require(NSColor(hex: "#30D158"))
-  #expect(sRGBColor(textView.layoutManager?.temporaryAttribute(.foregroundColor, atCharacterIndex: link.range.location, effectiveRange: nil) as? NSColor) == sRGBColor(green))
+  let accessibleGreen = FleckColorContrast.accessibleForeground(green, against: canvasColor)
+  let temporaryGreen = try #require(
+    textView.layoutManager?.temporaryAttribute(
+      .foregroundColor,
+      atCharacterIndex: link.range.location,
+      effectiveRange: nil
+    ) as? NSColor
+  )
+  #expect(sRGBColor(temporaryGreen) == sRGBColor(accessibleGreen))
+  #expect(FleckColorContrast.contrastRatio(temporaryGreen, against: canvasColor) >= 4.5)
   #expect(textView.string == originalString)
   #expect(NSAttributedString(attributedString: try #require(textView.textStorage)).isEqual(to: originalAttributed))
   let currentRTF = try textView.textStorage?.data(
@@ -313,12 +334,14 @@ func noteLinkPickerFieldUsesNeutralKeyboardFocusStyling() throws {
   let target = UUID()
   let token = NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)
   let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 520, height: 160))
+  textView.appearance = NSAppearance(named: .aqua)
   let window = NSWindow(
     contentRect: NSRect(x: 0, y: 0, width: 520, height: 160),
     styleMask: [.titled],
     backing: .buffered,
     defer: false
   )
+  window.appearance = NSAppearance(named: .aqua)
   window.contentView = textView
   textView.string = "Before \(token) after"
   let originalLink = try #require(NoteLinkParser.links(in: textView.string).first)
@@ -366,15 +389,19 @@ func noteLinkPickerFieldUsesNeutralKeyboardFocusStyling() throws {
     ) as? NSColor == nil
   )
   let accent = try #require(NSColor(hex: "#FFD600"))
-  #expect(
-    sRGBColor(
-      textView.layoutManager?.temporaryAttribute(
-        .foregroundColor,
-        atCharacterIndex: shiftedLink.range.location,
-        effectiveRange: nil
-      ) as? NSColor
-    ) == sRGBColor(accent)
+  let canvasColor = EditorCanvasInk.canvasColor(for: textView)
+  let accessibleAccent = FleckColorContrast.accessibleForeground(accent, against: canvasColor)
+  let temporaryAccent = try #require(
+    textView.layoutManager?.temporaryAttribute(
+      .foregroundColor,
+      atCharacterIndex: shiftedLink.range.location,
+      effectiveRange: nil
+    ) as? NSColor
   )
+  #expect(
+    sRGBColor(temporaryAccent) == sRGBColor(accessibleAccent)
+  )
+  #expect(FleckColorContrast.contrastRatio(temporaryAccent, against: canvasColor) >= 4.5)
   #expect(
     textView.layoutManager?.temporaryAttribute(
       .underlineStyle,

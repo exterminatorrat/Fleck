@@ -150,20 +150,47 @@ import Testing
 
   #expect(!formattingBar.contains(".background(.bar)"))
   #expect(normalizedFormattingBar.contains(
-    "frame(maxWidth: .infinity) .modifier(FormattingBarSurface()) "
+    "frame(maxWidth: .infinity) .modifier(FormattingBarSurface(isPinned: isPinned)) "
       + ".padding(.horizontal, 10) .padding(.top, 8)"
   ))
   #expect(surface.contains("@Environment(\\.fleckThemeSnapshot) private var theme"))
   #expect(surface.contains("FleckChromeMaterialPolicy.current("))
   #expect(surface.contains("if #available(macOS 26, *)"))
-  #expect(normalizedSurface.contains(
-    "let shape = RoundedRectangle(cornerRadius: 12, style: .continuous) "
-      + "switch materialPolicy { case .liquidGlass: if #available(macOS 26, *) { "
-      + "content.glassEffect( Glass.regular.tint(theme.color(.accent).opacity(0.08)), "
-      + "in: shape )"
+  let liquidGlassBranch = try #require(
+    normalizedSurface
+      .components(separatedBy: "case .liquidGlass:")
+      .dropFirst()
+      .first?
+      .components(separatedBy: "case .legacyMaterial:")
+      .first
+  )
+  let legacyMaterialBranch = try #require(
+    normalizedSurface
+      .components(separatedBy: "case .legacyMaterial:")
+      .dropFirst()
+      .first?
+      .components(separatedBy: "case .opaque:")
+      .first
+  )
+  let opaqueBranch = try #require(
+    normalizedSurface
+      .components(separatedBy: "case .opaque:")
+      .dropFirst()
+      .first?
+      .components(separatedBy: "private var materialPolicy")
+      .first
+  )
+
+  #expect(liquidGlassBranch.contains("if isPinned {"))
+  #expect(liquidGlassBranch.contains(
+    "content.glassEffect( Glass.regular.tint(theme.color(.accent).opacity(0.08)), in: shape )"
   ))
-  #expect(surface.contains("content.background { shape.fill(.ultraThinMaterial) }"))
-  #expect(surface.contains("content.background { shape.fill(theme.color(.card)) }"))
+  #expect(liquidGlassBranch.contains("} else { content }"))
+  #expect(liquidGlassBranch.contains("shape.fill(.ultraThinMaterial)"))
+  #expect(legacyMaterialBranch.contains("if isPinned {"))
+  #expect(legacyMaterialBranch.contains("content.background { shape.fill(.ultraThinMaterial) }"))
+  #expect(legacyMaterialBranch.contains("} else { content }"))
+  #expect(opaqueBranch.contains("content.background { shape.fill(theme.color(.card)) }"))
   #expect(!surface.contains("Color.black.opacity"))
   #expect(!surface.contains("GlassEffectContainer"))
 }

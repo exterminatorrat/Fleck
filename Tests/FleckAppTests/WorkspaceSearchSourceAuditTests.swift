@@ -86,7 +86,7 @@ func WorkspaceSearchSourceAuditUsesTheProductionPanelAndNativeOverlay() throws {
       .first
   )
   #expect(!formattingBar.contains(".background(.bar)"))
-  #expect(formattingBar.contains(".modifier(FormattingBarSurface())"))
+  #expect(formattingBar.contains(".modifier(FormattingBarSurface(isPinned: isPinned))"))
   #expect(formattingBarSurface.contains("@Environment(\\.fleckThemeSnapshot) private var theme"))
   #expect(formattingBarSurface.contains("FleckChromeMaterialPolicy.current("))
   #expect(formattingBarSurface.contains("case .liquidGlass"))

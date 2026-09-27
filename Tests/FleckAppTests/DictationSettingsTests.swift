@@ -15,6 +15,12 @@ import Testing
     contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
     encoding: .utf8
   )
+  let modelSourceStart = try #require(source.range(of: "    private var models: some View {"))
+  let modelSourceEnd = try #require(source.range(
+    of: "    private var dictationModifierPresentation: DictationModifierSettingsPresentation {",
+    range: modelSourceStart.upperBound..<source.endIndex
+  ))
+  let modelSource = String(source[modelSourceStart.lowerBound..<modelSourceEnd.lowerBound])
   let runtimeSource = try String(
     contentsOf: repository.appendingPathComponent("Sources/FleckApp/FleckApp.swift"),
     encoding: .utf8
@@ -78,7 +84,7 @@ import Testing
   #expect(!source.contains("Supported languages"))
   #expect(!source.contains("Download size"))
   #expect(!source.contains("Installed size"))
-  #expect(!source.contains(" bytes"))
+  #expect(!modelSource.contains(" bytes"))
   #expect(!source.contains("Admitted model installation progress"))
   #expect(!source.contains("Picker(\"Engine\""))
   #expect(!source.contains("ModelConsentView"))
