@@ -51,8 +51,25 @@ import Testing
     contentsOf: root.appendingPathComponent("Sources/FleckApp/AppState.swift"),
     encoding: .utf8
   )
+  let menuBarRoot = try #require(
+    appSource.components(separatedBy: "MenuBarExtra {").last?
+      .components(separatedBy: "      label: {").first
+  )
+  let pinnedNotesRoot = try #require(
+    appSource.components(separatedBy: "Window(\"Fleck\", id: \"pinned-notes\") {").last?
+      .components(separatedBy: "      .commands {").first
+  )
+  let settingsRoot = try #require(
+    appSource.components(separatedBy: "      Settings {").last?
+      .components(separatedBy: "      .defaultSize(width: 840, height: 600)").first
+  )
 
-  #expect(appSource.components(separatedBy: ".fleckTheme(appState)").count - 1 == 4)
+  #expect(menuBarRoot.contains(".fleckTheme(appState)"))
+  #expect(pinnedNotesRoot.contains(".fleckTheme(appState)"))
+  #expect(settingsRoot.contains(".fleckTheme(appState)"))
+  #expect(appSource.components(separatedBy: ".fleckTheme(appState)").count - 1 == 3)
+  #expect(!appSource.contains("Window(\"Models\""))
+  #expect(!appSource.contains("ModelLibraryLayout.windowIdentifier"))
   #expect(appSource.contains("DictationCapsuleController(theme: appState.themeSnapshot)"))
   #expect(appSource.contains("themeSnapshotSubscription = appState.$themeSnapshot.sink"))
   #expect(appSource.contains("capsuleController?.updateTheme(snapshot)"))

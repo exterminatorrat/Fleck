@@ -79,10 +79,11 @@
       #expect(SettingsSearchIndex.results(for: "Editing").first?.target == .section(.editing))
     }
 
-    @Test func modelsSearchOpensTheDedicatedModelsSection() throws {
+    @Test func modelsSearchResultsTargetTheSettingsModelsPane() throws {
       let results: [(String, SettingsSearchTarget)] = [
         ("Models", .section(.models)),
         ("model library", .section(.models)),
+        ("optional local models", .section(.models)),
         ("Dictation model", .dictationModel),
         ("Cleanup model", .dictationCleanupModel),
       ]

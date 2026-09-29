@@ -3,6 +3,18 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.1-beta.1] - 2026-09-29
+
+Private local QA candidate only; this change is not an accepted build or public release. External
+benchmark references are third-party citations, not measurements by Fleck.
+
+### Changed
+
+- Moved optional local model management into a Models pane in Settings, retaining search, filters,
+  pins, model details, attribution, and lifecycle actions.
+- Cited external Parakeet transcription and Gemma throughput results with their test conditions;
+  neither verifies the exact pinned conversion, and Gemma cleanup accuracy remains unmeasured.
+
 ## [1.4.0-beta.1] - 2026-09-28
 
 Private local QA candidate only; this change is not an accepted build or public release. It makes

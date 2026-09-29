@@ -66,7 +66,7 @@
       case .dictation:
         "Configure voice capture, microphones, experience, and history."
       case .models:
-        "Open the Models window to browse and manage optional local recognition and cleanup models."
+        "Browse and manage optional local recognition and cleanup models."
       case .vocabulary:
         "Manage personal vocabulary and dictation corrections."
       case .agents:
@@ -883,7 +883,6 @@
 
   struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
-    @Environment(\.openWindow) private var openWindow
     @Environment(\.fleckThemeSnapshot) private var theme
     @ObservedObject var runtime: DictationRuntime
     @ObservedObject private var personalDictionarySettingsViewModel:
@@ -947,59 +946,69 @@
         .frame(width: 220)
         .padding(.vertical, 8)
         ZStack(alignment: .topLeading) {
-          ScrollViewReader { proxy in
-            ScrollView {
-              VStack(alignment: .leading, spacing: 20) {
-                if selectedSection != .vocabulary {
-                  SettingsPageHeader(
-                    section: selectedSection,
-                    searchRequest: searchRequest,
-                    accessory: selectedSection == .dictation
-                      ? AnyView(dictationReadinessButton)
-                      : nil
-                  )
+          if selectedSection == .models {
+            modelsBrowser
+              .safeAreaPadding(.top, 40)
+          } else {
+            ScrollViewReader { proxy in
+              ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                  if selectedSection != .vocabulary {
+                    SettingsPageHeader(
+                      section: selectedSection,
+                      searchRequest: searchRequest,
+                      accessory: selectedSection == .dictation
+                        ? AnyView(dictationReadinessButton)
+                        : nil
+                    )
+                  }
+                  switch selectedSection {
+                  case .appearance:
+                    appearance
+                  case .editing:
+                    editing
+                  case .shortcuts:
+                    shortcuts
+                  case .dictation:
+                    dictation
+                  case .models:
+                    modelsBrowser
+                  case .vocabulary:
+                    vocabulary
+                  case .agents:
+                    AgentSettingsView()
+                  case .about:
+                    AboutSettingsView(identity: buildIdentity)
+                  }
                 }
-                switch selectedSection {
-                case .appearance:
-                  appearance
-                case .editing:
-                  editing
-                case .shortcuts:
-                  shortcuts
-                case .dictation:
-                  dictation
-                case .models:
-                  EmptyView()
-                case .vocabulary:
-                  vocabulary
-                case .agents:
-                  AgentSettingsView()
-                case .about:
-                  AboutSettingsView(identity: buildIdentity)
-                }
+                .environment(\.settingsSearchRequest, searchRequest)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 20)
               }
-              .environment(\.settingsSearchRequest, searchRequest)
-              .frame(maxWidth: .infinity, alignment: .leading)
-              .padding(.horizontal, 24)
-              .padding(.bottom, 20)
-            }
-            .id(selectedSection)
-            .safeAreaPadding(.top, 40)
-            .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .onChange(of: searchRequest?.id) { _, _ in
-              vocabularyPageScrollRequestID = nil
-              guard let searchRequest else { return }
-              Task { @MainActor in
-                await Task.yield()
-                await Task.yield()
-                guard self.searchRequest?.id == searchRequest.id else { return }
-                let pageScrollAnchor = searchRequest.anchor.pageScrollAnchor
-                let isTransferFooter = pageScrollAnchor == .vocabularyTransferFooter
-                proxy.scrollTo(pageScrollAnchor, anchor: isTransferFooter ? .bottom : .center)
-                if searchRequest.anchor.usesVocabularyFocusLifecycle {
+              .id(selectedSection)
+              .safeAreaPadding(.top, 40)
+              .frame(
+                minWidth: 0,
+                maxWidth: .infinity,
+                maxHeight: .infinity,
+                alignment: .topLeading
+              )
+              .onChange(of: searchRequest?.id) { _, _ in
+                vocabularyPageScrollRequestID = nil
+                guard let searchRequest else { return }
+                Task { @MainActor in
+                  await Task.yield()
                   await Task.yield()
                   guard self.searchRequest?.id == searchRequest.id else { return }
-                  vocabularyPageScrollRequestID = searchRequest.id
+                  let pageScrollAnchor = searchRequest.anchor.pageScrollAnchor
+                  let isTransferFooter = pageScrollAnchor == .vocabularyTransferFooter
+                  proxy.scrollTo(pageScrollAnchor, anchor: isTransferFooter ? .bottom : .center)
+                  if searchRequest.anchor.usesVocabularyFocusLifecycle {
+                    await Task.yield()
+                    guard self.searchRequest?.id == searchRequest.id else { return }
+                    vocabularyPageScrollRequestID = searchRequest.id
+                  }
                 }
               }
             }
@@ -1168,7 +1177,7 @@
       searchRequest = nil
       vocabularyPageScrollRequestID = nil
       isReadinessPopoverPresented = false
-      openModelsWindow()
+      selectedSection = .models
     }
 
     private var appearance: some View {
@@ -1599,14 +1608,23 @@
     }
 
     private var modelsLink: some View {
-      Button("Open Models", action: openModelsWindow)
+      Button("Open Models", action: openModelsFromSettingsNavigation)
         .buttonStyle(.link)
         .controlSize(.small)
         .accessibilityIdentifier("settings-dictation-open-models")
     }
 
-    private func openModelsWindow() {
-      openWindow(id: ModelLibraryLayout.windowIdentifier)
+    private var modelsBrowser: some View {
+      ModelsBrowserView(
+        speechViewModel: runtime.admittedModelSettingsViewModel,
+        cleanupViewModel: runtime.cleanupAdmittedModelSettingsViewModel,
+        pinnedModelKeys: Binding(
+          get: { Set(appState.preferences.pinnedLocalModelKeys) },
+          set: { keys in
+            appState.updatePreferences { $0.pinnedLocalModelKeys = keys.sorted() }
+          }
+        )
+      )
     }
 
     private var dictationModifierPresentation: DictationModifierSettingsPresentation {

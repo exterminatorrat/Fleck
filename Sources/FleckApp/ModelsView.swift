@@ -3,30 +3,18 @@
   import FleckCore
   import SwiftUI
 
-  @MainActor
-  struct ModelsWindowView: View {
-    @EnvironmentObject private var appState: AppState
-    @ObservedObject private var speechViewModel: AdmittedModelSettingsViewModel
-    @ObservedObject private var cleanupViewModel: AdmittedModelSettingsViewModel
+  private struct ModelsAccessibilityProbe: NSViewRepresentable {
+    let identifier: String
 
-    init(runtime: DictationRuntime) {
-      _speechViewModel = ObservedObject(wrappedValue: runtime.admittedModelSettingsViewModel)
-      _cleanupViewModel = ObservedObject(
-        wrappedValue: runtime.cleanupAdmittedModelSettingsViewModel
-      )
+    func makeNSView(context: Context) -> NSView {
+      let view = NSView()
+      view.setAccessibilityElement(false)
+      view.setAccessibilityIdentifier(identifier)
+      return view
     }
 
-    var body: some View {
-      ModelsBrowserView(
-        speechViewModel: speechViewModel,
-        cleanupViewModel: cleanupViewModel,
-        pinnedModelKeys: Binding(
-          get: { Set(appState.preferences.pinnedLocalModelKeys) },
-          set: { keys in
-            appState.updatePreferences { $0.pinnedLocalModelKeys = keys.sorted() }
-          }
-        )
-      )
+    func updateNSView(_ view: NSView, context: Context) {
+      view.setAccessibilityIdentifier(identifier)
     }
   }
 
@@ -40,7 +28,8 @@
     @SceneStorage("models.search") private var searchQuery = ""
     @SceneStorage("models.provider") private var providerFilter = "all"
     @SceneStorage("models.type") private var modelTypeFilter = ModelLibraryTypeFilter.all.rawValue
-    @SceneStorage("models.sort.ascending") private var sortAscending = true
+    @SceneStorage("models.sort.ascending") private var storedSortAscending = true
+    @State private var sortAscending = true
     @SceneStorage("models.selectedID") private var sceneSelectedModelID: String?
     private let selectedModelIDOverride: Binding<String?>?
     @SceneStorage("models.visibleID") private var visibleModelID: String?
@@ -123,21 +112,20 @@
     }
 
     var body: some View {
-      VStack(alignment: .leading, spacing: 16) {
-        header
-        filters
-        GeometryReader { geometry in
-          content(width: geometry.size.width)
+      GeometryReader { geometry in
+        VStack(alignment: .leading, spacing: geometry.size.width < 680 ? 10 : 16) {
+          header
+          filters
+          GeometryReader { contentGeometry in
+            content(width: contentGeometry.size.width)
+          }
+          .frame(minHeight: 0)
         }
-        .frame(minHeight: 380)
+        .padding(geometry.size.width < 680 ? 12 : 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
-      .padding(24)
-      .frame(
-        minWidth: ModelLibraryLayout.minimumWindowWidth,
-        minHeight: 620,
-        alignment: .topLeading
-      )
       .background(theme.color(.window))
+      .background(ModelsAccessibilityProbe(identifier: "models-browser"))
       .accessibilityIdentifier("models-browser")
       .onExitCommand(perform: closeDetails)
       .onChange(of: entries.map(\.id)) { _, availableIDs in
@@ -148,6 +136,12 @@
       .onChange(of: visibleEntries.map(\.id)) { _, matchingIDs in
         guard let selectedModelID, !matchingIDs.contains(selectedModelID) else { return }
         setSelectedModelID(nil)
+      }
+      .onAppear {
+        sortAscending = storedSortAscending
+      }
+      .onChange(of: sortAscending) { _, value in
+        storedSortAscending = value
       }
       .task {
         await speechViewModel.refresh()
@@ -248,6 +242,8 @@
 
         Spacer(minLength: 0)
       }
+      .accessibilityElement(children: .contain)
+      .accessibilityIdentifier("models-filters")
     }
 
     @ViewBuilder
@@ -272,11 +268,7 @@
         noMatchesState
       } else if let selectedEntry {
         if ModelLibraryLayout.stacksDetails(width: width, dynamicTypeSize: dynamicTypeSize) {
-          VStack(alignment: .leading, spacing: 16) {
-            compactList(visibleEntries)
-              .frame(maxHeight: 180)
-            detailView(selectedEntry)
-          }
+          detailView(selectedEntry)
         } else {
           HStack(alignment: .top, spacing: 20) {
             compactList(visibleEntries)
@@ -288,6 +280,8 @@
               .frame(maxWidth: .infinity)
           }
         }
+      } else if ModelLibraryLayout.stacksDetails(width: width, dynamicTypeSize: dynamicTypeSize) {
+        compactList(visibleEntries)
       } else {
         fullTable(visibleEntries)
       }
@@ -347,26 +341,13 @@
       VStack(spacing: 0) {
         HStack(spacing: 12) {
           Color.clear.frame(width: 28, height: 1)
-          Button {
-            sortAscending.toggle()
-          } label: {
-            HStack(spacing: 5) {
-              Text("Model name")
-              Image(systemName: sortAscending ? "chevron.up" : "chevron.down")
-                .font(.caption2.weight(.semibold))
-            }
+          sortByNameButton(title: "Model name")
             .frame(maxWidth: .infinity, alignment: .leading)
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel("Sort by model name")
-          .accessibilityValue(sortAscending ? "A to Z" : "Z to A")
-          .accessibilityHint("Pinned models remain first in either order.")
-          .accessibilityIdentifier("models-sort-name")
 
           Text("Type")
             .frame(width: 88, alignment: .leading)
-          Text("Speed / Accuracy")
-            .frame(width: 174, alignment: .center)
+          Text("External results")
+            .frame(width: 230, alignment: .leading)
           Text("Size")
             .frame(width: 78, alignment: .trailing)
           Text("Action")
@@ -388,9 +369,22 @@
     }
 
     private func compactList(_ entries: [ModelLibraryEntry]) -> some View {
-      VStack(alignment: .leading, spacing: 8) {
-        Text("Models")
-          .font(.headline)
+      VStack(spacing: 0) {
+        HStack {
+          sortByNameButton(title: "Sort by model name")
+          Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("models-compact-sort-header")
+        .font(.caption.weight(.medium))
+        .foregroundStyle(theme.color(.textSecondary))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+
+        Rectangle()
+          .fill(theme.color(.border))
+          .frame(height: 1)
+
         modelList(entries, compact: true)
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -467,8 +461,8 @@
               .font(.callout)
               .frame(width: 88, alignment: .leading)
 
-            ratingSlots
-              .frame(width: 174)
+            externalMetricSummary(entry)
+              .frame(width: 230, alignment: .leading)
 
             Text(ModelLibraryFormatting.megabytes(entry.descriptor.downloadBytes))
               .font(.callout)
@@ -501,7 +495,7 @@
     }
 
     private func compactRow(_ entry: ModelLibraryEntry) -> some View {
-      HStack(spacing: 7) {
+      HStack(alignment: .top, spacing: 7) {
         pinButton(entry)
           .frame(width: 28)
         Button {
@@ -519,8 +513,9 @@
             .font(.caption)
             .foregroundStyle(theme.color(.textSecondary))
             .lineLimit(1)
+            externalMetricSummary(entry)
           }
-          .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
+          .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -529,6 +524,10 @@
         .accessibilityValue(rowAccessibilityValue(entry))
         .accessibilityHint("Opens model details. This does not change which model Fleck uses.")
         .accessibilityIdentifier("models-row-\(entry.id)")
+        if selectedModelID != entry.id {
+          actionButton(entry, prominent: false)
+            .frame(width: 86)
+        }
       }
       .padding(.horizontal, 8)
       .padding(.vertical, 5)
@@ -539,27 +538,32 @@
       .accessibilityElement(children: .contain)
     }
 
-    private var ratingSlots: some View {
-      HStack(spacing: 10) {
-        VStack(alignment: .center, spacing: 2) {
-          Text("Speed")
+    private func externalMetricSummary(_ entry: ModelLibraryEntry) -> some View {
+      let evidence = externalEvidence(for: entry)
+      return VStack(alignment: .leading, spacing: 4) {
+        ForEach(evidence?.metrics ?? []) { metric in
+          Text("\(metric.label): \(compactExternalMetricValue(metric.value))")
+            .font(.caption.weight(.medium))
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        if let evidence {
+          Text(externalHardwareQualifier(for: evidence).map { "External · \($0)" } ?? "External")
             .font(.caption2)
             .foregroundStyle(theme.color(.textSecondary))
-          Text("Not rated")
-            .font(.caption)
-        }
-        .frame(maxWidth: .infinity)
-        VStack(alignment: .center, spacing: 2) {
-          Text("Accuracy")
+          if evidence.unmeasuredCleanupAccuracyContext != nil {
+            Text("Cleanup accuracy: Not measured")
+              .font(.caption2)
+              .foregroundStyle(theme.color(.textSecondary))
+          }
+        } else {
+          Text("No external results supplied")
             .font(.caption2)
             .foregroundStyle(theme.color(.textSecondary))
-          Text("Not rated")
-            .font(.caption)
         }
-        .frame(maxWidth: .infinity)
       }
-      .accessibilityElement(children: .ignore)
-      .accessibilityLabel("Speed: Not rated. Accuracy: Not rated.")
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .accessibilityElement(children: .contain)
+      .accessibilityIdentifier("models-external-metrics-\(entry.id)")
     }
 
     private func pinButton(_ entry: ModelLibraryEntry) -> some View {
@@ -709,10 +713,7 @@
 
         Divider()
 
-        Text("Benchmarks")
-          .font(.headline)
-        LabeledContent("Speed", value: "Not rated")
-        LabeledContent("Accuracy", value: "Not rated")
+        externalMetricDetails(entry)
 
         Divider()
 
@@ -734,6 +735,54 @@
       .frame(maxWidth: .infinity, alignment: .leading)
       .accessibilityElement(children: .contain)
       .accessibilityIdentifier("models-verified-specifications")
+    }
+
+    private func externalMetricDetails(_ entry: ModelLibraryEntry) -> some View {
+      let evidence = externalEvidence(for: entry)
+      return VStack(alignment: .leading, spacing: 10) {
+        Text("External results")
+          .font(.headline)
+        if let evidence {
+          ForEach(evidence.metrics) { metric in
+            LabeledContent(metric.label, value: metric.value)
+          }
+          Text(evidence.context)
+            .font(.caption)
+            .foregroundStyle(theme.color(.textSecondary))
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("models-external-context-\(entry.id)")
+          HStack(spacing: 12) {
+            ForEach(evidence.sources) { source in
+              Link(source.label, destination: source.url)
+                .accessibilityIdentifier(
+                  "models-external-source-\(entry.id)-\(source.id)"
+                )
+            }
+          }
+          .fixedSize(horizontal: false, vertical: true)
+          if let accuracyContext = evidence.unmeasuredCleanupAccuracyContext {
+            LabeledContent("Cleanup accuracy", value: "Not measured")
+            Text(accuracyContext)
+              .font(.caption)
+              .foregroundStyle(theme.color(.textSecondary))
+              .fixedSize(horizontal: false, vertical: true)
+              .accessibilityIdentifier("models-external-accuracy-context-\(entry.id)")
+            Text(
+              "The benchmark identifies the MLX model ID, not a conversion SHA, so it does not verify this pinned converted revision."
+            )
+            .font(.caption)
+            .foregroundStyle(theme.color(.textSecondary))
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("models-external-conversion-caveat-\(entry.id)")
+          }
+        } else {
+          Text("No external results supplied.")
+            .foregroundStyle(theme.color(.textSecondary))
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .accessibilityElement(children: .contain)
+      .accessibilityIdentifier("models-external-results")
     }
 
     private func attributionSection(_ entry: ModelLibraryEntry) -> some View {
@@ -824,7 +873,55 @@
     }
 
     private func rowAccessibilityValue(_ entry: ModelLibraryEntry) -> String {
-      "\(entry.provider.rawValue), \(entry.typeTitle), \(entry.presentation.compactStatus), download size \(ModelLibraryFormatting.megabytes(entry.descriptor.downloadBytes)), speed not rated, accuracy not rated"
+      let evidence = externalEvidence(for: entry)
+      let externalResults: String
+      if let evidence {
+        let metrics = evidence.metrics
+          .map { "\($0.label): \(compactExternalMetricValue($0.value))" }
+          .joined(separator: "; ")
+        let hardware = externalHardwareQualifier(for: evidence)
+          .map { " on \($0)" } ?? ""
+        let accuracy = evidence.unmeasuredCleanupAccuracyContext == nil
+          ? ""
+          : "; Cleanup accuracy: Not measured"
+        externalResults = "External benchmark\(hardware): \(metrics)\(accuracy)"
+      } else {
+        externalResults = "No external results supplied"
+      }
+      let identity = "\(entry.provider.rawValue), \(entry.typeTitle), \(entry.presentation.compactStatus)"
+      let downloadSize = ModelLibraryFormatting.megabytes(entry.descriptor.downloadBytes)
+      return "\(identity), download size \(downloadSize), \(externalResults)"
+    }
+
+    private func externalEvidence(for entry: ModelLibraryEntry) -> ModelLibraryExternalEvidence? {
+      ModelLibraryExternalEvidenceCatalog.evidence(for: entry.descriptor)
+    }
+
+    private func compactExternalMetricValue(_ value: String) -> String {
+      value.replacingOccurrences(of: "tokens/s", with: "tok/s")
+    }
+
+    private func externalHardwareQualifier(
+      for evidence: ModelLibraryExternalEvidence
+    ) -> String? {
+      ["M4 Pro", "M4 Max"].first { evidence.context.contains($0) }
+    }
+
+    private func sortByNameButton(title: String) -> some View {
+      Button {
+        sortAscending.toggle()
+      } label: {
+        HStack(spacing: 5) {
+          Text(title)
+          Image(systemName: sortAscending ? "chevron.up" : "chevron.down")
+            .font(.caption2.weight(.semibold))
+        }
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Sort by model name")
+      .accessibilityValue(sortAscending ? "A to Z" : "Z to A")
+      .accessibilityHint("Pinned models remain first in either order.")
+      .accessibilityIdentifier("models-sort-name")
     }
 
     private func detailColor(_ phase: AdmittedModelInstallPhase) -> Color {
