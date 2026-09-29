@@ -52,7 +52,7 @@ import Testing
     encoding: .utf8
   )
 
-  #expect(appSource.components(separatedBy: ".fleckTheme(appState)").count - 1 == 3)
+  #expect(appSource.components(separatedBy: ".fleckTheme(appState)").count - 1 == 4)
   #expect(appSource.contains("DictationCapsuleController(theme: appState.themeSnapshot)"))
   #expect(appSource.contains("themeSnapshotSubscription = appState.$themeSnapshot.sink"))
   #expect(appSource.contains("capsuleController?.updateTheme(snapshot)"))
@@ -1024,7 +1024,10 @@ func settingsSearchAnchorKeepsAppearanceCardFocusedWithoutSystemHalo() async thr
 
   let focusIdentifier =
     "settings-keyboard-focus-\(SettingsSearchTarget.appearanceGlassOpacity.identifier)"
+  let cueIdentifier =
+    "settings-keyboard-focus-cue-\(SettingsSearchTarget.appearanceGlassOpacity.identifier)"
   #expect(settingsNativeView(withAccessibilityIdentifier: focusIdentifier, in: host) != nil)
+  #expect(settingsNativeView(withAccessibilityIdentifier: cueIdentifier, in: host) == nil)
   let image = try settingsHostedCapture(in: host)
   #expect(settingsSurfacePixelCount(in: image, matching: NSColor.keyboardFocusIndicatorColor) == 0)
 
@@ -1036,6 +1039,138 @@ func settingsSearchAnchorKeepsAppearanceCardFocusedWithoutSystemHalo() async thr
     )
     let png = try #require(image.representation(using: .png, properties: [:]))
     try png.write(to: captureDirectory.appendingPathComponent("appearance-card-focus.png"))
+  }
+}
+
+@Test @MainActor
+func settingsSearchAnchorFocusCueDistinguishesTabFromPointer() async throws {
+  let application = NSApplication.shared
+  let previousActivationPolicy = application.activationPolicy()
+  #expect(application.setActivationPolicy(.regular))
+  defer { _ = application.setActivationPolicy(previousActivationPolicy) }
+
+  let theme = FleckThemeSnapshot.resolve(
+    colorTheme: .monochrome,
+    mode: .light,
+    systemAppearance: .light,
+    reduceTransparency: false,
+    increasedContrast: false
+  )
+  let state = SettingsGlassOpacityBindingProbe(value: 0.68)
+  let host = NSHostingView(
+    rootView: SettingsAppearanceFocusHostFixture(
+      state: state,
+      request: nil
+    )
+    .environment(\.fleckThemeSnapshot, theme)
+    .environment(\.colorScheme, theme.colorScheme)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 420, height: 132),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  NSApp.activate(ignoringOtherApps: true)
+  window.makeKeyAndOrderFront(nil)
+  defer {
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+  for _ in 0..<30 {
+    host.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
+
+  let focusIdentifier =
+    "settings-keyboard-focus-\(SettingsSearchTarget.appearanceGlassOpacity.identifier)"
+  let cueIdentifier =
+    "settings-keyboard-focus-cue-\(SettingsSearchTarget.appearanceGlassOpacity.identifier)"
+  let searchField = try #require(
+    settingsNativeView(withAccessibilityIdentifier: "settings-search-field", in: host)
+      as? NSSearchField
+  )
+  #expect(window.makeFirstResponder(searchField))
+  for _ in 0..<10 {
+    host.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
+  #expect(settingsNativeView(withAccessibilityIdentifier: focusIdentifier, in: host) == nil)
+  #expect(settingsNativeView(withAccessibilityIdentifier: cueIdentifier, in: host) == nil)
+  let appearanceRow = try #require(
+    settingsNativeView(
+      withAccessibilityIdentifier: SettingsSearchTarget.appearanceGlassOpacity.accessibilityIdentifier,
+      in: host
+    )
+  )
+  let rowFrame = appearanceRow.convert(appearanceRow.bounds, to: host)
+  let clickPoint = host.convert(NSPoint(x: rowFrame.minX + 36, y: rowFrame.midY), to: nil)
+  let tabEvent = try #require(
+    NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: [],
+      timestamp: ProcessInfo.processInfo.systemUptime,
+      windowNumber: window.windowNumber,
+      context: nil,
+      characters: "\t",
+      charactersIgnoringModifiers: "\t",
+      isARepeat: false,
+      keyCode: 48
+    )
+  )
+  NSApp.sendEvent(tabEvent)
+  for _ in 0..<20 {
+    host.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
+  #expect(settingsNativeView(withAccessibilityIdentifier: focusIdentifier, in: host) != nil)
+  #expect(settingsNativeView(withAccessibilityIdentifier: cueIdentifier, in: host) != nil)
+  let tabFocusImage = try settingsHostedCapture(in: host)
+  try settingsSendMouseSequence(
+    [(.leftMouseDown, clickPoint), (.leftMouseUp, clickPoint)],
+    to: window,
+    throughApplication: true
+  )
+  for _ in 0..<20 {
+    host.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
+  #expect(settingsNativeView(withAccessibilityIdentifier: focusIdentifier, in: host) != nil)
+  #expect(settingsNativeView(withAccessibilityIdentifier: cueIdentifier, in: host) == nil)
+  #expect(window.makeFirstResponder(searchField))
+  for _ in 0..<10 {
+    host.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
+  #expect(settingsNativeView(withAccessibilityIdentifier: focusIdentifier, in: host) == nil)
+  #expect(settingsNativeView(withAccessibilityIdentifier: cueIdentifier, in: host) == nil)
+  try settingsSendMouseSequence(
+    [(.leftMouseDown, clickPoint), (.leftMouseUp, clickPoint)],
+    to: window,
+    throughApplication: true
+  )
+  for _ in 0..<20 {
+    host.layoutSubtreeIfNeeded()
+    await Task.yield()
+  }
+  #expect(settingsNativeView(withAccessibilityIdentifier: focusIdentifier, in: host) != nil)
+  #expect(settingsNativeView(withAccessibilityIdentifier: cueIdentifier, in: host) == nil)
+  let pointerFocusImage = try settingsHostedCapture(in: host)
+
+  if let capturePath = ProcessInfo.processInfo.environment["FLECK_CONTROL_FOCUS_CAPTURE_DIR"] {
+    let captureDirectory = URL(fileURLWithPath: capturePath, isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: captureDirectory,
+      withIntermediateDirectories: true
+    )
+    let tabPNG = try #require(tabFocusImage.representation(using: .png, properties: [:]))
+    let pointerPNG = try #require(pointerFocusImage.representation(using: .png, properties: [:]))
+    try tabPNG.write(to: captureDirectory.appendingPathComponent("appearance-card-tab-focus.png"))
+    try pointerPNG.write(
+      to: captureDirectory.appendingPathComponent("appearance-card-pointer-focus.png")
+    )
   }
 }
 
@@ -1401,6 +1536,27 @@ private final class SettingsGlassOpacityBindingProbe: ObservableObject {
   }
 }
 
+private struct SettingsAppearanceFocusHostFixture: View {
+  @ObservedObject var state: SettingsGlassOpacityBindingProbe
+  let request: SettingsSearchRequest?
+  @State private var query = ""
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      SettingsSearchField(
+        query: $query,
+        onMove: { _ in },
+        onSubmit: {},
+        onBeginEditing: {},
+        onFocusChange: { _ in }
+      )
+      .frame(height: 28)
+      SettingsGlassOpacityRowFixture(state: state, isEnabled: true, request: request)
+    }
+    .frame(width: 420, height: 132, alignment: .topLeading)
+  }
+}
+
 private struct SettingsGlassOpacityRowFixture: View {
   @ObservedObject var state: SettingsGlassOpacityBindingProbe
   let isEnabled: Bool
@@ -1447,7 +1603,8 @@ private func settingsNativeView(withAccessibilityIdentifier identifier: String, 
 @MainActor
 private func settingsSendMouseSequence(
   _ events: [(NSEvent.EventType, NSPoint)],
-  to window: NSWindow
+  to window: NSWindow,
+  throughApplication: Bool = false
 ) throws {
   let timestamp = ProcessInfo.processInfo.systemUptime
   let nativeEvents = try events.enumerated().map { index, event in
@@ -1467,6 +1624,10 @@ private func settingsSendMouseSequence(
     )
   }
   for event in nativeEvents {
-    window.sendEvent(event)
+    if throughApplication {
+      NSApp.sendEvent(event)
+    } else {
+      window.sendEvent(event)
+    }
   }
 }

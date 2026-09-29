@@ -18,6 +18,7 @@ struct AdmittedModelSettingsPresentation: Equatable {
   let detail: String
   let phase: AdmittedModelInstallPhase
   let identity: String?
+  let descriptor: AdmittedModelDescriptor?
   let modelLabel: String
   let progress: Double?
   let progressAccessibilityValue: String?
@@ -57,6 +58,7 @@ struct AdmittedModelSettingsPresentation: Equatable {
       descriptor = value
     }
 
+    self.descriptor = descriptor
     identity = descriptor?.modelID
     switch context {
     case .dictation:

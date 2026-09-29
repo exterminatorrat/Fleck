@@ -89,7 +89,7 @@ struct SettingsDisclosureGroupStyleTests {
     for (text, start, end) in [
       (
         settings, "        DisclosureGroup(isExpanded: $isDictationPrivacyExpanded)",
-        "\n    private var readiness:"
+        "\n    private var dictationReadinessButton:"
       ),
       (
         agents, "          DisclosureGroup(\"Activity\", isExpanded: $isActivityExpanded)",

@@ -79,6 +79,22 @@
       #expect(SettingsSearchIndex.results(for: "Editing").first?.target == .section(.editing))
     }
 
+    @Test func modelsSearchOpensTheDedicatedModelsSection() throws {
+      let results: [(String, SettingsSearchTarget)] = [
+        ("Models", .section(.models)),
+        ("model library", .section(.models)),
+        ("Dictation model", .dictationModel),
+        ("Cleanup model", .dictationCleanupModel),
+      ]
+
+      for (query, target) in results {
+        let result = try #require(SettingsSearchIndex.results(for: query).first)
+        #expect(result.target == target)
+        #expect(result.destination == .models)
+        #expect(result.anchor == .section(.models))
+      }
+    }
+
     @Test func catalogCoversEveryApprovedTargetExactlyOnce() {
       let expected = Set(
         SettingsSection.allCases.map(SettingsSearchTarget.section)

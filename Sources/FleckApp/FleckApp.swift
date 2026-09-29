@@ -233,6 +233,17 @@
         }
       }
 
+      Window("Models", id: ModelLibraryLayout.windowIdentifier) {
+        ModelsWindowView(runtime: dictationRuntime)
+          .environmentObject(appState)
+          .fleckTheme(appState)
+      }
+      .defaultSize(
+        width: ModelLibraryLayout.defaultWindowWidth,
+        height: ModelLibraryLayout.defaultWindowHeight
+      )
+      .windowResizability(.contentMinSize)
+
       Settings {
         SettingsView(runtime: dictationRuntime)
           .environmentObject(appState)

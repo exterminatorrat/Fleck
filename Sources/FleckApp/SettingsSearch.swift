@@ -291,14 +291,26 @@
       }
 
       addSection(.dictation)
+      addSection(.models, aliases: ["model library", "optional local models"])
       add(
         .dictationStatus,
-        DictationSettingsGroup.readiness.rawValue,
+        "Dictation readiness",
         to: .dictation,
-        aliases: ["readiness", "permission recovery", "microphone speech permission"]
+        aliases: ["status", "readiness", "permission recovery", "microphone speech permission"]
       )
-      add(.dictationModel, "Dictation model", to: .dictation, aliases: ["speech model"])
-      add(.dictationCleanupModel, "Cleanup model", to: .dictation)
+      add(
+        .dictationModel,
+        "Dictation model",
+        to: .models,
+        aliases: ["speech model"],
+        anchor: .section(.models)
+      )
+      add(
+        .dictationCleanupModel,
+        "Cleanup model",
+        to: .models,
+        anchor: .section(.models)
+      )
       add(.dictationModifier, "Modifier key", to: .dictation)
       add(.dictationMicrophone, "Microphone", to: .dictation, aliases: ["audio input"])
       add(.dictationRecognitionLanguage, "Recognition language", to: .dictation)
@@ -442,6 +454,7 @@
       field.placeholderString = "Search settings"
       field.sendsSearchStringImmediately = true
       field.sendsWholeSearchString = false
+      context.coordinator.observeInputModality()
       Self.applyNativeMetrics(to: field)
       field.setAccessibilityLabel("Search settings")
       field.setAccessibilityIdentifier("settings-search-field")
@@ -475,6 +488,7 @@
 
     static func dismantleNSView(_ field: NSSearchField, coordinator: Coordinator) {
       let onFocusChange = coordinator.parent.onFocusChange
+      coordinator.stopObservingInputModality()
       field.delegate = nil
       Task { @MainActor in
         await Task.yield()
@@ -493,9 +507,33 @@
     final class Coordinator: NSObject, NSSearchFieldDelegate {
       var parent: SettingsSearchField
       var focusRequest: UUID?
+      private var inputModalityMonitor: Any?
 
       init(parent: SettingsSearchField) {
         self.parent = parent
+      }
+
+      func observeInputModality() {
+        guard inputModalityMonitor == nil else { return }
+        inputModalityMonitor = NSEvent.addLocalMonitorForEvents(
+          matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { event in
+          let windowNumber = event.windowNumber
+          let isKeyboardInput = event.type == .keyDown
+          MainActor.assumeIsolated {
+            SettingsSearchInputModality.shared.record(
+              isKeyboardInput: isKeyboardInput,
+              windowNumber: windowNumber
+            )
+          }
+          return event
+        }
+      }
+
+      func stopObservingInputModality() {
+        guard let inputModalityMonitor else { return }
+        NSEvent.removeMonitor(inputModalityMonitor)
+        self.inputModalityMonitor = nil
       }
 
       func controlTextDidBeginEditing(_ notification: Notification) {
@@ -840,11 +878,32 @@
     }
   }
 
+  @MainActor
+  private final class SettingsSearchInputModality: ObservableObject {
+    static let shared = SettingsSearchInputModality()
+
+    @Published private var lastInput: (windowNumber: Int, isKeyboard: Bool)?
+
+    var showsKeyboardFocusCue: Bool {
+      guard let lastInput else { return false }
+      return lastInput.isKeyboard && lastInput.windowNumber == NSApp.keyWindow?.windowNumber
+    }
+
+    func record(isKeyboardInput: Bool, windowNumber: Int) {
+      lastInput = (windowNumber: windowNumber, isKeyboard: isKeyboardInput)
+    }
+  }
+
   private struct SettingsSearchAnchorModifier: ViewModifier {
     let target: SettingsSearchTarget
     let request: SettingsSearchRequest?
     @FocusState private var isKeyboardFocused: Bool
     @AccessibilityFocusState private var isFocused: Bool
+    @ObservedObject private var inputModality = SettingsSearchInputModality.shared
+
+    private var isKeyboardFocusCueVisible: Bool {
+      isKeyboardFocused && inputModality.showsKeyboardFocusCue
+    }
 
     private var isRevealed: Bool {
       request?.anchor == target
@@ -864,6 +923,9 @@
           if isKeyboardFocused {
             SettingsSearchProbe(identifier: "settings-keyboard-focus-\(target.identifier)")
           }
+          if isKeyboardFocusCueVisible {
+            SettingsSearchProbe(identifier: "settings-keyboard-focus-cue-\(target.identifier)")
+          }
         }
         .overlay(alignment: .bottom) {
           if isRevealed {
@@ -874,7 +936,7 @@
               )
               .allowsHitTesting(false)
               .accessibilityHidden(true)
-          } else if isKeyboardFocused {
+          } else if isKeyboardFocused && isKeyboardFocusCueVisible {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
               .strokeBorder(Color.primary.opacity(0.72), lineWidth: 1.5)
               .allowsHitTesting(false)

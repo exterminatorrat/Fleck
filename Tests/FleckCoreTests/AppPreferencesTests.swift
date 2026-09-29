@@ -14,11 +14,41 @@ import Testing
   #expect(value.dictationHistoryEnabled)
   #expect(value.dictationCapsuleEnabled)
   #expect(value.dictationMicrophoneUID == nil)
+  #expect(value.pinnedLocalModelKeys.isEmpty)
   let encoded = try JSONEncoder().encode(value)
   let json = try #require(
     JSONSerialization.jsonObject(with: encoded) as? [String: Any]
   )
   #expect(json["dictationShortcut"] != nil)
+}
+
+@Test func localModelPinsDefaultEmptyAndRoundTripByStableIdentity() throws {
+  let legacy = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: Data(#"{"fontFamily":"Menlo"}"#.utf8)
+  )
+  #expect(legacy.pinnedLocalModelKeys.isEmpty)
+
+  let unsortedPinKeys = [
+    "cleanup:mlx-community/gemma-3-1b-it-qat-4bit",
+    "asr:FluidInference/parakeet-tdt-0.6b-v2-coreml",
+    "asr:FluidInference/parakeet-tdt-0.6b-v2-coreml",
+  ]
+  let sortedPinKeys = [
+    "asr:FluidInference/parakeet-tdt-0.6b-v2-coreml",
+    "cleanup:mlx-community/gemma-3-1b-it-qat-4bit",
+  ]
+  let value = AppPreferences(pinnedLocalModelKeys: unsortedPinKeys)
+  #expect(value.pinnedLocalModelKeys == sortedPinKeys)
+
+  let encoded = try JSONEncoder().encode(value)
+  let json = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+  #expect(json["pinnedLocalModelKeys"] as? [String] == sortedPinKeys)
+  let decoded = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: encoded
+  )
+  #expect(decoded.pinnedLocalModelKeys == sortedPinKeys)
 }
 
 @Test func newPreferencesUseAvenirReadingDefaults() {

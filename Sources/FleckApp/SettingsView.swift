@@ -11,12 +11,13 @@
     case editing = "Editing"
     case shortcuts = "Shortcuts"
     case dictation = "Dictation"
+    case models = "Models"
     case vocabulary = "Vocabulary"
     case agents = "Agents"
     case about = "About"
 
     static let fleckCases: [SettingsSection] = [.editing, .appearance, .shortcuts]
-    static let voiceAndWritingCases: [SettingsSection] = [.dictation, .vocabulary]
+    static let voiceAndWritingCases: [SettingsSection] = [.dictation, .models, .vocabulary]
     static let connectionCases: [SettingsSection] = [.agents]
     static let informationCases: [SettingsSection] = [.about]
     static let allCases: [SettingsSection] =
@@ -43,6 +44,8 @@
         "keyboard"
       case .dictation:
         "waveform"
+      case .models:
+        "square.stack.3d.up"
       case .vocabulary:
         "character.book.closed"
       case .agents:
@@ -61,7 +64,9 @@
       case .shortcuts:
         "Set the keyboard shortcuts you use across Fleck."
       case .dictation:
-        "Configure voice capture, models, microphones, and history."
+        "Configure voice capture, microphones, experience, and history."
+      case .models:
+        "Open the Models window to browse and manage optional local recognition and cleanup models."
       case .vocabulary:
         "Manage personal vocabulary and dictation corrections."
       case .agents:
@@ -73,8 +78,6 @@
   }
 
   enum DictationSettingsGroup: String, CaseIterable, Identifiable {
-    case readiness = "Status"
-    case models = "Models"
     case capture = "Capture"
     case experience = "Experience & history"
     case privacy = "Privacy"
@@ -419,32 +422,39 @@
     let section: SettingsSection
     let searchRequest: SettingsSearchRequest?
     let title: String?
+    let accessory: AnyView?
 
     init(
       section: SettingsSection,
       title: String? = nil,
-      searchRequest: SettingsSearchRequest?
+      searchRequest: SettingsSearchRequest?,
+      accessory: AnyView? = nil
     ) {
       self.section = section
       self.title = title
       self.searchRequest = searchRequest
+      self.accessory = accessory
     }
 
     var body: some View {
-      VStack(alignment: .leading, spacing: 4) {
-        Text(title ?? section.title)
-          .font(
-            section == .editing
-              ? .system(size: generalTitleSize, weight: .semibold)
-              : .title2.weight(.semibold)
-          )
-          .background(SettingsPageHeaderProbe())
-        if section != .editing {
-          Text(section.description)
-            .font(.callout)
-            .foregroundStyle(theme.color(.textSecondary))
-            .fixedSize(horizontal: false, vertical: true)
+      HStack(alignment: .top, spacing: 12) {
+        VStack(alignment: .leading, spacing: 4) {
+          Text(title ?? section.title)
+            .font(
+              section == .editing
+                ? .system(size: generalTitleSize, weight: .semibold)
+                : .title2.weight(.semibold)
+            )
+            .background(SettingsPageHeaderProbe())
+          if section != .editing {
+            Text(section.description)
+              .font(.callout)
+              .foregroundStyle(theme.color(.textSecondary))
+              .fixedSize(horizontal: false, vertical: true)
+          }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        if let accessory { accessory }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .settingsSearchAnchor(.section(section), request: searchRequest)
@@ -873,10 +883,9 @@
 
   struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.openWindow) private var openWindow
     @Environment(\.fleckThemeSnapshot) private var theme
     @ObservedObject var runtime: DictationRuntime
-    @ObservedObject private var admittedModelSettingsViewModel: AdmittedModelSettingsViewModel
-    @ObservedObject private var cleanupAdmittedModelSettingsViewModel: AdmittedModelSettingsViewModel
     @ObservedObject private var personalDictionarySettingsViewModel:
       PersonalDictionarySettingsViewModel
     @ObservedObject private var historyController: DictationHistoryController
@@ -888,6 +897,7 @@
     @State private var recordingSelection = SettingsShortcutRecordingState()
     @State private var isSettingsSearchFieldFocused = false
     @State private var searchQuery = ""
+    @State private var isReadinessPopoverPresented = false
     @State private var searchFocusRequest: UUID?
     @State private var highlightedSearchTarget: SettingsSearchTarget?
     @State private var searchRequest: SettingsSearchRequest?
@@ -897,12 +907,6 @@
     init(runtime: DictationRuntime, buildIdentity: BuildIdentity = .current()) {
       self.runtime = runtime
       self.buildIdentity = buildIdentity
-      _admittedModelSettingsViewModel = ObservedObject(
-        wrappedValue: runtime.admittedModelSettingsViewModel
-      )
-      _cleanupAdmittedModelSettingsViewModel = ObservedObject(
-        wrappedValue: runtime.cleanupAdmittedModelSettingsViewModel
-      )
       _personalDictionarySettingsViewModel = ObservedObject(
         wrappedValue: runtime.personalDictionarySettingsViewModel
       )
@@ -947,7 +951,13 @@
             ScrollView {
               VStack(alignment: .leading, spacing: 20) {
                 if selectedSection != .vocabulary {
-                  SettingsPageHeader(section: selectedSection, searchRequest: searchRequest)
+                  SettingsPageHeader(
+                    section: selectedSection,
+                    searchRequest: searchRequest,
+                    accessory: selectedSection == .dictation
+                      ? AnyView(dictationReadinessButton)
+                      : nil
+                  )
                 }
                 switch selectedSection {
                 case .appearance:
@@ -958,6 +968,8 @@
                   shortcuts
                 case .dictation:
                   dictation
+                case .models:
+                  EmptyView()
                 case .vocabulary:
                   vocabulary
                 case .agents:
@@ -1004,6 +1016,9 @@
       .tint(theme.color(.accent))
       .onChange(of: selectedSection) { _, newSection in
         recordingSelection.transition(to: newSection)
+        if newSection != .dictation {
+          isReadinessPopoverPresented = false
+        }
       }
       .onChange(of: searchQuery) { _, _ in
         recordingSelection.cancel()
@@ -1018,8 +1033,6 @@
       .onDisappear { recordingSelection.cancel() }
       .task {
         await runtime.awaitStartupAssessment()
-        await admittedModelSettingsViewModel.refresh()
-        await cleanupAdmittedModelSettingsViewModel.refresh()
         await personalDictionarySettingsViewModel.load()
         recoveryActions = runtime.permissionRecoveryActions()
         microphones = DictationMicrophoneOption.available()
@@ -1061,6 +1074,10 @@
 
     private func consumePendingSettingsRoute() {
       guard let section = runtime.consumePendingSettingsSection() else { return }
+      if section == .models {
+        openModelsFromSettingsNavigation()
+        return
+      }
       recordingSelection.cancel()
       searchQuery = ""
       highlightedSearchTarget = nil
@@ -1091,6 +1108,10 @@
       Binding(
         get: { selectedSection },
         set: { section in
+          if section == .models {
+            openModelsFromSettingsNavigation()
+            return
+          }
           if selectedSection == section,
             let target = searchRequest?.target,
             SettingsSearchIndex.catalog.first(where: { $0.target == target })?.destination
@@ -1099,6 +1120,7 @@
             return
           }
           recordingSelection.cancel()
+          isReadinessPopoverPresented = false
           searchRequest = nil
           vocabularyPageScrollRequestID = nil
           selectedSection = section
@@ -1122,16 +1144,31 @@
     }
 
     private func activateSearchResult(_ result: SettingsSearchResult) {
+      if result.destination == .models {
+        openModelsFromSettingsNavigation()
+        return
+      }
       recordingSelection.cancel()
       selectedSection = result.destination
       searchQuery = ""
       highlightedSearchTarget = nil
       let anchor = result.anchor.revealAnchor(isPackaged: buildIdentity.isPackaged)
+      isReadinessPopoverPresented = result.target == .dictationStatus
       if anchor == .dictationPrivacy {
         isDictationPrivacyExpanded = true
       }
       vocabularyPageScrollRequestID = nil
       searchRequest = SettingsSearchRequest(target: result.target, anchor: anchor)
+    }
+
+    private func openModelsFromSettingsNavigation() {
+      recordingSelection.cancel()
+      searchQuery = ""
+      highlightedSearchTarget = nil
+      searchRequest = nil
+      vocabularyPageScrollRequestID = nil
+      isReadinessPopoverPresented = false
+      openModelsWindow()
     }
 
     private var appearance: some View {
@@ -1329,8 +1366,7 @@
 
     private var dictation: some View {
       VStack(alignment: .leading, spacing: 12) {
-        readiness
-        models
+        modelsLink
         capture
         experienceAndHistory
         DisclosureGroup(isExpanded: $isDictationPrivacyExpanded) {
@@ -1350,36 +1386,111 @@
       }
     }
 
-    private var readiness: some View {
-      let isReady = availabilityIssues.isEmpty && recoveryActions.isEmpty
-      return SettingsPreferenceRow(
-        DictationSettingsGroup.readiness.rawValue,
-        detail: isReady
-          ? "Dictation is ready to capture and process your voice locally."
-          : "Review the items below before starting a capture."
-      ) {
-        VStack(alignment: .trailing, spacing: 5) {
+    private var dictationReadinessButton: some View {
+      let isReady = isDictationReady
+      return Button {
+        isReadinessPopoverPresented.toggle()
+      } label: {
+        Label(
+          isReady ? "Ready" : "Needs attention",
+          systemImage: isReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+        )
+        .font(.callout.weight(.medium))
+      }
+      .buttonStyle(.bordered)
+      .controlSize(.small)
+      .popover(isPresented: $isReadinessPopoverPresented, arrowEdge: .top) {
+        dictationReadinessPopover
+      }
+      .settingsSearchAnchor(.dictationStatus, request: searchRequest)
+      .accessibilityLabel("Dictation readiness")
+      .accessibilityValue(isReady ? "Ready" : "Needs attention")
+      .accessibilityHint("Show dictation readiness and recovery actions.")
+      .accessibilityIdentifier("settings-dictation-readiness-button")
+    }
+
+    @ViewBuilder
+    private var dictationModifierRecoveryButton: some View {
+      if let action = dictationModifierPresentation.recoveryAction {
+        switch action {
+        case .enableInputMonitoring:
+          Button("Enable Input Monitoring") {
+            Task { @MainActor in
+              guard let settings = await runtime.recoverModifierMonitoring() else { return }
+              runtime.openSystemSettings(settings)
+            }
+          }
+          .disabled(!dictationModifierPresentation.isPickerEnabled)
+        case .retry:
+          Button("Retry") {
+            Task {
+              _ = await runtime.retryModifierMonitoring()
+            }
+          }
+          .disabled(!dictationModifierPresentation.isPickerEnabled)
+        }
+      }
+    }
+
+    private var dictationReadinessPopover: some View {
+      let isReady = isDictationReady
+      return ScrollView(.vertical) {
+        VStack(alignment: .leading, spacing: 12) {
           Label(
-            isReady ? "Ready" : "Needs attention",
+            isReady ? "Dictation is ready" : "Dictation needs attention",
             systemImage: isReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
           )
-          .font(.body.weight(.medium))
-          if !isReady {
-            ForEach(availabilityIssues, id: \.title) { row in
-              Text("\(row.title) — \(row.detail)")
-                .font(.caption)
-                .foregroundStyle(theme.color(.caption))
-                .multilineTextAlignment(.trailing)
+          .font(.headline)
+          .foregroundStyle(theme.color(isReady ? .success : .warning))
+
+          if isReady {
+            Text("Dictation is ready to capture and process your voice locally.")
+              .font(.callout)
+              .foregroundStyle(theme.color(.textSecondary))
+          } else {
+            ForEach(availabilityIssues, id: \.title) { issue in
+              VStack(alignment: .leading, spacing: 2) {
+                Text(issue.title)
+                  .font(.callout.weight(.medium))
+                Text(issue.detail)
+                  .font(.caption)
+                  .foregroundStyle(theme.color(.caption))
+                  .fixedSize(horizontal: false, vertical: true)
+              }
             }
+
             ForEach(recoveryActions, id: \.pane) { action in
               Button(action.title) {
-                NSWorkspace.shared.open(action.url)
+                runtime.openSystemSettings(action)
+              }
+              .buttonStyle(.bordered)
+            }
+
+            if !dictationModifierPresentation.isReady {
+              Divider()
+              VStack(alignment: .leading, spacing: 6) {
+                Text("Modifier key")
+                  .font(.callout.weight(.medium))
+                Text(dictationModifierPresentation.statusCopy)
+                  .font(.caption)
+                  .foregroundStyle(theme.color(.caption))
+                  .fixedSize(horizontal: false, vertical: true)
+                dictationModifierRecoveryButton
               }
             }
           }
         }
+        .padding(14)
       }
-      .settingsSearchAnchor(.dictationStatus, request: searchRequest)
+      .frame(width: 340, height: isReady ? 160 : 300, alignment: .topLeading)
+      .accessibilityIdentifier("settings-dictation-readiness-popover")
+      .background {
+        SettingsSearchProbe(identifier: "settings-dictation-readiness-popover")
+      }
+    }
+
+    private var isDictationReady: Bool {
+      availabilityIssues.isEmpty && recoveryActions.isEmpty && dictationModifierPresentation.isReady
     }
 
     private var capture: some View {
@@ -1408,23 +1519,7 @@
                 .foregroundStyle(theme.color(.caption))
                 .multilineTextAlignment(.trailing)
             }
-            if let action = dictationModifierPresentation.recoveryAction {
-              switch action {
-              case .enableInputMonitoring:
-                Button("Enable Input Monitoring") {
-                  Task { @MainActor in
-                    guard let settings = await runtime.recoverModifierMonitoring() else { return }
-                    runtime.openSystemSettings(settings)
-                  }
-                }
-              case .retry:
-                Button("Retry") {
-                  Task {
-                    _ = await runtime.retryModifierMonitoring()
-                  }
-                }
-              }
-            }
+            dictationModifierRecoveryButton
           }
         }
         .settingsSearchAnchor(.dictationModifier, request: searchRequest)
@@ -1503,71 +1598,15 @@
         .filter { !$0.available }
     }
 
-    private var models: some View {
-      VStack(alignment: .leading, spacing: 12) {
-        Text(DictationSettingsGroup.models.rawValue)
-          .font(.headline)
-        SettingsPreferenceRow(
-          "Dictation model",
-          detail: "Use the local model that turns your voice into text."
-        ) {
-          modelRow(
-            presentation: admittedModelSettingsViewModel.presentation,
-            viewModel: admittedModelSettingsViewModel,
-            progressAccessibilityLabel: "Enhanced local dictation installation progress"
-          )
-        }
-        .settingsSearchAnchor(.dictationModel, request: searchRequest)
-        SettingsPreferenceRow(
-          "Cleanup model",
-          detail: "Use the local model that polishes captured text."
-        ) {
-          modelRow(
-            presentation: cleanupAdmittedModelSettingsViewModel.presentation,
-            viewModel: cleanupAdmittedModelSettingsViewModel,
-            progressAccessibilityLabel: "Enhanced local cleanup installation progress"
-          )
-        }
-        .settingsSearchAnchor(.dictationCleanupModel, request: searchRequest)
-      }
+    private var modelsLink: some View {
+      Button("Open Models", action: openModelsWindow)
+        .buttonStyle(.link)
+        .controlSize(.small)
+        .accessibilityIdentifier("settings-dictation-open-models")
     }
 
-    private func modelRow(
-      presentation: AdmittedModelSettingsPresentation,
-      viewModel: AdmittedModelSettingsViewModel,
-      progressAccessibilityLabel: String
-    ) -> some View {
-      VStack(alignment: .leading, spacing: 6) {
-        Text("Model: \(presentation.modelLabel)")
-          .font(.caption.weight(.medium))
-        if presentation.showsStatus {
-          Text(presentation.compactStatus)
-            .font(.caption)
-            .foregroundStyle(theme.color(.caption))
-        }
-        if presentation.showsDetail {
-          Text(presentation.detail)
-            .font(.caption)
-            .foregroundStyle(theme.color(.caption))
-            .fixedSize(horizontal: false, vertical: true)
-        }
-
-        if let progress = presentation.progress {
-          ProgressView(value: progress)
-            .accessibilityLabel(progressAccessibilityLabel)
-            .accessibilityValue(presentation.progressAccessibilityValue ?? "")
-        }
-        if let action = presentation.primaryAction,
-           let label = presentation.primaryActionLabel {
-          Button(label) { viewModel.perform(action) }
-            .focusable(presentation.isKeyboardFocusable)
-            .buttonStyle(.borderedProminent)
-        }
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .accessibilityElement(children: .contain)
-      .accessibilityLabel(presentation.accessibilityLabel)
-      .accessibilityValue(presentation.accessibilityValue)
+    private func openModelsWindow() {
+      openWindow(id: ModelLibraryLayout.windowIdentifier)
     }
 
     private var dictationModifierPresentation: DictationModifierSettingsPresentation {

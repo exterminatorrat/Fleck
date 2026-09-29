@@ -3,6 +3,24 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.0-beta.1] - 2026-09-28
+
+Private local QA candidate only; this change is not an accepted build or public release. It makes
+no model-release or benchmark claim.
+
+### Added
+
+- Added a dedicated Models window for optional local models admitted to the current build, with
+  search, provider and type filters, stable pins, model details, attribution, and lifecycle actions.
+- Added truthful local capability and storage details, a source/license/capacity review before each
+  install or update, a Gemma terms-acceptance gate, and not-rated benchmark fields until suitable
+  evidence is reviewed.
+
+### Changed
+
+- Kept Dictation capture, history, and privacy controls in Settings while moving model management
+  to the Models window and retaining compact model-readiness status.
+
 ## [1.3.1-beta.1] - 2026-09-27
 
 Private local QA candidate only; this correction is not an accepted build or public release.
