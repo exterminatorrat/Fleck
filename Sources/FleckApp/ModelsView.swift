@@ -18,6 +18,171 @@
     }
   }
 
+  private struct ModelsMonitoredEvent: @unchecked Sendable {
+    let event: NSEvent
+  }
+
+  @MainActor
+  private struct ModelsSearchFocusResigner: NSViewRepresentable {
+    let isFocused: Bool
+    let hasDetails: Bool
+    let isModalPresented: Bool
+    let onFocusLoss: () -> Void
+    let onCloseDetails: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+      Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+      let view = NSView()
+      view.setAccessibilityElement(false)
+      return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+      context.coordinator.update(
+        view,
+        isFocused: isFocused,
+        hasDetails: hasDetails,
+        isModalPresented: isModalPresented,
+        onFocusLoss: onFocusLoss,
+        onCloseDetails: onCloseDetails
+      )
+    }
+
+    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
+      coordinator.stopMonitoring()
+    }
+
+    @MainActor
+    final class Coordinator {
+      private weak var window: NSWindow?
+      private var eventMonitor: Any?
+      private var isFocused = false
+      private var hasDetails = false
+      private var isModalPresented = false
+      private var onFocusLoss: () -> Void = {}
+      private var onCloseDetails: () -> Void = {}
+
+      func update(
+        _ view: NSView,
+        isFocused: Bool,
+        hasDetails: Bool,
+        isModalPresented: Bool,
+        onFocusLoss: @escaping () -> Void,
+        onCloseDetails: @escaping () -> Void
+      ) {
+        self.onFocusLoss = onFocusLoss
+        self.onCloseDetails = onCloseDetails
+
+        if window !== view.window {
+          stopMonitoring()
+          window = view.window
+        }
+
+        let didLoseFocus = self.isFocused && !isFocused
+        self.isFocused = isFocused
+        self.hasDetails = hasDetails
+        self.isModalPresented = isModalPresented
+        if didLoseFocus {
+          resignSearchField(in: view.window)
+        }
+
+        guard isFocused || (hasDetails && !isModalPresented), window != nil else {
+          stopMonitoring()
+          return
+        }
+
+        guard eventMonitor == nil else { return }
+        eventMonitor = NSEvent.addLocalMonitorForEvents(
+          matching: [.leftMouseDown, .keyDown]
+        ) { [weak self] event in
+          guard let self else { return event }
+          let monitoredEvent = ModelsMonitoredEvent(event: event)
+          let shouldConsume = MainActor.assumeIsolated { self.handle(monitoredEvent.event) }
+          return shouldConsume ? nil : event
+        }
+      }
+
+      func stopMonitoring() {
+        if let eventMonitor {
+          NSEvent.removeMonitor(eventMonitor)
+          self.eventMonitor = nil
+        }
+      }
+
+      private func handle(_ event: NSEvent) -> Bool {
+        guard let window, event.window === window else { return false }
+
+        if event.type == .keyDown, event.keyCode == 53, !isModalPresented {
+          if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor {
+            guard let field = activeTextField(in: window),
+              field.placeholderString == "Search models"
+            else {
+              return false
+            }
+            onFocusLoss()
+            isFocused = false
+            resignSearchField(in: window)
+            if !hasDetails { stopMonitoring() }
+            return true
+          }
+          if hasDetails {
+            onCloseDetails()
+            hasDetails = false
+            stopMonitoring()
+            return true
+          }
+          return false
+        }
+
+        guard event.type == .leftMouseDown,
+          let field = activeTextField(in: window),
+          field.placeholderString == "Search models",
+          !field.convert(field.bounds, to: nil).contains(event.locationInWindow)
+        else {
+          return false
+        }
+
+        onFocusLoss()
+        isFocused = false
+        if !hasDetails { stopMonitoring() }
+        Task { @MainActor [weak self, weak window] in
+          await Task.yield()
+          guard let self, let window,
+            self.activeTextField(in: window) === field
+          else {
+            return
+          }
+          self.resignSearchField(in: window)
+        }
+        return false
+      }
+
+      private func resignSearchField(in window: NSWindow?) {
+        guard let window,
+          let field = activeTextField(in: window),
+          field.placeholderString == "Search models"
+        else {
+          return
+        }
+        window.makeFirstResponder(nil)
+      }
+
+      private func activeTextField(in window: NSWindow) -> NSTextField? {
+        guard let editor = window.firstResponder as? NSTextView,
+          editor.isFieldEditor,
+          let field = editor.delegate as? NSTextField,
+          field.currentEditor() === editor
+        else {
+          return nil
+        }
+        return field
+      }
+    }
+  }
+
   @MainActor
   struct ModelsBrowserView: View {
     @Environment(\.fleckThemeSnapshot) private var theme
@@ -25,7 +190,7 @@
     @ObservedObject private var speechViewModel: AdmittedModelSettingsViewModel
     @ObservedObject private var cleanupViewModel: AdmittedModelSettingsViewModel
     @Binding private var pinnedModelKeys: Set<String>
-    @SceneStorage("models.search") private var searchQuery = ""
+    @SceneStorage("models.search") private var storedSearchQuery = ""
     @SceneStorage("models.provider") private var providerFilter = "all"
     @SceneStorage("models.type") private var modelTypeFilter = ModelLibraryTypeFilter.all.rawValue
     @SceneStorage("models.sort.ascending") private var storedSortAscending = true
@@ -39,17 +204,55 @@
     @State private var pendingRemoval: ModelLibraryEntry?
     @State private var pendingInstallReview: PendingModelInstallReview?
     @State private var attributionIsExpanded = false
+    private let searchQueryOverride: Binding<String>?
+    private let typeFilterOverride: Binding<ModelLibraryTypeFilter>?
 
     init(
       speechViewModel: AdmittedModelSettingsViewModel,
       cleanupViewModel: AdmittedModelSettingsViewModel,
       pinnedModelKeys: Binding<Set<String>>,
-      selectedModelID: Binding<String?>? = nil
+      selectedModelID: Binding<String?>? = nil,
+      searchQuery: Binding<String>? = nil,
+      typeFilter: Binding<ModelLibraryTypeFilter>? = nil
     ) {
       _speechViewModel = ObservedObject(wrappedValue: speechViewModel)
       _cleanupViewModel = ObservedObject(wrappedValue: cleanupViewModel)
       _pinnedModelKeys = pinnedModelKeys
       selectedModelIDOverride = selectedModelID
+      searchQueryOverride = searchQuery
+      typeFilterOverride = typeFilter
+    }
+
+    private var searchQuery: String {
+      get { searchQueryOverride?.wrappedValue ?? storedSearchQuery }
+      nonmutating set {
+        if let searchQueryOverride {
+          searchQueryOverride.wrappedValue = newValue
+        } else {
+          storedSearchQuery = newValue
+        }
+      }
+    }
+
+    private var searchQueryBinding: Binding<String> {
+      searchQueryOverride ?? $storedSearchQuery
+    }
+
+    private var modelTypeFilterBinding: Binding<ModelLibraryTypeFilter> {
+      Binding(
+        get: {
+          typeFilterOverride?.wrappedValue
+            ?? ModelLibraryTypeFilter(rawValue: modelTypeFilter)
+            ?? .all
+        },
+        set: { value in
+          if let typeFilterOverride {
+            typeFilterOverride.wrappedValue = value
+          } else {
+            modelTypeFilter = value.rawValue
+          }
+        }
+      )
     }
 
     private var entries: [ModelLibraryEntry] {
@@ -64,7 +267,7 @@
         entries,
         searchQuery: searchQuery,
         provider: providerFilter,
-        type: ModelLibraryTypeFilter(rawValue: modelTypeFilter) ?? .all,
+        type: modelTypeFilterBinding.wrappedValue,
         pins: pinnedModelKeys,
         ascending: sortAscending
       )
@@ -127,7 +330,6 @@
       .background(theme.color(.window))
       .background(ModelsAccessibilityProbe(identifier: "models-browser"))
       .accessibilityIdentifier("models-browser")
-      .onExitCommand(perform: closeDetails)
       .onChange(of: entries.map(\.id)) { _, availableIDs in
         guard let selectedModelID, !availableIDs.contains(selectedModelID) else { return }
         setSelectedModelID(nil)
@@ -207,11 +409,42 @@
     }
 
     private var searchField: some View {
-      TextField("Search models", text: $searchQuery)
-        .textFieldStyle(.roundedBorder)
-        .focused($searchIsFocused)
-        .accessibilityLabel("Search models")
-        .accessibilityIdentifier("models-search-field")
+      let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+      return HStack(spacing: 8) {
+        Image(systemName: "magnifyingglass")
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(theme.color(.textSecondary))
+          .accessibilityHidden(true)
+
+        TextField("Search models", text: searchQueryBinding)
+          .textFieldStyle(.plain)
+          .focused($searchIsFocused)
+          .accessibilityLabel("Search models")
+          .accessibilityValue(searchQuery.isEmpty ? "No search" : searchQuery)
+          .accessibilityHint("Filters the available optional models.")
+          .accessibilityIdentifier("models-search-field")
+      }
+      .frame(maxWidth: .infinity)
+      .padding(.horizontal, 10)
+      .frame(minHeight: 34, maxHeight: 34)
+      .background(theme.color(.card), in: shape)
+      .overlay {
+        shape.strokeBorder(
+          theme.color(.border).opacity(theme.increasedContrast ? 0.85 : 0.4),
+          lineWidth: 1
+        )
+      }
+      .fleckNeutralControlOutline(isFocused: searchIsFocused, cornerRadius: 7)
+      .accessibilityElement(children: .contain)
+      .background(
+        ModelsSearchFocusResigner(
+          isFocused: searchIsFocused,
+          hasDetails: selectedModelID != nil,
+          isModalPresented: pendingRemoval != nil || pendingInstallReview != nil,
+          onFocusLoss: { searchIsFocused = false },
+          onCloseDetails: closeDetails
+        )
+      )
     }
 
     private var filters: some View {
@@ -227,10 +460,7 @@
 
         Picker(
           "Model type",
-          selection: Binding(
-            get: { ModelLibraryTypeFilter(rawValue: modelTypeFilter) ?? .all },
-            set: { modelTypeFilter = $0.rawValue }
-          )
+          selection: modelTypeFilterBinding
         ) {
           ForEach(ModelLibraryTypeFilter.allCases) { type in
             Text(type.rawValue).tag(type)
@@ -334,6 +564,7 @@
           .accessibilityIdentifier("models-clear-filters")
       }
       .frame(maxWidth: .infinity, minHeight: 260)
+      .accessibilityElement(children: .contain)
       .accessibilityIdentifier("models-empty-filter-results")
     }
 
@@ -1003,7 +1234,7 @@
     private func clearFilters() {
       searchQuery = ""
       providerFilter = "all"
-      modelTypeFilter = ModelLibraryTypeFilter.all.rawValue
+      modelTypeFilterBinding.wrappedValue = .all
       searchIsFocused = true
     }
 

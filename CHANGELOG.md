@@ -3,6 +3,18 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.2-beta.1] - 2026-09-30
+
+Private development candidate only; this change is not an accepted build or public release.
+
+### Changed
+
+- Added a themed custom Models search field and made outside-click focus resignation preserve the
+  initiating interaction. Escape only dismisses search when its native field editor owns focus and
+  passes through when another text field is active.
+- Added hosted interaction coverage across themes and sizes for search focus, type filtering,
+  empty-result recovery, Details/Escape behavior, and unrelated Settings-search focus.
+
 ## [1.4.1-beta.1] - 2026-09-29
 
 Private local QA candidate only; this change is not an accepted build or public release. External

@@ -143,6 +143,26 @@ private func modelLibraryDescriptor(
   }
 
   @MainActor
+  private final class ModelBrowserSelection: ObservableObject {
+    @Published var selectedModelID: String?
+
+    init(selectedModelID: String? = nil) {
+      self.selectedModelID = selectedModelID
+    }
+
+    var binding: Binding<String?> {
+      Binding(
+        get: { self.selectedModelID },
+        set: { self.selectedModelID = $0 }
+      )
+    }
+  }
+
+  private struct ModelSearchEscapeEvent: @unchecked Sendable {
+    let event: NSEvent
+  }
+
+  @MainActor
   private struct ModelBrowserFixture: View {
     let speechViewModel: AdmittedModelSettingsViewModel
     let cleanupViewModel: AdmittedModelSettingsViewModel
@@ -150,7 +170,9 @@ private func modelLibraryDescriptor(
     let size: CGSize
     let dynamicTypeSize: DynamicTypeSize
     @State private var pinnedModelKeys: Set<String> = []
-    @State private var selectedModelID: String?
+    @State private var modelTypeFilter: ModelLibraryTypeFilter = .all
+    @ObservedObject private var selection: ModelBrowserSelection
+    @State private var searchQuery = ""
 
     init(
       speechViewModel: AdmittedModelSettingsViewModel,
@@ -158,14 +180,20 @@ private func modelLibraryDescriptor(
       theme: FleckThemeSnapshot,
       size: CGSize,
       dynamicTypeSize: DynamicTypeSize = .medium,
-      selectedModelID: String? = nil
+      selectedModelID: String? = nil,
+      selection: ModelBrowserSelection? = nil
     ) {
       self.speechViewModel = speechViewModel
       self.cleanupViewModel = cleanupViewModel
       self.theme = theme
       self.size = size
       self.dynamicTypeSize = dynamicTypeSize
-      _selectedModelID = State(initialValue: selectedModelID)
+      _selection = ObservedObject(
+        wrappedValue: selection
+          ?? ModelBrowserSelection(
+            selectedModelID: selectedModelID
+          )
+      )
     }
 
     var body: some View {
@@ -173,7 +201,9 @@ private func modelLibraryDescriptor(
         speechViewModel: speechViewModel,
         cleanupViewModel: cleanupViewModel,
         pinnedModelKeys: $pinnedModelKeys,
-        selectedModelID: $selectedModelID
+        selectedModelID: selection.binding,
+        searchQuery: $searchQuery,
+        typeFilter: $modelTypeFilter
       )
       .environment(\.fleckThemeSnapshot, theme)
       .environment(\.colorScheme, theme.colorScheme)
@@ -285,6 +315,180 @@ private func modelLibraryDescriptor(
       ))
       NSApp.sendEvent(event)
     }
+  }
+
+  @MainActor
+  private func sendModelTrackedMouseClick(at screenPoint: NSPoint, to window: NSWindow) throws {
+    let windowPoint = window.convertPoint(fromScreen: screenPoint)
+    let timestamp = ProcessInfo.processInfo.systemUptime
+    let mouseUp = try #require(
+      NSEvent.mouseEvent(
+        with: .leftMouseUp,
+        location: windowPoint,
+        modifierFlags: [],
+        timestamp: timestamp + 0.01,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: 1,
+        clickCount: 1,
+        pressure: 0
+      )
+    )
+    NSApp.postEvent(mouseUp, atStart: true)
+    let mouseDown = try #require(
+      NSEvent.mouseEvent(
+        with: .leftMouseDown,
+        location: windowPoint,
+        modifierFlags: [],
+        timestamp: timestamp,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: 0,
+        clickCount: 1,
+        pressure: 1
+      )
+    )
+    NSApp.sendEvent(mouseDown)
+  }
+
+  @MainActor
+  private func modelSearchField(in view: NSView?) -> NSTextField? {
+    guard let view else { return nil }
+    if let textField = view as? NSTextField,
+      textField.accessibilityIdentifier() == "models-search-field"
+        || textField.placeholderString == "Search models"
+    {
+      return textField
+    }
+    for subview in view.subviews {
+      if let searchField = modelSearchField(in: subview) {
+        return searchField
+      }
+    }
+    return nil
+  }
+
+  @MainActor
+  private func modelTypeFilterControl(in view: NSView?) -> NSSegmentedControl? {
+    guard let view else { return nil }
+    if let control = view as? NSSegmentedControl,
+      control.segmentCount == 3,
+      control.label(forSegment: 0) == "All",
+      control.label(forSegment: 1) == "Voice",
+      control.label(forSegment: 2) == "Cleanup"
+    {
+      return control
+    }
+    for subview in view.subviews {
+      if let control = modelTypeFilterControl(in: subview) {
+        return control
+      }
+    }
+    return nil
+  }
+
+  @MainActor
+  private func sendModelKey(
+    _ keyCode: UInt16,
+    characters: String,
+    modifierFlags: NSEvent.ModifierFlags = [],
+    to window: NSWindow
+  ) throws {
+    let event = try #require(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: modifierFlags,
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: characters,
+        charactersIgnoringModifiers: characters,
+        isARepeat: false,
+        keyCode: keyCode
+      )
+    )
+    NSApp.sendEvent(event)
+    let keyUp = try #require(
+      NSEvent.keyEvent(
+        with: .keyUp,
+        location: .zero,
+        modifierFlags: modifierFlags,
+        timestamp: ProcessInfo.processInfo.systemUptime + 0.01,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: "",
+        charactersIgnoringModifiers: "",
+        isARepeat: false,
+        keyCode: keyCode
+      )
+    )
+    NSApp.sendEvent(keyUp)
+  }
+
+  @MainActor
+  private func modelEscapePassesNextLocalMonitor(in window: NSWindow) throws -> Bool {
+    var didReceiveEscape = false
+    guard
+      let monitor = NSEvent.addLocalMonitorForEvents(
+        matching: .keyDown,
+        handler: { event in
+          let monitoredEvent = ModelSearchEscapeEvent(event: event)
+          MainActor.assumeIsolated {
+            if monitoredEvent.event.window === window, monitoredEvent.event.keyCode == 53 {
+              didReceiveEscape = true
+            }
+          }
+          return event
+        })
+    else {
+      return false
+    }
+    defer { NSEvent.removeMonitor(monitor) }
+    try sendModelKey(53, characters: "\u{1b}", to: window)
+    return didReceiveEscape
+  }
+
+  @MainActor
+  private func typeModelText(_ text: String, in window: NSWindow) throws {
+    let keyCodes: [Character: UInt16] = [
+      "a": 0, "b": 11, "c": 8, "d": 2, "e": 14, "f": 3, "g": 5,
+      "h": 4, "i": 34, "j": 38, "k": 40, "l": 37, "m": 46,
+      "n": 45, "o": 31, "p": 35, "q": 12, "r": 15, "s": 1,
+      "t": 17, "u": 32, "v": 9, "w": 13, "x": 7, "y": 16, "z": 6,
+      " ": 49,
+    ]
+    for character in text {
+      try sendModelKey(
+        try #require(keyCodes[character]),
+        characters: String(character),
+        to: window
+      )
+    }
+  }
+
+  @MainActor
+  private func settleModelBrowser(_ host: NSView) async throws {
+    try await Task.sleep(for: .milliseconds(120))
+    for _ in 0..<5 {
+      host.layoutSubtreeIfNeeded()
+      await Task.yield()
+    }
+  }
+
+  @MainActor
+  private func clickModelElement(_ element: NSObject, in window: NSWindow) throws {
+    let frame = try #require(modelAccessibilityFrame(element))
+    try sendModelMouseClick(at: NSPoint(x: frame.midX, y: frame.midY), to: window)
+  }
+
+  @MainActor
+  private func clickModelView(_ view: NSView, in window: NSWindow) throws {
+    let windowPoint = view.convert(
+      NSPoint(x: view.bounds.midX, y: view.bounds.midY),
+      to: nil
+    )
+    try sendModelTrackedMouseClick(at: window.convertPoint(toScreen: windowPoint), to: window)
   }
 
   @MainActor
@@ -780,6 +984,305 @@ private func modelLibraryDescriptor(
     for _ in 0..<5 { await Task.yield() }
     emptyHost.layoutSubtreeIfNeeded()
     #expect(modelAccessibilityElements(in: emptyHost, identifier: "models-empty-state").count == 1)
+  }
+
+  @Test @MainActor
+  func modelSearchBlursWithoutSwallowingActionsAcrossThemesAndSizes() async throws {
+    enum OutsideAction {
+      case blankPane
+      case pin
+      case openDetails
+      case clearFilters
+    }
+    struct Scenario {
+      let name: String
+      let size: CGSize
+      let theme: FleckThemeSnapshot
+      let action: OutsideAction
+    }
+
+    let previousAccessibility = enableModelBrowserAccessibility()
+    defer { restoreModelBrowserAccessibility(previousAccessibility) }
+    let viewModels = try fixtureModelViewModels()
+    let lightTheme = FleckThemeSnapshot.resolve(
+      colorTheme: .monochrome,
+      mode: .light,
+      systemAppearance: .light,
+      reduceTransparency: true,
+      increasedContrast: false
+    )
+    let darkTheme = FleckThemeSnapshot.resolve(
+      colorTheme: .capy,
+      mode: .dark,
+      systemAppearance: .dark,
+      reduceTransparency: true,
+      increasedContrast: true
+    )
+    let scenarios: [Scenario] = [
+      Scenario(
+        name: "840x600-light-blank",
+        size: CGSize(width: 840, height: 600),
+        theme: lightTheme,
+        action: .blankPane
+      ),
+      Scenario(
+        name: "760x520-light-pin",
+        size: CGSize(width: 760, height: 520),
+        theme: lightTheme,
+        action: .pin
+      ),
+      Scenario(
+        name: "840x600-dark-details",
+        size: CGSize(width: 840, height: 600),
+        theme: darkTheme,
+        action: .openDetails
+      ),
+      Scenario(
+        name: "760x520-dark-clear",
+        size: CGSize(width: 760, height: 520),
+        theme: darkTheme,
+        action: .clearFilters
+      ),
+    ]
+    let speechID = ModelLibraryEntry.pinKey(
+      for: .asr,
+      modelID: ModelLibraryCatalog.parakeetModelID
+    )
+    let cleanupID = ModelLibraryEntry.pinKey(
+      for: .cleanup,
+      modelID: ModelLibraryCatalog.gemmaModelID
+    )
+
+    for scenario in scenarios {
+      let query = scenario.action == .clearFilters ? "a" : "parakeet"
+      let selection = ModelBrowserSelection()
+      let host = try captureModelFixture(
+        ModelBrowserFixture(
+          speechViewModel: viewModels.speech,
+          cleanupViewModel: viewModels.cleanup,
+          theme: scenario.theme,
+          size: scenario.size,
+          selection: selection
+        ),
+        name: "models-search-\(scenario.name)",
+        size: scenario.size
+      )
+      let window = makeModelFixtureWindow(contentView: host)
+      do {
+        defer {
+          window.orderOut(nil)
+          window.contentView = nil
+        }
+        for _ in 0..<5 {
+          host.layoutSubtreeIfNeeded()
+          await Task.yield()
+        }
+
+        let searchField = try #require(modelSearchField(in: host))
+        let searchElements = modelAccessibilityElements(
+          in: host,
+          identifier: "models-search-field"
+        )
+        #expect(searchElements.count == 1)
+        #expect(modelAccessibilityLabel(try #require(searchElements.first)) == "Search models")
+        #expect(searchField.placeholderString == "Search models")
+        let searchFrame = searchField.convert(searchField.bounds, to: nil)
+        #expect(searchFrame.width > 100)
+        #expect(searchFrame.height > 14)
+
+        try writeModelFixture("models-search-\(scenario.name)-idle", in: host)
+        try clickModelView(searchField, in: window)
+        let fieldEditor = try #require(searchField.currentEditor())
+        #expect(window.firstResponder === fieldEditor)
+        let editor = try #require(fieldEditor as? NSTextView)
+        #expect(editor.delegate === searchField)
+        editor.selectAll(nil)
+        try typeModelText(query, in: window)
+        try await settleModelBrowser(host)
+        #expect(searchField.stringValue == query)
+        #expect(modelAccessibilityValue(try #require(searchElements.first)) == query)
+        #expect(
+          modelAccessibilityElements(in: host, identifier: "models-row-\(speechID)").count == 1
+        )
+        if scenario.action == .clearFilters {
+          #expect(
+            modelAccessibilityElements(in: host, identifier: "models-row-\(cleanupID)").count == 1
+          )
+        } else {
+          #expect(
+            modelAccessibilityElements(in: host, identifier: "models-row-\(cleanupID)").isEmpty
+          )
+        }
+        try writeModelFixture("models-search-\(scenario.name)-focused", in: host)
+
+        switch scenario.action {
+        case .blankPane:
+          let windowPoint = host.convert(
+            NSPoint(x: host.bounds.maxX - 32, y: host.bounds.minY + 520),
+            to: nil
+          )
+          try sendModelMouseClick(at: window.convertPoint(toScreen: windowPoint), to: window)
+          try await settleModelBrowser(host)
+          try writeModelFixture("models-search-blank-after-outside-click", in: host)
+          #expect(window.firstResponder !== fieldEditor)
+          try sendModelKey(7, characters: "x", to: window)
+          try await settleModelBrowser(host)
+          #expect(searchField.stringValue == query)
+        case .pin:
+          let pin = try #require(
+            modelAccessibilityElements(in: host, identifier: "models-pin-\(speechID)").first
+          )
+          #expect(modelAccessibilityValue(pin) == "Not pinned")
+          try clickModelElement(pin, in: window)
+          try await settleModelBrowser(host)
+          let updatedPin = try #require(
+            modelAccessibilityElements(in: host, identifier: "models-pin-\(speechID)").first
+          )
+          #expect(modelAccessibilityValue(updatedPin) == "Pinned")
+          #expect(window.firstResponder !== fieldEditor)
+          #expect(searchField.stringValue == query)
+        case .openDetails:
+          let row = try #require(
+            modelAccessibilityElements(in: host, identifier: "models-row-\(speechID)").first
+          )
+          try clickModelElement(row, in: window)
+          try await settleModelBrowser(host)
+          try writeModelFixture("models-search-details-open", in: host)
+          #expect(selection.selectedModelID == speechID)
+          #expect(window.firstResponder !== fieldEditor)
+          #expect(searchField.stringValue == query)
+
+          let settingsSearchField = NSTextField()
+          settingsSearchField.placeholderString = "Settings search"
+          settingsSearchField.setAccessibilityIdentifier("settings-search-field")
+          settingsSearchField.stringValue = "settings"
+          settingsSearchField.frame = NSRect(
+            x: host.bounds.midX - 80,
+            y: host.bounds.minY + 12,
+            width: 160,
+            height: 22
+          )
+          host.addSubview(settingsSearchField)
+          #expect(window.makeFirstResponder(settingsSearchField))
+          let settingsEditor = try #require(settingsSearchField.currentEditor())
+          #expect(window.firstResponder === settingsEditor)
+          #expect((settingsEditor as? NSTextView)?.delegate === settingsSearchField)
+          #expect(try modelEscapePassesNextLocalMonitor(in: window))
+          try await settleModelBrowser(host)
+          try #require(selection.selectedModelID == speechID)
+          #expect(searchField.stringValue == query)
+
+          try clickModelView(searchField, in: window)
+          let focusedEditor = try #require(searchField.currentEditor())
+          #expect(window.firstResponder === focusedEditor)
+          if NSApp.isFullKeyboardAccessEnabled {
+            try sendModelKey(48, characters: "\t", to: window)
+            try await settleModelBrowser(host)
+            #expect(window.firstResponder !== focusedEditor)
+            try sendModelKey(48, characters: "\t", modifierFlags: [.shift], to: window)
+            try await settleModelBrowser(host)
+            let returnedEditor = try #require(searchField.currentEditor())
+            #expect(window.firstResponder === returnedEditor)
+          } else {
+            try sendModelKey(48, characters: "\t", to: window)
+            try await settleModelBrowser(host)
+            #expect(window.firstResponder === focusedEditor)
+          }
+          let returnedEditor = try #require(searchField.currentEditor())
+          #expect(window.firstResponder === returnedEditor)
+          try sendModelKey(53, characters: "\u{1b}", to: window)
+          try await settleModelBrowser(host)
+          #expect(window.firstResponder !== returnedEditor)
+          #expect(searchField.stringValue == query)
+          #expect(selection.selectedModelID == speechID)
+          try sendModelKey(53, characters: "\u{1b}", to: window)
+          try await settleModelBrowser(host)
+          #expect(selection.selectedModelID == nil)
+          #expect(searchField.stringValue == query)
+        case .clearFilters:
+          #expect(
+            modelAccessibilityElements(in: host, identifier: "models-type-filter").count == 1
+          )
+          let typeFilterControl = try #require(modelTypeFilterControl(in: host))
+          #expect(typeFilterControl.selectedSegment == 0)
+          let voiceSegmentPoint = typeFilterControl.convert(
+            NSPoint(
+              x: typeFilterControl.bounds.midX,
+              y: typeFilterControl.bounds.midY
+            ),
+            to: nil
+          )
+          try sendModelTrackedMouseClick(
+            at: window.convertPoint(toScreen: voiceSegmentPoint),
+            to: window
+          )
+          try await settleModelBrowser(host)
+          let filteredTypeFilterControl = try #require(modelTypeFilterControl(in: host))
+          #expect(filteredTypeFilterControl.selectedSegment == 1)
+          #expect(window.firstResponder !== fieldEditor)
+          #expect(searchField.stringValue == query)
+          #expect(
+            modelAccessibilityElements(in: host, identifier: "models-row-\(speechID)").count == 1
+          )
+          #expect(
+            modelAccessibilityElements(in: host, identifier: "models-row-\(cleanupID)").isEmpty
+          )
+
+          try clickModelView(searchField, in: window)
+          let emptySearchEditor = try #require(searchField.currentEditor())
+          emptySearchEditor.selectAll(nil)
+          try typeModelText("zzzz", in: window)
+          try await settleModelBrowser(host)
+          #expect(searchField.stringValue == "zzzz")
+          #expect(
+            modelAccessibilityElements(in: host, identifier: "models-row-\(speechID)").isEmpty
+          )
+          #expect(
+            modelAccessibilityElements(in: host, identifier: "models-row-\(cleanupID)").isEmpty
+          )
+
+          let noResultsBlankPoint = host.convert(
+            NSPoint(x: host.bounds.maxX - 32, y: host.bounds.minY + 110),
+            to: nil
+          )
+          try sendModelMouseClick(
+            at: window.convertPoint(toScreen: noResultsBlankPoint),
+            to: window
+          )
+          try await settleModelBrowser(host)
+          #expect(window.firstResponder !== emptySearchEditor)
+          #expect(searchField.stringValue == "zzzz")
+
+          try clickModelView(searchField, in: window)
+          let refocusedEditor = try #require(searchField.currentEditor())
+          #expect(window.firstResponder === refocusedEditor)
+          try await settleModelBrowser(host)
+          try sendModelKey(53, characters: "\u{1b}", to: window)
+          try await settleModelBrowser(host)
+          #expect(window.firstResponder !== refocusedEditor)
+          #expect(searchField.stringValue == "zzzz")
+          #expect(
+            modelAccessibilityElements(in: host, identifier: "models-row-\(speechID)").isEmpty
+          )
+          #expect(
+            modelAccessibilityElements(in: host, identifier: "models-row-\(cleanupID)").isEmpty
+          )
+
+          let clearFiltersButton = try #require(
+            modelAccessibilityElements(in: host, identifier: "models-clear-filters").first
+          )
+          try clickModelElement(clearFiltersButton, in: window)
+          try await settleModelBrowser(host)
+          #expect(searchField.stringValue.isEmpty)
+          #expect(
+            modelAccessibilityElements(in: host, identifier: "models-row-\(speechID)").count == 1
+          )
+          #expect(
+            modelAccessibilityElements(in: host, identifier: "models-row-\(cleanupID)").count == 1
+          )
+        }
+      }
+    }
   }
 
   @Test @MainActor
