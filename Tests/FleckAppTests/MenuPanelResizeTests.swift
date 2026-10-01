@@ -1648,6 +1648,11 @@ import Testing
     window.orderFront(nil)
     host.installIfNeeded()
     await settleResizeHost(host)
+    await withCheckedContinuation { continuation in
+      DispatchQueue.main.async {
+        continuation.resume()
+      }
+    }
     defer {
       host.uninstall()
       window.contentView = nil

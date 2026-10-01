@@ -248,127 +248,126 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
 @Test @MainActor
 func DictationSettingsHostedSidebarSelectionUsesPaletteInKeyWindow() async throws {
   let application = NSApplication.shared
-  let activationState = SettingsTestApplicationActivationState(application)
-  defer { activationState.restore(application) }
-  try #require(activateSettingsTestApplication(application))
-  for family in [FleckColorTheme.monochrome, .capy] {
-    let theme = FleckThemeSnapshot.resolve(
-      colorTheme: family,
-      mode: .dark,
-      systemAppearance: .dark,
-      reduceTransparency: false,
-      increasedContrast: false
-    )
-    let host = NSHostingView(
-      rootView: SettingsSidebarThemeTestHost()
-      .environment(\.fleckThemeSnapshot, theme)
-      .environment(\.colorScheme, .dark)
-      .frame(width: 220, height: 520)
-      .background(theme.color(.sidebar))
-    )
-    let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 220, height: 520),
-      styleMask: [.titled, .closable],
-      backing: .buffered,
-      defer: false
-    )
-    window.appearance = NSAppearance(named: .darkAqua)
-    window.contentView = host
-    defer {
-      window.contentView = nil
-      window.orderOut(nil)
-    }
-    window.makeKeyAndOrderFront(nil)
-    try #require(
-      waitForSettingsAppKitState {
-        application.isActive && application.keyWindow === window && window.isKeyWindow
+  try await withSettingsTestApplicationActivationState(application) {
+    try #require(prepareSettingsTestApplication(application))
+    for family in [FleckColorTheme.monochrome, .capy] {
+      let theme = FleckThemeSnapshot.resolve(
+        colorTheme: family,
+        mode: .dark,
+        systemAppearance: .dark,
+        reduceTransparency: false,
+        increasedContrast: false
+      )
+      let host = NSHostingView(
+        rootView: SettingsSidebarThemeTestHost()
+          .environment(\.fleckThemeSnapshot, theme)
+          .environment(\.colorScheme, .dark)
+          .frame(width: 220, height: 520)
+          .background(theme.color(.sidebar))
+      )
+      let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 220, height: 520),
+        styleMask: [.titled, .closable],
+        backing: .buffered,
+        defer: false
+      )
+      window.appearance = NSAppearance(named: .darkAqua)
+      window.contentView = host
+      defer {
+        window.contentView = nil
+        window.orderOut(nil)
       }
-    )
-    await settleSettingsHost(host)
-    try #require(
-      waitForSettingsAppKitState {
-        application.isActive && application.keyWindow === window && window.isKeyWindow
-      }
-    )
+      window.makeKeyAndOrderFront(nil)
+      try #require(await activateSettingsTestApplication(application, keyWindow: window))
+      await settleSettingsHost(host)
+      try #require(
+        await waitForSettingsAppKitState {
+          application.isActive && application.keyWindow === window && window.isKeyWindow
+        }
+      )
 
-    let outline = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
-    let row = try #require(settingsSidebarRow(.appearance, in: outline))
+      let outline = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
+      let row = try #require(settingsSidebarRow(.appearance, in: outline))
 
-    #expect(window.isKeyWindow)
-    #expect(outline.selectedRow == row)
-    #expect(outline.accessibilitySelectedRows()?.count == 1)
-    #expect(outline.selectionHighlightStyle == .none)
-    let rowView = try #require(outline.rowView(atRow: row, makeIfNecessary: true))
-    let image = try #require(rowView.bitmapImageRepForCachingDisplay(in: rowView.bounds))
-    rowView.cacheDisplay(in: rowView.bounds, to: image)
-    let fill = try #require(image.colorAt(
-      x: Int(CGFloat(image.pixelsWide) * 0.85),
-      y: image.pixelsHigh / 2
-    ))
-    let expectedFill = theme.nsColor(.selectionFill)
-    #expect(abs(fill.redComponent - expectedFill.redComponent) < 0.12)
-    #expect(abs(fill.greenComponent - expectedFill.greenComponent) < 0.12)
-    #expect(abs(fill.blueComponent - expectedFill.blueComponent) < 0.12)
-    #expect(fill.blueComponent < 0.5)
-    let expectedInk = theme.nsColor(.selectionText)
-    func hasSelectedInk(_ image: NSBitmapImageRep) -> Bool {
-      (0..<image.pixelsHigh).contains { y in
-        (20..<Int(CGFloat(image.pixelsWide) * 0.65)).contains { x in
-          guard let pixel = image.colorAt(x: x, y: y) else { return false }
-          return abs(pixel.redComponent - expectedInk.redComponent) < 0.05
-            && abs(pixel.greenComponent - expectedInk.greenComponent) < 0.05
-            && abs(pixel.blueComponent - expectedInk.blueComponent) < 0.05
+      #expect(window.isKeyWindow)
+      #expect(outline.selectedRow == row)
+      #expect(outline.accessibilitySelectedRows()?.count == 1)
+      #expect(outline.selectionHighlightStyle == .none)
+      let rowView = try #require(outline.rowView(atRow: row, makeIfNecessary: true))
+      let image = try #require(rowView.bitmapImageRepForCachingDisplay(in: rowView.bounds))
+      rowView.cacheDisplay(in: rowView.bounds, to: image)
+      let fill = try #require(
+        image.colorAt(
+          x: Int(CGFloat(image.pixelsWide) * 0.85),
+          y: image.pixelsHigh / 2
+        ))
+      let expectedFill = theme.nsColor(.selectionFill)
+      #expect(abs(fill.redComponent - expectedFill.redComponent) < 0.12)
+      #expect(abs(fill.greenComponent - expectedFill.greenComponent) < 0.12)
+      #expect(abs(fill.blueComponent - expectedFill.blueComponent) < 0.12)
+      #expect(fill.blueComponent < 0.5)
+      let expectedInk = theme.nsColor(.selectionText)
+      func hasSelectedInk(_ image: NSBitmapImageRep) -> Bool {
+        (0..<image.pixelsHigh).contains { y in
+          (20..<Int(CGFloat(image.pixelsWide) * 0.65)).contains { x in
+            guard let pixel = image.colorAt(x: x, y: y) else { return false }
+            return abs(pixel.redComponent - expectedInk.redComponent) < 0.05
+              && abs(pixel.greenComponent - expectedInk.greenComponent) < 0.05
+              && abs(pixel.blueComponent - expectedInk.blueComponent) < 0.05
+          }
         }
       }
-    }
-    #expect(hasSelectedInk(image))
-    if family == .monochrome {
-      #expect(abs(fill.redComponent - fill.greenComponent) < 0.04)
-    } else {
-      #expect(fill.greenComponent > fill.redComponent + 0.07)
-    }
-
-    if let captureDirectory = ProcessInfo.processInfo.environment[
-      "FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR"
-    ] {
-      let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-      let screenshot = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-      host.cacheDisplay(in: host.bounds, to: screenshot)
-      let png = try #require(screenshot.representation(using: .png, properties: [:]))
-      try png.write(to: directory.appendingPathComponent("settings-sidebar-\(family.rawValue).png"))
-    }
-
-    let otherWindow = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 180, height: 120),
-      styleMask: [.titled],
-      backing: .buffered,
-      defer: false
-    )
-    defer { otherWindow.orderOut(nil) }
-    otherWindow.makeKeyAndOrderFront(nil)
-    await settleSettingsHost(host)
-    try #require(
-      waitForSettingsAppKitState {
-        application.isActive
-          && application.keyWindow === otherWindow
-          && otherWindow.isKeyWindow
-          && !window.isKeyWindow
+      #expect(hasSelectedInk(image))
+      if family == .monochrome {
+        #expect(abs(fill.redComponent - fill.greenComponent) < 0.04)
+      } else {
+        #expect(fill.greenComponent > fill.redComponent + 0.07)
       }
-    )
-    #expect(!window.isKeyWindow)
-    #expect(outline.selectedRow == row)
-    #expect(outline.accessibilitySelectedRows()?.count == 1)
-    let inactiveImage = try #require(rowView.bitmapImageRepForCachingDisplay(in: rowView.bounds))
-    rowView.cacheDisplay(in: rowView.bounds, to: inactiveImage)
-    let inactiveFill = try #require(inactiveImage.colorAt(
-      x: Int(CGFloat(inactiveImage.pixelsWide) * 0.85),
-      y: inactiveImage.pixelsHigh / 2
-    ))
-    #expect(abs(inactiveFill.redComponent - fill.redComponent) < 0.04)
-    #expect(abs(inactiveFill.greenComponent - fill.greenComponent) < 0.04)
-    #expect(abs(inactiveFill.blueComponent - fill.blueComponent) < 0.04)
-    #expect(hasSelectedInk(inactiveImage))
+
+      if let captureDirectory = ProcessInfo.processInfo.environment[
+        "FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR"
+      ] {
+        let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let screenshot = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: screenshot)
+        let png = try #require(screenshot.representation(using: .png, properties: [:]))
+        try png.write(
+          to: directory.appendingPathComponent("settings-sidebar-\(family.rawValue).png"))
+      }
+
+      let otherWindow = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 180, height: 120),
+        styleMask: [.titled],
+        backing: .buffered,
+        defer: false
+      )
+      defer { otherWindow.orderOut(nil) }
+      otherWindow.makeKeyAndOrderFront(nil)
+      await settleSettingsHost(host)
+      try #require(
+        await waitForSettingsAppKitState {
+          application.isActive
+            && application.keyWindow === otherWindow
+            && otherWindow.isKeyWindow
+            && !window.isKeyWindow
+        }
+      )
+      #expect(!window.isKeyWindow)
+      #expect(outline.selectedRow == row)
+      #expect(outline.accessibilitySelectedRows()?.count == 1)
+      let inactiveImage = try #require(rowView.bitmapImageRepForCachingDisplay(in: rowView.bounds))
+      rowView.cacheDisplay(in: rowView.bounds, to: inactiveImage)
+      let inactiveFill = try #require(
+        inactiveImage.colorAt(
+          x: Int(CGFloat(inactiveImage.pixelsWide) * 0.85),
+          y: inactiveImage.pixelsHigh / 2
+        ))
+      #expect(abs(inactiveFill.redComponent - fill.redComponent) < 0.04)
+      #expect(abs(inactiveFill.greenComponent - fill.greenComponent) < 0.04)
+      #expect(abs(inactiveFill.blueComponent - fill.blueComponent) < 0.04)
+      #expect(hasSelectedInk(inactiveImage))
+    }
   }
 }
 
@@ -1067,192 +1066,197 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
 @Test @MainActor
 func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async throws {
   let application = NSApplication.shared
-  let activationState = SettingsTestApplicationActivationState(application)
-  defer { activationState.restore(application) }
-  try #require(activateSettingsTestApplication(application))
+  try await withSettingsTestApplicationActivationState(application) {
+    try #require(prepareSettingsTestApplication(application))
 
-  let fixture = try await RuntimeFixture(
-    finalText: nil,
-    capsuleEnabled: false,
-    monitorAccessGranted: false,
-    monitorRequestAccessResult: false,
-    permissionController: DictationPermissionController(
-      microphoneStatus: { .denied },
-      speechStatus: { .denied }
-    ),
-    availability: .evaluate(.init(
-      osMajorVersion: 13,
-      architecture: .intel,
-      microphonePermission: .denied,
-      speechPermission: .denied,
-      appleOnDeviceRecognitionSupported: false,
-      enhancedModelReady: false,
-      foundationModelAvailable: false
-    ))
-  )
-  await fixture.runtime.awaitStartupAssessment()
-  fixture.runtime.preferencesDidChange()
-  #expect(fixture.runtime.modifierMonitorState == .unauthorized)
-
-  let host = NSHostingView(
-    rootView: SettingsView(runtime: fixture.runtime)
-      .environmentObject(fixture.appState)
-      .environment(\.dynamicTypeSize, .accessibility5)
-      .environment(\.colorScheme, .light)
-  )
-  let window = NSWindow(
-    contentRect: NSRect(x: 0, y: 0, width: 840, height: 600),
-    styleMask: [.titled, .resizable, .closable],
-    backing: .buffered,
-    defer: false
-  )
-  window.title = "Settings"
-  window.appearance = NSAppearance(named: .aqua)
-  window.contentView = host
-  window.center()
-  defer {
-    window.contentView = nil
-    window.orderOut(nil)
-  }
-  window.makeKeyAndOrderFront(nil)
-  try #require(
-    waitForSettingsAppKitState {
-      application.isActive && application.keyWindow === window && window.isKeyWindow
-    }
-  )
-  await settleSettingsHost(host)
-
-  let sidebar = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
-  let dictationRow = try #require(settingsSidebarRow(.dictation, in: sidebar))
-  sidebar.selectRowIndexes(IndexSet(integer: dictationRow), byExtendingSelection: false)
-  NotificationCenter.default.post(
-    name: NSTableView.selectionDidChangeNotification,
-    object: sidebar
-  )
-  await settleSettingsHost(host)
-
-  let readinessAnchor = try #require(
-    settingsView(
-      withAccessibilityIdentifier: "settings-search-target-dictation-status",
-      in: host
+    let fixture = try await RuntimeFixture(
+      finalText: nil,
+      capsuleEnabled: false,
+      monitorAccessGranted: false,
+      monitorRequestAccessResult: false,
+      permissionController: DictationPermissionController(
+        microphoneStatus: { .denied },
+        speechStatus: { .denied }
+      ),
+      availability: .evaluate(
+        .init(
+          osMajorVersion: 13,
+          architecture: .intel,
+          microphonePermission: .denied,
+          speechPermission: .denied,
+          appleOnDeviceRecognitionSupported: false,
+          enhancedModelReady: false,
+          foundationModelAvailable: false
+        ))
     )
-  )
-  let readinessCenter = readinessAnchor.convert(
-    NSPoint(x: readinessAnchor.bounds.midX, y: readinessAnchor.bounds.midY),
-    to: nil
-  )
-  try #require(
-    waitForSettingsAppKitState {
-      application.isActive && application.keyWindow === window && window.isKeyWindow
+    await fixture.runtime.awaitStartupAssessment()
+    fixture.runtime.preferencesDidChange()
+    #expect(fixture.runtime.modifierMonitorState == .unauthorized)
+
+    let host = NSHostingView(
+      rootView: SettingsView(runtime: fixture.runtime)
+        .environmentObject(fixture.appState)
+        .environment(\.dynamicTypeSize, .accessibility5)
+        .environment(\.colorScheme, .light)
+    )
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 840, height: 600),
+      styleMask: [.titled, .resizable, .closable],
+      backing: .buffered,
+      defer: false
+    )
+    window.title = "Settings"
+    window.appearance = NSAppearance(named: .aqua)
+    window.contentView = host
+    window.center()
+    defer {
+      window.contentView = nil
+      window.orderOut(nil)
     }
-  )
-  let mouseDown = try #require(NSEvent.mouseEvent(
-    with: .leftMouseDown,
-    location: readinessCenter,
-    modifierFlags: [],
-    timestamp: ProcessInfo.processInfo.systemUptime,
-    windowNumber: window.windowNumber,
-    context: nil,
-    eventNumber: 1,
-    clickCount: 1,
-    pressure: 1
-  ))
-  let mouseUp = try #require(NSEvent.mouseEvent(
-    with: .leftMouseUp,
-    location: readinessCenter,
-    modifierFlags: [],
-    timestamp: ProcessInfo.processInfo.systemUptime + 0.01,
-    windowNumber: window.windowNumber,
-    context: nil,
-    eventNumber: 2,
-    clickCount: 1,
-    pressure: 0
-  ))
-  NSApp.sendEvent(mouseDown)
-  NSApp.sendEvent(mouseUp)
-  await settleSettingsHost(host)
+    window.makeKeyAndOrderFront(nil)
+    try #require(
+      await activateSettingsTestApplication(application, keyWindow: window)
+    )
+    await settleSettingsHost(host)
 
-  #expect(
-    settingsView(withAccessibilityIdentifier: "settings-keyboard-focus-dictation-status", in: host)
-      != nil
-  )
-  #expect(
-    settingsView(
-      withAccessibilityIdentifier: "settings-keyboard-focus-cue-dictation-status",
-      in: host
-    ) == nil
-  )
+    let sidebar = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
+    let dictationRow = try #require(settingsSidebarRow(.dictation, in: sidebar))
+    sidebar.selectRowIndexes(IndexSet(integer: dictationRow), byExtendingSelection: false)
+    NotificationCenter.default.post(
+      name: NSTableView.selectionDidChangeNotification,
+      object: sidebar
+    )
+    await settleSettingsHost(host)
 
-  let popoverWindow = try #require(
-    NSApplication.shared.windows.first {
-      $0 !== window
-        && $0.contentView.map {
-          settingsView(
-            withAccessibilityIdentifier: "settings-dictation-readiness-popover",
-            in: $0
-          ) != nil
-        } == true
-    }
-  )
-  defer { popoverWindow.orderOut(nil) }
-  let popover = try #require(popoverWindow.contentView)
-  await settleSettingsHost(popover)
-  popoverWindow.displayIfNeeded()
-  let popoverScrollViews = settingsHostedScrollViews(of: popover)
-  let scrollView = try #require(popoverScrollViews.first)
-  let documentView = try #require(scrollView.documentView)
-  let visibleViewportHeight = scrollView.contentView.bounds.height
-    - scrollView.contentInsets.top
-    - scrollView.contentInsets.bottom
-  #expect(scrollView.hasVerticalScroller)
-  #expect(visibleViewportHeight <= 300)
-  #expect(documentView.frame.height > visibleViewportHeight)
+    let readinessAnchor = try #require(
+      settingsView(
+        withAccessibilityIdentifier: "settings-search-target-dictation-status",
+        in: host
+      )
+    )
+    let readinessCenter = readinessAnchor.convert(
+      NSPoint(x: readinessAnchor.bounds.midX, y: readinessAnchor.bounds.midY),
+      to: nil
+    )
+    try #require(
+      await waitForSettingsAppKitState {
+        application.isActive && application.keyWindow === window && window.isKeyWindow
+      }
+    )
+    let mouseDown = try #require(
+      NSEvent.mouseEvent(
+        with: .leftMouseDown,
+        location: readinessCenter,
+        modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: 1,
+        clickCount: 1,
+        pressure: 1
+      ))
+    let mouseUp = try #require(
+      NSEvent.mouseEvent(
+        with: .leftMouseUp,
+        location: readinessCenter,
+        modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime + 0.01,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: 2,
+        clickCount: 1,
+        pressure: 0
+      ))
+    NSApp.sendEvent(mouseDown)
+    NSApp.sendEvent(mouseUp)
+    await settleSettingsHost(host)
 
-  let captureDirectory = ProcessInfo.processInfo.environment[
-    "FLECK_SETTINGS_WINDOW_CAPTURE_DIR"
-  ]
-  if let captureDirectory {
-    let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let visibleFrame = try #require(window.screen?.visibleFrame)
-    popoverWindow.setFrameOrigin(NSPoint(
-      x: visibleFrame.midX - popoverWindow.frame.width / 2,
-      y: visibleFrame.midY - popoverWindow.frame.height / 2
-    ))
+    #expect(
+      settingsView(
+        withAccessibilityIdentifier: "settings-keyboard-focus-dictation-status", in: host)
+        != nil
+    )
+    #expect(
+      settingsView(
+        withAccessibilityIdentifier: "settings-keyboard-focus-cue-dictation-status",
+        in: host
+      ) == nil
+    )
+
+    let popoverWindow = try #require(
+      NSApplication.shared.windows.first {
+        $0 !== window
+          && $0.contentView.map {
+            settingsView(
+              withAccessibilityIdentifier: "settings-dictation-readiness-popover",
+              in: $0
+            ) != nil
+          } == true
+      }
+    )
+    defer { popoverWindow.orderOut(nil) }
+    let popover = try #require(popoverWindow.contentView)
     await settleSettingsHost(popover)
     popoverWindow.displayIfNeeded()
-    for (name, captureWindow) in [
-      ("settings-dictation-840x600", window),
-      ("settings-dictation-readiness-popover", popoverWindow),
-    ] {
-      let cgImage = try #require(CGWindowListCreateImage(
-        .null,
-        .optionIncludingWindow,
-        CGWindowID(captureWindow.windowNumber),
-        .bestResolution
-      ))
-      if captureWindow === window {
-        #expect(cgImage.width >= 840)
-        #expect(cgImage.height >= 600)
-      } else if cgImage.width < 300 || cgImage.height < 250 {
-        print(
-          "Readiness popover window-level capture was incomplete: "
-            + "\(cgImage.width)×\(cgImage.height) pixels for a "
-            + "\(Int(captureWindow.frame.width))×\(Int(captureWindow.frame.height))-point window."
-        )
-        continue
+    let popoverScrollViews = settingsHostedScrollViews(of: popover)
+    let scrollView = try #require(popoverScrollViews.first)
+    let documentView = try #require(scrollView.documentView)
+    let visibleViewportHeight =
+      scrollView.contentView.bounds.height
+      - scrollView.contentInsets.top
+      - scrollView.contentInsets.bottom
+    #expect(scrollView.hasVerticalScroller)
+    #expect(visibleViewportHeight <= 300)
+    #expect(documentView.frame.height > visibleViewportHeight)
+
+    let captureDirectory = ProcessInfo.processInfo.environment[
+      "FLECK_SETTINGS_WINDOW_CAPTURE_DIR"
+    ]
+    if let captureDirectory {
+      let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      let visibleFrame = try #require(window.screen?.visibleFrame)
+      popoverWindow.setFrameOrigin(
+        NSPoint(
+          x: visibleFrame.midX - popoverWindow.frame.width / 2,
+          y: visibleFrame.midY - popoverWindow.frame.height / 2
+        ))
+      await settleSettingsHost(popover)
+      popoverWindow.displayIfNeeded()
+      for (name, captureWindow) in [
+        ("settings-dictation-840x600", window),
+        ("settings-dictation-readiness-popover", popoverWindow),
+      ] {
+        let cgImage = try #require(
+          CGWindowListCreateImage(
+            .null,
+            .optionIncludingWindow,
+            CGWindowID(captureWindow.windowNumber),
+            .bestResolution
+          ))
+        if captureWindow === window {
+          #expect(cgImage.width >= 840)
+          #expect(cgImage.height >= 600)
+        } else if cgImage.width < 300 || cgImage.height < 250 {
+          print(
+            "Readiness popover window-level capture was incomplete: "
+              + "\(cgImage.width)×\(cgImage.height) pixels for a "
+              + "\(Int(captureWindow.frame.width))×\(Int(captureWindow.frame.height))-point window."
+          )
+          continue
+        }
+        let image = NSBitmapImageRep(cgImage: cgImage)
+        let png = try #require(image.representation(using: .png, properties: [:]))
+        try png.write(to: directory.appendingPathComponent("\(name).png"))
       }
-      let image = NSBitmapImageRep(cgImage: cgImage)
-      let png = try #require(image.representation(using: .png, properties: [:]))
-      try png.write(to: directory.appendingPathComponent("\(name).png"))
     }
+    #expect(
+      settingsView(
+        withAccessibilityIdentifier: "settings-dictation-readiness-popover",
+        in: popover
+      ) != nil
+    )
   }
-  #expect(
-    settingsView(
-      withAccessibilityIdentifier: "settings-dictation-readiness-popover",
-      in: popover
-    ) != nil
-  )
 }
 
 @Test @MainActor
@@ -2238,7 +2242,7 @@ private struct SettingsTestApplicationActivationState {
     wasActive = application.isActive
   }
 
-  func restore(_ application: NSApplication) {
+  func restore(_ application: NSApplication) async {
     defer {
       #expect(application.activationPolicy() == activationPolicy)
       #expect(application.isActive == wasActive)
@@ -2246,7 +2250,7 @@ private struct SettingsTestApplicationActivationState {
 
     if !wasActive && application.isActive {
       application.deactivate()
-      guard waitForSettingsAppKitState(condition: { !application.isActive }) else {
+      guard await waitForSettingsAppKitState(condition: { !application.isActive }) else {
         Issue.record(
           "Failed to restore NSApp's inactive state; activation policy was left unchanged"
         )
@@ -2265,13 +2269,13 @@ private struct SettingsTestApplicationActivationState {
 
     if wasActive && !application.isActive {
       application.activate(ignoringOtherApps: true)
-      guard waitForSettingsAppKitState(condition: { application.isActive }) else {
+      guard await waitForSettingsAppKitState(condition: { application.isActive }) else {
         Issue.record("Failed to restore NSApp's active state")
         return
       }
     } else if !wasActive && application.isActive {
       application.deactivate()
-      guard waitForSettingsAppKitState(condition: { !application.isActive }) else {
+      guard await waitForSettingsAppKitState(condition: { !application.isActive }) else {
         Issue.record("Failed to restore NSApp's inactive state")
         return
       }
@@ -2280,28 +2284,62 @@ private struct SettingsTestApplicationActivationState {
 }
 
 @MainActor
-private func activateSettingsTestApplication(_ application: NSApplication) -> Bool {
+private func withSettingsTestApplicationActivationState(
+  _ application: NSApplication,
+  operation: @MainActor () async throws -> Void
+) async throws {
+  let activationState = SettingsTestApplicationActivationState(application)
+  do {
+    try await operation()
+    await Task { @MainActor in
+      await activationState.restore(application)
+    }.value
+  } catch {
+    await Task { @MainActor in
+      await activationState.restore(application)
+    }.value
+    throw error
+  }
+}
+
+@MainActor
+private func prepareSettingsTestApplication(_ application: NSApplication) -> Bool {
   if application.activationPolicy() != .regular, !application.setActivationPolicy(.regular) {
     return false
   }
+  return application.activationPolicy() == .regular
+}
 
+@MainActor
+private func activateSettingsTestApplication(
+  _ application: NSApplication,
+  keyWindow: NSWindow
+) async -> Bool {
+  guard application.activationPolicy() == .regular else { return false }
   application.activate(ignoringOtherApps: true)
-  return waitForSettingsAppKitState { application.isActive }
+  return await waitForSettingsAppKitState {
+    application.isActive && application.keyWindow === keyWindow && keyWindow.isKeyWindow
+  }
 }
 
 @MainActor
 private func waitForSettingsAppKitState(
   timeout: TimeInterval = 2,
   condition: @MainActor () -> Bool
-) -> Bool {
-  let deadline = Date().addingTimeInterval(timeout)
-  while !condition(), Date() < deadline {
-    _ = RunLoop.main.run(
-      mode: .default,
-      before: min(deadline, Date().addingTimeInterval(0.01))
-    )
+) async -> Bool {
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: .milliseconds(Int64(timeout * 1_000)))
+  while true {
+    guard !Task.isCancelled else { return false }
+    if condition() { return true }
+    let remaining = clock.now.duration(to: deadline)
+    guard remaining > .zero else { return false }
+    do {
+      try await Task.sleep(for: min(.milliseconds(10), remaining))
+    } catch {
+      return false
+    }
   }
-  return condition()
 }
 
 @Test @MainActor func DictationRuntimeUpdatesRailAccentWithoutRewritingPreference() async throws {
