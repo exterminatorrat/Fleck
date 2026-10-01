@@ -5525,7 +5525,13 @@ func hostedGlassAndSolidMenuPanelsCaptureSyntheticChromeAndOpaqueEditor() async 
     state.updatePreferences { $0.chromeAppearance = appearance }
     let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
     let panel = NotesPanel(dictationRuntime: runtime, sizing: .container)
-    let host = NSHostingView(rootView: AnyView(FleckThemeTestRoot(state: state) { panel }))
+    let host = NSHostingView(
+      rootView: AnyView(
+        FleckThemeTestRoot(state: state) { panel }
+          .environment(\._accessibilityReduceTransparency, false)
+          .environment(\._colorSchemeContrast, .standard)
+      )
+    )
     let window = NSWindow(
       contentRect: backdrop.frame,
       styleMask: [.borderless],

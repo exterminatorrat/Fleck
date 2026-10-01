@@ -248,16 +248,9 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
 @Test @MainActor
 func DictationSettingsHostedSidebarSelectionUsesPaletteInKeyWindow() async throws {
   let application = NSApplication.shared
-  let previousActivationPolicy = application.activationPolicy()
-  let wasActive = application.isActive
-  defer {
-    if !wasActive { application.deactivate() }
-    application.setActivationPolicy(previousActivationPolicy)
-  }
-  if previousActivationPolicy != .regular {
-    #expect(application.setActivationPolicy(.regular))
-  }
-  application.activate(ignoringOtherApps: true)
+  let activationState = SettingsTestApplicationActivationState(application)
+  defer { activationState.restore(application) }
+  try #require(activateSettingsTestApplication(application))
   for family in [FleckColorTheme.monochrome, .capy] {
     let theme = FleckThemeSnapshot.resolve(
       colorTheme: family,
@@ -281,8 +274,22 @@ func DictationSettingsHostedSidebarSelectionUsesPaletteInKeyWindow() async throw
     )
     window.appearance = NSAppearance(named: .darkAqua)
     window.contentView = host
+    defer {
+      window.contentView = nil
+      window.orderOut(nil)
+    }
     window.makeKeyAndOrderFront(nil)
+    try #require(
+      waitForSettingsAppKitState {
+        application.isActive && application.keyWindow === window && window.isKeyWindow
+      }
+    )
     await settleSettingsHost(host)
+    try #require(
+      waitForSettingsAppKitState {
+        application.isActive && application.keyWindow === window && window.isKeyWindow
+      }
+    )
 
     let outline = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
     let row = try #require(settingsSidebarRow(.appearance, in: outline))
@@ -338,8 +345,17 @@ func DictationSettingsHostedSidebarSelectionUsesPaletteInKeyWindow() async throw
       backing: .buffered,
       defer: false
     )
+    defer { otherWindow.orderOut(nil) }
     otherWindow.makeKeyAndOrderFront(nil)
     await settleSettingsHost(host)
+    try #require(
+      waitForSettingsAppKitState {
+        application.isActive
+          && application.keyWindow === otherWindow
+          && otherWindow.isKeyWindow
+          && !window.isKeyWindow
+      }
+    )
     #expect(!window.isKeyWindow)
     #expect(outline.selectedRow == row)
     #expect(outline.accessibilitySelectedRows()?.count == 1)
@@ -353,10 +369,6 @@ func DictationSettingsHostedSidebarSelectionUsesPaletteInKeyWindow() async throw
     #expect(abs(inactiveFill.greenComponent - fill.greenComponent) < 0.04)
     #expect(abs(inactiveFill.blueComponent - fill.blueComponent) < 0.04)
     #expect(hasSelectedInk(inactiveImage))
-    otherWindow.orderOut(nil)
-
-    window.contentView = nil
-    window.orderOut(nil)
   }
 }
 
@@ -1054,6 +1066,11 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
 
 @Test @MainActor
 func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async throws {
+  let application = NSApplication.shared
+  let activationState = SettingsTestApplicationActivationState(application)
+  defer { activationState.restore(application) }
+  try #require(activateSettingsTestApplication(application))
+
   let fixture = try await RuntimeFixture(
     finalText: nil,
     capsuleEnabled: false,
@@ -1093,11 +1110,16 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
   window.appearance = NSAppearance(named: .aqua)
   window.contentView = host
   window.center()
-  window.makeKeyAndOrderFront(nil)
   defer {
     window.contentView = nil
     window.orderOut(nil)
   }
+  window.makeKeyAndOrderFront(nil)
+  try #require(
+    waitForSettingsAppKitState {
+      application.isActive && application.keyWindow === window && window.isKeyWindow
+    }
+  )
   await settleSettingsHost(host)
 
   let sidebar = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
@@ -1118,6 +1140,11 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
   let readinessCenter = readinessAnchor.convert(
     NSPoint(x: readinessAnchor.bounds.midX, y: readinessAnchor.bounds.midY),
     to: nil
+  )
+  try #require(
+    waitForSettingsAppKitState {
+      application.isActive && application.keyWindow === window && window.isKeyWindow
+    }
   )
   let mouseDown = try #require(NSEvent.mouseEvent(
     with: .leftMouseDown,
@@ -2199,6 +2226,82 @@ private func settleSettingsHost(_ view: NSView) async {
     view.layoutSubtreeIfNeeded()
     await Task.yield()
   }
+}
+
+@MainActor
+private struct SettingsTestApplicationActivationState {
+  private let activationPolicy: NSApplication.ActivationPolicy
+  private let wasActive: Bool
+
+  init(_ application: NSApplication) {
+    activationPolicy = application.activationPolicy()
+    wasActive = application.isActive
+  }
+
+  func restore(_ application: NSApplication) {
+    defer {
+      #expect(application.activationPolicy() == activationPolicy)
+      #expect(application.isActive == wasActive)
+    }
+
+    if !wasActive && application.isActive {
+      application.deactivate()
+      guard waitForSettingsAppKitState(condition: { !application.isActive }) else {
+        Issue.record(
+          "Failed to restore NSApp's inactive state; activation policy was left unchanged"
+        )
+        return
+      }
+    }
+
+    if application.activationPolicy() != activationPolicy {
+      guard application.setActivationPolicy(activationPolicy),
+        application.activationPolicy() == activationPolicy
+      else {
+        Issue.record("Failed to restore NSApp's activation policy")
+        return
+      }
+    }
+
+    if wasActive && !application.isActive {
+      application.activate(ignoringOtherApps: true)
+      guard waitForSettingsAppKitState(condition: { application.isActive }) else {
+        Issue.record("Failed to restore NSApp's active state")
+        return
+      }
+    } else if !wasActive && application.isActive {
+      application.deactivate()
+      guard waitForSettingsAppKitState(condition: { !application.isActive }) else {
+        Issue.record("Failed to restore NSApp's inactive state")
+        return
+      }
+    }
+  }
+}
+
+@MainActor
+private func activateSettingsTestApplication(_ application: NSApplication) -> Bool {
+  if application.activationPolicy() != .regular, !application.setActivationPolicy(.regular) {
+    return false
+  }
+
+  application.activate(ignoringOtherApps: true)
+  return waitForSettingsAppKitState { application.isActive }
+}
+
+@MainActor
+private func waitForSettingsAppKitState(
+  timeout: TimeInterval = 2,
+  condition: @MainActor () -> Bool
+) -> Bool {
+  let deadline = Date().addingTimeInterval(timeout)
+  while !condition(), Date() < deadline {
+    _ = RunLoop.main.run(
+      mode: .default,
+      before: min(deadline, Date().addingTimeInterval(0.01))
+    )
+  }
+  return condition()
 }
 
 @Test @MainActor func DictationRuntimeUpdatesRailAccentWithoutRewritingPreference() async throws {

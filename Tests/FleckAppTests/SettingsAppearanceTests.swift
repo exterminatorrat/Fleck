@@ -337,8 +337,11 @@ func settingsColorThemePickerRendersOpenAndSelectedNativePreviewsAcrossAppearanc
 {
   let application = NSApplication.shared
   let previousActivationPolicy = application.activationPolicy()
-  #expect(application.setActivationPolicy(.regular))
   defer { _ = application.setActivationPolicy(previousActivationPolicy) }
+  if previousActivationPolicy != .regular {
+    try #require(application.setActivationPolicy(.regular))
+  }
+  try #require(application.activationPolicy() == .regular)
   application.activate(ignoringOtherApps: true)
 
   let captureDirectory = ProcessInfo.processInfo.environment["FLECK_THEME_PICKER_CAPTURE_DIR"]
@@ -410,34 +413,56 @@ func settingsColorThemePickerRendersOpenAndSelectedNativePreviewsAcrossAppearanc
     }
 
     let openMenuProbe = SettingsThemePickerOpenMenuProbe()
-    let menuTimer = Timer(timeInterval: 0.15, repeats: false) { _ in
-      MainActor.assumeIsolated {
-        do {
-          openMenuProbe.captures = try settingsThemePickerCaptureOpenWindows(
-            excluding: window,
-            appearance: appearance,
-            directory: captureDirectory
-          )
-        } catch {
-          openMenuProbe.captureError = String(describing: error)
+    do {
+      let menuTimer = Timer(timeInterval: 0.15, repeats: false) { _ in
+        MainActor.assumeIsolated {
+          do {
+            let captures = try settingsThemePickerCaptureOpenWindows(
+              excluding: window,
+              appearance: appearance,
+              directory: captureDirectory
+            )
+            openMenuProbe.captures = captures.map(\.image)
+            guard let menuWindowNumber = captures.first?.windowNumber else {
+              openMenuProbe.captureError = "No live native menu window was captured"
+              return
+            }
+            openMenuProbe.menuWindowNumber = menuWindowNumber
+            settingsThemePickerPostKey(
+              keyCode: 125,
+              characters: "\u{F701}",
+              windowNumber: menuWindowNumber
+            )
+            settingsThemePickerPostKey(
+              keyCode: 36,
+              characters: "\r",
+              windowNumber: menuWindowNumber
+            )
+          } catch {
+            openMenuProbe.captureError = String(describing: error)
+          }
         }
-        settingsThemePickerPostKey(
-          keyCode: 125,
-          characters: "\u{F701}",
-          windowNumber: window.windowNumber
-        )
-        settingsThemePickerPostKey(
-          keyCode: 36,
-          characters: "\r",
-          windowNumber: window.windowNumber
-        )
       }
+      let menuDeadlineTimer = Timer(timeInterval: 5, repeats: false) { _ in
+        MainActor.assumeIsolated {
+          openMenuProbe.deadlineFired = true
+          picker.menu?.cancelTracking()
+        }
+      }
+      for timer in [menuTimer, menuDeadlineTimer] {
+        RunLoop.main.add(timer, forMode: .eventTracking)
+        RunLoop.main.add(timer, forMode: .default)
+      }
+      defer {
+        menuTimer.invalidate()
+        menuDeadlineTimer.invalidate()
+      }
+      picker.performClick(nil)
     }
-    RunLoop.main.add(menuTimer, forMode: .eventTracking)
-    RunLoop.main.add(menuTimer, forMode: .default)
-    picker.performClick(nil)
 
+    #expect(!openMenuProbe.deadlineFired)
     #expect(openMenuProbe.captureError == nil)
+    #expect(openMenuProbe.menuWindowNumber != nil)
     #expect(!openMenuProbe.captures.isEmpty)
     #expect(state.selection == .capy)
     #expect(picker.titleOfSelectedItem == FleckColorTheme.capy.title)
@@ -452,28 +477,52 @@ func settingsColorThemePickerRendersOpenAndSelectedNativePreviewsAcrossAppearanc
     }
 
     let activationProbe = SettingsThemePickerOpenMenuProbe()
-    let activationTimer = Timer(timeInterval: 0.15, repeats: false) { _ in
-      MainActor.assumeIsolated {
-        guard let menu = picker.menu else { return }
-        menu.performActionForItem(at: 4)
-        activationProbe.didActivateMenuItem = true
+    do {
+      let activationTimer = Timer(timeInterval: 0.15, repeats: false) { _ in
+        MainActor.assumeIsolated {
+          guard let menu = picker.menu else {
+            activationProbe.captureError = "The theme picker menu is unavailable"
+            return
+          }
+          guard let menuWindow = settingsThemePickerOpenMenuWindows(excluding: window).first else {
+            activationProbe.captureError = "No live native menu window was found"
+            return
+          }
+          activationProbe.menuWindowNumber = menuWindow.windowNumber
+          menu.performActionForItem(at: 4)
+          activationProbe.didActivateMenuItem = true
+        }
       }
-    }
-    let dismissTimer = Timer(timeInterval: 1.2, repeats: false) { _ in
-      MainActor.assumeIsolated {
-        settingsThemePickerPostKey(
-          keyCode: 53,
-          characters: "\u{1B}",
-          windowNumber: window.windowNumber
-        )
+      let dismissTimer = Timer(timeInterval: 1.2, repeats: false) { _ in
+        MainActor.assumeIsolated {
+          guard let menuWindowNumber = activationProbe.menuWindowNumber else { return }
+          settingsThemePickerPostKey(
+            keyCode: 53,
+            characters: "\u{1B}",
+            windowNumber: menuWindowNumber
+          )
+        }
       }
+      let menuDeadlineTimer = Timer(timeInterval: 5, repeats: false) { _ in
+        MainActor.assumeIsolated {
+          activationProbe.deadlineFired = true
+          picker.menu?.cancelTracking()
+        }
+      }
+      for timer in [activationTimer, dismissTimer, menuDeadlineTimer] {
+        RunLoop.main.add(timer, forMode: .eventTracking)
+        RunLoop.main.add(timer, forMode: .default)
+      }
+      defer {
+        activationTimer.invalidate()
+        dismissTimer.invalidate()
+        menuDeadlineTimer.invalidate()
+      }
+      picker.performClick(nil)
     }
-    RunLoop.main.add(activationTimer, forMode: .eventTracking)
-    RunLoop.main.add(activationTimer, forMode: .default)
-    RunLoop.main.add(dismissTimer, forMode: .eventTracking)
-    RunLoop.main.add(dismissTimer, forMode: .default)
-    picker.performClick(nil)
-    dismissTimer.invalidate()
+    #expect(!activationProbe.deadlineFired)
+    #expect(activationProbe.captureError == nil)
+    #expect(activationProbe.menuWindowNumber != nil)
     #expect(activationProbe.didActivateMenuItem)
     #expect(state.selection == .codex)
     #expect(picker.titleOfSelectedItem == FleckColorTheme.codex.title)
@@ -1201,6 +1250,8 @@ private final class SettingsThemePickerOpenMenuProbe {
   var captures: [NSBitmapImageRep] = []
   var captureError: String?
   var didActivateMenuItem = false
+  var menuWindowNumber: Int?
+  var deadlineFired = false
 }
 
 private struct SettingsThemePickerFixture: View {
@@ -1266,12 +1317,9 @@ private func settingsThemePickerCaptureOpenWindows(
   excluding hostWindow: NSWindow,
   appearance: FleckThemeAppearance,
   directory: URL?
-) throws -> [NSBitmapImageRep] {
-  let menuWindows = NSApp.windows.filter {
-    $0 !== hostWindow && $0.isVisible && $0.frame.height > hostWindow.frame.height
-  }
-  var captures: [NSBitmapImageRep] = []
-  for menuWindow in menuWindows {
+) throws -> [SettingsThemePickerOpenWindowCapture] {
+  var captures: [SettingsThemePickerOpenWindowCapture] = []
+  for menuWindow in settingsThemePickerOpenMenuWindows(excluding: hostWindow) {
     guard let number = UInt32(exactly: menuWindow.windowNumber),
       let image = CGWindowListCreateImage(
         .null,
@@ -1281,7 +1329,12 @@ private func settingsThemePickerCaptureOpenWindows(
       )
     else { continue }
     let representation = NSBitmapImageRep(cgImage: image)
-    captures.append(representation)
+    captures.append(
+      SettingsThemePickerOpenWindowCapture(
+        windowNumber: menuWindow.windowNumber,
+        image: representation
+      )
+    )
     try settingsThemePickerWriteCapture(
       representation,
       name: "theme-picker-\(appearance.rawValue)-open-menu-\(number).png",
@@ -1289,6 +1342,18 @@ private func settingsThemePickerCaptureOpenWindows(
     )
   }
   return captures
+}
+
+private struct SettingsThemePickerOpenWindowCapture {
+  let windowNumber: Int
+  let image: NSBitmapImageRep
+}
+
+@MainActor
+private func settingsThemePickerOpenMenuWindows(excluding hostWindow: NSWindow) -> [NSWindow] {
+  NSApp.windows.filter {
+    $0 !== hostWindow && $0.isVisible && $0.level == .popUpMenu
+  }
 }
 
 @MainActor
