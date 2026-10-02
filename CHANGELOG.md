@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.1.3-beta.1] - 2026-10-02
+
+### Fixed
+
+- Keep the insertion point after an empty list marker when indenting or outdenting, so typing
+  does not replace the marker.
+
 ## [1.1.2-beta.2] - 2026-09-18
 
 First public **Developer Preview** release. This entry is the public preview record for
