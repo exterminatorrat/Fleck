@@ -477,6 +477,9 @@ func settingsColorThemePickerRendersOpenAndSelectedNativePreviewsAcrossAppearanc
       picker.performClick(nil)
     }
 
+    _ = try await settingsAppearanceWait(in: host) {
+      state.selection == .capy && picker.titleOfSelectedItem == FleckColorTheme.capy.title
+    }
     #expect(!openMenuProbe.deadlineFired)
     #expect(openMenuProbe.captureError == nil)
     #expect(openMenuProbe.readinessError == nil)
@@ -553,6 +556,9 @@ func settingsColorThemePickerRendersOpenAndSelectedNativePreviewsAcrossAppearanc
         activationProbe.dismissTimer = nil
       }
       picker.performClick(nil)
+    }
+    _ = try await settingsAppearanceWait(in: host) {
+      state.selection == .codex && picker.titleOfSelectedItem == FleckColorTheme.codex.title
     }
     #expect(!activationProbe.deadlineFired)
     #expect(activationProbe.captureError == nil)
@@ -921,7 +927,10 @@ func settingsGlassOpacitySliderRespondsToThumbDragAndTrackClickAtAnchoredSetting
 {
   let application = NSApplication.shared
   let previousActivationPolicy = application.activationPolicy()
-  #expect(application.setActivationPolicy(.regular))
+  if previousActivationPolicy != .regular {
+    #expect(application.setActivationPolicy(.regular))
+  }
+  #expect(application.activationPolicy() == .regular)
   defer { _ = application.setActivationPolicy(previousActivationPolicy) }
 
   let theme = FleckThemeSnapshot.resolve(
@@ -957,10 +966,18 @@ func settingsGlassOpacitySliderRespondsToThumbDragAndTrackClickAtAnchoredSetting
       window.contentView = nil
       window.orderOut(nil)
     }
-    for _ in 0..<30 {
-      host.layoutSubtreeIfNeeded()
-      await Task.yield()
+    let windowReady = try await settingsAppearanceWait(in: host) {
+      guard NSApp.isActive,
+        window.isKeyWindow,
+        NSApp.keyWindow === window,
+        window.isVisible,
+        let slider = settingsNativeSlider(in: host),
+        slider.window === window,
+        !slider.isHiddenOrHasHiddenAncestor
+      else { return false }
+      return slider.bounds.width > 0 && slider.bounds.height > 0
     }
+    try #require(windowReady)
 
     let slider = try #require(settingsNativeSlider(in: host))
     let sliderRect = slider.convert(slider.bounds, to: host)
@@ -985,10 +1002,7 @@ func settingsGlassOpacitySliderRespondsToThumbDragAndTrackClickAtAnchoredSetting
       ],
       to: window
     )
-    for _ in 0..<20 {
-      host.layoutSubtreeIfNeeded()
-      await Task.yield()
-    }
+    _ = try await settingsAppearanceWait(in: host) { state.value > 0.82 }
     #expect(state.value > 0.82)
     let valueAfterDrag = state.value
     let clickedValue = 0.6
@@ -997,9 +1011,8 @@ func settingsGlassOpacitySliderRespondsToThumbDragAndTrackClickAtAnchoredSetting
       [(.leftMouseDown, trackPoint), (.leftMouseUp, trackPoint)],
       to: window
     )
-    for _ in 0..<20 {
-      host.layoutSubtreeIfNeeded()
-      await Task.yield()
+    _ = try await settingsAppearanceWait(in: host) {
+      state.value < valueAfterDrag && abs(state.value - clickedValue) < 0.04
     }
 
     #expect(valueAfterDrag > 0.82)
@@ -1012,7 +1025,10 @@ func settingsGlassOpacitySliderRespondsToThumbDragAndTrackClickAtAnchoredSetting
 func settingsGlassOpacitySliderRemainsDisabledForSolidAppearance() async throws {
   let application = NSApplication.shared
   let previousActivationPolicy = application.activationPolicy()
-  #expect(application.setActivationPolicy(.regular))
+  if previousActivationPolicy != .regular {
+    #expect(application.setActivationPolicy(.regular))
+  }
+  #expect(application.activationPolicy() == .regular)
   defer { _ = application.setActivationPolicy(previousActivationPolicy) }
 
   let theme = FleckThemeSnapshot.resolve(
@@ -1084,7 +1100,10 @@ func settingsGlassOpacitySliderRemainsDisabledForSolidAppearance() async throws 
 func settingsSearchAnchorKeepsAppearanceCardFocusedWithoutSystemHalo() async throws {
   let application = NSApplication.shared
   let previousActivationPolicy = application.activationPolicy()
-  #expect(application.setActivationPolicy(.regular))
+  if previousActivationPolicy != .regular {
+    #expect(application.setActivationPolicy(.regular))
+  }
+  #expect(application.activationPolicy() == .regular)
   defer { _ = application.setActivationPolicy(previousActivationPolicy) }
 
   let theme = FleckThemeSnapshot.resolve(
@@ -1147,7 +1166,10 @@ func settingsSearchAnchorKeepsAppearanceCardFocusedWithoutSystemHalo() async thr
 func settingsSearchAnchorFocusCueDistinguishesTabFromPointer() async throws {
   let application = NSApplication.shared
   let previousActivationPolicy = application.activationPolicy()
-  #expect(application.setActivationPolicy(.regular))
+  if previousActivationPolicy != .regular {
+    #expect(application.setActivationPolicy(.regular))
+  }
+  #expect(application.activationPolicy() == .regular)
   defer { _ = application.setActivationPolicy(previousActivationPolicy) }
 
   let theme = FleckThemeSnapshot.resolve(
@@ -1179,10 +1201,21 @@ func settingsSearchAnchorFocusCueDistinguishesTabFromPointer() async throws {
     window.contentView = nil
     window.orderOut(nil)
   }
-  for _ in 0..<30 {
-    host.layoutSubtreeIfNeeded()
-    await Task.yield()
+  let windowReady = try await settingsAppearanceWait(in: host) {
+    guard NSApp.isActive,
+      window.isKeyWindow,
+      NSApp.keyWindow === window,
+      window.isVisible,
+      let searchField = settingsNativeView(
+        withAccessibilityIdentifier: "settings-search-field",
+        in: host
+      ) as? NSSearchField,
+      searchField.window === window,
+      !searchField.isHiddenOrHasHiddenAncestor
+    else { return false }
+    return searchField.bounds.width > 0 && searchField.bounds.height > 0
   }
+  try #require(windowReady)
 
   let focusIdentifier =
     "settings-keyboard-focus-\(SettingsSearchTarget.appearanceGlassOpacity.identifier)"
@@ -1193,9 +1226,9 @@ func settingsSearchAnchorFocusCueDistinguishesTabFromPointer() async throws {
       as? NSSearchField
   )
   #expect(window.makeFirstResponder(searchField))
-  for _ in 0..<10 {
-    host.layoutSubtreeIfNeeded()
-    await Task.yield()
+  _ = try await settingsAppearanceWait(in: host) {
+    settingsNativeView(withAccessibilityIdentifier: focusIdentifier, in: host) == nil
+      && settingsNativeView(withAccessibilityIdentifier: cueIdentifier, in: host) == nil
   }
   #expect(settingsNativeView(withAccessibilityIdentifier: focusIdentifier, in: host) == nil)
   #expect(settingsNativeView(withAccessibilityIdentifier: cueIdentifier, in: host) == nil)
@@ -1221,10 +1254,27 @@ func settingsSearchAnchorFocusCueDistinguishesTabFromPointer() async throws {
       keyCode: 48
     )
   )
+  let tabReady = try await settingsAppearanceWait(in: host) {
+    guard NSApp.isActive,
+      window.isKeyWindow,
+      NSApp.keyWindow === window,
+      window.isVisible,
+      searchField.window === window,
+      !searchField.isHiddenOrHasHiddenAncestor,
+      searchField.bounds.width > 0,
+      searchField.bounds.height > 0,
+      let editor = searchField.currentEditor()
+    else { return false }
+    return editor === window.firstResponder
+  }
+  try #require(tabReady)
+  try #require(
+    searchField.currentEditor() != nil && searchField.currentEditor() === window.firstResponder
+  )
   NSApp.sendEvent(tabEvent)
-  for _ in 0..<20 {
-    host.layoutSubtreeIfNeeded()
-    await Task.yield()
+  _ = try await settingsAppearanceWait(in: host) {
+    settingsNativeView(withAccessibilityIdentifier: focusIdentifier, in: host) != nil
+      && settingsNativeView(withAccessibilityIdentifier: cueIdentifier, in: host) != nil
   }
   #expect(settingsNativeView(withAccessibilityIdentifier: focusIdentifier, in: host) != nil)
   #expect(settingsNativeView(withAccessibilityIdentifier: cueIdentifier, in: host) != nil)
@@ -1234,16 +1284,16 @@ func settingsSearchAnchorFocusCueDistinguishesTabFromPointer() async throws {
     to: window,
     throughApplication: true
   )
-  for _ in 0..<20 {
-    host.layoutSubtreeIfNeeded()
-    await Task.yield()
+  _ = try await settingsAppearanceWait(in: host) {
+    settingsNativeView(withAccessibilityIdentifier: focusIdentifier, in: host) != nil
+      && settingsNativeView(withAccessibilityIdentifier: cueIdentifier, in: host) == nil
   }
   #expect(settingsNativeView(withAccessibilityIdentifier: focusIdentifier, in: host) != nil)
   #expect(settingsNativeView(withAccessibilityIdentifier: cueIdentifier, in: host) == nil)
   #expect(window.makeFirstResponder(searchField))
-  for _ in 0..<10 {
-    host.layoutSubtreeIfNeeded()
-    await Task.yield()
+  _ = try await settingsAppearanceWait(in: host) {
+    settingsNativeView(withAccessibilityIdentifier: focusIdentifier, in: host) == nil
+      && settingsNativeView(withAccessibilityIdentifier: cueIdentifier, in: host) == nil
   }
   #expect(settingsNativeView(withAccessibilityIdentifier: focusIdentifier, in: host) == nil)
   #expect(settingsNativeView(withAccessibilityIdentifier: cueIdentifier, in: host) == nil)
@@ -1252,9 +1302,9 @@ func settingsSearchAnchorFocusCueDistinguishesTabFromPointer() async throws {
     to: window,
     throughApplication: true
   )
-  for _ in 0..<20 {
-    host.layoutSubtreeIfNeeded()
-    await Task.yield()
+  _ = try await settingsAppearanceWait(in: host) {
+    settingsNativeView(withAccessibilityIdentifier: focusIdentifier, in: host) != nil
+      && settingsNativeView(withAccessibilityIdentifier: cueIdentifier, in: host) == nil
   }
   #expect(settingsNativeView(withAccessibilityIdentifier: focusIdentifier, in: host) != nil)
   #expect(settingsNativeView(withAccessibilityIdentifier: cueIdentifier, in: host) == nil)
@@ -1727,6 +1777,29 @@ private func settingsNativeView(withAccessibilityIdentifier identifier: String, 
     }
   }
   return nil
+}
+
+@MainActor
+private func settingsAppearanceWait(
+  in host: NSView,
+  predicate: () -> Bool
+) async throws -> Bool {
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: .seconds(2))
+  while clock.now < deadline {
+    try Task.checkCancellation()
+    host.layoutSubtreeIfNeeded()
+    guard clock.now < deadline else { break }
+    if predicate() {
+      try Task.checkCancellation()
+      return true
+    }
+    let remaining = clock.now.duration(to: deadline)
+    guard remaining > .zero else { break }
+    try await Task.sleep(for: min(.milliseconds(25), remaining))
+  }
+  try Task.checkCancellation()
+  return false
 }
 
 @MainActor

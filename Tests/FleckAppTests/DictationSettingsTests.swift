@@ -249,7 +249,6 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
 func DictationSettingsHostedSidebarSelectionUsesPaletteInKeyWindow() async throws {
   let application = NSApplication.shared
   try await withSettingsTestApplicationActivationState(application) {
-    try #require(prepareSettingsTestApplication(application))
     for family in [FleckColorTheme.monochrome, .capy] {
       let theme = FleckThemeSnapshot.resolve(
         colorTheme: family,
@@ -861,16 +860,7 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
   async throws
 {
   let application = NSApplication.shared
-  let previousActivationPolicy = application.activationPolicy()
-  let wasActive = application.isActive
-  defer {
-    if !wasActive { application.deactivate() }
-    application.setActivationPolicy(previousActivationPolicy)
-  }
-  if previousActivationPolicy != .regular {
-    #expect(application.setActivationPolicy(.regular))
-  }
-  application.activate(ignoringOtherApps: true)
+  try requireSettingsTestApplicationBaseline(application)
   let previousAccessibility = enableSettingsAccessibility()
   defer { restoreSettingsAccessibility(previousAccessibility) }
   let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
@@ -1067,8 +1057,6 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
 func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async throws {
   let application = NSApplication.shared
   try await withSettingsTestApplicationActivationState(application) {
-    try #require(prepareSettingsTestApplication(application))
-
     let fixture = try await RuntimeFixture(
       finalText: nil,
       capsuleEnabled: false,
@@ -2248,35 +2236,19 @@ private struct SettingsTestApplicationActivationState {
       #expect(application.isActive == wasActive)
     }
 
-    if !wasActive && application.isActive {
-      application.deactivate()
-      guard await waitForSettingsAppKitState(condition: { !application.isActive }) else {
-        Issue.record(
-          "Failed to restore NSApp's inactive state; activation policy was left unchanged"
-        )
-        return
-      }
-    }
-
     if application.activationPolicy() != activationPolicy {
-      guard application.setActivationPolicy(activationPolicy),
-        application.activationPolicy() == activationPolicy
-      else {
-        Issue.record("Failed to restore NSApp's activation policy")
-        return
-      }
+      Issue.record("NSApp's activation policy changed during the test; host policy was not reset")
+      return
     }
 
     if wasActive && !application.isActive {
       application.activate(ignoringOtherApps: true)
-      guard await waitForSettingsAppKitState(condition: { application.isActive }) else {
+      guard
+        await waitForSettingsAppKitState(condition: {
+          application.activationPolicy() == activationPolicy && application.isActive
+        })
+      else {
         Issue.record("Failed to restore NSApp's active state")
-        return
-      }
-    } else if !wasActive && application.isActive {
-      application.deactivate()
-      guard await waitForSettingsAppKitState(condition: { !application.isActive }) else {
-        Issue.record("Failed to restore NSApp's inactive state")
         return
       }
     }
@@ -2288,6 +2260,7 @@ private func withSettingsTestApplicationActivationState(
   _ application: NSApplication,
   operation: @MainActor () async throws -> Void
 ) async throws {
+  try requireSettingsTestApplicationBaseline(application)
   let activationState = SettingsTestApplicationActivationState(application)
   do {
     try await operation()
@@ -2303,11 +2276,12 @@ private func withSettingsTestApplicationActivationState(
 }
 
 @MainActor
-private func prepareSettingsTestApplication(_ application: NSApplication) -> Bool {
-  if application.activationPolicy() != .regular, !application.setActivationPolicy(.regular) {
-    return false
-  }
-  return application.activationPolicy() == .regular
+private func requireSettingsTestApplicationBaseline(_ application: NSApplication) throws {
+  try #require(
+    application.activationPolicy() == .regular,
+    "Expected the test host's declared .regular activation policy"
+  )
+  try #require(application.isActive, "Expected the test host's active application baseline")
 }
 
 @MainActor

@@ -1449,6 +1449,11 @@ import Testing
         window.orderOut(nil)
       }
       await settleResizeHost(host)
+      await withCheckedContinuation { continuation in
+        DispatchQueue.main.async {
+          continuation.resume()
+        }
+      }
       let startingFrame = window.frame
       let anchoredButtonFrame = try #require(geometryStore.cachedStatusButton?.screenFrame)
 
@@ -1481,8 +1486,16 @@ import Testing
       }
       if changesHeight { release.y -= heightDelta }
 
-      sendResizeMouseEvent(.leftMouseDown, at: mouseDown, to: window, number: eventNumber)
+      let mouseDownEventNumber = eventNumber
+      await withCheckedContinuation { continuation in
+        DispatchQueue.main.async {
+          sendResizeMouseEvent(
+            .leftMouseDown, at: mouseDown, to: window, number: mouseDownEventNumber)
+          continuation.resume()
+        }
+      }
       eventNumber += 1
+      try #require(controller.isTracking)
       sendResizeMouseEvent(.leftMouseDragged, atScreen: release, to: window, number: eventNumber)
       eventNumber += 1
       sendResizeMouseEvent(.leftMouseUp, atScreen: release, to: window, number: eventNumber)

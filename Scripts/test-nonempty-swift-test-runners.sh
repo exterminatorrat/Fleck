@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+unset FLECK_TEST_APPKIT_HOST_APP_PATH
 
 readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly ordinary_runner="$script_dir/run-nonempty-swift-tests.sh"
@@ -14,8 +15,13 @@ readonly fixture_scripts="$fixture_root/Scripts"
 readonly fixture_bin="$temp_root/bin"
 readonly fixture_state="$temp_root/state"
 readonly foreign_root="$temp_root/foreign"
+decoy_pid=''
 
 cleanup() {
+  if [[ -n "$decoy_pid" ]]; then
+    /bin/kill -TERM "$decoy_pid" 2>/dev/null || true
+    wait "$decoy_pid" 2>/dev/null || true
+  fi
   /bin/rm -rf -- "$temp_root"
 }
 trap cleanup EXIT
@@ -192,36 +198,21 @@ SH
 /bin/chmod +x "$fixture_bin/swift"
 
 cat > "$fixture_state/fake-appkit-host" <<'SH'
-#!/bin/sh
+#!/bin/bash
 set -eu
 
-printf '%s\n' "$*" >> "$FAKE_STATE/host-invocations"
-if [ -n "${FAKE_REACHED_SWIFT_MARKER:-}" ]; then
-  /usr/bin/touch "$FAKE_REACHED_SWIFT_MARKER"
-fi
-if [ -n "${FAKE_SWIFT_PID_FILE:-}" ]; then
-  printf '%s\n' "$$" > "$FAKE_SWIFT_PID_FILE"
-fi
-if [ "${FAKE_HOST_LOAD_EXIT:-0}" != 0 ]; then
-  printf '%s\n' 'error: failed to load test bundle: fixture failure' >&2
-  exit "$FAKE_HOST_LOAD_EXIT"
-fi
-if [ "${2:-}" = --list-tests ]; then
-  if [ -n "${FAKE_BLOCK_LIST_MARKER:-}" ]; then
-    /usr/bin/touch "$FAKE_BLOCK_LIST_MARKER"
-    while [ ! -e "$FAKE_RELEASE_LIST_MARKER" ]; do
-      /bin/sleep 0.05
-    done
-  fi
-  printf '%s\n' "${FAKE_LIST_OUTPUT:-}"
-  exit "${FAKE_LIST_EXIT:-0}"
-fi
-
+bundle_binary="$1"
+shift
+list_tests=0
 saw_no_parallel=0
 actual_filter=''
-shift
+host_configuration=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --list-tests)
+      list_tests=1
+      shift
+      ;;
     --filter)
       actual_filter="${2:-}"
       shift 2
@@ -230,12 +221,120 @@ while [ "$#" -gt 0 ]; do
       saw_no_parallel=1
       shift
       ;;
+    --host-config)
+      host_configuration="${2:-}"
+      shift 2
+      ;;
     *)
-      printf 'error: unsupported fake host argument: %s\n' "$1" >&2
+      printf 'error: unsupported test argument: %s\n' "$1" >&2
       exit 94
       ;;
   esac
 done
+[[ -n "$host_configuration" ]] || {
+  printf '%s\n' 'error: fake host configuration is missing' >&2
+  exit 95
+}
+configuration_values=()
+while IFS= read -r -d '' value; do
+  configuration_values+=("$value")
+done < "$host_configuration"
+[[ "${#configuration_values[@]}" -eq 5 ]] || {
+  printf '%s\n' 'error: fake host configuration has the wrong field count' >&2
+  exit 96
+}
+nonce="${configuration_values[0]}"
+receipt_path="${configuration_values[1]}"
+pid_path="${configuration_values[2]}"
+phase_path="${configuration_values[3]}"
+host_log_path="${configuration_values[4]}"
+exec >> "$host_log_path" 2>&1
+printf '%s\t%s\n' "$nonce" "$$" > "$pid_path"
+printf '%s\n' 'didFinishLaunching' > "$phase_path"
+printf '%s|%s|%s|%s\n' "$bundle_binary" "$list_tests" "$actual_filter" \
+  "$saw_no_parallel" >> "$FAKE_STATE/host-invocations"
+if [ -n "${FAKE_REACHED_SWIFT_MARKER:-}" ]; then
+  /usr/bin/touch "$FAKE_REACHED_SWIFT_MARKER"
+fi
+if [ -n "${FAKE_SWIFT_PID_FILE:-}" ]; then
+  printf '%s\n' "$$" > "$FAKE_SWIFT_PID_FILE"
+fi
+if [ -f "$FAKE_STATE/host-path-forwarding-contract" ] &&
+  [[ ${FLECK_TEST_APPKIT_HOST_APP_PATH+x} ]]; then
+  printf '%s\n' 'error: fake host received the internal host-app path variable' >&2
+  exit 97
+fi
+if [ -f "$FAKE_STATE/environment-forwarding-contract" ]; then
+  if [[ ${FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR+x} ]]; then
+    printf '%s\n' 'error: fake host received an unset whitelist variable' >&2
+    exit 97
+  fi
+  if [[ ! ${FLECK_SETTINGS_WINDOW_CAPTURE_DIR+x} ]]; then
+    printf '%s\n' 'error: fake host lost an explicitly empty whitelist variable' >&2
+    exit 97
+  fi
+  if [[ -n "$FLECK_SETTINGS_WINDOW_CAPTURE_DIR" ]]; then
+    printf '%s\n' 'error: fake host changed an explicitly empty whitelist variable' >&2
+    exit 97
+  fi
+  if [[ ! ${FLECK_SETTINGS_MODELS_CAPTURE_DIR+x} ]]; then
+    printf '%s\n' 'error: fake host lost a non-empty whitelist variable' >&2
+    exit 97
+  fi
+  if [[ "$FLECK_SETTINGS_MODELS_CAPTURE_DIR" != 'mock capture path with spaces' ]]; then
+    printf '%s\n' 'error: fake host changed a non-empty whitelist variable' >&2
+    exit 97
+  fi
+  if [[ ${FLECK_TEST_UNWHITELISTED_CAPTURE_PROBE+x} ]]; then
+    printf '%s\n' 'error: fake host received an unwhitelisted variable' >&2
+    exit 97
+  fi
+  printf '%s\n' 'pass' >> "$FAKE_STATE/host-environment-observations"
+fi
+
+write_receipt() {
+  local status="$1"
+  local phase
+  phase="$(/bin/cat "$phase_path")"
+  if [ "${FAKE_NO_RECEIPT:-0}" = 1 ] ||
+    [ "${FAKE_NO_RECEIPT_PHASE:-}" = "$phase" ]; then
+    return 0
+  fi
+  printf '%s\t%s\t%s\n' "${FAKE_RECEIPT_NONCE:-$nonce}" \
+    "${FAKE_RECEIPT_PID:-$$}" "$status" \
+    > "$receipt_path"
+}
+
+hang_host() {
+  trap '' TERM
+  while :; do
+    /bin/sleep 1
+  done
+}
+
+if [ "${FAKE_HOST_LOAD_EXIT:-0}" != 0 ]; then
+  printf '%s\n' 'error: failed to load test bundle: fixture failure' >&2
+  write_receipt "$FAKE_HOST_LOAD_EXIT"
+  exit "$FAKE_HOST_LOAD_EXIT"
+fi
+if [ "$list_tests" -eq 1 ]; then
+  printf '%s\n' 'listingTests' > "$phase_path"
+  if [ "${FAKE_HOST_HANG_PHASE:-}" = listingTests ]; then
+    hang_host
+  fi
+  if [ -n "${FAKE_BLOCK_LIST_MARKER:-}" ]; then
+    /usr/bin/touch "$FAKE_BLOCK_LIST_MARKER"
+    while [ ! -e "$FAKE_RELEASE_LIST_MARKER" ]; do
+      /bin/sleep 0.05
+    done
+  fi
+  printf '%s\n' "${FAKE_LIST_OUTPUT:-}"
+  status="${FAKE_LIST_EXIT:-0}"
+  write_receipt "$status"
+  exit "$status"
+fi
+
+printf '%s\n' 'runningTests' > "$phase_path"
 if [ "${FAKE_EXPECT_NO_PARALLEL:-0}" = 1 ] && [ "$saw_no_parallel" -ne 1 ]; then
   printf '%s\n' 'error: native host run omitted --no-parallel' >&2
   exit 93
@@ -263,8 +362,16 @@ if [ -n "${FAKE_READONLY_LOCK_PARENT:-}" ]; then
   /bin/chmod 400 "$FAKE_MUTATE_LOCK"
   /bin/chmod 500 "$FAKE_READONLY_LOCK_PARENT"
 fi
-if [ "${FAKE_SIGNAL_RUNNER:-0}" = 1 ]; then
+if [ "${FAKE_HOST_HANG_PHASE:-}" = runningTests ]; then
+  printf '%s\n' 'fixture host output tail for runningTests'
+fi
+if [ "${FAKE_SIGNAL_RUNNER:-0}" = 1 ] ||
+  [ "${FAKE_SIGNAL_RUNNER_PHASE:-}" = runningTests ]; then
   kill -TERM "$PPID"
+fi
+if [ "${FAKE_HOST_HANG:-0}" = 1 ] ||
+  [ "${FAKE_HOST_HANG_PHASE:-}" = runningTests ]; then
+  hang_host
 fi
 if [ "${FAKE_RUN_OUTPUT+x}" = x ]; then
   if [ -n "$FAKE_RUN_OUTPUT" ]; then
@@ -273,9 +380,209 @@ if [ "${FAKE_RUN_OUTPUT+x}" = x ]; then
 else
   printf '%s\n' '✔ Test run with 1 test in 0 suites passed after 0.001 seconds.'
 fi
-exit "${FAKE_RUN_EXIT:-0}"
+status="${FAKE_RUN_EXIT:-0}"
+write_receipt "$status"
+exit "$status"
 SH
 /bin/chmod +x "$fixture_state/fake-appkit-host"
+
+cat > "$fixture_bin/codesign" <<'SH'
+#!/bin/bash
+set -eu
+
+printf '%s\n' "$*" >> "$FAKE_STATE/codesign-invocations"
+app_path=''
+for argument in "$@"; do app_path="$argument"; done
+case "${1:-}" in
+  --force)
+    [[ "${2:-}" = --deep && "${3:-}" = --sign && "${4:-}" = - ]] || exit 97
+    if [ "${FAKE_CODESIGN_SIGN_EXIT:-0}" != 0 ]; then
+      exit "$FAKE_CODESIGN_SIGN_EXIT"
+    fi
+    [[ -x "$app_path/Contents/MacOS/AppKitTestHost" ]] || exit 98
+    printf '%s\n' "$app_path" >> "$FAKE_STATE/signed-app-paths"
+    printf '%s\n' 'ad-hoc fixture signature' > \
+      "$app_path/Contents/.fixture-adhoc-signature"
+    ;;
+  --verify)
+    [[ "${2:-}" = --deep && "${3:-}" = --strict && \
+      "${4:-}" = --verbose=2 ]] || exit 99
+    [[ -f "$app_path/Contents/.fixture-adhoc-signature" ]] || exit 100
+    if [ "${FAKE_CODESIGN_VERIFY_EXIT:-0}" != 0 ]; then
+      exit "$FAKE_CODESIGN_VERIFY_EXIT"
+    fi
+    printf '%s\n' "$app_path" >> "$FAKE_STATE/verified-app-paths"
+    ;;
+  *)
+    exit 96
+    ;;
+esac
+SH
+/bin/chmod +x "$fixture_bin/codesign"
+
+cat > "$fixture_bin/open" <<'SH'
+#!/bin/bash
+set -eu
+
+printf '%s\n' "$*" >> "$FAKE_STATE/open-invocations"
+if [ -n "${FAKE_OPEN_PID_FILE:-}" ]; then
+  printf '%s\n' "$$" > "$FAKE_OPEN_PID_FILE"
+fi
+app_path=''
+list_background=0
+saw_new=0
+saw_wait=0
+app_arguments=()
+forwarded_environment_names=()
+
+environment_name_is_forwarded() {
+  local expected_name="$1"
+  local forwarded_name
+  for forwarded_name in "${forwarded_environment_names[@]}"; do
+    [[ "$forwarded_name" = "$expected_name" ]] && return 0
+  done
+  return 1
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -n)
+      saw_new=1
+      shift
+      ;;
+    -W)
+      saw_wait=1
+      shift
+      ;;
+    -g)
+      list_background=1
+      shift
+      ;;
+    -a)
+      app_path="${2:-}"
+      shift 2
+      ;;
+    --env)
+      environment_name="${2:-}"
+      forwarded_environment_names+=("$environment_name")
+      printf 'environment:%s\n' "$environment_name" >> "$FAKE_STATE/open-environments"
+      shift 2
+      ;;
+    --args)
+      shift
+      app_arguments=("$@")
+      break
+      ;;
+    *)
+      printf 'error: unsupported fake open option: %s\n' "$1" >&2
+      exit 91
+      ;;
+  esac
+done
+printf '%s\n' "${forwarded_environment_names[*]}" \
+  >> "$FAKE_STATE/open-environment-name-blocks"
+[[ "$saw_new" -eq 1 && "$saw_wait" -eq 1 && -n "$app_path" ]] || {
+  printf '%s\n' 'error: fake open did not receive -n, -W, and -a' >&2
+  exit 92
+}
+host_binary="$app_path/Contents/MacOS/AppKitTestHost"
+[[ -x "$host_binary" && -f "$app_path/Contents/Info.plist" ]] || {
+  printf '%s\n' 'error: fake open received an invalid AppKit test bundle' >&2
+  exit 93
+}
+bundle_id="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - \
+  "$app_path/Contents/Info.plist")"
+[[ "$bundle_id" = 'com.harryjin.fleck.tests.appkit-host' ]] || {
+  printf 'error: unexpected AppKit test bundle identifier: %s\n' "$bundle_id" >&2
+  exit 94
+}
+[[ -f "$app_path/Contents/.fixture-adhoc-signature" ]] && \
+  /usr/bin/grep -Fxq -- "$app_path" "$FAKE_STATE/verified-app-paths" || {
+  printf '%s\n' 'error: fake LaunchServices received an unsigned or unverified AppKit test host' >&2
+  exit 97
+}
+printf '%s\n' "$app_path" >> "$FAKE_STATE/host-app-paths"
+if [ -n "${FAKE_PRESERVE_HOST_APP_PATH:-}" ] &&
+  [ ! -e "$FAKE_PRESERVE_HOST_APP_PATH" ]; then
+  /bin/cp -R "$app_path" "$FAKE_PRESERVE_HOST_APP_PATH"
+fi
+if [ -f "$FAKE_STATE/environment-forwarding-contract" ]; then
+  for probe_name in FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR \
+    FLECK_SETTINGS_WINDOW_CAPTURE_DIR FLECK_SETTINGS_MODELS_CAPTURE_DIR \
+    FLECK_TEST_UNWHITELISTED_CAPTURE_PROBE; do
+    if environment_name_is_forwarded "$probe_name"; then
+      if [[ "$probe_name" = FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR &&
+        ! ${!probe_name+x} ]]; then
+        printf -v "$probe_name" '%s' ''
+        export "$probe_name"
+      fi
+    else
+      unset "$probe_name"
+    fi
+  done
+fi
+if ! environment_name_is_forwarded FLECK_TEST_APPKIT_HOST_APP_PATH; then
+  unset FLECK_TEST_APPKIT_HOST_APP_PATH
+fi
+if [ "${FAKE_OPEN_EXIT:-0}" != 0 ]; then
+  exit "$FAKE_OPEN_EXIT"
+fi
+if [ "${FAKE_OPEN_RETURN_EARLY:-0}" = 1 ] ||
+  { [ "${FAKE_OPEN_RETURN_EARLY_RUN:-0}" = 1 ] && [ "$list_background" -eq 0 ]; }; then
+  "$host_binary" "${app_arguments[@]}" &
+  child_pid=$!
+  if [ -n "${FAKE_OPEN_CHILD_PID_FILE:-}" ]; then
+    printf '%s\n' "$child_pid" > "$FAKE_OPEN_CHILD_PID_FILE"
+  fi
+  config=''
+  for (( index = 0; index < ${#app_arguments[@]}; index++ )); do
+    if [ "${app_arguments[index]}" = --host-config ]; then
+      config="${app_arguments[index + 1]:-}"
+      break
+    fi
+  done
+  values=()
+  while IFS= read -r -d '' value; do values+=("$value"); done < "$config"
+  for _ in {1..50}; do
+    [ -s "${values[2]}" ] && break
+    /bin/sleep 0.02
+  done
+  if [ -n "${FAKE_OPEN_WAIT_PHASE:-}" ]; then
+    for _ in {1..50}; do
+      [ "$(/bin/cat "${values[3]}" 2>/dev/null || true)" = \
+        "$FAKE_OPEN_WAIT_PHASE" ] && break
+      /bin/sleep 0.02
+    done
+  fi
+  exit 0
+fi
+if [ "$list_background" -ne 1 ] &&
+  printf '%s\n' "${app_arguments[@]}" | /usr/bin/grep -Fxq -- '--list-tests'; then
+  printf '%s\n' 'error: list mode was not launched in the background' >&2
+  exit 95
+fi
+exec "$host_binary" "${app_arguments[@]}"
+SH
+/bin/chmod +x "$fixture_bin/open"
+
+cat > "$fixture_bin/sample" <<'SH'
+#!/bin/sh
+set -eu
+
+pid="$1"
+printf '%s\n' "$pid" >> "$FAKE_STATE/sample-pids"
+output=''
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -file ]; then
+    output="${2:-}"
+    break
+  fi
+  shift
+done
+[ -n "$output" ] || exit 95
+printf 'fixture stack for pid %s\n' "$pid" > "$output"
+SH
+/bin/chmod +x "$fixture_bin/sample"
 
 cat > "$fixture_bin/swiftc" <<'SH'
 #!/bin/sh
@@ -341,6 +648,50 @@ assert_root_lock() {
     fail 'root Package.resolved was not restored'
 }
 
+assert_pid_stopped() {
+  local pid="$1" label="$2" process_state
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || fail "$label did not record a valid PID"
+  for _ in {1..100}; do
+    if ! /bin/kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+    process_state="$(/bin/ps -p "$pid" -o stat= 2>/dev/null | /usr/bin/tr -d '[:space:]' || true)"
+    [[ -n "$process_state" && "$process_state" != *Z* ]] || return 0
+    /bin/sleep 0.05
+  done
+  fail "$label PID $pid remained running"
+}
+
+assert_host_state_removed() {
+  local host_app_path state_dir
+  host_app_path="$(/usr/bin/tail -n 1 "$fixture_state/host-app-paths")"
+  [[ -n "$host_app_path" ]] || fail 'fake LaunchServices did not record a host app path'
+  state_dir="$(/usr/bin/dirname "$host_app_path")"
+  [[ ! -e "$state_dir" ]] || fail 'AppKit test host state/watchdog directory remained after exit'
+}
+
+assert_configured_host_rejected() {
+  local app_path="$1" expected_error="$2" expected_status="${3:-1}"
+  local temporary_host_app
+  reset_invocations
+  FLECK_TEST_APPKIT_HOST_APP_PATH="$app_path" \
+    FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+    run_capture "$fixture_state/output" \
+      run_ordinary '^FleckCoreTests\.known\(\)$'
+  assert_status "$expected_status"
+  /usr/bin/grep -Fq -- "$expected_error" "$fixture_state/output" ||
+    fail "configured AppKit host was not rejected with: $expected_error"
+  [[ ! -s "$fixture_state/open-invocations" && \
+    ! -s "$fixture_state/host-app-paths" ]] ||
+    fail 'LaunchServices was called before configured-host validation completed'
+  [[ "$(wc -l < "$fixture_state/codesign-invocations" | tr -d ' ')" -ge 2 ]] ||
+    fail 'configured-host validation skipped signing or verifying the expected temporary helper'
+  temporary_host_app="$(/usr/bin/sed -n '1p' "$fixture_state/signed-app-paths")"
+  [[ -n "$temporary_host_app" && ! -e "$temporary_host_app" ]] ||
+    fail 'configured-host rejection retained its owned temporary helper app'
+  assert_root_lock
+}
+
 assert_completion_error() {
   /usr/bin/grep -Fq \
     'error: Swift test exited successfully without a final non-empty passing test summary' \
@@ -351,20 +702,34 @@ reset_invocations() {
   : > "$fixture_state/swift-invocations"
   : > "$fixture_state/swiftc-invocations"
   : > "$fixture_state/xcrun-invocations"
+  : > "$fixture_state/codesign-invocations"
+  : > "$fixture_state/signed-app-paths"
+  : > "$fixture_state/verified-app-paths"
   : > "$fixture_state/host-invocations"
+  : > "$fixture_state/open-invocations"
+  : > "$fixture_state/open-environments"
+  : > "$fixture_state/open-environment-name-blocks"
+  : > "$fixture_state/host-app-paths"
+  : > "$fixture_state/sample-pids"
   : > "$fixture_state/output"
   printf 'ordinary root lock\n' > "$fixture_root/Package.resolved"
   /bin/rm -rf -- "$fixture_state/bin"
   /bin/rm -f -- "$fixture_state/enhanced-scratch" \
     "$fixture_state/resolver-root-backup" \
     "$fixture_state/resolver-root" \
-    "$fixture_state/selected-runtime-identifiers"
+    "$fixture_state/selected-runtime-identifiers" \
+    "$fixture_state/environment-forwarding-contract" \
+    "$fixture_state/host-path-forwarding-contract" \
+    "$fixture_state/host-environment-observations"
 }
 
 run_ordinary() {
   (
     cd "$foreign_root"
     PATH="$fixture_bin:$PATH" \
+      FLECK_TEST_APPKIT_OPEN_PATH="$fixture_bin/open" \
+      FLECK_TEST_APPKIT_SAMPLE_PATH="$fixture_bin/sample" \
+      FLECK_TEST_APPKIT_CODESIGN_PATH="$fixture_bin/codesign" \
       FAKE_STATE="$fixture_state" \
       "$fixture_scripts/run-nonempty-swift-tests.sh" "$@"
   )
@@ -374,9 +739,34 @@ run_enhanced() {
   (
     cd "$foreign_root"
     PATH="$fixture_bin:$PATH" \
+      FLECK_TEST_APPKIT_OPEN_PATH="$fixture_bin/open" \
+      FLECK_TEST_APPKIT_SAMPLE_PATH="$fixture_bin/sample" \
+      FLECK_TEST_APPKIT_CODESIGN_PATH="$fixture_bin/codesign" \
       FAKE_STATE="$fixture_state" \
       FAKE_ACTUAL_ROOT="$fixture_root" \
       "$fixture_scripts/run-nonempty-enhanced-tests.sh" "$@"
+  )
+}
+
+run_appkit_environment_probe() {
+  (
+    cd "$foreign_root"
+    unset FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR FLECK_ENHANCED_CANDIDATE
+    FLECK_SETTINGS_WINDOW_CAPTURE_DIR=''
+    export FLECK_SETTINGS_WINDOW_CAPTURE_DIR
+    FLECK_SETTINGS_MODELS_CAPTURE_DIR='mock capture path with spaces'
+    export FLECK_SETTINGS_MODELS_CAPTURE_DIR
+    FLECK_TEST_UNWHITELISTED_CAPTURE_PROBE='mock unlisted value'
+    export FLECK_TEST_UNWHITELISTED_CAPTURE_PROBE
+    PATH="$fixture_bin:$PATH" \
+      FLECK_TEST_APPKIT_OPEN_PATH="$fixture_bin/open" \
+      FLECK_TEST_APPKIT_SAMPLE_PATH="$fixture_bin/sample" \
+      FLECK_TEST_APPKIT_CODESIGN_PATH="$fixture_bin/codesign" \
+      FAKE_STATE="$fixture_state" \
+      FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+      FAKE_RUN_OUTPUT='✔ Test run with 1 test in 0 suites passed after 0.001 seconds.' \
+      "$fixture_scripts/run-swift-tests-with-appkit-host.sh" \
+        "$fixture_root" '' '^FleckCoreTests\.known\(\)$'
   )
 }
 
@@ -441,6 +831,9 @@ run_crashing_ordinary() {
   cd "$foreign_root"
   exec env \
     PATH="$fixture_bin:$PATH" \
+    FLECK_TEST_APPKIT_OPEN_PATH="$fixture_bin/open" \
+    FLECK_TEST_APPKIT_SAMPLE_PATH="$fixture_bin/sample" \
+    FLECK_TEST_APPKIT_CODESIGN_PATH="$fixture_bin/codesign" \
     FAKE_STATE="$fixture_state" \
     FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
     FAKE_BLOCK_LIST_MARKER="$crash_blocked" \
@@ -462,29 +855,97 @@ readonly real_sdk="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
 readonly real_platform="$(/usr/bin/xcrun --sdk macosx --show-sdk-platform-path)"
 readonly real_frameworks="$real_platform/Developer/Library/Frameworks"
 readonly real_host="$fixture_state/AppKitTestHost"
+readonly real_host_config="$fixture_state/real-host-configuration"
+readonly real_host_receipt="$fixture_state/real-host-receipt"
+readonly real_host_process="$fixture_state/real-host-process"
+readonly real_host_phase="$fixture_state/real-host-phase"
+readonly real_host_log="$fixture_state/real-host-log"
 "$(/usr/bin/xcrun --sdk macosx --find swiftc)" -parse-as-library \
   -sdk "$real_sdk" -F "$real_frameworks" \
   -framework AppKit -framework Testing \
   -Xlinker -rpath -Xlinker "$real_frameworks" \
   "$appkit_host_source" -o "$real_host"
+
+prepare_real_host_configuration() {
+  local nonce
+  nonce="$(/usr/bin/uuidgen | /usr/bin/tr -d '\r\n')"
+  printf '%s\0' "$nonce" "$real_host_receipt" "$real_host_process" \
+    "$real_host_phase" "$real_host_log" > "$real_host_config"
+  /bin/rm -f -- "$real_host_receipt" "$real_host_process" \
+    "$real_host_phase" "$real_host_log"
+}
+
+readonly bundle_validation_line="$(/usr/bin/grep -nF \
+  'try loadTestBundle(at: parsedArguments.bundlePath)' "$appkit_host_source" | \
+  /usr/bin/head -n 1 | /usr/bin/cut -d: -f1)"
+readonly list_branch_line="$(/usr/bin/grep -nF \
+  'if parsedArguments.testingArguments.listTests == true' "$appkit_host_source" | \
+  /usr/bin/head -n 1 | /usr/bin/cut -d: -f1)"
+readonly appkit_initialization_line="$(/usr/bin/grep -nF \
+  'let application = NSApplication.shared' "$appkit_host_source" | \
+  /usr/bin/head -n 1 | /usr/bin/cut -d: -f1)"
+readonly launch_guard_line="$(/usr/bin/grep -nF \
+  'guard !didStartTestRun' "$appkit_host_source" | \
+  /usr/bin/head -n 1 | /usr/bin/cut -d: -f1)"
+readonly activation_request_line="$(/usr/bin/grep -nF \
+  'application.activate(ignoringOtherApps: true)' "$appkit_host_source" | \
+  /usr/bin/head -n 1 | /usr/bin/cut -d: -f1)"
+readonly activation_task_line="$(/usr/bin/grep -nF \
+  'Task { @MainActor in' "$appkit_host_source" | \
+  /usr/bin/tail -n 1 | /usr/bin/cut -d: -f1)"
+readonly running_phase_line="$(/usr/bin/grep -nF \
+  'configuration.writePhase("runningTests")' "$appkit_host_source" | \
+  /usr/bin/head -n 1 | /usr/bin/cut -d: -f1)"
+readonly run_entry_line="$(/usr/bin/grep -nF \
+  'Testing.__swiftPMEntryPoint(passing: testingArguments)' "$appkit_host_source" | \
+  /usr/bin/head -n 1 | /usr/bin/cut -d: -f1)"
+[[ -n "$bundle_validation_line" && -n "$list_branch_line" && \
+  -n "$appkit_initialization_line" && \
+  "$bundle_validation_line" -lt "$list_branch_line" && \
+  "$list_branch_line" -lt "$appkit_initialization_line" ]] ||
+  fail 'AppKit initialization precedes CPU-only bundle/list validation'
+[[ -n "$launch_guard_line" && -n "$activation_request_line" && \
+  -n "$activation_task_line" && \
+  "$launch_guard_line" -lt "$activation_request_line" && \
+  "$activation_request_line" -lt "$activation_task_line" ]] ||
+  fail 'AppKit test run is not guarded against a duplicate launch callback'
+[[ -n "$running_phase_line" && -n "$run_entry_line" && \
+  "$((run_entry_line - running_phase_line))" -eq 1 ]] ||
+  fail 'AppKit host does not record runningTests before entering Swift Testing'
+
 run_capture "$fixture_state/output" "$real_host" /missing/test-bundle --bogus
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'native host accepted an unsupported argument'
 /usr/bin/grep -Fq 'error: unsupported test argument: --bogus' \
   "$fixture_state/output" || fail 'native host did not report its unsupported argument'
-run_capture "$fixture_state/output" "$real_host" /missing/test-bundle
+
+prepare_real_host_configuration
+run_capture "$fixture_state/output" "$real_host" /missing/test-bundle \
+  --host-config "$real_host_config"
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'native host accepted a missing test bundle'
-/usr/bin/grep -Fq 'error: test bundle binary is missing' "$fixture_state/output" ||
+/usr/bin/grep -Fq 'error: test bundle binary is missing' "$real_host_log" ||
   fail 'native host did not report its missing test bundle'
+/usr/bin/grep -Fxq 'completed' "$real_host_phase" ||
+  fail 'native host did not complete its missing-bundle receipt'
+/usr/bin/grep -Fq $'\t1\n' "$real_host_receipt" ||
+  fail 'native host did not record its missing-bundle status'
+
 printf '%s\n' 'not a Mach-O test bundle' > "$fixture_state/invalid-test-bundle"
-run_capture "$fixture_state/output" "$real_host" "$fixture_state/invalid-test-bundle"
+prepare_real_host_configuration
+run_capture "$fixture_state/output" "$real_host" \
+  "$fixture_state/invalid-test-bundle" --list-tests \
+  --filter '^FleckCoreTests\\.known\\(\\)$' --host-config "$real_host_config"
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'native host loaded an invalid test bundle'
-/usr/bin/grep -Fq 'error: failed to load test bundle:' "$fixture_state/output" ||
+/usr/bin/grep -Fq 'error: failed to load test bundle:' "$real_host_log" ||
   fail 'native host did not report its test bundle loading failure'
+/usr/bin/grep -Fxq 'completed' "$real_host_phase" ||
+  fail 'native host did not complete its invalid-bundle receipt'
 
 assert_completion_contracts run_ordinary ordinary
 assert_completion_contracts run_enhanced enhanced
 
 reset_invocations
+FAKE_PRESERVE_HOST_APP_PATH="$fixture_state/preserved-host.app" \
+FLECK_ENHANCED_CANDIDATE='' \
 FAKE_LIST_OUTPUT=$'TargetA.first()\nTargetB.second()' \
   FAKE_EXPECT_FILTER='^.+$' \
   FAKE_EXPECT_NO_PARALLEL=1 \
@@ -492,6 +953,147 @@ FAKE_LIST_OUTPUT=$'TargetA.first()\nTargetB.second()' \
 assert_status 0
 /usr/bin/grep -Fxq 'matched test count: 2' "$fixture_state/output" ||
   fail 'ordinary whole-suite selection did not retain its exact non-empty count'
+[[ "$(wc -l < "$fixture_state/host-app-paths" | tr -d ' ')" -eq 2 ]] ||
+  fail 'ordinary runner did not launch separate list and run host apps'
+while IFS= read -r host_app_path; do
+  [[ ! -e "$host_app_path" ]] || fail 'ordinary runner retained its temporary AppKit host app'
+done < "$fixture_state/host-app-paths"
+/usr/bin/grep -Fxq 'environment:FLECK_ENHANCED_CANDIDATE' \
+  "$fixture_state/open-environments" ||
+  fail 'LaunchServices host did not receive the enhanced-candidate environment name'
+[[ "$(wc -l < "$fixture_state/open-invocations" | tr -d ' ')" -eq 2 ]] ||
+  fail 'ordinary runner did not use LaunchServices for both host invocations'
+[[ "$(wc -l < "$fixture_state/codesign-invocations" | tr -d ' ')" -eq 2 ]] ||
+  fail 'ordinary runner did not sign and verify its temporary host app once'
+/usr/bin/grep -Fq -- '--force --deep --sign - ' \
+  "$fixture_state/codesign-invocations" ||
+  fail 'temporary host app was not signed ad hoc and recursively'
+/usr/bin/grep -Fq -- '--verify --deep --strict --verbose=2 ' \
+  "$fixture_state/codesign-invocations" ||
+  fail 'temporary host app was not deep/strict verified before launch'
+assert_root_lock
+
+existing_host_app="$fixture_state/preserved-host.app"
+[[ -d "$existing_host_app" && ! -L "$existing_host_app" ]] ||
+  fail 'fake LaunchServices did not preserve a reusable host app'
+preserved_host_files=(
+  "$existing_host_app/Contents/Info.plist"
+  "$existing_host_app/Contents/MacOS/AppKitTestHost"
+  "$existing_host_app/Contents/.fixture-adhoc-signature"
+)
+/usr/bin/shasum -a 256 "${preserved_host_files[@]}" \
+  > "$fixture_state/preserved-host-before.sha256"
+reset_invocations
+: > "$fixture_state/host-path-forwarding-contract"
+FLECK_TEST_APPKIT_HOST_APP_PATH="$existing_host_app" \
+FAKE_LIST_OUTPUT=$'TargetA.first()\nTargetB.second()' \
+  run_capture "$fixture_state/output" run_ordinary '^.+$'
+assert_status 0
+[[ "$(wc -l < "$fixture_state/host-app-paths" | tr -d ' ')" -eq 2 ]] ||
+  fail 'configured existing host was not reused for list and run phases'
+while IFS= read -r host_app_path; do
+  [[ "$host_app_path" = "$existing_host_app" ]] ||
+    fail 'LaunchServices did not receive the configured existing host app'
+done < "$fixture_state/host-app-paths"
+[[ "$(wc -l < "$fixture_state/codesign-invocations" | tr -d ' ')" -eq 3 ]] ||
+  fail 'configured existing host was not strictly verified after the temporary host'
+/usr/bin/grep -Fq -- \
+  "--verify --deep --strict --verbose=2 $existing_host_app" \
+  "$fixture_state/codesign-invocations" ||
+  fail 'configured existing host did not receive deep/strict signature verification'
+if /usr/bin/grep -Fxq 'environment:FLECK_TEST_APPKIT_HOST_APP_PATH' \
+  "$fixture_state/open-environments"; then
+  fail 'AppKit host path configuration was forwarded through LaunchServices'
+fi
+temporary_host_app="$(/usr/bin/sed -n '1p' "$fixture_state/signed-app-paths")"
+[[ -n "$temporary_host_app" && ! -e "$temporary_host_app" ]] ||
+  fail 'configured-host run retained its owned temporary helper app'
+/usr/bin/shasum -a 256 "${preserved_host_files[@]}" \
+  > "$fixture_state/preserved-host-after.sha256"
+/usr/bin/cmp -s "$fixture_state/preserved-host-before.sha256" \
+  "$fixture_state/preserved-host-after.sha256" ||
+  fail 'configured existing host app changed during verification or cleanup'
+assert_root_lock
+
+/bin/ln -s "$existing_host_app" "$fixture_state/symlink-host.app"
+assert_configured_host_rejected "$fixture_state/symlink-host.app" \
+  'configured AppKit test host path is unsafe or incomplete'
+
+/bin/cp -R "$existing_host_app" "$fixture_state/mismatched-binary-host.app"
+printf '%s\n' 'mismatched executable' \
+  > "$fixture_state/mismatched-binary-host.app/Contents/MacOS/AppKitTestHost"
+/bin/chmod +x "$fixture_state/mismatched-binary-host.app/Contents/MacOS/AppKitTestHost"
+assert_configured_host_rejected "$fixture_state/mismatched-binary-host.app" \
+  'configured AppKit test host executable does not match the current build'
+
+/bin/cp -R "$existing_host_app" "$fixture_state/mismatched-info-host.app"
+printf '%s\n' 'mismatched Info.plist' \
+  > "$fixture_state/mismatched-info-host.app/Contents/Info.plist"
+assert_configured_host_rejected "$fixture_state/mismatched-info-host.app" \
+  'configured AppKit test host Info.plist does not match the current build'
+
+/bin/cp -R "$existing_host_app" "$fixture_state/symlink-binary-host.app"
+/bin/rm "$fixture_state/symlink-binary-host.app/Contents/MacOS/AppKitTestHost"
+/bin/ln -s "$existing_host_app/Contents/MacOS/AppKitTestHost" \
+  "$fixture_state/symlink-binary-host.app/Contents/MacOS/AppKitTestHost"
+assert_configured_host_rejected "$fixture_state/symlink-binary-host.app" \
+  'configured AppKit test host path is unsafe or incomplete'
+
+/bin/cp -R "$existing_host_app" "$fixture_state/symlink-info-host.app"
+/bin/rm "$fixture_state/symlink-info-host.app/Contents/Info.plist"
+/bin/ln -s "$existing_host_app/Contents/Info.plist" \
+  "$fixture_state/symlink-info-host.app/Contents/Info.plist"
+assert_configured_host_rejected "$fixture_state/symlink-info-host.app" \
+  'configured AppKit test host path is unsafe or incomplete'
+
+/bin/cp -R "$existing_host_app" "$fixture_state/unsigned-host.app"
+/bin/rm "$fixture_state/unsigned-host.app/Contents/.fixture-adhoc-signature"
+assert_configured_host_rejected "$fixture_state/unsigned-host.app" \
+  'configured AppKit test host failed strict signature verification' 100
+[[ "$(wc -l < "$fixture_state/codesign-invocations" | tr -d ' ')" -eq 3 ]] ||
+  fail 'configured existing host was not independently deep/strict verified'
+/usr/bin/shasum -a 256 "${preserved_host_files[@]}" \
+  > "$fixture_state/preserved-host-after-rejections.sha256"
+/usr/bin/cmp -s "$fixture_state/preserved-host-before.sha256" \
+  "$fixture_state/preserved-host-after-rejections.sha256" ||
+  fail 'configured-host rejection modified the preserved matching host'
+
+reset_invocations
+: > "$fixture_state/environment-forwarding-contract"
+run_capture "$fixture_state/output" run_appkit_environment_probe
+assert_status 0
+[[ "$(wc -l < "$fixture_state/open-environment-name-blocks" | tr -d ' ')" -eq 2 ]] ||
+  fail 'AppKit list and run hosts did not both record their forwarded environment names'
+[[ "$(sed -n '1p' "$fixture_state/open-environment-name-blocks")" = \
+  "$(sed -n '2p' "$fixture_state/open-environment-name-blocks")" ]] ||
+  fail 'AppKit list and run hosts received different environment-name lists'
+for environment_name in FLECK_SETTINGS_WINDOW_CAPTURE_DIR \
+  FLECK_SETTINGS_MODELS_CAPTURE_DIR; do
+  forwarded_count="$(/usr/bin/grep -Fxc "environment:$environment_name" \
+    "$fixture_state/open-environments" || true)"
+  [[ "$forwarded_count" -eq 2 ]] ||
+    fail 'AppKit host did not forward a set whitelist variable to both phases'
+done
+for environment_name in FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR \
+  FLECK_TEST_UNWHITELISTED_CAPTURE_PROBE; do
+  if /usr/bin/grep -E -q "^environment:$environment_name(=|$)" \
+    "$fixture_state/open-environments"; then
+    fail 'AppKit host forwarded an unset or unwhitelisted environment name'
+  fi
+done
+if /usr/bin/grep -E -q '(^| )[^ ]+=' \
+  "$fixture_state/open-environment-name-blocks"; then
+  fail 'AppKit host serialized an environment value in the forwarded-name list'
+fi
+if /usr/bin/grep -Fq 'mock capture path with spaces' \
+  "$fixture_state/open-invocations" ||
+  /usr/bin/grep -Fq 'mock unlisted value' "$fixture_state/open-invocations"; then
+  fail 'AppKit host serialized an environment value in LaunchServices arguments'
+fi
+[[ "$(wc -l < "$fixture_state/host-environment-observations" | tr -d ' ')" -eq 2 ]] ||
+  fail 'AppKit list/run hosts did not both inherit the expected environment values'
+/usr/bin/grep -Fxq 'pass' "$fixture_state/host-environment-observations" ||
+  fail 'AppKit host inherited-environment contract failed'
 assert_root_lock
 
 reset_invocations
@@ -502,6 +1104,169 @@ FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
 assert_status 41
 /usr/bin/grep -Fq 'error: failed to load test bundle: fixture failure' \
   "$fixture_state/output" || fail 'ordinary runner hid the native loading failure'
+assert_root_lock
+
+reset_invocations
+FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+  FAKE_NO_RECEIPT_PHASE=runningTests \
+  run_capture "$fixture_state/output" \
+  run_ordinary '^FleckCoreTests\.known\(\)$'
+[[ "$RUN_STATUS" -ne 0 ]] || fail 'ordinary runner accepted a missing host receipt'
+/usr/bin/grep -Fq 'error: AppKit test host completion receipt is missing' \
+  "$fixture_state/output" || fail 'missing host receipt was not rejected explicitly'
+assert_root_lock
+
+reset_invocations
+FAKE_RECEIPT_NONCE=wrong-invocation \
+  run_capture "$fixture_state/output" \
+  run_ordinary '^FleckCoreTests\.known\(\)$'
+[[ "$RUN_STATUS" -ne 0 ]] || fail 'ordinary runner accepted a mismatched host receipt'
+/usr/bin/grep -Fq 'error: AppKit test host completion receipt does not match this invocation' \
+  "$fixture_state/output" || fail 'mismatched host receipt was not rejected explicitly'
+assert_root_lock
+
+reset_invocations
+FAKE_RECEIPT_PID=1 \
+  run_capture "$fixture_state/output" \
+  run_ordinary '^FleckCoreTests\.known\(\)$'
+[[ "$RUN_STATUS" -ne 0 ]] || fail 'ordinary runner accepted a receipt from another PID'
+/usr/bin/grep -Fq 'error: AppKit test host completion receipt does not match this invocation' \
+  "$fixture_state/output" || fail 'foreign-PID host receipt was not rejected explicitly'
+assert_root_lock
+
+reset_invocations
+FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+  FAKE_RUN_EXIT=256 \
+  run_capture "$fixture_state/output" \
+  run_ordinary '^FleckCoreTests\.known\(\)$'
+[[ "$RUN_STATUS" -ne 0 ]] || fail 'ordinary runner accepted an invalid Swift Testing status'
+/usr/bin/grep -Fq 'error: AppKit test host returned an invalid Swift Testing status' \
+  "$fixture_state/output" || fail 'invalid host status was not rejected explicitly'
+assert_root_lock
+
+reset_invocations
+FAKE_OPEN_EXIT=47 \
+  run_capture "$fixture_state/output" \
+  run_ordinary '^FleckCoreTests\.known\(\)$'
+assert_status 47
+/usr/bin/grep -Fq 'error: /usr/bin/open -W returned status 47' \
+  "$fixture_state/output" || fail 'LaunchServices failure status was not propagated'
+assert_root_lock
+
+reset_invocations
+/bin/sleep 30 >/dev/null 2>&1 &
+decoy_pid=$!
+FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+  FAKE_OPEN_RETURN_EARLY=1 \
+  FAKE_OPEN_CHILD_PID_FILE="$fixture_state/early-open-child-pid" \
+  FAKE_HOST_HANG_PHASE=listingTests \
+  FAKE_OPEN_WAIT_PHASE=listingTests \
+  run_capture "$fixture_state/output" \
+  run_ordinary '^FleckCoreTests\.known\(\)$'
+/bin/kill -0 "$decoy_pid" 2>/dev/null || {
+  fail 'early-return cleanup terminated an unrelated decoy process'
+}
+/bin/kill -TERM "$decoy_pid" 2>/dev/null || true
+wait "$decoy_pid" 2>/dev/null || true
+decoy_pid=''
+/usr/bin/grep -Fq 'error: /usr/bin/open -W returned while owned AppKit test host PID' \
+  "$fixture_state/output" || fail 'early LaunchServices return was not detected'
+/usr/bin/grep -Fq 'last phase: listingTests' "$fixture_state/output" ||
+  fail 'early-return diagnostics omitted the last host phase'
+[[ "$(cat "$fixture_state/early-open-child-pid")" = \
+  "$(cat "$fixture_state/sample-pids")" ]] ||
+  fail 'early-return cleanup did not sample the invocation-owned host PID'
+assert_root_lock
+
+reset_invocations
+/bin/sleep 30 >/dev/null 2>&1 &
+decoy_pid=$!
+FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+  FAKE_OPEN_RETURN_EARLY_RUN=1 \
+  FAKE_OPEN_WAIT_PHASE=runningTests \
+  FAKE_OPEN_CHILD_PID_FILE="$fixture_state/run-early-host-pid" \
+  FAKE_OPEN_PID_FILE="$fixture_state/run-early-open-pid" \
+  FAKE_HOST_HANG_PHASE=runningTests \
+  run_capture "$fixture_state/output" \
+  run_ordinary '^FleckCoreTests\.known\(\)$'
+assert_status 1
+/usr/bin/grep -Fq 'error: /usr/bin/open -W returned while owned AppKit test host PID' \
+  "$fixture_state/output" || fail 'run-phase early LaunchServices return was not detected'
+/usr/bin/grep -Fq 'last phase: runningTests' "$fixture_state/output" ||
+  fail 'run-phase early-return diagnostics omitted the runningTests phase'
+[[ "$(cat "$fixture_state/run-early-host-pid")" = \
+  "$(cat "$fixture_state/sample-pids")" ]] ||
+  fail 'run-phase early-return cleanup did not sample the owned host PID'
+assert_pid_stopped "$(cat "$fixture_state/run-early-host-pid")" \
+  'run-phase early-return host'
+assert_pid_stopped "$(cat "$fixture_state/run-early-open-pid")" \
+  'run-phase early-return open child'
+assert_host_state_removed
+/bin/kill -0 "$decoy_pid" 2>/dev/null || {
+  fail 'run-phase early-return cleanup terminated an unrelated decoy process'
+}
+/bin/kill -TERM "$decoy_pid" 2>/dev/null || true
+wait "$decoy_pid" 2>/dev/null || true
+decoy_pid=''
+assert_root_lock
+
+reset_invocations
+/bin/sleep 30 >/dev/null 2>&1 &
+decoy_pid=$!
+FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+  FAKE_SIGNAL_RUNNER_PHASE=runningTests \
+  FAKE_HOST_HANG_PHASE=runningTests \
+  FAKE_OPEN_PID_FILE="$fixture_state/term-open-pid" \
+  run_capture "$fixture_state/output" \
+  run_ordinary '^FleckCoreTests\.known\(\)$'
+assert_status 143
+[[ "$(cat "$fixture_state/term-open-pid")" = \
+  "$(cat "$fixture_state/sample-pids")" ]] ||
+  fail 'run-phase TERM cleanup did not sample the owned open/host PID'
+sampled_pid="$(cat "$fixture_state/term-open-pid")"
+/usr/bin/grep -Fq \
+  'error: interrupted while running the AppKit test host (status 143)' \
+  "$fixture_state/output" || fail 'TERM interruption diagnostics were not caller-visible'
+/usr/bin/grep -Fq \
+  'error: AppKit test host was interrupted; last phase: runningTests; owned PID:' \
+  "$fixture_state/output" || fail 'TERM cleanup omitted the runningTests host diagnostic'
+/usr/bin/grep -Fq "fixture stack for pid $sampled_pid" "$fixture_state/output" ||
+  fail 'TERM cleanup sample stack was not caller-visible'
+/usr/bin/grep -Fq -- '--- last AppKit test host output ---' "$fixture_state/output" ||
+  fail 'TERM cleanup host log header was not caller-visible'
+/usr/bin/grep -Fq 'fixture host output tail for runningTests' "$fixture_state/output" ||
+  fail 'TERM cleanup host log tail was not caller-visible'
+assert_pid_stopped "$(cat "$fixture_state/term-open-pid")" \
+  'run-phase TERM open/host'
+assert_host_state_removed
+/bin/kill -0 "$decoy_pid" 2>/dev/null || {
+  fail 'run-phase TERM cleanup terminated an unrelated decoy process'
+}
+/bin/kill -TERM "$decoy_pid" 2>/dev/null || true
+wait "$decoy_pid" 2>/dev/null || true
+decoy_pid=''
+assert_root_lock
+
+reset_invocations
+FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+  FAKE_HOST_HANG=1 \
+  run_capture "$fixture_state/output" env \
+    PATH="$fixture_bin:$PATH" \
+    FLECK_TEST_APPKIT_OPEN_PATH="$fixture_bin/open" \
+    FLECK_TEST_APPKIT_SAMPLE_PATH="$fixture_bin/sample" \
+    FLECK_TEST_APPKIT_CODESIGN_PATH="$fixture_bin/codesign" \
+    FLECK_TEST_APPKIT_WATCHDOG_SECONDS=1 \
+    FAKE_STATE="$fixture_state" \
+    FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+    "$fixture_scripts/run-nonempty-swift-tests.sh" \
+      '^FleckCoreTests\.known\(\)$'
+assert_status 124
+/usr/bin/grep -Fq 'error: AppKit test host watchdog terminated the owned host' \
+  "$fixture_state/output" || fail 'AppKit host watchdog did not report its timeout'
+/usr/bin/grep -Fq 'last phase: runningTests' "$fixture_state/output" ||
+  fail 'watchdog diagnostics omitted the runningTests phase'
+[[ -s "$fixture_state/sample-pids" ]] ||
+  fail 'AppKit host watchdog did not sample the timed-out host'
 assert_root_lock
 
 reset_invocations
@@ -520,6 +1285,32 @@ FAKE_HOST_BUILD_EXIT=43 \
 assert_status 43
 [[ ! -s "$fixture_state/host-invocations" ]] ||
   fail 'failed native host build reached test execution'
+assert_root_lock
+
+reset_invocations
+FAKE_CODESIGN_SIGN_EXIT=44 \
+  run_capture "$fixture_state/output" \
+  run_ordinary '^FleckCoreTests\.known\(\)$'
+assert_status 44
+/usr/bin/grep -Fq 'error: failed to ad-hoc sign the temporary AppKit test host' \
+  "$fixture_state/output" || fail 'ad-hoc signing failure was not reported'
+[[ "$(wc -l < "$fixture_state/codesign-invocations" | tr -d ' ')" -eq 1 ]] ||
+  fail 'signature verification ran after ad-hoc signing failed'
+[[ ! -s "$fixture_state/host-invocations" ]] ||
+  fail 'ad-hoc signing failure reached LaunchServices'
+assert_root_lock
+
+reset_invocations
+FAKE_CODESIGN_VERIFY_EXIT=45 \
+  run_capture "$fixture_state/output" \
+  run_ordinary '^FleckCoreTests\.known\(\)$'
+assert_status 45
+/usr/bin/grep -Fq 'error: temporary AppKit test host failed strict signature verification' \
+  "$fixture_state/output" || fail 'strict signature failure was not reported'
+[[ "$(wc -l < "$fixture_state/codesign-invocations" | tr -d ' ')" -eq 2 ]] ||
+  fail 'ad-hoc signature was not verified before LaunchServices'
+[[ ! -s "$fixture_state/host-invocations" ]] ||
+  fail 'signature verification failure reached LaunchServices'
 assert_root_lock
 
 reset_invocations
@@ -586,7 +1377,7 @@ FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
   "$fixture_state/swift-invocations" || fail 'ordinary tests were not built from the repository root'
 [[ "$(wc -l < "$fixture_state/host-invocations" | tr -d ' ')" -eq 1 ]] ||
   fail 'ordinary no-match invoked the native filtered test run'
-/usr/bin/grep -Fq -- '--list-tests' "$fixture_state/host-invocations" ||
+/usr/bin/grep -Fq '|1||0' "$fixture_state/host-invocations" ||
   fail 'ordinary no-match did not list through the native host'
 [[ "$(/usr/bin/stat -f %i "$fixture_root/Package.resolved")" = \
   "$ordinary_unchanged_inode" ]] || fail 'ordinary runner replaced an unchanged root lock'
