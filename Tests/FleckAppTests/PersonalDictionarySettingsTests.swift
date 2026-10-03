@@ -1361,9 +1361,21 @@ func personalDictionaryToolbarUsesPaddedTargetsInlineSearchAndKeyboardDismissal(
       window: window
     )
     await settlePersonalDictionarySettingsHost(host)
-    for _ in 0..<100 where viewModel.revision == revisionBeforeExternalUpdate {
-      await Task.yield()
+    let reloadClock = ContinuousClock()
+    let reloadDeadline = reloadClock.now.advanced(by: .seconds(2))
+    let didReload = {
+      viewModel.revision == revisionBeforeExternalUpdate + 1
+        && viewModel.entries.contains { $0.id == settingsUUID(76) }
     }
+    while !didReload(), reloadClock.now < reloadDeadline {
+      try await reloadClock.sleep(
+        until: min(reloadDeadline, reloadClock.now.advanced(by: .milliseconds(10)))
+      )
+    }
+    try #require(
+      didReload(),
+      "Dictionary reload did not complete; error: \(viewModel.errorMessage ?? "none")"
+    )
     #expect(viewModel.revision == revisionBeforeExternalUpdate + 1)
     #expect(viewModel.entries.contains { $0.id == settingsUUID(76) })
   }
