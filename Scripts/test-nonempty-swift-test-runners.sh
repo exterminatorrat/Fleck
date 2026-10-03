@@ -2264,19 +2264,24 @@ dispatch = re.search(
     current_workflow,
     re.M | re.S,
 )
-if dispatch is None or dispatch.group("body").count("folder_navigator_probe:") != 1:
-    raise SystemExit("workflow_dispatch must declare one folder_navigator_probe input")
-input_match = re.search(
-    r"^      folder_navigator_probe:\n(?:^ {8}.*\n)+",
-    current_workflow,
-    re.M,
-)
-if input_match is None:
-    raise SystemExit("folder_navigator_probe input block is missing")
-input_block = input_match.group(0)
-for required in ("required: false", "type: boolean", "default: false"):
-    if required not in input_block:
-        raise SystemExit(f"folder_navigator_probe input omitted: {required}")
+if dispatch is None:
+    raise SystemExit("workflow_dispatch inputs are missing")
+input_blocks = {}
+for input_name in ("folder_navigator_probe", "folder_navigator_recording"):
+    if dispatch.group("body").count(f"{input_name}:") != 1:
+        raise SystemExit(f"workflow_dispatch must declare one {input_name} input")
+    input_match = re.search(
+        rf"^      {re.escape(input_name)}:\n(?:^ {{8}}.*\n)+",
+        current_workflow,
+        re.M,
+    )
+    if input_match is None:
+        raise SystemExit(f"{input_name} input block is missing")
+    input_block = input_match.group(0)
+    for required in ("required: false", "type: boolean", "default: false"):
+        if required not in input_block:
+            raise SystemExit(f"{input_name} input omitted: {required}")
+    input_blocks[input_name] = input_block
 
 supplemental_jobs = (
     (
@@ -2292,17 +2297,23 @@ supplemental_jobs = (
         True,
     ),
 )
+recording_environment = (
+    "FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC: "
+    "${{ inputs.folder_navigator_recording && '1' || '0' }}"
+)
 for job_id, job_name, selector, enhanced in supplemental_jobs:
     _, _, block = job_block(current_workflow, job_id)
     for required in (
         f"name: {job_name}",
         "if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe }}",
-        'FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC: "1"',
+        recording_environment,
         'test "$source_commit" = "$GITHUB_SHA"',
         selector,
     ):
         if required not in block:
             raise SystemExit(f"supplemental CI job {job_id} omitted: {required}")
+    if block.count(recording_environment) != 1:
+        raise SystemExit(f"supplemental CI job {job_id} has unexpected diagnostic recording")
     if enhanced != ("Scripts/test-enhanced-candidate-pin.sh" in block):
         raise SystemExit(f"supplemental CI job {job_id} has unexpected candidate pin validation")
 
@@ -2330,7 +2341,8 @@ boundary_names = (
     "Declare native capture boundary (candidate graph)",
 )
 normalized_workflow = current_workflow
-normalized_workflow = normalized_workflow.replace(input_block, "", 1)
+for input_block in input_blocks.values():
+    normalized_workflow = normalized_workflow.replace(input_block, "", 1)
 for job_id, _, _, _ in supplemental_jobs:
     start, end, _ = job_block(normalized_workflow, job_id)
     if start >= 2 and normalized_workflow[start - 2:start] == "\n\n":

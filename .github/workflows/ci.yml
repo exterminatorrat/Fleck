@@ -20,6 +20,13 @@ on:
         required: false
         type: boolean
         default: false
+      folder_navigator_recording:
+        description: >-
+          Record native folder field diagnostics in supplemental folder navigator
+          probes only; this does not request product or screen-capture access.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -209,7 +216,7 @@ jobs:
     permissions:
       contents: read
     env:
-      FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC: "1"
+      FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC: ${{ inputs.folder_navigator_recording && '1' || '0' }}
     steps:
       - name: Check out repository (actions/checkout v6.0.2, without credentials)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -241,7 +248,7 @@ jobs:
     permissions:
       contents: read
     env:
-      FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC: "1"
+      FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC: ${{ inputs.folder_navigator_recording && '1' || '0' }}
     steps:
       - name: Check out repository (actions/checkout v6.0.2, without credentials)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd

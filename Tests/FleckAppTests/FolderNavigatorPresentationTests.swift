@@ -448,6 +448,8 @@ struct FolderNavigatorPresentationTests {
     try fixture.sendKey(characters: "\u{1b}", keyCode: 53)
     diagnostics.endKeyDispatch()
     await fixture.settle()
+    let escapedComposerDismissed = try await fixture.waitForNewFolderComposer(isPresent: false)
+    try #require(escapedComposerDismissed)
     #expect(fixture.newFolderFieldIfPresent() == nil)
   }
 
@@ -1258,7 +1260,11 @@ private final class FolderNavigatorFixture {
     let deadline = clock.now.advanced(by: .seconds(2))
 
     func stateMatches() -> Bool {
-      guard let field = newFolderFieldIfPresent() else { return !isPresent }
+      guard let field = newFolderFieldIfPresent() else {
+        return !isPresent
+          && elementIfPresent(label: "Create folder") == nil
+          && elementIfPresent(label: "Cancel new folder") == nil
+      }
       guard isPresent else { return false }
       guard
         field.window === window,
