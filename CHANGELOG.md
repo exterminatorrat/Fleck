@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.4-beta.1] - 2026-10-03
+
+Private development candidate only; this correction is not an accepted build or public release.
+
+### Fixed
+
+- Preserve caret placement after empty list markers when indenting or outdenting, including
+  numbered-list renumbering that changes marker widths.
+
 ## [1.4.3-beta.1] - 2026-10-02
 
 Private development candidate only; this correction is not an accepted build or public release.
