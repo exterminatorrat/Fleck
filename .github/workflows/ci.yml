@@ -13,6 +13,13 @@ on:
         required: false
         type: boolean
         default: false
+      folder_navigator_probe:
+        description: >-
+          Run the supplemental folder navigator diagnostic suites; normal full-graph
+          jobs remain unchanged.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -193,3 +200,57 @@ jobs:
             ${{ runner.temp }}/fleck-own-window-capture-probe/console.log
             ${{ runner.temp }}/fleck-own-window-capture-probe/captures/
           if-no-files-found: error
+
+  folder-navigator-diagnostic:
+    name: Supplemental folder navigator diagnostic (ordinary)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe }}
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC: "1"
+    steps:
+      - name: Check out repository (actions/checkout v6.0.2, without credentials)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Verify dispatched source pin
+        run: |
+          source_commit="$(git rev-parse --verify 'HEAD^{commit}')"
+          test "$source_commit" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          printf 'Source commit: %s\n' "$source_commit"
+          printf 'Source tree: %s\n' "$(git rev-parse --verify 'HEAD^{tree}')"
+      - name: Run folder navigator diagnostic tests (ordinary graph)
+        run: |
+          unset FLECK_ENHANCED_CANDIDATE
+          Scripts/run-nonempty-swift-tests.sh '^.*FolderNavigatorPresentationTests.*$'
+
+  folder-navigator-diagnostic-enhanced:
+    name: Supplemental folder navigator diagnostic (Enhanced)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe }}
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC: "1"
+    steps:
+      - name: Check out repository (actions/checkout v6.0.2, without credentials)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Verify dispatched source pin
+        run: |
+          source_commit="$(git rev-parse --verify 'HEAD^{commit}')"
+          test "$source_commit" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          printf 'Source commit: %s\n' "$source_commit"
+          printf 'Source tree: %s\n' "$(git rev-parse --verify 'HEAD^{tree}')"
+      - name: Verify Enhanced Local candidate pin
+        run: Scripts/test-enhanced-candidate-pin.sh
+      - name: Run folder navigator diagnostic tests (Enhanced graph)
+        run: |
+          Scripts/run-nonempty-enhanced-tests.sh '^.*FolderNavigatorPresentationTests.*$'
+          git diff --exit-code -- Package.resolved

@@ -337,6 +337,15 @@ if [ -f "$FAKE_STATE/environment-forwarding-contract" ]; then
     printf '%s\n' 'error: fake host received an unwhitelisted variable' >&2
     exit 97
   fi
+  if [[ ${FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC+x} ]]; then
+    [[ "$FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC" = 1 ]] || {
+      printf '%s\n' 'error: fake host changed the folder navigator diagnostic value' >&2
+      exit 97
+    }
+    printf 'FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC=%s\n' \
+      "$FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC" \
+      >> "$FAKE_STATE/folder-diagnostic-observations"
+  fi
   printf '%s\n' 'pass' >> "$FAKE_STATE/host-environment-observations"
 fi
 
@@ -541,7 +550,7 @@ while [ "$#" -gt 0 ]; do
       printf 'environment:%s\n' "$environment_name" >> "$FAKE_STATE/open-environments"
       if [ -f "$FAKE_STATE/environment-forwarding-contract" ]; then
         case "$environment_name" in
-          FLECK_SETTINGS_WINDOW_CAPTURE_DIR|FLECK_SETTINGS_MODELS_CAPTURE_DIR|FLECK_NATIVE_CAPTURE_QA)
+          FLECK_SETTINGS_WINDOW_CAPTURE_DIR|FLECK_SETTINGS_MODELS_CAPTURE_DIR|FLECK_NATIVE_CAPTURE_QA|FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC)
             printf 'environment:%s\n' "$environment_assignment" \
               >> "$FAKE_STATE/open-environment-probes"
             ;;
@@ -607,7 +616,7 @@ fi
 if [ -f "$FAKE_STATE/environment-forwarding-contract" ]; then
   for probe_name in FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR \
     FLECK_SETTINGS_WINDOW_CAPTURE_DIR FLECK_SETTINGS_MODELS_CAPTURE_DIR \
-    FLECK_TEST_UNWHITELISTED_CAPTURE_PROBE; do
+    FLECK_TEST_UNWHITELISTED_CAPTURE_PROBE FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC; do
     if ! environment_name_is_forwarded "$probe_name"; then
       unset "$probe_name"
     fi
@@ -842,6 +851,7 @@ reset_invocations() {
   : > "$fixture_state/open-environments"
   : > "$fixture_state/open-environment-probes"
   : > "$fixture_state/open-environment-name-blocks"
+  : > "$fixture_state/folder-diagnostic-observations"
   : > "$fixture_state/host-app-paths"
   : > "$fixture_state/sample-pids"
   : > "$fixture_state/output"
@@ -919,6 +929,45 @@ run_appkit_environment_probe() {
         "$fixture_root" '' '^FleckCoreTests\.known\(\)$'
   )
 }
+
+assert_folder_navigator_diagnostic_forwarding_contracts() {
+  reset_invocations
+  : > "$fixture_state/environment-forwarding-contract"
+  unset FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC FLECK_NATIVE_CAPTURE_QA
+  run_capture "$fixture_state/output" run_appkit_environment_probe
+  assert_status 0
+  if /usr/bin/grep -E -q \
+    '^environment:FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC(=|$)' \
+    "$fixture_state/open-environments"; then
+    fail 'AppKit host forwarded the unset folder navigator diagnostic variable'
+  fi
+  [[ ! -s "$fixture_state/folder-diagnostic-observations" ]] ||
+    fail 'fake host received the unset folder navigator diagnostic variable'
+  assert_root_lock
+
+  reset_invocations
+  : > "$fixture_state/environment-forwarding-contract"
+  FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC=1 \
+    run_capture "$fixture_state/output" run_appkit_environment_probe
+  assert_status 0
+  forwarded_count="$(/usr/bin/grep -Fxc \
+    'environment:FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC=1' \
+    "$fixture_state/open-environment-probes" || true)"
+  [[ "$forwarded_count" -eq 2 ]] ||
+    fail 'AppKit host did not forward the literal diagnostic flag to both phases'
+  [[ "$(wc -l < "$fixture_state/folder-diagnostic-observations" | tr -d ' ')" -eq 2 ]] ||
+    fail 'fake AppKit hosts did not both receive the diagnostic flag'
+  /usr/bin/grep -Fxq 'FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC=1' \
+    "$fixture_state/folder-diagnostic-observations" ||
+    fail 'fake AppKit host received a changed diagnostic flag'
+  assert_root_lock
+}
+
+if [[ "${FLECK_TEST_FOLDER_DIAGNOSTIC_CONTRACT_ONLY:-0}" = 1 ]]; then
+  assert_folder_navigator_diagnostic_forwarding_contracts
+  printf '%s\n' 'Folder navigator diagnostic environment contracts passed.'
+  exit 0
+fi
 
 assert_completion_contracts() {
   local runner="$1"
@@ -1213,7 +1262,7 @@ assert_configured_host_rejected "$fixture_state/unsigned-host.app" \
 
 reset_invocations
 : > "$fixture_state/environment-forwarding-contract"
-unset FLECK_NATIVE_CAPTURE_QA
+unset FLECK_NATIVE_CAPTURE_QA FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC
 run_capture "$fixture_state/output" run_appkit_environment_probe
 assert_status 0
 [[ "$(wc -l < "$fixture_state/open-environment-name-blocks" | tr -d ' ')" -eq 2 ]] ||
@@ -1237,7 +1286,8 @@ for environment_assignment in \
     fail 'AppKit host did not forward the exact whitelist assignment to both phases'
 done
 for environment_name in FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR \
-  FLECK_TEST_UNWHITELISTED_CAPTURE_PROBE FLECK_NATIVE_CAPTURE_QA; do
+  FLECK_TEST_UNWHITELISTED_CAPTURE_PROBE FLECK_NATIVE_CAPTURE_QA \
+  FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC; do
   if /usr/bin/grep -E -q "^environment:$environment_name(=|$)" \
     "$fixture_state/open-environments"; then
     fail 'AppKit host forwarded an unset or unwhitelisted environment name'
@@ -1289,7 +1339,9 @@ for invalid_native_capture_value in '' 2 true; do
     fail 'invalid native capture opt-in reached a build or host launch'
 done
 unset FLECK_NATIVE_CAPTURE_QA
+unset FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC
 assert_root_lock
+assert_folder_navigator_diagnostic_forwarding_contracts
 
 reset_invocations
 FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
@@ -2199,6 +2251,61 @@ root = pathlib.Path(sys.argv[1]).resolve()
 workflow_path = root / ".github/workflows/ci.yml"
 current_workflow = workflow_path.read_text()
 
+def job_block(contents, job_id):
+    match = re.search(rf"^  {re.escape(job_id)}:\n", contents, re.M)
+    if match is None:
+        raise SystemExit(f"missing supplemental CI job: {job_id}")
+    following = re.search(r"^  [A-Za-z0-9_-]+:\n", contents[match.end():], re.M)
+    end = match.end() + following.start() if following else len(contents)
+    return match.start(), end, contents[match.start():end]
+
+dispatch = re.search(
+    r"^  workflow_dispatch:\n(?P<body>.*?)(?=^permissions:\n)",
+    current_workflow,
+    re.M | re.S,
+)
+if dispatch is None or dispatch.group("body").count("folder_navigator_probe:") != 1:
+    raise SystemExit("workflow_dispatch must declare one folder_navigator_probe input")
+input_match = re.search(
+    r"^      folder_navigator_probe:\n(?:^ {8}.*\n)+",
+    current_workflow,
+    re.M,
+)
+if input_match is None:
+    raise SystemExit("folder_navigator_probe input block is missing")
+input_block = input_match.group(0)
+for required in ("required: false", "type: boolean", "default: false"):
+    if required not in input_block:
+        raise SystemExit(f"folder_navigator_probe input omitted: {required}")
+
+supplemental_jobs = (
+    (
+        "folder-navigator-diagnostic",
+        "Supplemental folder navigator diagnostic (ordinary)",
+        "Scripts/run-nonempty-swift-tests.sh '^.*FolderNavigatorPresentationTests.*$'",
+        False,
+    ),
+    (
+        "folder-navigator-diagnostic-enhanced",
+        "Supplemental folder navigator diagnostic (Enhanced)",
+        "Scripts/run-nonempty-enhanced-tests.sh '^.*FolderNavigatorPresentationTests.*$'",
+        True,
+    ),
+)
+for job_id, job_name, selector, enhanced in supplemental_jobs:
+    _, _, block = job_block(current_workflow, job_id)
+    for required in (
+        f"name: {job_name}",
+        "if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe }}",
+        'FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC: "1"',
+        'test "$source_commit" = "$GITHUB_SHA"',
+        selector,
+    ):
+        if required not in block:
+            raise SystemExit(f"supplemental CI job {job_id} omitted: {required}")
+    if enhanced != ("Scripts/test-enhanced-candidate-pin.sh" in block):
+        raise SystemExit(f"supplemental CI job {job_id} has unexpected candidate pin validation")
+
 def step_block(contents, name):
     match = re.search(rf"^      - name: {re.escape(name)}\n", contents, re.M)
     if match is None:
@@ -2223,6 +2330,12 @@ boundary_names = (
     "Declare native capture boundary (candidate graph)",
 )
 normalized_workflow = current_workflow
+normalized_workflow = normalized_workflow.replace(input_block, "", 1)
+for job_id, _, _, _ in supplemental_jobs:
+    start, end, _ = job_block(normalized_workflow, job_id)
+    if start >= 2 and normalized_workflow[start - 2:start] == "\n\n":
+        start -= 1
+    normalized_workflow = normalized_workflow[:start] + normalized_workflow[end:]
 for name in boundary_names:
     start, end, block = step_block(normalized_workflow, name)
     for required in (
