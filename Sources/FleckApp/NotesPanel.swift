@@ -4,6 +4,22 @@
   import FleckCore
   import UniformTypeIdentifiers
 
+  enum NoteTabInk {
+    static let selectedCapsuleOpacity = 0.22
+
+    static func selectedCapsuleFill(tabColor: NSColor, surfaceColor: NSColor) -> NSColor {
+      FleckColorContrast.composite(
+        tabColor.withAlphaComponent(selectedCapsuleOpacity),
+        over: surfaceColor
+      )
+    }
+
+    static func selectedLabelColor(tabColor: NSColor, surfaceColor: NSColor) -> NSColor {
+      let fill = selectedCapsuleFill(tabColor: tabColor, surfaceColor: surfaceColor)
+      return FleckColorContrast.accessibleForeground(.white, against: fill)
+    }
+  }
+
   enum FolderDragPayload {
     static let noteType = UTType(exportedAs: "com.harryjin.fleck.local-note", conformingTo: .data)
     static let folderType = UTType(exportedAs: "com.harryjin.fleck.local-folder", conformingTo: .data)
@@ -744,18 +760,47 @@
     }
   }
 
-  enum PinnedChromeMaterialPolicy: Equatable {
+  enum FleckChromeMaterialPolicy: Equatable {
     case liquidGlass
     case legacyMaterial
     case opaque
 
     static func resolve(
+      appearance: FleckChromeAppearance,
       supportsLiquidGlass: Bool,
       reduceTransparency: Bool,
       increasedContrast: Bool
     ) -> Self {
-      if reduceTransparency || increasedContrast { return .opaque }
+      if appearance == .solid || reduceTransparency || increasedContrast { return .opaque }
       return supportsLiquidGlass ? .liquidGlass : .legacyMaterial
+    }
+
+    static func current(
+      appearance: FleckChromeAppearance,
+      reduceTransparency: Bool,
+      increasedContrast: Bool
+    ) -> Self {
+      resolve(
+        appearance: appearance,
+        supportsLiquidGlass: supportsLiquidGlass,
+        reduceTransparency: reduceTransparency,
+        increasedContrast: increasedContrast
+      )
+    }
+
+    private static var supportsLiquidGlass: Bool {
+      if #available(macOS 26, *) { true } else { false }
+    }
+  }
+
+  private struct FleckChromeAppearanceKey: EnvironmentKey {
+    static let defaultValue = FleckChromeAppearance.solid
+  }
+
+  extension EnvironmentValues {
+    var fleckChromeAppearance: FleckChromeAppearance {
+      get { self[FleckChromeAppearanceKey.self] }
+      set { self[FleckChromeAppearanceKey.self] = newValue }
     }
   }
 
@@ -843,7 +888,9 @@
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.fleckThemeSnapshot) private var theme
     @Environment(\.menuPanelGeometryStore) private var menuPanelGeometryStore
     @ObservedObject var dictationRuntime: DictationRuntime
     let isPinned: Bool
@@ -901,10 +948,18 @@
       noteLinkPickerController.setPresentationGuard { !searchController.isPresented }
     }
 
+    private var chromeMaterialPolicy: FleckChromeMaterialPolicy {
+      FleckChromeMaterialPolicy.current(
+        appearance: appState.preferences.chromeAppearance,
+        reduceTransparency: reduceTransparency,
+        increasedContrast: colorSchemeContrast == .increased
+      )
+    }
+
     var body: some View {
       ZStack {
         if isPinned {
-          PinnedWritingSurface()
+          PinnedWritingSurface(color: theme.nsColor(.editorOpaque))
             .accessibilityHidden(true)
         }
         VStack(spacing: 0) {
@@ -968,14 +1023,14 @@
             if let error = appState.saveError {
               Text("Could not save: \(error)")
                 .font(.caption)
-                .foregroundStyle(.red)
+                .foregroundStyle(theme.color(.error))
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let error = appState.noteFileReferenceError {
               Text(error)
                 .font(.caption)
-                .foregroundStyle(.red)
+                .foregroundStyle(theme.color(.error))
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -1020,12 +1075,23 @@
       }
       .background {
         if !isPinned {
-          Rectangle()
-            .fill(.ultraThinMaterial)
-            .opacity(appState.preferences.panelOpacity)
+          switch chromeMaterialPolicy {
+          case .liquidGlass:
+            Rectangle()
+              .fill(.regularMaterial)
+              .opacity(appState.preferences.panelOpacity)
+          case .legacyMaterial:
+            Rectangle()
+              .fill(.ultraThinMaterial)
+              .opacity(appState.preferences.panelOpacity)
+          case .opaque:
+            Rectangle().fill(theme.color(.window))
+          }
         }
       }
-      .tint(Color(hex: appState.preferences.accentHex) ?? .accentColor)
+      .tint(theme.color(.accent))
+      .foregroundStyle(theme.color(.textPrimary))
+      .environment(\.fleckChromeAppearance, appState.preferences.chromeAppearance)
       .background(
         ShortcutMonitor(shortcuts: appState.preferences.shortcuts, action: performShortcut)
           .frame(width: 0, height: 0)
@@ -1169,7 +1235,7 @@
             WorkspaceSearchView(
               controller: searchController,
               notes: appState.workspace.notes,
-              accent: Color(hex: appState.preferences.accentHex) ?? .accentColor,
+              accent: theme.color(.accent),
               presentationID: searchController.presentationID,
               reduceMotion: reduceMotion,
               currentNoteIDs: {
@@ -1192,7 +1258,7 @@
             controller: noteLinkPickerController,
             notes: appState.workspace.notes,
             foldersByID: folderNamesByID,
-            accent: Color(hex: appState.preferences.accentHex) ?? .accentColor,
+            accent: theme.color(.accent),
             currentNoteIDs: { Set(appState.workspace.notes.map(\.id)) },
             currentSource: {
               guard let source = visibleSelectedNote else { return nil }
@@ -1287,7 +1353,7 @@
       VStack(spacing: 12) {
         Image(systemName: "externaldrive.badge.exclamationmark")
           .font(.system(size: 28))
-          .foregroundStyle(.orange)
+          .foregroundStyle(theme.color(.error))
         Text("Fleck needs your help")
           .font(.headline)
         Text(
@@ -1297,10 +1363,10 @@
         )
         .font(.callout)
         .multilineTextAlignment(.center)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.color(.textSecondary))
         Text(String(describing: error))
           .font(.caption2.monospaced())
-          .foregroundStyle(.tertiary)
+          .foregroundStyle(theme.color(.caption))
           .textSelection(.enabled)
       }
       .padding(24)
@@ -1548,7 +1614,7 @@
                   selectedID: appState.workspace.selectedNoteID,
                   selectedColor: visibleNotes.first(where: {
                     $0.id == appState.workspace.selectedNoteID
-                  }).map { tabColor(for: $0, opacity: 0.22) },
+                  }).map { Color(nsColor: selectedTabCapsuleFill(for: $0)) },
                   reduceMotion: reduceMotion
                 ) {
                 HStack(spacing: 6) {
@@ -1568,10 +1634,9 @@
                     .accessibilityLabel(AgentSharingPresentation.sharedBadgeAccessibilityLabel)
                 }
               }
-              .foregroundStyle(
-                note.id == appState.workspace.selectedNoteID || colorScheme == .dark
-                  ? Color.white : Color.black
-              )
+              .foregroundStyle(note.id == appState.workspace.selectedNoteID
+                ? selectedTabLabelInk(for: note)
+                : theme.color(.textPrimary))
               .padding(.horizontal, 10)
               .padding(.vertical, 6)
               .contentShape(Capsule())
@@ -1813,13 +1878,29 @@
 
     private func tabColor(for note: Note, opacity: Double) -> Color {
       guard let hex = note.tabColorHex else {
-        return Color.accentColor.opacity(opacity)
+        return theme.color(.accent).opacity(opacity)
       }
       let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
       guard cleaned.count == 6, UInt64(cleaned, radix: 16) != nil else {
-        return Color.accentColor.opacity(opacity)
+        return theme.color(.accent).opacity(opacity)
       }
-      return (Color(hex: hex) ?? .accentColor).opacity(opacity)
+      return (Color(hex: hex) ?? theme.color(.accent)).opacity(opacity)
+    }
+
+    private func selectedTabLabelInk(for note: Note) -> Color {
+      return Color(
+        nsColor: NoteTabInk.selectedLabelColor(
+          tabColor: NSColor(hex: note.tabColorHex) ?? theme.nsColor(.accent),
+          surfaceColor: theme.nsColor(.window)
+        )
+      )
+    }
+
+    private func selectedTabCapsuleFill(for note: Note) -> NSColor {
+      NoteTabInk.selectedCapsuleFill(
+        tabColor: NSColor(hex: note.tabColorHex) ?? theme.nsColor(.accent),
+        surfaceColor: theme.nsColor(.window)
+      )
     }
 
     @ViewBuilder
@@ -2362,9 +2443,6 @@
             },
             fontFamily: appState.preferences.fontFamily,
             fontSize: appState.preferences.fontSize,
-            textColorHex: appState.preferences.editorTextHex,
-            backgroundColorHex: appState.preferences.editorBackgroundHex,
-            accentColorHex: appState.preferences.accentHex,
             reduceMotion: reduceMotion,
             automaticLists: appState.preferences.automaticLists,
             commands: editorCommands,
@@ -2540,6 +2618,7 @@
 
     @EnvironmentObject private var appState: AppState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.fleckThemeSnapshot) private var theme
     @FocusState private var focusedRow: FocusedRow?
     @FocusState private var isUnfiledDisclosureFocused: Bool
     @Binding private var draggedSource: NoteDropSource?
@@ -3186,13 +3265,14 @@
       let role: Role
       let accent: Color
       let motion: AppMotion
+      @Environment(\.fleckThemeSnapshot) private var theme
       @Environment(\.isEnabled) private var isEnabled
 
       func makeBody(configuration: Configuration) -> some View {
         let isSave = role == .save
         return configuration.label
           .font(.caption.weight(isSave ? .semibold : .medium))
-          .foregroundStyle(isSave ? accent : Color.secondary)
+          .foregroundStyle(isSave ? accent : theme.color(.textSecondary))
           .frame(height: 22)
           .padding(.horizontal, 8)
           .background(
@@ -3209,11 +3289,17 @@
 
     @ViewBuilder
     private func folderEditor(label: String, focus: FocusedRow) -> some View {
-      let accent = Color(hex: appState.preferences.accentHex) ?? .accentColor
+      let accent = theme.color(.accent)
       HStack(spacing: 5) {
         TextField(label, text: $folderNameDraft)
-          .textFieldStyle(.roundedBorder)
+          .textFieldStyle(.plain)
+          .focusEffectDisabled()
           .focused($focusedRow, equals: focus)
+          .fleckNeutralControlOutline(
+            isFocused: focusedRow == focus,
+            cornerRadius: 6,
+            idleOpacity: 0.22
+          )
           .onSubmit { commitFolderEditing() }
           .onExitCommand { cancelFolderEditing() }
         Button("Save") { commitFolderEditing() }
@@ -3277,24 +3363,23 @@
         }
         Text(count, format: .number)
           .font(.caption.monospacedDigit())
-          .foregroundStyle(.secondary)
+          .foregroundStyle(theme.color(.caption))
       }
       .padding(.horizontal, 8)
       .padding(.vertical, 5)
       .frame(minHeight: 24)
       .background(
         isDropTarget
-          ? Color.accentColor.opacity(0.28)
-          : (isSelected ? Color.accentColor.opacity(0.18) : .clear),
+          ? theme.color(.hoverFill)
+          : (isSelected ? theme.color(.selectionFill) : .clear),
         in: RoundedRectangle(cornerRadius: 6)
       )
+      .foregroundStyle(isSelected ? theme.color(.selectionText) : theme.color(.textPrimary))
       .contentShape(RoundedRectangle(cornerRadius: 6))
-      .overlay {
-        if isFocused && !isSelected {
-          RoundedRectangle(cornerRadius: 6)
-            .strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1)
-        }
-      }
+      .fleckNeutralControlOutline(
+        isFocused: isFocused && !isSelected,
+        cornerRadius: 6
+      )
       .accessibilityHint(isEmpty ? "Empty folder" : "")
     }
 
@@ -3752,6 +3837,7 @@
   }
 
   struct FolderDeleteConfirmationOverlay: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     let folder: Folder
     let onCancel: () -> Void
     let onConfirm: () -> Void
@@ -3768,7 +3854,7 @@
               .font(.headline)
             Text("Notes in this folder move to Unfiled. No notes are deleted.")
               .font(.callout)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.color(.textSecondary))
           }
 
           HStack {
@@ -3790,6 +3876,7 @@
   }
 
   private struct DeleteConfirmationOverlay: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     let note: Note
     @Binding var dontAskAgain: Bool
     let onCancel: () -> Void
@@ -3806,7 +3893,7 @@
               .font(.headline)
             Text("This note can be restored from Trash for 30 days.")
               .font(.callout)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.color(.textSecondary))
           }
 
           Toggle("Don't ask me again", isOn: $dontAskAgain)
@@ -3842,6 +3929,7 @@
   }
 
   struct DictationShortcutHelpRow: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     static let smartCaptureHelp =
       "Say a specific note title to help Fleck choose. "
       + "If it cannot find a clear match, it saves to Inbox."
@@ -3862,10 +3950,11 @@
         VStack(alignment: .leading, spacing: 1) {
           Text(presentation.statusCopy)
             .font(.caption)
+            .foregroundStyle(theme.color(.caption))
           if let detail = presentation.detailCopy {
             Text(detail)
               .font(.caption2)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.color(.caption))
           }
           if mode != .recovery {
             HStack(spacing: 4) {
@@ -3883,7 +3972,7 @@
                     .font(.headline)
                   Text(Self.smartCaptureHelp)
                   Text("Example: “Travel plans.”")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.color(.textSecondary))
                 }
                 .font(.callout)
                 .frame(width: 280, alignment: .leading)
@@ -3891,9 +3980,10 @@
               }
             }
             .font(.caption2)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.color(.caption))
           }
         }
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         Spacer(minLength: 8)
         if mode.canDismissGuide {
           Button(action: onDismissGuide) {
@@ -4845,9 +4935,15 @@
 
     private func fontSizeField(targetNoteID: UUID? = nil) -> some View {
       TextField("Font size", text: $fontSizeText)
-        .textFieldStyle(.roundedBorder)
+        .textFieldStyle(.plain)
+        .focusEffectDisabled()
         .frame(width: 48)
         .focused($isFontSizeFocused)
+        .fleckNeutralControlOutline(
+          isFocused: isFontSizeFocused,
+          cornerRadius: 6,
+          idleOpacity: 0.22
+        )
         .onChange(of: isFontSizeFocused) { wasFocused, isFocused in
           if wasFocused && !isFocused { applyFontSizeText(targetNoteID: targetNoteID) }
         }
@@ -4981,6 +5077,8 @@
   private struct PinnedNavigationChromeSurface: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.fleckChromeAppearance) private var appearance
+    @Environment(\.fleckThemeSnapshot) private var theme
 
     func body(content: Content) -> some View {
       switch materialPolicy {
@@ -4998,74 +5096,93 @@
       case .legacyMaterial:
         content.background(.ultraThinMaterial)
       case .opaque:
-        content.background(Color(nsColor: .windowBackgroundColor))
+        content.background(theme.color(.window))
       }
     }
 
-    private var materialPolicy: PinnedChromeMaterialPolicy {
-      PinnedChromeMaterialPolicy.resolve(
-        supportsLiquidGlass: supportsLiquidGlass,
+    private var materialPolicy: FleckChromeMaterialPolicy {
+      FleckChromeMaterialPolicy.current(
+        appearance: appearance,
         reduceTransparency: reduceTransparency,
         increasedContrast: colorSchemeContrast == .increased
       )
-    }
-
-    private var supportsLiquidGlass: Bool {
-      if #available(macOS 26, *) {
-        true
-      } else {
-        false
-      }
     }
   }
 
   private struct FormattingBarSurface: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.fleckChromeAppearance) private var appearance
+    @Environment(\.fleckThemeSnapshot) private var theme
+
     let isPinned: Bool
 
     func body(content: Content) -> some View {
-      if isPinned && (reduceTransparency || colorSchemeContrast == .increased) {
-        content.background {
-          RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(Color(nsColor: .windowBackgroundColor))
-        }
-      } else {
-        if #available(macOS 26, *) {
-          content.glassEffect(
-            Glass.regular.tint(Color.black.opacity(0.18)),
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-          )
+      let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+      switch materialPolicy {
+      case .liquidGlass:
+        if isPinned {
+          if #available(macOS 26, *) {
+            content.glassEffect(
+              Glass.regular.tint(theme.color(.accent).opacity(0.08)),
+              in: shape
+            )
+          } else {
+            content
+              .background {
+                shape.fill(.ultraThinMaterial)
+              }
+          }
         } else {
           content
-            .background {
-              RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay {
-                  RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.black.opacity(0.10))
-                }
-            }
         }
+      case .legacyMaterial:
+        if isPinned {
+          content.background { shape.fill(.ultraThinMaterial) }
+        } else {
+          content
+        }
+      case .opaque:
+        content.background { shape.fill(theme.color(.card)) }
       }
+    }
+
+    private var materialPolicy: FleckChromeMaterialPolicy {
+      FleckChromeMaterialPolicy.current(
+        appearance: appearance,
+        reduceTransparency: reduceTransparency,
+        increasedContrast: colorSchemeContrast == .increased
+      )
     }
   }
 
   private struct PinnedWritingSurface: NSViewRepresentable {
+    let color: NSColor
+
     func makeNSView(context: Context) -> AdaptiveOpaqueSurfaceView {
-      AdaptiveOpaqueSurfaceView()
+      AdaptiveOpaqueSurfaceView(color: color)
     }
 
     func updateNSView(_ nsView: AdaptiveOpaqueSurfaceView, context: Context) {
-      nsView.updateSurfaceColor()
+      nsView.updateSurfaceColor(color)
     }
   }
 
   final class AdaptiveOpaqueSurfaceView: NSView {
+    private var surfaceColor: NSColor
     override var isOpaque: Bool { true }
     override var wantsUpdateLayer: Bool { true }
 
+    init(color: NSColor = .textBackgroundColor) {
+      surfaceColor = color
+      super.init(frame: .zero)
+      identifier = NSUserInterfaceItemIdentifier("pinnedWritingSurface")
+      wantsLayer = true
+      updateSurfaceColor(color)
+    }
+
     override init(frame frameRect: NSRect) {
+      surfaceColor = .textBackgroundColor
       super.init(frame: frameRect)
       identifier = NSUserInterfaceItemIdentifier("pinnedWritingSurface")
       wantsLayer = true
@@ -5073,6 +5190,7 @@
     }
 
     required init?(coder: NSCoder) {
+      surfaceColor = .textBackgroundColor
       super.init(coder: coder)
       identifier = NSUserInterfaceItemIdentifier("pinnedWritingSurface")
       wantsLayer = true
@@ -5090,8 +5208,13 @@
 
     func updateSurfaceColor() {
       effectiveAppearance.performAsCurrentDrawingAppearance {
-        layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
+        layer?.backgroundColor = surfaceColor.cgColor
       }
+    }
+
+    func updateSurfaceColor(_ color: NSColor) {
+      surfaceColor = color
+      updateSurfaceColor()
     }
   }
 
@@ -5122,6 +5245,7 @@
   }
 
   private struct SaveFeedbackView: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     let status: AppState.SaveStatus
     let motion: AppMotion
 
@@ -5135,17 +5259,18 @@
             ProgressView()
               .controlSize(.mini)
             Text("Saving")
+              .foregroundStyle(theme.color(.caption))
           }
           .id(status)
           .transition(.opacity)
         case .saved:
           Label("Saved", systemImage: "checkmark")
+            .foregroundStyle(theme.color(.caption))
             .id(status)
             .transition(.opacity)
         }
       }
       .font(.caption)
-      .foregroundStyle(.secondary)
       .frame(width: 62, height: 22, alignment: .trailing)
       .animation(motion.quick, value: status)
       .accessibilityElement(children: .combine)
@@ -5453,6 +5578,7 @@
       wantsLayer = true
       if selectionHighlightLayer.superlayer == nil {
         selectionHighlightLayer.isHidden = true
+        selectionHighlightLayer.zPosition = -1
         layer?.insertSublayer(selectionHighlightLayer, at: 0)
       }
       let changed = selectedID != noteID
@@ -5584,6 +5710,7 @@
     var noteDrop: (any DropDelegate)? = nil
     @State private var width: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.fleckThemeSnapshot) private var theme
 
     func body(content: Content) -> some View {
       content
@@ -5596,7 +5723,7 @@
         })
         .overlay(alignment: interaction?.after == true ? .trailing : .leading) {
           if interaction?.targetID == destinationID {
-            Capsule().fill(Color.accentColor).frame(width: 2, height: 22)
+            Capsule().fill(theme.color(.accent)).frame(width: 2, height: 22)
               .offset(x: interaction?.after == true ? 3 : -3)
               .allowsHitTesting(false)
               .accessibilityHidden(true)
@@ -6204,6 +6331,7 @@
   }
 
   private struct ToolbarIconLabel: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     let systemImage: String
     var isActive = false
 
@@ -6211,7 +6339,7 @@
       Image(systemName: systemImage)
         .frame(width: 28, height: 26)
         .background(
-          isActive ? Color.accentColor.opacity(0.24) : .clear,
+          isActive ? theme.color(.selectionFill) : .clear,
           in: RoundedRectangle(cornerRadius: 5)
         )
         .contentShape(RoundedRectangle(cornerRadius: 5))

@@ -179,7 +179,7 @@
         )
           .environmentObject(appState)
           .environment(\.menuPanelGeometryStore, menuPanelGeometry)
-          .preferredColorScheme(colorScheme)
+          .fleckTheme(appState)
       }
       label: {
         DictationSettingsEnvironmentBridge(runtime: dictationRuntime) {
@@ -203,7 +203,7 @@
           dictationRuntime: dictationRuntime
         )
           .environmentObject(appState)
-          .preferredColorScheme(colorScheme)
+          .fleckTheme(appState)
           .background(FloatingWindowConfigurator())
       }
       .windowResizability(.contentSize)
@@ -236,6 +236,7 @@
       Settings {
         SettingsView(runtime: dictationRuntime)
           .environmentObject(appState)
+          .fleckTheme(appState)
           .frame(
             minWidth: 760,
             idealWidth: 840,
@@ -248,13 +249,6 @@
       .windowToolbarStyle(.unifiedCompact)
     }
 
-    private var colorScheme: ColorScheme? {
-      switch appState.preferences.theme {
-      case .system: nil
-      case .light: .light
-      case .dark: .dark
-      }
-    }
   }
 
   #if CLEAN_DICTATION_ENHANCED_CANDIDATE
@@ -519,6 +513,7 @@
     private var terminationObserver: ObserverToken?
     private var activationObserver: ObserverToken?
     private var cleanupPresentationSubscription: AnyCancellable?
+    private var themeSnapshotSubscription: AnyCancellable?
     #if CLEAN_DICTATION_ENHANCED_CANDIDATE
       private var captureEngine: DictationSpeechEngine?
       private var captureReachedListening = false
@@ -664,7 +659,7 @@
           diagnosticExporter.submit(observation)
         }
       }
-      let capsuleController = DictationCapsuleController()
+      let capsuleController = DictationCapsuleController(theme: appState.themeSnapshot)
       let shortcutController = GlobalHoldShortcut(
         handler: coordinator,
         editorProvider: { [weak editorRegistry] in
@@ -849,6 +844,9 @@
         .sink { [weak self] presentation in
           self?.refreshAvailability(cleanupPresentation: presentation)
         }
+      themeSnapshotSubscription = appState.$themeSnapshot.sink { [weak capsuleController] snapshot in
+        capsuleController?.updateTheme(snapshot)
+      }
 
       coordinator.setEventObserver { [weak self] event in
         self?.receive(event)
@@ -1923,8 +1921,6 @@
       let dockChanged = dock != capsuleDock
       capsuleDock = dock
       appliedCapsuleEnabled = enabled
-      capsuleController.updateAccentHex(appState.preferences.accentHex)
-
       if dockChanged {
         capsuleController.setDock(dock)
       }

@@ -21,7 +21,7 @@ func WorkspaceSearchSourceAuditUsesTheProductionPanelAndNativeOverlay() throws {
   for required in [
     "WorkspaceSearchView(",
     "searchController.present(for: appState.workspace.selectedNoteID)",
-    "accent: Color(hex: appState.preferences.accentHex) ?? .accentColor",
+    "accent: theme.color(.accent)",
     ".keyboardShortcut(\"f\", modifiers: .command)",
     ".accessibilityLabel(\"Search notes\")",
     ".help(\"Search notes",
@@ -54,7 +54,12 @@ func WorkspaceSearchSourceAuditUsesTheProductionPanelAndNativeOverlay() throws {
       separatedBy: "Text(\n                          workspaceSearchHighlightedAttributedString("
     ).count - 1 == 2
   )
-  #expect(searchView.components(separatedBy: "accent: accent").count - 1 == 2)
+  #expect(searchView.components(separatedBy: "underlineMatches: isSelected").count - 1 == 2)
+  #expect(
+    searchView.components(
+      separatedBy: "accent: isSelected ? theme.color(.selectionText) : accent"
+    ).count - 1 == 2
+  )
   #expect(
     searchView.contains(#".accessibilityLabel("\(result.displayTitle), \(result.snippet)")"#)
   )
@@ -82,12 +87,38 @@ func WorkspaceSearchSourceAuditUsesTheProductionPanelAndNativeOverlay() throws {
   )
   #expect(!formattingBar.contains(".background(.bar)"))
   #expect(formattingBar.contains(".modifier(FormattingBarSurface(isPinned: isPinned))"))
-  #expect(formattingBarSurface.contains("let isPinned: Bool"))
-  #expect(
-    formattingBarSurface.contains(
-      "if isPinned && (reduceTransparency || colorSchemeContrast == .increased)"
-    )
+  #expect(formattingBarSurface.contains("@Environment(\\.fleckThemeSnapshot) private var theme"))
+  #expect(formattingBarSurface.contains("FleckChromeMaterialPolicy.current("))
+  #expect(formattingBarSurface.contains("case .liquidGlass"))
+  #expect(formattingBarSurface.contains("case .opaque"))
+}
+
+@Test
+func WorkspaceSearchSourceAuditDoesNotOutlineTheQueryFieldSeparatelyFromItsPanel() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let searchView = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/WorkspaceSearchView.swift"),
+    encoding: .utf8
   )
+  let queryField = try #require(
+    searchView
+      .components(separatedBy: "TextField(\"Search notes\"")
+      .dropFirst()
+      .first?
+      .components(separatedBy: ".onKeyPress(.upArrow)")
+      .first
+  )
+
+  #expect(queryField.contains(".textFieldStyle(.plain)"))
+  #expect(queryField.contains(".focused($isQueryFocused)"))
+  #expect(queryField.contains(".accessibilityLabel(\"Search notes\")"))
+  #expect(queryField.contains(".accessibilityHint(\"Search note titles and bodies\")"))
+  #expect(!queryField.contains(".fleckNeutralControlOutline("))
+  #expect(searchView.contains(".fill(.regularMaterial)"))
+  #expect(searchView.contains(".strokeBorder(.quaternary)"))
 }
 
 @Test

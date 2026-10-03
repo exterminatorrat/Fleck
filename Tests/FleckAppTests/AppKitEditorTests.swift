@@ -1,5 +1,6 @@
 import AppKit
 import FleckCore
+import ScreenCaptureKit
 import SwiftUI
 import Testing
 
@@ -1563,20 +1564,24 @@ private func captureChecklist(_ textView: ListAwareTextView, name: String) throw
   )
 
   let accent = try #require(NSColor(hex: "#FFD600"))
+  let canvasColor = EditorCanvasInk.canvasColor(for: textView)
+  let accessibleAccent = FleckColorContrast.accessibleForeground(accent, against: canvasColor)
   textView.refreshNoteLinks(accentColorHex: "#FFD600", liveNoteIDs: [target])
   textView.refreshChecklistPresentation()
   textView.refreshChecklistPresentation()
 
-  func assertLayers() {
-    #expect(
-      sRGB(
-        layoutManager.temporaryAttribute(
-          .foregroundColor,
-          atCharacterIndex: link.range.location,
-          effectiveRange: nil
-        ) as? NSColor
-      ) == sRGB(accent)
+  func assertLayers() throws {
+    let temporaryAccent = try #require(
+      layoutManager.temporaryAttribute(
+        .foregroundColor,
+        atCharacterIndex: link.range.location,
+        effectiveRange: nil
+      ) as? NSColor
     )
+    #expect(
+      sRGB(temporaryAccent) == sRGB(accessibleAccent)
+    )
+    #expect(FleckColorContrast.contrastRatio(temporaryAccent, against: canvasColor) >= 4.5)
     #expect(
       layoutManager.temporaryAttribute(
         .underlineStyle,
@@ -1608,10 +1613,10 @@ private func captureChecklist(_ textView: ListAwareTextView, name: String) throw
     )
   }
 
-  assertLayers()
+  try assertLayers()
   textView.clearNoteLinkPresentation()
   textView.refreshNoteLinks(accentColorHex: "#FFD600", liveNoteIDs: [target])
-  assertLayers()
+  try assertLayers()
 }
 
 @Test @MainActor func clickingChecklistControlUsesSharedHitRect() throws {
@@ -2096,17 +2101,25 @@ private final class UndoRoutingResponder: NSView {
   let undoManager = try #require(textView.undoManager)
   undoManager.registerUndo(withTarget: textView) { _ in }
   let originalCanUndo = undoManager.canUndo
+  let canvasColor = EditorCanvasInk.canvasColor(for: textView)
 
   NativeRichTextEditor.applyAccentAppearance(to: textView, accentColorHex: "#FFD600")
   let yellow = try #require(NSColor(hex: "#FFD600"))
   let yellowSelection = try #require(
     textView.selectedTextAttributes[.backgroundColor] as? NSColor
   )
-  let yellowComponents = try #require(sRGB(yellow))
   let selectedYellowComponents = try #require(sRGB(yellowSelection))
-  #expect(sRGB(textView.insertionPointColor) == yellowComponents)
+  let yellowSelectionForeground = try #require(
+    textView.selectedTextAttributes[.foregroundColor] as? NSColor
+  )
+  #expect(FleckColorContrast.contrastRatio(textView.insertionPointColor, against: canvasColor) >= 3)
   #expect(textView.selectedTextAttributes.count == 3)
-  #expect(sRGB(textView.selectedTextAttributes[.foregroundColor] as? NSColor) == sRGB(selectionForeground))
+  #expect(
+    FleckColorContrast.contrastRatio(
+      yellowSelectionForeground,
+      against: FleckColorContrast.composite(yellowSelection, over: canvasColor)
+    ) >= 4.5
+  )
   #expect(textView.selectedTextAttributes[.underlineStyle] as? Int == selectionUnderline)
   #expect(selectedYellowComponents == sRGB(yellow.withAlphaComponent(0.35)))
 
@@ -2115,11 +2128,18 @@ private final class UndoRoutingResponder: NSView {
   let greenSelection = try #require(
     textView.selectedTextAttributes[.backgroundColor] as? NSColor
   )
-  let greenComponents = try #require(sRGB(green))
   let selectedGreenComponents = try #require(sRGB(greenSelection))
-  #expect(sRGB(textView.insertionPointColor) == greenComponents)
+  let greenSelectionForeground = try #require(
+    textView.selectedTextAttributes[.foregroundColor] as? NSColor
+  )
+  #expect(FleckColorContrast.contrastRatio(textView.insertionPointColor, against: canvasColor) >= 3)
   #expect(textView.selectedTextAttributes.count == 3)
-  #expect(sRGB(textView.selectedTextAttributes[.foregroundColor] as? NSColor) == sRGB(selectionForeground))
+  #expect(
+    FleckColorContrast.contrastRatio(
+      greenSelectionForeground,
+      against: FleckColorContrast.composite(greenSelection, over: canvasColor)
+    ) >= 4.5
+  )
   #expect(textView.selectedTextAttributes[.underlineStyle] as? Int == selectionUnderline)
   #expect(selectedGreenComponents == sRGB(green.withAlphaComponent(0.35)))
 
@@ -2513,6 +2533,20 @@ private func sRGB(_ color: NSColor?) -> [Int]? {
   ]
 }
 
+private func hasEditorInk(_ color: NSColor?, against background: NSColor) -> Bool {
+  guard let color = color?.usingColorSpace(.sRGB),
+    let background = background.usingColorSpace(.sRGB)
+  else { return false }
+  let alpha = color.alphaComponent
+  let red = color.redComponent * alpha + background.redComponent * (1 - alpha)
+  let green = color.greenComponent * alpha + background.greenComponent * (1 - alpha)
+  let blue = color.blueComponent * alpha + background.blueComponent * (1 - alpha)
+  return max(
+    abs(red - background.redComponent),
+    max(abs(green - background.greenComponent), abs(blue - background.blueComponent))
+  ) > 0.1
+}
+
 @MainActor
 private func temporaryForegroundColor(in textView: NSTextView, at index: Int) -> [Int]? {
   sRGB(
@@ -2627,10 +2661,8 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
 }
 
 @Test @MainActor func formattingBarIconMenusHaveUniqueAccessibleHitFramesAcrossProfiles() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let profiles: [(
     label: String,
     appearance: NSAppearance.Name,
@@ -2767,10 +2799,8 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     ) == CGSize(width: 620, height: 390)
   )
 
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let note = Note(title: "Toolbar fixture", body: "Body")
@@ -2924,10 +2954,8 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
 
 @Test @MainActor
 func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let expectedTags = [
     NSTextFinder.Action.showFindInterface.rawValue,
     NSTextFinder.Action.showReplaceInterface.rawValue,
@@ -3044,10 +3072,8 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
 }
 
 @Test @MainActor func toolbarOverflowPreservesPickerActionsAndFormattingStateAcrossWidths() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let note = Note(title: "Overflow actions", body: "Body")
@@ -3101,10 +3127,8 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
 }
 
 @Test @MainActor func toolbarOverflowDismissesWhenMeasuredSuffixChangesAndReopensComplete() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let note = Note(title: "Overflow lifecycle", body: "Body")
@@ -3165,10 +3189,8 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
 }
 
 @Test @MainActor func toolbarOverflowStaysOpenWithinTheSameMeasuredPrefix() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let note = Note(title: "Stable overflow", body: "Body")
@@ -3231,10 +3253,8 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
 }
 
 @Test @MainActor func toolbarDirectPickersAndPendingSizeSurviveMeasuredPrefixTransition() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let note = Note(title: "Direct picker transition", body: "Body")
@@ -3390,10 +3410,8 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
 }
 
 @Test @MainActor func toolbarHiddenUniformFontSizeSelectionSyncsBeforeFirstFieldReveal() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let attributedText = NSMutableAttributedString(
@@ -3477,10 +3495,8 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
 }
 
 @Test @MainActor func toolbarHiddenMixedFontSizeSelectionSyncsBeforeFirstFieldReveal() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let attributedText = NSMutableAttributedString(
@@ -3572,10 +3588,8 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
 }
 
 @Test @MainActor func toolbarOverflowRowsExposeCurrentAndMixedFormattingAccessibilityValues() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let note = Note(title: "Overflow AX", body: "Body")
@@ -3763,7 +3777,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   #expect(navigator.contains("if reduceMotion { return .opacity.animation(motion.state) }"))
   #expect(!body.contains(".animation(motion.spatial, value: isCreatingFolder)"))
 
-  #expect(editor.contains("let accent = Color(hex: appState.preferences.accentHex) ?? .accentColor"))
+  #expect(editor.contains("let accent = theme.color(.accent)"))
   #expect(
     normalizedEditor.contains(
       ".buttonStyle(FolderActionButtonStyle(role: .save, accent: accent, motion: motion))"
@@ -3823,7 +3837,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   #expect(navigator.contains("canAccept(expectedSource, target.folderID)"))
   #expect(navigator.contains("guard let expectedSource = matchingSource(info)"))
   #expect(navigator.contains("draggedSource == expectedSource"))
-  #expect(navigator.contains("Color.accentColor.opacity"))
+  #expect(navigator.contains("theme.color(.hoverFill)"))
   #expect(navigator.contains(".contentShape"))
   #expect(navigator.contains("accessibilityAction"))
   #expect(navigator.contains("noteDropTarget = nil"))
@@ -4027,6 +4041,333 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   #expect(actualRTF == expectedRTF)
   #expect(commands.isBold)
   #expect(textView.undoManager?.canUndo == true)
+}
+
+@MainActor
+private func dictationGuideStaticTextElements(
+  in value: Any,
+  matching expectedText: String
+) -> [NSObject] {
+  let roleSelector = NSSelectorFromString("accessibilityRole")
+  let valueSelector = NSSelectorFromString("accessibilityValue")
+  let childrenSelector = NSSelectorFromString("accessibilityChildren")
+  var elements = [NSObject]()
+
+  func collect(_ value: Any) {
+    guard let element = value as? NSObject else { return }
+    let role = element.responds(to: roleSelector)
+      ? element.perform(roleSelector)?.takeUnretainedValue() as? String : nil
+    let accessibilityValue = element.responds(to: valueSelector)
+      ? element.perform(valueSelector)?.takeUnretainedValue() as? String : nil
+    if role == NSAccessibility.Role.staticText.rawValue,
+      accessibilityValue == expectedText
+    {
+      elements.append(element)
+    }
+    let children = element.responds(to: childrenSelector)
+      ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+    for child in children ?? [] { collect(child) }
+  }
+
+  collect(value)
+  return elements
+}
+
+@MainActor
+private func visibleOwnedDictationGuideStaticTextElements(
+  in owner: NSWindow,
+  matching expectedText: String
+) -> [NSObject] {
+  ownedWindowTree(owner).filter(\.isVisible)
+    .compactMap(\.contentView)
+    .flatMap { dictationGuideStaticTextElements(in: $0, matching: expectedText) }
+}
+
+@MainActor
+private func requireDictationShortcutHelpViewport(
+  window: NSWindow,
+  host: NSView,
+  width: CGFloat
+) throws {
+  let expectedSize = CGSize(width: width, height: 240)
+  let hostSize = host.bounds.size
+  let contentSize = window.contentLayoutRect.size
+  let matchesExpectedSize = abs(hostSize.width - expectedSize.width) <= 0.5
+    && abs(hostSize.height - expectedSize.height) <= 0.5
+    && abs(contentSize.width - expectedSize.width) <= 0.5
+    && abs(contentSize.height - expectedSize.height) <= 0.5
+  try #require(matchesExpectedSize)
+}
+
+@Test @MainActor
+func hostedDictationShortcutHelpRowKeepsTextAndControlsInsideNarrowWidths() async throws {
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("dictation-shortcut-help-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let state = await hostedPanelState(root: root, workspace: Workspace())
+  let longDestination = String(
+    repeating: "Long user-provided destination for archived research notes · ",
+    count: 5
+  )
+  let scenarios: [
+    (name: String, status: ModifierMonitorState, canChange: Bool,
+     destination: String)
+  ] = [
+    ("ready", .running, true, "Current dictation destination: Inbox"),
+    ("idle", .running, true, "Click in this note to dictate here."),
+    ("unauthorized", .unauthorized, true, ""),
+    ("failed", .failed, true, ""),
+    ("can-change-disabled", .running, false, longDestination),
+  ]
+
+  for scenario in scenarios {
+    let presentation = DictationModifierSettingsPresentation(
+      selected: .rightOption,
+      monitorStatus: scenario.status,
+      canChange: scenario.canChange
+    )
+    let mode = try #require(
+      DictationShortcutHelpMode.resolve(
+        isReady: presentation.isReady,
+        isCaptureActive: false,
+        showsGuide: true
+      )
+    )
+    let (window, host) = hostedDictationShortcutHelpRow(
+      state: state,
+      mode: mode,
+      presentation: presentation,
+      destinationCopy: scenario.destination,
+      onRecovery: {},
+      onDismissGuide: {}
+    )
+    do {
+      defer { closeHostedDictationShortcutHelpWindow(window) }
+      for width in [CGFloat(380), 384, 385, 386, 800] {
+        window.setContentSize(NSSize(width: width, height: 240))
+        await settleHostedView(host)
+        try requireDictationShortcutHelpViewport(window: window, host: host, width: width)
+
+        let viewport = window.convertToScreen(host.convert(host.bounds, to: nil))
+        let groupElements = fontPickerAccessibilityElements(
+          host,
+          label: presentation.capsuleAccessibilityLabel
+        )
+        #expect(groupElements.count == 1)
+        let group = try #require(groupElements.first)
+        let groupFrame = try #require(
+          group.value(forKey: "accessibilityFrame") as? NSValue
+        ).rectValue
+        let statusElements = dictationGuideStaticTextElements(
+          in: host,
+          matching: presentation.statusCopy
+        )
+        #expect(statusElements.count == 1)
+        let status = try #require(statusElements.first)
+        let statusFrame = try #require(
+          status.value(forKey: "accessibilityFrame") as? NSValue
+        ).rectValue
+        var textFrames = [statusFrame]
+        if let detailCopy = presentation.detailCopy {
+          let detailElements = dictationGuideStaticTextElements(
+            in: host,
+            matching: detailCopy
+          )
+          #expect(detailElements.count == 1)
+          let detail = try #require(detailElements.first)
+          textFrames.append(try #require(
+            detail.value(forKey: "accessibilityFrame") as? NSValue
+          ).rectValue)
+        }
+
+        var controlFrames: [CGRect] = []
+        var destinationFrame: CGRect?
+        if mode != .recovery {
+          let destinationElements = dictationGuideStaticTextElements(
+            in: host,
+            matching: scenario.destination
+          )
+          #expect(destinationElements.count == 1)
+          let destination = try #require(destinationElements.first)
+          destinationFrame = try #require(
+            destination.value(forKey: "accessibilityFrame") as? NSValue
+          ).rectValue
+          textFrames.append(try #require(destinationFrame))
+
+          let helpElements = fontPickerAccessibilityElements(host, label: "About Smart Capture")
+          #expect(helpElements.count == 1)
+          let help = try #require(helpElements.first)
+          controlFrames.append(try #require(
+            help.value(forKey: "accessibilityFrame") as? NSValue
+          ).rectValue)
+        }
+
+        let actionLabel = mode.canDismissGuide
+          ? "Dismiss shortcut guide"
+          : presentation.recoveryButtonTitle
+        if let actionLabel {
+          let actionElements = fontPickerAccessibilityElements(host, label: actionLabel)
+          #expect(actionElements.count == 1)
+          let action = try #require(actionElements.first)
+          controlFrames.append(try #require(
+            action.value(forKey: "accessibilityFrame") as? NSValue
+          ).rectValue)
+        }
+
+        let measuredFrames = [groupFrame] + textFrames + controlFrames
+        #expect(measuredFrames.allSatisfy { $0.width > 0 && $0.height > 0 })
+        #expect(measuredFrames.allSatisfy {
+          $0.minX >= viewport.minX - 0.5 && $0.maxX <= viewport.maxX + 0.5
+            && $0.minY >= viewport.minY - 0.5 && $0.maxY <= viewport.maxY + 0.5
+        })
+        #expect(textFrames.allSatisfy { groupFrame.insetBy(dx: -0.5, dy: -0.5).contains($0) })
+        #expect(controlFrames.allSatisfy {
+          groupFrame.insetBy(dx: -0.5, dy: -0.5).contains($0)
+        })
+        #expect(controlFrames.allSatisfy { control in
+          textFrames.allSatisfy { !control.intersects($0) }
+        })
+
+        let capturesNativeEvidence = (scenario.name == "unauthorized" && width == 385)
+          || (scenario.name == "idle" && width == 380)
+          || (scenario.name == "can-change-disabled" && width == 380)
+        if capturesNativeEvidence,
+          let evidenceDirectory = ProcessInfo.processInfo.environment["FLECK_EDITOR_EVIDENCE_DIR"],
+          !evidenceDirectory.isEmpty
+        {
+          let directory = URL(fileURLWithPath: evidenceDirectory, isDirectory: true)
+          if FileManager.default.fileExists(atPath: directory.path) {
+            let image = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: image)
+            try requireDictationShortcutHelpViewport(window: window, host: host, width: width)
+            let png = try #require(image.representation(using: .png, properties: [:]))
+            let filename = "dictation-shortcut-help-\(scenario.name)-\(Int(width))-\(UUID().uuidString).png"
+            try png.write(
+              to: directory.appendingPathComponent(filename),
+              options: .atomic
+            )
+          }
+        }
+
+        if scenario.name == "can-change-disabled", width <= 386 {
+          #expect(statusFrame.height > 14)
+          let longDestinationFrame = try #require(destinationFrame)
+          #expect(longDestinationFrame.height > 24)
+        }
+      }
+    }
+  }
+}
+
+@Test @MainActor
+func hostedDictationShortcutHelpRowAccessibilityActionsFireOnce() async throws {
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("dictation-shortcut-actions-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let state = await hostedPanelState(root: root, workspace: Workspace())
+  let pressSelector = NSSelectorFromString("accessibilityPerformPress")
+  let readyPresentation = DictationModifierSettingsPresentation(
+    selected: .rightOption,
+    monitorStatus: .running,
+    canChange: true
+  )
+  let readyMode = try #require(
+    DictationShortcutHelpMode.resolve(
+      isReady: readyPresentation.isReady,
+      isCaptureActive: false,
+      showsGuide: true
+    )
+  )
+  var dismissCount = 0
+  let (readyWindow, readyHost) = hostedDictationShortcutHelpRow(
+    state: state,
+    mode: readyMode,
+    presentation: readyPresentation,
+    destinationCopy: "Current dictation destination: Inbox",
+    onRecovery: {},
+    onDismissGuide: { dismissCount += 1 }
+  )
+  do {
+    defer { closeHostedDictationShortcutHelpWindow(readyWindow) }
+    readyWindow.setContentSize(NSSize(width: 385, height: 240))
+    await settleHostedView(readyHost)
+    try requireDictationShortcutHelpViewport(window: readyWindow, host: readyHost, width: 385)
+
+    let help = try #require(
+      fontPickerAccessibilityElement(readyHost, label: "About Smart Capture")
+    )
+    #expect(help.responds(to: pressSelector))
+    _ = help.perform(pressSelector)
+    await settleHostedView(readyHost)
+    let popoverTextElements = [
+      visibleOwnedDictationGuideStaticTextElements(in: readyWindow, matching: "Smart Capture"),
+      visibleOwnedDictationGuideStaticTextElements(
+        in: readyWindow,
+        matching: DictationShortcutHelpRow.smartCaptureHelp
+      ),
+      visibleOwnedDictationGuideStaticTextElements(
+        in: readyWindow,
+        matching: "Example: “Travel plans.”"
+      ),
+    ]
+    #expect(popoverTextElements.map(\.count) == [1, 1, 1])
+    for elements in popoverTextElements {
+      let text = try #require(elements.first)
+      let frame = try #require(text.value(forKey: "accessibilityFrame") as? NSValue).rectValue
+      #expect(frame.width > 0 && frame.height > 0)
+    }
+
+    let dismiss = try #require(
+      fontPickerAccessibilityElement(readyHost, label: "Dismiss shortcut guide")
+    )
+    #expect(dismiss.responds(to: pressSelector))
+    _ = dismiss.perform(pressSelector)
+    #expect(dismissCount == 1)
+  }
+
+  for (monitorStatus, expectedTitle) in [
+    (ModifierMonitorState.unauthorized, "Open Input Monitoring"),
+    (.failed, "Retry"),
+  ] {
+    let presentation = DictationModifierSettingsPresentation(
+      selected: .rightOption,
+      monitorStatus: monitorStatus,
+      canChange: true
+    )
+    let mode = try #require(
+      DictationShortcutHelpMode.resolve(
+        isReady: presentation.isReady,
+        isCaptureActive: false,
+        showsGuide: false
+      )
+    )
+    var recoveryCount = 0
+    let (window, host) = hostedDictationShortcutHelpRow(
+      state: state,
+      mode: mode,
+      presentation: presentation,
+      destinationCopy: "",
+      onRecovery: { recoveryCount += 1 },
+      onDismissGuide: {}
+    )
+    do {
+      defer { closeHostedDictationShortcutHelpWindow(window) }
+      window.setContentSize(NSSize(width: 385, height: 240))
+      await settleHostedView(host)
+      try requireDictationShortcutHelpViewport(window: window, host: host, width: 385)
+
+      let action = try #require(fontPickerAccessibilityElement(host, label: expectedTitle))
+      let frame = try #require(action.value(forKey: "accessibilityFrame") as? NSValue).rectValue
+      #expect(frame.width > 0 && frame.height > 0)
+      #expect(action.responds(to: pressSelector))
+      _ = action.perform(pressSelector)
+      #expect(recoveryCount == 1)
+    }
+  }
 }
 
 @Test @MainActor func hostedNotesPanelTitleScrollsWithBody() async throws {
@@ -4400,8 +4741,9 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
         let rows = max(0, Int((top - 10) * scale))..<min(bitmap.pixelsHigh, Int((top + originalFrame.height) * scale))
         // The first N is common to the placeholder and typed text; exclude the caret at x=2.
         let columns = Int((originalFrame.minX + 5) * scale)..<Int((originalFrame.minX + 13) * scale)
+        let canvasColor = state.themeSnapshot.nsColor(.editorOpaque)
         let ink = rows.filter { y in columns.contains { x in
-          (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.1
+          hasEditorInk(bitmap.colorAt(x: x, y: y), against: canvasColor)
         } }
         let first = try #require(ink.first)
         let last = try #require(ink.last)
@@ -4483,7 +4825,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
     try await withHostedTitleEditors(
       isPinned: isPinned, titleText: titleText, fontFamily: font,
       bodyText: String(repeating: "Caret body\n", count: 50)
-    ) { _, window, host, title, body in
+    ) { state, window, host, title, body in
       let scrollView = try #require(body.enclosingScrollView)
       do {
         #expect(window.makeFirstResponder(body))
@@ -4509,8 +4851,9 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
             let right = sourceRect.maxX - source.bounds.minX
             let xs = max(0, Int(left * scale))..<min(bitmap.pixelsWide, Int(right * scale))
             let ys = max(0, Int(top * scale))..<min(bitmap.pixelsHigh, Int((top + sourceRect.height) * scale))
+            let canvasColor = state.themeSnapshot.nsColor(.editorOpaque)
             let rows = ys.filter { y in xs.contains { x in
-              (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.2
+              hasEditorInk(bitmap.colorAt(x: x, y: y), against: canvasColor)
             } }
             let first = try #require(rows.first)
             let last = try #require(rows.last)
@@ -4580,20 +4923,30 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   }
 }
 
-@Test @MainActor func hostedTitleCaretMatchesBodyAccent() async throws {
-  try await withHostedTitleEditors { _, window, host, titleField, bodyEditor in
-    let accent = try #require(NSColor(hex: "#FFD600"))
+@Test @MainActor func hostedTitleCaretKeepsAccentWhileBodyCaretFollowsCanvasContrast() async throws {
+  try await withHostedTitleEditors { state, window, host, titleField, bodyEditor in
+    let canvasColor = EditorCanvasInk.canvasColor(for: bodyEditor)
+    let expectedCaretColor = FleckColorContrast.accessibleForeground(
+      state.themeSnapshot.nsColor(.focusRing),
+      against: canvasColor,
+      minimumContrast: 3
+    )
     for _ in 0..<2 {
       #expect(window.makeFirstResponder(bodyEditor))
-      #expect(sRGB(bodyEditor.insertionPointColor) == sRGB(accent))
+      #expect(
+        FleckColorContrast.contrastRatio(
+          bodyEditor.insertionPointColor,
+          against: EditorCanvasInk.canvasColor(for: bodyEditor)
+        ) >= 3
+      )
       #expect(window.makeFirstResponder(titleField))
       let fieldEditor = try #require(titleField.currentEditor() as? NSTextView)
       #expect(window.firstResponder === fieldEditor)
-      // Check immediately: merely focusing an empty selection must style the caret.
       fieldEditor.setSelectedRange(NSRange(location: 2, length: 0))
-      #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(bodyEditor.insertionPointColor))
+      #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(expectedCaretColor))
+      #expect(FleckColorContrast.contrastRatio(fieldEditor.insertionPointColor, against: canvasColor) >= 3)
       await settleHostedView(host)
-      #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(accent))
+      #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(expectedCaretColor))
     }
   }
 }
@@ -4607,11 +4960,25 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
     let typing = NSDictionary(dictionary: fieldEditor.typingAttributes)
     let selectedAppearance = NSDictionary(dictionary: fieldEditor.selectedTextAttributes)
     let originalTitle = fieldEditor.string
+    let expectedCaretColor = FleckColorContrast.accessibleForeground(
+      state.themeSnapshot.nsColor(.focusRing),
+      against: EditorCanvasInk.canvasColor(for: bodyEditor),
+      minimumContrast: 3
+    )
     state.updatePreferences { $0.accentHex = "#30D158" }
     await settleHostedView(host)
     #expect(window.firstResponder === fieldEditor)
-    #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(NSColor(hex: "#30D158")))
-    #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(bodyEditor.insertionPointColor))
+    #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(expectedCaretColor))
+    #expect(FleckColorContrast.contrastRatio(
+      fieldEditor.insertionPointColor,
+      against: EditorCanvasInk.canvasColor(for: bodyEditor)
+    ) >= 3)
+    #expect(
+      FleckColorContrast.contrastRatio(
+        bodyEditor.insertionPointColor,
+        against: EditorCanvasInk.canvasColor(for: bodyEditor)
+      ) >= 3
+    )
     #expect(fieldEditor.selectedRange() == selection)
     #expect(NSDictionary(dictionary: fieldEditor.typingAttributes).isEqual(to: typing))
     #expect(NSDictionary(dictionary: fieldEditor.selectedTextAttributes).isEqual(to: selectedAppearance))
@@ -4623,8 +4990,65 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   }
 }
 
+@Test @MainActor func hostedTitleInkAndCaretFollowInverseCanvasOnCreateUpdateAndFocus() async throws {
+  let authoredRTF = try hostedPanelRTF(text: "Caret body")
+  try await withHostedTitleEditors(
+    richTextRTF: authoredRTF,
+    editorBackgroundHexForAppearance: { appearance in
+      appearance == .aqua ? "#000000" : "#FFFFFF"
+    }
+  ) { state, window, host, titleField, bodyEditor in
+    let originalTitle = titleField.stringValue
+    let originalRichTextRTF = try #require(state.workspace.notes.first?.richTextRTF)
+    let snapshot = state.themeSnapshot
+    @MainActor func expectPaletteColors() throws -> NSColor {
+      let canvasColor = EditorCanvasInk.canvasColor(for: bodyEditor)
+      #expect(sRGB(canvasColor) == sRGB(snapshot.nsColor(.editorOpaque)))
+      let titleInk = try #require(titleField.textColor)
+      #expect(sRGB(titleInk) == sRGB(snapshot.nsColor(.textPrimary)))
+      #expect(FleckColorContrast.contrastRatio(titleInk, against: canvasColor) >= 4.5)
+      return canvasColor
+    }
+    @MainActor func expectFieldEditorContrast(_ fieldEditor: NSTextView, against canvasColor: NSColor) throws {
+      let titleInk = try #require(fieldEditor.textColor)
+      #expect(FleckColorContrast.contrastRatio(
+        titleInk,
+        against: canvasColor
+      ) >= 4.5)
+      let caretInk = FleckColorContrast.accessibleForeground(
+        snapshot.nsColor(.focusRing),
+        against: canvasColor,
+        minimumContrast: 3
+      )
+      #expect(sRGB(fieldEditor.insertionPointColor) == sRGB(caretInk))
+      #expect(FleckColorContrast.contrastRatio(fieldEditor.insertionPointColor, against: canvasColor) >= 3)
+    }
+
+    var canvasColor = try expectPaletteColors()
+    #expect(window.makeFirstResponder(titleField))
+    var fieldEditor = try #require(titleField.currentEditor() as? NSTextView)
+    try expectFieldEditorContrast(fieldEditor, against: canvasColor)
+
+    state.updatePreferences { $0.editorBackgroundHex = "#00FF00" }
+    await settleHostedView(host)
+    #expect(state.themeSnapshot == snapshot)
+    canvasColor = try expectPaletteColors()
+    #expect(window.firstResponder === fieldEditor)
+    try expectFieldEditorContrast(fieldEditor, against: canvasColor)
+
+    #expect(window.makeFirstResponder(bodyEditor))
+    #expect(window.makeFirstResponder(titleField))
+    fieldEditor = try #require(titleField.currentEditor() as? NSTextView)
+    try expectFieldEditorContrast(fieldEditor, against: canvasColor)
+    #expect(fieldEditor.string == originalTitle)
+    #expect(state.workspace.notes.first?.title == originalTitle)
+    #expect(state.workspace.notes.first?.body == "Caret body")
+    #expect(state.workspace.notes.first?.richTextRTF == originalRichTextRTF)
+  }
+}
+
 @Test @MainActor func hostedTitleAccentDoesNotLeakToOtherFields() async throws {
-  try await withHostedTitleEditors { state, window, host, titleField, _ in
+  try await withHostedTitleEditors { state, window, host, titleField, bodyEditor in
     let otherField = NSTextField(string: "Unrelated input")
     otherField.frame = NSRect(x: 0, y: 0, width: 200, height: 24)
     host.addSubview(otherField)
@@ -4635,7 +5059,11 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
     #expect(window.makeFirstResponder(titleField))
     let titleEditor = try #require(titleField.currentEditor() as? NSTextView)
     #expect(titleEditor !== ordinaryEditor)
-    #expect(sRGB(titleEditor.insertionPointColor) == sRGB(NSColor(hex: "#FFD600")))
+    #expect(sRGB(titleEditor.insertionPointColor) == sRGB(FleckColorContrast.accessibleForeground(
+      state.themeSnapshot.nsColor(.focusRing),
+      against: EditorCanvasInk.canvasColor(for: bodyEditor),
+      minimumContrast: 3
+    )))
     #expect(window.makeFirstResponder(otherField))
     #expect(otherField.currentEditor() === ordinaryEditor)
     #expect(sRGB(ordinaryEditor.insertionPointColor) == sRGB(originalCaret))
@@ -4644,7 +5072,11 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
     await settleHostedView(host)
     #expect(sRGB(ordinaryEditor.insertionPointColor) == sRGB(originalCaret))
     #expect(window.makeFirstResponder(titleField))
-    #expect(sRGB(titleEditor.insertionPointColor) == sRGB(NSColor(hex: "#30D158")))
+    #expect(sRGB(titleEditor.insertionPointColor) == sRGB(FleckColorContrast.accessibleForeground(
+      state.themeSnapshot.nsColor(.focusRing),
+      against: EditorCanvasInk.canvasColor(for: bodyEditor),
+      minimumContrast: 3
+    )))
     #expect(window.makeFirstResponder(otherField))
     #expect(otherField.currentEditor() === ordinaryEditor)
     #expect(sRGB(ordinaryEditor.insertionPointColor) == sRGB(originalCaret))
@@ -4657,12 +5089,19 @@ private func withHostedTitleEditors(
   titleText: String = "Caret title",
   fontFamily: String = "Avenir Next",
   bodyText: String = "Caret body",
+  richTextRTF: Data? = nil,
+  editorBackgroundHexForAppearance: (NSAppearance.Name) -> String? = { _ in nil },
   _ check: @MainActor (AppState, NSWindow, NSHostingView<AnyView>, NSTextField, ListAwareTextView) async throws -> Void
 ) async throws {
   for appearance in [NSAppearance.Name.aqua, .darkAqua] {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     defer { try? FileManager.default.removeItem(at: root) }
-    let note = Note(title: titleText, body: bodyText, folderID: nil)
+    let note = Note(
+      title: titleText,
+      body: bodyText,
+      richTextRTF: richTextRTF,
+      folderID: nil
+    )
     let state = await hostedPanelState(
       root: root,
       workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
@@ -4670,6 +5109,7 @@ private func withHostedTitleEditors(
     state.updatePreferences {
       $0.accentHex = "#FFD600"
       $0.fontFamily = fontFamily
+      $0.editorBackgroundHex = editorBackgroundHexForAppearance(appearance)
     }
     let (window, host) = hostedPanel(root: root, state: state, commands: EditorCommands(), isPinned: isPinned)
     defer { window.orderOut(nil) }
@@ -4733,6 +5173,8 @@ private func withHostedTitleEditors(
 }
 
 @Test @MainActor func hostedCompactUnfiledKeepsNamedFolderPillInsideNavigator() async throws {
+  let previousNavigatorAccessibility = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousNavigatorAccessibility) }
   let unfiledRoot = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)
   let namedRoot = FileManager.default.temporaryDirectory
@@ -4755,34 +5197,32 @@ private func withHostedTitleEditors(
   )
   var namedWorkspace = unfiledWorkspace
   namedWorkspace.selectedNoteID = namedNote.id
-  let accentHex = "#00FF00"
   let unfiledPill = try await hostedFolderSelectionGeometry(
     root: unfiledRoot,
-    workspace: unfiledWorkspace,
-    accentHex: accentHex
+    workspace: unfiledWorkspace
   )
   let namedPill = try await hostedFolderSelectionGeometry(
     root: namedRoot,
-    workspace: namedWorkspace,
-    accentHex: accentHex
+    workspace: namedWorkspace
   )
 
   let navigatorBand = CGRect(x: 0, y: 42, width: 640, height: 40)
   let windowBounds = CGRect(x: 0, y: 0, width: 640, height: 430)
   for pill in [unfiledPill, namedPill] {
-    #expect(navigatorBand.contains(pill.bounds))
-    #expect(windowBounds.contains(pill.bounds))
-    #expect(pill.bounds.width >= 24)
-    #expect(pill.bounds.height >= 24)
-    #expect(pill.bounds.height <= 33)
+    #expect(navigatorBand.contains(pill.rowFrame))
+    #expect(windowBounds.contains(pill.rowFrame))
+    #expect(pill.rowFrame.width >= 24)
+    #expect(pill.rowFrame.height >= 24)
+    #expect(pill.rowFrame.height <= 33)
+    #expect(pill.rowFrame.insetBy(dx: 2, dy: 2).contains(pill.fillBounds))
     #expect(pill.pixelCount >= 32)
-    #expect(pill.bounds.minX >= 4)
-    #expect(pill.bounds.maxX <= 636)
+    #expect(pill.rowFrame.minX >= 4)
+    #expect(pill.rowFrame.maxX <= 636)
   }
 
-  #expect(abs(namedPill.bounds.minY - unfiledPill.bounds.minY) <= 2)
-  #expect(abs(namedPill.bounds.height - unfiledPill.bounds.height) <= 5)
-  #expect(namedPill.bounds.width > unfiledPill.bounds.width)
+  #expect(abs(namedPill.rowFrame.minY - unfiledPill.rowFrame.minY) <= 2)
+  #expect(abs(namedPill.rowFrame.height - unfiledPill.rowFrame.height) <= 5)
+  #expect(namedPill.rowFrame.width > unfiledPill.rowFrame.width)
 
   let focusDestination = FolderNavigatorFocus.nextIndex(
     currentIndex: 0,
@@ -4813,7 +5253,7 @@ private func withHostedTitleEditors(
       .components(separatedBy: "private struct FolderActionButtonStyle").first
   )
   #expect(rowLabelBody.contains("RoundedRectangle(cornerRadius: 6)"))
-  #expect(rowLabelBody.contains("isSelected ? Color.accentColor.opacity(0.18)"))
+  #expect(rowLabelBody.contains("isSelected ? theme.color(.selectionFill) : .clear"))
   #expect(rootRow.contains("isFocused: focusedRow == .unfiled"))
   #expect(folderRow.contains("isFocused: focusedRow == .folder(folder.id)"))
   #expect(rootRow.contains(".focusEffectDisabled()"))
@@ -4829,12 +5269,11 @@ private func withHostedTitleEditors(
   #expect(rootFocusable.lowerBound < rootFocused.lowerBound)
   #expect(folderFocusable.lowerBound < folderFocused.lowerBound)
   #expect(rowLabelBody.contains("isFocused: Bool"))
-  #expect(rowLabelBody.contains("isFocused && !isSelected"))
-  #expect(rowLabelBody.contains(".overlay"))
+  #expect(rowLabelBody.contains(".fleckNeutralControlOutline("))
+  #expect(rowLabelBody.contains("isFocused: isFocused && !isSelected"))
+  #expect(rowLabelBody.contains("cornerRadius: 6"))
   #expect(
-    rowLabelBody.contains(
-      ".strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1)"
-    )
+    !rowLabelBody.contains(".focusRing")
   )
 }
 
@@ -4858,17 +5297,11 @@ private func withHostedTitleEditors(
     )
   )
   state.updatePreferences {
-    $0.accentHex = "#00FF00"
     $0.isUnfiledCompact = true
     $0.showFormattingBar = false
   }
   let commands = EditorCommands()
-  let (window, host) = hostedPanel(
-    root: root,
-    state: state,
-    commands: commands,
-    accentHex: "#00FF00"
-  )
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
   window.appearance = NSAppearance(named: .darkAqua)
   defer { window.orderOut(nil) }
   await settleHostedView(host)
@@ -4917,118 +5350,545 @@ private func withHostedTitleEditors(
 }
 
 @Test @MainActor func hostedFolderKeyboardFocusAddsOutlineToUnselectedRow() async throws {
-  let root = FileManager.default.temporaryDirectory
-    .appendingPathComponent(UUID().uuidString, isDirectory: true)
-  defer { try? FileManager.default.removeItem(at: root) }
-  let folder = try Folder(id: UUID(), name: "School")
-  let note = Note(title: "Selected Unfiled", body: "Body")
-  let folderNote = Note(
-    title: "Selected School",
-    body: "Body",
-    folderID: folder.id
-  )
-  let workspace = Workspace(
-    notes: [note, folderNote],
-    selectedNoteID: note.id,
-    folders: [folder]
-  )
-  let state = await hostedPanelState(root: root, workspace: workspace)
-  state.updatePreferences {
-    $0.accentHex = "#00FF00"
-    $0.isUnfiledCompact = false
-    $0.showFormattingBar = false
+  let previousNavigatorAccessibility = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousNavigatorAccessibility) }
+  let previousApplicationAppearance = NSApp.appearance
+  defer { NSApp.appearance = previousApplicationAppearance }
+
+  for (theme, windowAppearance) in [
+    (AppTheme.light, NSAppearance.Name.aqua),
+    (AppTheme.dark, NSAppearance.Name.darkAqua),
+  ] {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let folder = try Folder(id: UUID(), name: "School")
+    let note = Note(title: "Selected Unfiled", body: "Body")
+    let folderNote = Note(
+      title: "Selected School",
+      body: "Body",
+      folderID: folder.id
+    )
+    let workspace = Workspace(
+      notes: [note, folderNote],
+      selectedNoteID: note.id,
+      folders: [folder]
+    )
+    let state = await hostedPanelState(root: root, workspace: workspace)
+    state.updatePreferences {
+      $0.isUnfiledCompact = false
+      $0.showFormattingBar = false
+      $0.theme = theme
+    }
+    let commands = EditorCommands()
+    let (window, host) = hostedPanel(
+      root: root,
+      state: state,
+      commands: commands
+    )
+    window.appearance = NSAppearance(named: windowAppearance)
+    defer { window.orderOut(nil) }
+    await settleHostedView(host)
+
+    let folderRowIdentifiers = ["folder-unfiled", "folder-\(folder.id.uuidString)"]
+    let folderRowViews = try folderRowIdentifiers.map { identifier in
+      (
+        identifier,
+        try #require(
+          hostedNavigatorKeyView(
+            matchingAccessibilityIdentifier: identifier,
+            in: host
+          )
+        )
+      )
+    }
+    #expect(Set(folderRowViews.map { ObjectIdentifier($0.1) }).count == folderRowIdentifiers.count)
+    let unfiledControl = try #require(
+      folderRowViews.first { $0.0 == "folder-unfiled" }?.1
+    )
+    let folderControl = try #require(
+      folderRowViews.first { $0.0 == "folder-\(folder.id.uuidString)" }?.1
+    )
+    #expect(unfiledControl !== folderControl)
+    #expect(window.makeFirstResponder(unfiledControl))
+    await settleHostedView(host)
+
+    let folderRowFrame = folderControl.convert(folderControl.bounds, to: host)
+    let navigatorBand = CGRect(x: 0, y: 42, width: host.bounds.width, height: 40)
+    #expect(navigatorBand.contains(folderRowFrame))
+    #expect(folderRowFrame.width >= 24)
+    #expect(folderRowFrame.height >= 24)
+    #expect(folderRowFrame.height <= 33)
+    let before = try hostedThemeCapture(in: host)
+    try sendHostedKeyDown(
+      String(UnicodeScalar(NSDownArrowFunctionKey)!),
+      keyCode: 125,
+      to: window
+    )
+    await settleHostedView(host)
+    let focusedFolderRowFrame = folderControl.convert(folderControl.bounds, to: host)
+    #expect(focusedFolderRowFrame == folderRowFrame)
+    let after = try hostedThemeCapture(in: host)
+    let changedNeutralPixels = hostedNeutralFocusOutlineChangedPixelCount(
+      before: before,
+      after: after,
+      rowFrame: focusedFolderRowFrame,
+      hostSize: host.bounds.size
+    )
+    #expect(
+      changedNeutralPixels >= 24,
+      "keyboard focus should change neutral pixels around the folder row (got \(changedNeutralPixels))"
+    )
+    #expect(state.workspace.selectedNoteID == note.id)
+
+    try sendHostedKeyDown("\r", keyCode: 36, to: window)
+    await settleHostedView(host)
+    #expect(state.workspace.selectedNoteID == folderNote.id)
   }
-  let commands = EditorCommands()
-  let (window, host) = hostedPanel(
-    root: root,
-    state: state,
-    commands: commands,
-    accentHex: "#00FF00"
-  )
-  window.appearance = NSAppearance(named: .darkAqua)
-  defer { window.orderOut(nil) }
-  await settleHostedView(host)
-
-  let keyViews = hostedNavigatorKeyViews(in: host)
-  let unfiledControl = try #require(keyViews.first)
-  #expect(window.makeFirstResponder(unfiledControl))
-  await settleHostedView(host)
-
-  let before = try hostedNavigatorAccentGeometry(
-    in: host,
-    accentHex: "#00FF00"
-  )
-  try sendHostedKeyDown(
-    String(UnicodeScalar(NSDownArrowFunctionKey)!),
-    keyCode: 125,
-    to: window
-  )
-  await settleHostedView(host)
-  let after = try hostedNavigatorAccentGeometry(
-    in: host,
-    accentHex: "#00FF00"
-  )
-
-  #expect(after.pixelCount > before.pixelCount)
-
-  try sendHostedKeyDown("\r", keyCode: 36, to: window)
-  await settleHostedView(host)
-  #expect(state.workspace.selectedNoteID == folderNote.id)
 }
 
-private struct HostedAccentPillGeometry {
+private struct HostedSelectionPillGeometry {
+  let rowFrame: CGRect
+  let fillBounds: CGRect
+  let pixelCount: Int
+}
+
+private struct HostedSelectionPixelBounds {
   let bounds: CGRect
   let pixelCount: Int
+}
+
+private struct HostedSelectionCapture {
+  let rowFrame: CGRect
+  let hostSize: CGSize
+  let image: NSBitmapImageRep
+  let theme: FleckThemeSnapshot
 }
 
 @MainActor
 private func hostedFolderSelectionGeometry(
   root: URL,
-  workspace: Workspace,
-  accentHex: String
-) async throws -> HostedAccentPillGeometry {
-  let state = await hostedPanelState(root: root, workspace: workspace)
-  state.updatePreferences {
-    $0.accentHex = accentHex
-    $0.isUnfiledCompact = true
-    $0.showFormattingBar = false
-  }
-  let commands = EditorCommands()
-  let (window, host) = hostedPanel(
-    root: root,
-    state: state,
-    commands: commands,
-    accentHex: accentHex
-  )
-  window.appearance = NSAppearance(named: .darkAqua)
-  defer { window.orderOut(nil) }
-  await settleHostedView(host)
+  workspace: Workspace
+) async throws -> HostedSelectionPillGeometry {
+  let previousApplicationAppearance = NSApp.appearance
+  defer { NSApp.appearance = previousApplicationAppearance }
 
-  let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-  host.cacheDisplay(in: host.bounds, to: imageRep)
-  return try #require(
-    hostedAccentFillBounds(
-      in: imageRep,
-      hostSize: host.bounds.size,
-      accentHex: accentHex
+  let selectedNote = try #require(
+    workspace.notes.first { $0.id == workspace.selectedNoteID }
+  )
+  let selectedRowIdentifier = selectedNote.folderID.map {
+    "folder-\($0.uuidString)"
+  } ?? "folder-unfiled"
+  let expectedFolderRowIdentifiers = ["folder-unfiled"] + workspace.folders.map {
+    "folder-\($0.id.uuidString)"
+  }
+  func capture(workspace: Workspace, root: URL) async throws -> HostedSelectionCapture {
+    let state = await hostedPanelState(root: root, workspace: workspace)
+    state.updatePreferences {
+      $0.isUnfiledCompact = true
+      $0.showFormattingBar = false
+      $0.theme = .dark
+    }
+    let commands = EditorCommands()
+    let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+    window.appearance = NSAppearance(named: .darkAqua)
+    defer { window.orderOut(nil) }
+    await settleHostedView(host)
+
+    let folderRowViews = try expectedFolderRowIdentifiers.map { identifier in
+      (
+        identifier,
+        try #require(
+          hostedNavigatorKeyView(
+            matchingAccessibilityIdentifier: identifier,
+            in: host
+          )
+        )
+      )
+    }
+    #expect(
+      Set(folderRowViews.map { ObjectIdentifier($0.1) }).count
+        == expectedFolderRowIdentifiers.count
     )
+    let selectedRow = try #require(
+      folderRowViews.first { $0.0 == selectedRowIdentifier }?.1
+    )
+    let rowFrame = selectedRow.convert(selectedRow.bounds, to: host)
+    return HostedSelectionCapture(
+      rowFrame: rowFrame,
+      hostSize: host.bounds.size,
+      image: try hostedThemeCapture(in: host),
+      theme: state.themeSnapshot
+    )
+  }
+
+  let selected = try await capture(workspace: workspace, root: root)
+  var baselineWorkspace = workspace
+  baselineWorkspace.selectedNoteID = try #require(
+    workspace.notes.first { $0.id != selectedNote.id }?.id
+  )
+  let baseline = try await capture(
+    workspace: baselineWorkspace,
+    root: root.appendingPathComponent("selection-baseline", isDirectory: true)
+  )
+  #expect(selected.theme == baseline.theme)
+  #expect(selected.rowFrame == baseline.rowFrame)
+  let rowInterior = selected.rowFrame.insetBy(dx: 2, dy: 2)
+  let selectedFill = selected.theme.nsColor(.selectionFill)
+  let pixels = try #require(
+    hostedSelectionFillTransitionBounds(
+      selected: selected.image,
+      baseline: baseline.image,
+      hostSize: selected.hostSize,
+      color: selectedFill,
+      within: rowInterior
+    )
+  )
+  return HostedSelectionPillGeometry(
+    rowFrame: selected.rowFrame,
+    fillBounds: pixels.bounds,
+    pixelCount: pixels.pixelCount
   )
 }
 
 @MainActor
-private func hostedNavigatorAccentGeometry(
-  in host: NSHostingView<AnyView>,
-  accentHex: String
-) throws -> HostedAccentPillGeometry {
-  let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-  host.cacheDisplay(in: host.bounds, to: imageRep)
-  return try #require(
-    hostedAccentFillBounds(
-      in: imageRep,
-      hostSize: host.bounds.size,
-      accentHex: accentHex
-    )
+private func hostedNeutralFocusOutlineChangedPixelCount(
+  before: NSBitmapImageRep,
+  after: NSBitmapImageRep,
+  rowFrame: CGRect,
+  hostSize: CGSize
+) -> Int {
+  guard before.pixelsWide == after.pixelsWide,
+    before.pixelsHigh == after.pixelsHigh,
+    hostSize.width > 0,
+    hostSize.height > 0
+  else { return 0 }
+
+  let scaleX = CGFloat(after.pixelsWide) / hostSize.width
+  let scaleY = CGFloat(after.pixelsHigh) / hostSize.height
+  let cornerInset: CGFloat = 8
+  let borderBand: CGFloat = 2
+  let horizontalStart = max(0, Int(floor((rowFrame.minX + cornerInset) * scaleX)))
+  let horizontalEnd = min(
+    after.pixelsWide,
+    Int(ceil((rowFrame.maxX - cornerInset) * scaleX))
   )
+  let verticalStart = max(0, Int(floor((rowFrame.minY + cornerInset) * scaleY)))
+  let verticalEnd = min(
+    after.pixelsHigh,
+    Int(ceil((rowFrame.maxY - cornerInset) * scaleY))
+  )
+  let topStart = max(0, Int(floor(rowFrame.minY * scaleY)))
+  let topEnd = min(after.pixelsHigh, Int(ceil((rowFrame.minY + borderBand) * scaleY)))
+  let bottomStart = max(
+    0,
+    Int(floor((rowFrame.maxY - borderBand) * scaleY))
+  )
+  let bottomEnd = min(after.pixelsHigh, Int(ceil(rowFrame.maxY * scaleY)))
+  let leftStart = max(0, Int(floor(rowFrame.minX * scaleX)))
+  let leftEnd = min(after.pixelsWide, Int(ceil((rowFrame.minX + borderBand) * scaleX)))
+  let rightStart = max(
+    0,
+    Int(floor((rowFrame.maxX - borderBand) * scaleX))
+  )
+  let rightEnd = min(after.pixelsWide, Int(ceil(rowFrame.maxX * scaleX)))
+  let borderBands = [
+    (horizontalStart..<horizontalEnd, topStart..<topEnd),
+    (horizontalStart..<horizontalEnd, bottomStart..<bottomEnd),
+    (leftStart..<leftEnd, verticalStart..<verticalEnd),
+    (rightStart..<rightEnd, verticalStart..<verticalEnd),
+  ]
+
+  var changedNeutralPixelCount = 0
+  for (xs, ys) in borderBands where !xs.isEmpty && !ys.isEmpty {
+    for y in ys {
+      for x in xs {
+        guard let beforeColor = before.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+          let afterColor = after.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+        else { continue }
+        let beforeComponents = [
+          beforeColor.redComponent,
+          beforeColor.greenComponent,
+          beforeColor.blueComponent,
+        ]
+        let afterComponents = [
+          afterColor.redComponent,
+          afterColor.greenComponent,
+          afterColor.blueComponent,
+        ]
+        let change = zip(beforeComponents, afterComponents).map { abs($0 - $1) }.max() ?? 0
+        let minimum = afterComponents.min() ?? 0
+        let maximum = afterComponents.max() ?? 0
+        guard beforeColor.alphaComponent > 0.5,
+          afterColor.alphaComponent > 0.5,
+          change > 0.04,
+          maximum - minimum < 0.12
+        else { continue }
+        changedNeutralPixelCount += 1
+      }
+    }
+  }
+  return changedNeutralPixelCount
+}
+
+@Test @MainActor func hostedSettingsLabelsUsePaletteRolesAcrossAppearances() async throws {
+  let previousApplicationAppearance = NSApp.appearance
+  defer { NSApp.appearance = previousApplicationAppearance }
+
+  for palette in [FleckColorTheme.capy, .absolutely] {
+    for (appearance, mode) in [
+      (FleckThemeAppearance.light, AppTheme.light),
+      (FleckThemeAppearance.dark, AppTheme.dark),
+    ] {
+      let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+      defer { try? FileManager.default.removeItem(at: root) }
+      let state = await hostedPanelState(root: root, workspace: Workspace())
+      state.updatePreferences {
+        $0.colorTheme = palette
+        $0.theme = mode
+      }
+      let theme = state.themeSnapshot
+      #expect(theme.colorTheme == palette)
+      #expect(theme.appearance == appearance)
+      let header = FleckThemeTestRoot(state: state) {
+        SettingsPageHeader(section: .about, searchRequest: nil)
+        .padding(12)
+        .frame(width: 640, height: 100, alignment: .topLeading)
+        .background(theme.color(.window))
+      }
+      let headerHost = NSHostingView(rootView: AnyView(header))
+      let headerWindow = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 640, height: 100),
+        styleMask: [.borderless], backing: .buffered, defer: false
+      )
+      headerWindow.appearance = NSAppearance(named: mode == .light ? .aqua : .darkAqua)
+      headerWindow.backgroundColor = theme.nsColor(.window)
+      headerWindow.contentView = headerHost
+      headerWindow.makeKeyAndOrderFront(nil)
+      defer { headerWindow.orderOut(nil) }
+      await settleHostedView(headerHost)
+
+      let headerImageRep = try #require(
+        headerHost.bitmapImageRepForCachingDisplay(in: headerHost.bounds)
+      )
+      headerHost.cacheDisplay(in: headerHost.bounds, to: headerImageRep)
+      #expect(
+        hostedThemePixelCount(in: headerImageRep, matching: theme.nsColor(.textSecondary)) > 0
+      )
+
+      let row = FleckThemeTestRoot(state: state) {
+        SettingsPreferenceRow(
+          "Palette label",
+          detail: "This caption follows the selected theme snapshot in every appearance."
+        ) {
+          Text("Current")
+        }
+        .padding(12)
+        .frame(width: 640, height: 100, alignment: .topLeading)
+        .background(theme.color(.window))
+      }
+      let rowHost = NSHostingView(rootView: AnyView(row))
+      let rowWindow = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 640, height: 100),
+        styleMask: [.borderless], backing: .buffered, defer: false
+      )
+      rowWindow.appearance = NSAppearance(named: mode == .light ? .aqua : .darkAqua)
+      rowWindow.backgroundColor = theme.nsColor(.window)
+      rowWindow.contentView = rowHost
+      rowWindow.makeKeyAndOrderFront(nil)
+      defer { rowWindow.orderOut(nil) }
+      await settleHostedView(rowHost)
+      let rowImageRep = try #require(rowHost.bitmapImageRepForCachingDisplay(in: rowHost.bounds))
+      rowHost.cacheDisplay(in: rowHost.bounds, to: rowImageRep)
+      #expect(hostedThemePixelCount(in: rowImageRep, matching: theme.nsColor(.caption)) > 0)
+    }
+  }
+
+  #expect(
+    FleckThemePalette.resolve(family: .capy, appearance: .dark)[.textSecondary]
+      != FleckThemePalette.resolve(family: .absolutely, appearance: .dark)[.textSecondary]
+  )
+}
+
+@Test @MainActor
+func hostedSelectedNoteTabUsesOpaqueTintFillAndPairedInkUnderGlass() async throws {
+  let previousApplicationAppearance = NSApp.appearance
+  defer { NSApp.appearance = previousApplicationAppearance }
+  let tintHexes = ["#F2F3F5", "#7030A0"]
+
+  for (mode, appearance, windowAppearance) in [
+    (AppTheme.light, FleckThemeAppearance.light, NSAppearance.Name.aqua),
+    (AppTheme.dark, FleckThemeAppearance.dark, NSAppearance.Name.darkAqua),
+  ] {
+    for backdrop in [NSColor.white, NSColor.black] {
+      for selectedTint in tintHexes {
+        let root = FileManager.default.temporaryDirectory
+          .appendingPathComponent("selected-note-tab-glass-" + UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let selected = Note(title: "Selected tint", tabColorHex: selectedTint)
+        let other = Note(title: "Other tint", tabColorHex: tintHexes.first { $0 != selectedTint })
+        let state = await hostedPanelState(
+          root: root,
+          workspace: Workspace(notes: [selected, other], selectedNoteID: selected.id, folders: [])
+        )
+        state.updatePreferences {
+          $0.colorTheme = .capy
+          $0.theme = mode
+          $0.chromeAppearance = .glass
+          $0.panelOpacity = 0.55
+        }
+        let theme = state.themeSnapshot
+        #expect(theme.appearance == appearance)
+        #expect(state.workspace.notes.map(\.tabColorHex) == [selectedTint, tintHexes.first { $0 != selectedTint }])
+
+        let commands = EditorCommands()
+        let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+        defer {
+          window.orderOut(nil)
+          window.contentView = nil
+        }
+        window.appearance = NSAppearance(named: windowAppearance)
+        window.backgroundColor = backdrop
+        window.isOpaque = false
+        await settleHostedView(host)
+
+        let tabHost = try #require(hostedDescendant(in: host, as: FluidTabDestinationView.self))
+        let source = try #require(
+          hostedDescendants(in: tabHost, as: ReorderSourceHostingView.self)
+            .first { $0.noteID == selected.id }
+        )
+        let expectedFill = NoteTabInk.selectedCapsuleFill(
+          tabColor: try #require(NSColor(hex: selectedTint)),
+          surfaceColor: theme.nsColor(.window)
+        )
+        let actualFill = try #require(tabHost.selectionHighlightLayer.backgroundColor)
+        let actualFillColor = try #require(NSColor(cgColor: actualFill))
+        #expect(actualFillColor.alphaComponent == 1)
+        #expect(hostedThemeColorsMatch(actualFillColor, expectedFill))
+
+        let expectedInk = NoteTabInk.selectedLabelColor(
+          tabColor: try #require(NSColor(hex: selectedTint)),
+          surfaceColor: theme.nsColor(.window)
+        )
+        #expect(FleckColorContrast.contrastRatio(expectedInk, against: expectedFill) >= 4.5)
+        let image = try hostedThemeCapture(in: host)
+        let capsuleRect = tabHost.convert(tabHost.selectionHighlightLayer.frame, to: host)
+        #expect(
+          hostedThemePixelCount(
+            in: image,
+            matching: expectedFill,
+            within: capsuleRect,
+            hostSize: host.bounds.size
+          ) > 40
+        )
+        let labelImage = try hostedThemeCapture(in: source)
+        #expect(
+          hostedThemePixelCount(
+            in: labelImage,
+            matching: expectedInk,
+            within: source.labelCapsuleRect,
+            hostSize: source.bounds.size
+          ) > 0
+        )
+      }
+    }
+  }
+}
+
+@Test @MainActor
+func hostedGlassAndSolidMenuPanelsCaptureSyntheticChromeAndOpaqueEditor() async throws {
+  try #require(CGPreflightScreenCaptureAccess())
+  let previousApplicationAppearance = NSApp.appearance
+  defer { NSApp.appearance = previousApplicationAppearance }
+
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("synthetic-glass-menu-panel-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let note = Note(title: "Synthetic note", body: "Synthetic editor canvas.")
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  state.updatePreferences {
+    $0.colorTheme = .capy
+    $0.theme = .dark
+    $0.panelOpacity = 0.55
+  }
+
+  let backdrop = NSWindow(
+    contentRect: NSRect(x: 90, y: 240, width: 640, height: 430),
+    styleMask: [.borderless],
+    backing: .buffered,
+    defer: false
+  )
+  backdrop.isOpaque = true
+  backdrop.hasShadow = false
+  backdrop.backgroundColor = NSColor(calibratedWhite: 0.24, alpha: 1)
+  backdrop.orderFront(nil)
+  defer { backdrop.orderOut(nil) }
+
+  var captures: [(FleckChromeAppearance, NSBitmapImageRep)] = []
+  for appearance in [FleckChromeAppearance.glass, .solid] {
+    state.updatePreferences { $0.chromeAppearance = appearance }
+    let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+    let panel = NotesPanel(dictationRuntime: runtime, sizing: .container)
+    let host = NSHostingView(
+      rootView: AnyView(
+        FleckThemeTestRoot(state: state) { panel }
+          .environment(\._accessibilityReduceTransparency, false)
+          .environment(\._colorSchemeContrast, .standard)
+      )
+    )
+    let window = NSWindow(
+      contentRect: backdrop.frame,
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false
+    )
+    window.isReleasedWhenClosed = false
+    window.level = .floating
+    window.appearance = NSAppearance(named: .darkAqua)
+    window.backgroundColor = .clear
+    window.isOpaque = false
+    window.hasShadow = false
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+
+    do {
+      await settleHostedView(host)
+
+      let editor = try #require(hostedDescendant(in: host, as: NativeEditorDocumentView.self))
+      #expect(editor.isOpaque)
+      let canvasCGColor = try #require(editor.layer?.backgroundColor)
+      let canvasColor = try #require(NSColor(cgColor: canvasCGColor))
+      #expect(hostedThemeColorsMatch(canvasColor, state.themeSnapshot.nsColor(.editorOpaque)))
+
+      let image = try await hostedNativeWindowCapture(window)
+      captures.append((appearance, image))
+      if let captureDirectory = ProcessInfo.processInfo.environment[
+        "FLECK_GLASS_SYNTHETIC_CAPTURE_DIR"
+      ] {
+        let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("\(appearance).png")
+        let png = try #require(image.representation(using: .png, properties: [:]))
+        try png.write(to: file, options: .atomic)
+      }
+    } catch {
+      window.orderOut(nil)
+      window.contentView = nil
+      await runtime.shutdown()
+      throw error
+    }
+    window.orderOut(nil)
+    window.contentView = nil
+    await runtime.shutdown()
+  }
+
+  let glass = try #require(captures.first { $0.0 == .glass }?.1)
+  let solid = try #require(captures.first { $0.0 == .solid }?.1)
+  #expect(hostedWindowCapturesDiffer(glass, solid))
 }
 
 @Test @MainActor func hostedNotesPanelEvacuatesTitleFocusWithoutRestoringBody() async throws {
@@ -5396,6 +6256,70 @@ private func hostedNavigatorKeyViews(in view: NSView) -> [NSView] {
 }
 
 @MainActor
+private func enableHostedAccessibility() -> Any? {
+  let application = NSApplication.shared
+  let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  let previousValue = application.accessibilityAttributeValue(attribute)
+  application.accessibilitySetValue(true, forAttribute: attribute)
+  return previousValue
+}
+
+@MainActor
+private func restoreHostedAccessibility(_ value: Any?) {
+  NSApplication.shared.accessibilitySetValue(
+    value,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+}
+
+@MainActor
+private func hostedNavigatorKeyView(
+  matchingAccessibilityIdentifier identifier: String,
+  in view: NSView
+) -> NSView? {
+  let accessibilityElements = hostedAccessibilityElements(in: view, identifier: identifier)
+  #expect(accessibilityElements.count == 1)
+  guard accessibilityElements.count == 1,
+    let accessibilityFrame = accessibilityElements.first?.value(forKey: "accessibilityFrame") as? NSValue,
+    let window = view.window
+  else { return nil }
+
+  let screenFrame = accessibilityFrame.rectValue
+  let keyViews = hostedNavigatorKeyViews(in: view)
+  let candidateScreenFrames = keyViews.map { candidate in
+    let hostFrame = candidate.convert(candidate.bounds, to: view)
+    let windowFrame = view.convert(hostFrame, to: nil)
+    return window.convertToScreen(windowFrame)
+  }
+  let accessibilityCenter = CGPoint(x: screenFrame.midX, y: screenFrame.midY)
+  let matchingKeyViews = zip(keyViews, candidateScreenFrames).filter {
+    $0.1.contains(accessibilityCenter)
+  }.map(\.0)
+  #expect(!matchingKeyViews.isEmpty)
+  guard let matchingKeyView = matchingKeyViews.first else { return nil }
+  let matchingFrames = matchingKeyViews.map { $0.convert($0.bounds, to: view) }
+  let matchingFrame = matchingKeyView.convert(matchingKeyView.bounds, to: view)
+  #expect(matchingFrames.allSatisfy { $0 == matchingFrame })
+  return matchingKeyView
+}
+
+@MainActor
+private func hostedAccessibilityElements(in value: Any?, identifier: String) -> [NSObject] {
+  guard let element = value as? NSObject else { return [] }
+  let identifierSelector = NSSelectorFromString("accessibilityIdentifier")
+  let matchesIdentifier = element.responds(to: identifierSelector)
+    && element.perform(identifierSelector)?.takeUnretainedValue() as? String == identifier
+  var matches = matchesIdentifier ? [element] : []
+  let childrenSelector = NSSelectorFromString("accessibilityChildren")
+  let rawChildren = element.responds(to: childrenSelector)
+    ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+  for child in NSAccessibility.unignoredChildren(from: rawChildren ?? []) {
+    matches.append(contentsOf: hostedAccessibilityElements(in: child, identifier: identifier))
+  }
+  return matches
+}
+
+@MainActor
 private func settleHostedView(_ view: NSView) async {
   for _ in 0..<5 {
     view.layoutSubtreeIfNeeded()
@@ -5473,7 +6397,6 @@ private func hostedPanel(
   root: URL,
   state: AppState,
   commands: EditorCommands,
-  accentHex: String? = nil,
   isPinned: Bool = false
 ) -> (NSWindow, NSHostingView<AnyView>) {
   let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
@@ -5483,12 +6406,7 @@ private func hostedPanel(
     sizing: .container,
     editorCommands: commands
   )
-  let rootView: AnyView
-  if let accentHex, let accent = Color(hex: accentHex) {
-    rootView = AnyView(panel.environmentObject(state).accentColor(accent))
-  } else {
-    rootView = AnyView(panel.environmentObject(state))
-  }
+  let rootView = AnyView(FleckThemeTestRoot(state: state) { panel })
   let host = NSHostingView(rootView: rootView)
   let window = NSWindow(
     contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
@@ -5497,6 +6415,60 @@ private func hostedPanel(
   window.contentView = host
   window.makeKeyAndOrderFront(nil)
   return (window, host)
+}
+
+@MainActor
+private func hostedDictationShortcutHelpRow(
+  state: AppState,
+  mode: DictationShortcutHelpMode,
+  presentation: DictationModifierSettingsPresentation,
+  destinationCopy: String,
+  onRecovery: @escaping () -> Void,
+  onDismissGuide: @escaping () -> Void
+) -> (NSWindow, NSHostingView<AnyView>) {
+  let row = DictationShortcutHelpRow(
+    mode: mode,
+    presentation: presentation,
+    destinationCopy: destinationCopy,
+    onRecovery: onRecovery,
+    onDismissGuide: onDismissGuide
+  )
+  let commands = EditorCommands()
+  let editor = NativeRichTextEditor(
+    text: "Synthetic editor body",
+    richTextRTF: nil,
+    onChange: { _, _ in },
+    fontFamily: state.preferences.fontFamily,
+    fontSize: state.preferences.fontSize,
+    reduceMotion: true,
+    automaticLists: state.preferences.automaticLists,
+    commands: commands
+  )
+  let editorRegion = VStack(spacing: 0) {
+    row
+    editor.padding(.vertical, 10)
+  }
+  .frame(maxWidth: .infinity, maxHeight: .infinity)
+  let host = NSHostingView(
+    rootView: AnyView(FleckThemeTestRoot(state: state) { editorRegion })
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 380, height: 240),
+    styleMask: [.borderless], backing: .buffered, defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  return (window, host)
+}
+
+@MainActor
+private func closeHostedDictationShortcutHelpWindow(_ window: NSWindow) {
+  for child in ownedWindowTree(window).dropFirst().reversed() {
+    child.orderOut(nil)
+    child.close()
+  }
+  window.orderOut(nil)
+  window.contentView = nil
 }
 
 @MainActor
@@ -5562,62 +6534,90 @@ private func hostedPanelRTF(text: String) throws -> Data {
 }
 
 @MainActor
-private func hostedAccentFillBounds(
-  in imageRep: NSBitmapImageRep,
+private func hostedSelectionFillTransitionBounds(
+  selected imageRep: NSBitmapImageRep,
+  baseline: NSBitmapImageRep,
   hostSize: CGSize,
-  accentHex: String
-) -> HostedAccentPillGeometry? {
+  color targetColor: NSColor,
+  within region: CGRect
+) -> HostedSelectionPixelBounds? {
   guard hostSize.width > 0, hostSize.height > 0,
-    let accent = NSColor(hex: accentHex)?.usingColorSpace(.sRGB)
+    imageRep.pixelsWide == baseline.pixelsWide,
+    imageRep.pixelsHigh == baseline.pixelsHigh,
+    region.width > 0, region.height > 0,
+    let targetColor = targetColor.usingColorSpace(.sRGB)
   else { return nil }
 
-  var accentRed: CGFloat = 0
-  var accentGreen: CGFloat = 0
-  var accentBlue: CGFloat = 0
-  var accentAlpha: CGFloat = 0
-  accent.getRed(
-    &accentRed,
-    green: &accentGreen,
-    blue: &accentBlue,
-    alpha: &accentAlpha
-  )
-  guard accentRed < 0.01, accentGreen > 0.99, accentBlue < 0.01 else { return nil }
+  let target = [
+    targetColor.redComponent,
+    targetColor.greenComponent,
+    targetColor.blueComponent,
+  ]
 
   let scaleX = CGFloat(imageRep.pixelsWide) / hostSize.width
   let scaleY = CGFloat(imageRep.pixelsHigh) / hostSize.height
-  let bandTop: CGFloat = 42
-  let bandBottom: CGFloat = 82
-  let bandStart = max(0, Int(floor(bandTop * scaleY)))
-  let bandEnd = min(imageRep.pixelsHigh, Int(ceil(bandBottom * scaleY)))
-  guard bandStart < bandEnd else { return nil }
+  let horizontalInset: CGFloat = 6
+  let bandHeight: CGFloat = 2
+  let probeBands = [
+    CGRect(
+      x: region.minX + horizontalInset,
+      y: region.minY,
+      width: region.width - 2 * horizontalInset,
+      height: bandHeight
+    ),
+    CGRect(
+      x: region.minX + horizontalInset,
+      y: region.maxY - bandHeight,
+      width: region.width - 2 * horizontalInset,
+      height: bandHeight
+    ),
+  ]
+  guard probeBands.allSatisfy({ region.contains($0) }) else { return nil }
   var matchCount = 0
   var minX = Int.max
   var minY = Int.max
   var maxX = Int.min
   var maxY = Int.min
 
-  for y in bandStart..<bandEnd {
-    for x in 0..<imageRep.pixelsWide {
-      guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
-      else { continue }
-      var red: CGFloat = 0
-      var green: CGFloat = 0
-      var blue: CGFloat = 0
-      var alpha: CGFloat = 0
-      color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-      guard alpha > 0.5 else { continue }
-      guard green > 0.05, green > red + 0.05, green > blue + 0.05 else { continue }
-      matchCount += 1
-      minX = min(minX, x)
-      minY = min(minY, y)
-      maxX = max(maxX, x)
-      maxY = max(maxY, y)
+  for band in probeBands {
+    let xStart = max(0, Int(floor(band.minX * scaleX)))
+    let xEnd = min(imageRep.pixelsWide, Int(ceil(band.maxX * scaleX)))
+    let yStart = max(0, Int(floor(band.minY * scaleY)))
+    let yEnd = min(imageRep.pixelsHigh, Int(ceil(band.maxY * scaleY)))
+    guard xStart < xEnd, yStart < yEnd else { continue }
+    for y in yStart..<yEnd {
+      for x in xStart..<xEnd {
+        guard let selectedColor = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+          let baselineColor = baseline.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+          selectedColor.alphaComponent > 0.5,
+          baselineColor.alphaComponent > 0.5
+        else { continue }
+        let selectedComponents = [
+          selectedColor.redComponent,
+          selectedColor.greenComponent,
+          selectedColor.blueComponent,
+        ]
+        let baselineComponents = [
+          baselineColor.redComponent,
+          baselineColor.greenComponent,
+          baselineColor.blueComponent,
+        ]
+        let selectedDistance = zip(selectedComponents, target).map { abs($0 - $1) }.max() ?? 1
+        let baselineDistance = zip(baselineComponents, target).map { abs($0 - $1) }.max() ?? 1
+        let stateChange = zip(selectedComponents, baselineComponents).map { abs($0 - $1) }.max() ?? 0
+        guard stateChange > 0.04, selectedDistance + 0.015 < baselineDistance else { continue }
+        matchCount += 1
+        minX = min(minX, x)
+        minY = min(minY, y)
+        maxX = max(maxX, x)
+        maxY = max(maxY, y)
+      }
     }
   }
 
   let minimumPixels = max(32, Int(20 * scaleX * scaleY))
   guard matchCount >= minimumPixels else { return nil }
-  return HostedAccentPillGeometry(
+  return HostedSelectionPixelBounds(
     bounds: CGRect(
       x: CGFloat(minX) / scaleX,
       y: CGFloat(minY) / scaleY,
@@ -5626,6 +6626,32 @@ private func hostedAccentFillBounds(
     ),
     pixelCount: matchCount
   )
+}
+
+@MainActor
+private func hostedThemePixelCount(
+  in imageRep: NSBitmapImageRep,
+  matching targetColor: NSColor
+) -> Int {
+  guard let target = targetColor.usingColorSpace(.sRGB) else { return 0 }
+  let targetComponents = [target.redComponent, target.greenComponent, target.blueComponent]
+  var matchCount = 0
+  for y in 0..<imageRep.pixelsHigh {
+    for x in 0..<imageRep.pixelsWide {
+      guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+        color.alphaComponent > 0.5
+      else { continue }
+      let distance = max(
+        abs(color.redComponent - targetComponents[0]),
+        max(
+          abs(color.greenComponent - targetComponents[1]),
+          abs(color.blueComponent - targetComponents[2])
+        )
+      )
+      if distance < 0.04 { matchCount += 1 }
+    }
+  }
+  return matchCount
 }
 
 @MainActor
@@ -5843,6 +6869,128 @@ private func sendHostedKeyDown(
 }
 
 @MainActor
+private func hostedThemePixelCount(
+  in imageRep: NSBitmapImageRep,
+  matching targetColor: NSColor,
+  within rect: CGRect,
+  hostSize: CGSize
+) -> Int {
+  guard hostSize.width > 0, hostSize.height > 0,
+    let target = targetColor.usingColorSpace(imageRep.colorSpace)
+  else { return 0 }
+  let scaleX = CGFloat(imageRep.pixelsWide) / hostSize.width
+  let scaleY = CGFloat(imageRep.pixelsHigh) / hostSize.height
+  let xStart = max(0, Int(floor(rect.minX * scaleX)))
+  let xEnd = min(imageRep.pixelsWide, Int(ceil(rect.maxX * scaleX)))
+  let yStart = max(0, Int(floor(rect.minY * scaleY)))
+  let yEnd = min(imageRep.pixelsHigh, Int(ceil(rect.maxY * scaleY)))
+  guard xStart < xEnd, yStart < yEnd else { return 0 }
+  var matches = 0
+  for y in yStart..<yEnd {
+    for x in xStart..<xEnd {
+      guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(imageRep.colorSpace),
+        color.alphaComponent > 0.5
+      else { continue }
+      let distance = max(
+        abs(color.redComponent - target.redComponent),
+        max(
+          abs(color.greenComponent - target.greenComponent),
+          abs(color.blueComponent - target.blueComponent)
+        )
+      )
+      if distance < 0.04 { matches += 1 }
+    }
+  }
+  return matches
+}
+
+@MainActor
+private func hostedThemeColorsMatch(_ lhs: NSColor, _ rhs: NSColor) -> Bool {
+  guard let lhs = lhs.usingColorSpace(.sRGB), let rhs = rhs.usingColorSpace(.sRGB) else {
+    return false
+  }
+  return abs(lhs.redComponent - rhs.redComponent) < 0.005
+    && abs(lhs.greenComponent - rhs.greenComponent) < 0.005
+    && abs(lhs.blueComponent - rhs.blueComponent) < 0.005
+    && abs(lhs.alphaComponent - rhs.alphaComponent) < 0.005
+}
+
+@MainActor
+private func hostedThemeCapture(in view: NSView) throws -> NSBitmapImageRep {
+  let scale = view.window?.backingScaleFactor ?? 2
+  let image = try #require(
+    NSBitmapImageRep(
+      bitmapDataPlanes: nil,
+      pixelsWide: Int(view.bounds.width * scale),
+      pixelsHigh: Int(view.bounds.height * scale),
+      bitsPerSample: 8,
+      samplesPerPixel: 4,
+      hasAlpha: true,
+      isPlanar: false,
+      colorSpaceName: .calibratedRGB,
+      bytesPerRow: 0,
+      bitsPerPixel: 0
+    )
+  )
+  image.size = view.bounds.size
+  view.cacheDisplay(in: view.bounds, to: image)
+  return image
+}
+
+@MainActor
+private func hostedNativeWindowCapture(_ window: NSWindow) async throws -> NSBitmapImageRep {
+  let targetWindowID = CGWindowID(window.windowNumber)
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: .seconds(2))
+  var shareableWindow: SCWindow?
+  repeat {
+    let shareableContent = try await SCShareableContent.excludingDesktopWindows(
+      true,
+      onScreenWindowsOnly: true
+    )
+    shareableWindow = shareableContent.windows.first { $0.windowID == targetWindowID }
+    guard shareableWindow == nil, clock.now < deadline else { break }
+    try await Task.sleep(for: .milliseconds(25))
+  } while clock.now < deadline
+  let capturedWindow = try #require(shareableWindow)
+  let filter = SCContentFilter(desktopIndependentWindow: capturedWindow)
+  let configuration = SCStreamConfiguration()
+  configuration.width = Int(window.frame.width * window.backingScaleFactor)
+  configuration.height = Int(window.frame.height * window.backingScaleFactor)
+  configuration.showsCursor = false
+  let image = try await SCScreenshotManager.captureImage(
+    contentFilter: filter,
+    configuration: configuration
+  )
+  return NSBitmapImageRep(cgImage: image)
+}
+
+@MainActor
+private func hostedWindowCapturesDiffer(
+  _ lhs: NSBitmapImageRep,
+  _ rhs: NSBitmapImageRep
+) -> Bool {
+  guard lhs.pixelsWide == rhs.pixelsWide, lhs.pixelsHigh == rhs.pixelsHigh else { return false }
+  for y in 0..<lhs.pixelsHigh {
+    for x in 0..<lhs.pixelsWide {
+      guard let lhsColor = lhs.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+        let rhsColor = rhs.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+      else { continue }
+      if max(
+        abs(lhsColor.redComponent - rhsColor.redComponent),
+        max(
+          abs(lhsColor.greenComponent - rhsColor.greenComponent),
+          abs(lhsColor.blueComponent - rhsColor.blueComponent)
+        )
+      ) > 0.04 {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+@MainActor
 private func pressHostedToolbarAction(_ label: String, in host: NSView) async throws {
   if let direct = fontPickerAccessibilityElement(host, label: label) {
     _ = direct.perform(NSSelectorFromString("accessibilityPerformPress"))
@@ -5925,10 +7073,8 @@ private func hostedAccessibilityValue(_ element: NSObject) -> String? {
 }
 
 @Test @MainActor func fontPickerOverflowTargetsOwningPanelWhenWideDecoyIsVisible() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let decoyRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   let targetRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer {
@@ -6028,7 +7174,8 @@ private func hostedAccessibilityValue(_ element: NSObject) -> String? {
 }
 
 @Test @MainActor func fontPickerHostedToolbarRetainsTitleAndBodyTargets() async throws {
-  NSApplication.shared.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   for isTitle in [true, false] {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -6107,10 +7254,8 @@ private func hostedAccessibilityValue(_ element: NSObject) -> String? {
 }
 
 @Test @MainActor func formattingBarCollapseDismissesFontPopoverAndPreservesEditor() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   for width in [CGFloat(380), CGFloat(800)] {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -6125,6 +7270,7 @@ private func hostedAccessibilityValue(_ element: NSObject) -> String? {
     }
     let commands = EditorCommands()
     let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+    defer { window.orderOut(nil) }
     window.setContentSize(NSSize(width: width, height: 430))
     await settleHostedView(host)
     let editor = try #require(hostedPanelEditor(in: host))
@@ -6168,7 +7314,6 @@ private func hostedAccessibilityValue(_ element: NSObject) -> String? {
       #expect(visibleAccessibilityElement(label: "Font", owner: window) == nil)
     }
     #expect(commands.textView === editor)
-    window.orderOut(nil)
   }
 }
 

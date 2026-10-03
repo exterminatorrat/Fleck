@@ -81,6 +81,35 @@ struct FolderNavigatorPresentationTests {
     #expect(source.contains(".transition(composerTransition)"))
   }
 
+  @Test func focusedUnselectedFolderRowsUseAdaptiveNeutralOutlines() throws {
+    let source = try folderNavigatorSource()
+    #expect(source.contains(".fleckNeutralControlOutline("))
+    #expect(source.contains("isFocused: isFocused && !isSelected"))
+    #expect(source.contains("cornerRadius: 6"))
+    #expect(!source.contains(".strokeBorder(theme.color(.focusRing), lineWidth: 1)"))
+    #expect(source.contains("? theme.color(.hoverFill)"))
+    #expect(source.contains("isSelected ? theme.color(.selectionFill) : .clear"))
+    #expect(source.contains(".accessibilityHint(isEmpty ? \"Empty folder\" : \"\")"))
+  }
+
+  @Test func folderRenameFieldUsesNeutralKeyboardFocusStyling() throws {
+    let source = try folderNavigatorSource()
+    let editor = try #require(
+      source.components(separatedBy: "private func folderEditor(").last?
+        .components(separatedBy: "private struct FolderRowFocusPublisher").first
+    )
+
+    #expect(editor.contains(".textFieldStyle(.plain)"))
+    #expect(editor.contains(".focusEffectDisabled()"))
+    #expect(editor.contains(".focused($focusedRow, equals: focus)"))
+    #expect(editor.contains(".fleckNeutralControlOutline("))
+    #expect(editor.contains("isFocused: focusedRow == focus"))
+    #expect(editor.contains("idleOpacity: 0.22"))
+    #expect(!editor.contains(".textFieldStyle(.roundedBorder)"))
+    #expect(editor.contains(".onSubmit { commitFolderEditing() }"))
+    #expect(editor.contains(".onExitCommand { cancelFolderEditing() }"))
+  }
+
   @Test(arguments: [
     OverflowCase(width: 380, names: ["A"], overflows: false),
     OverflowCase(width: 520, names: ["A", "B"], overflows: false),
@@ -304,7 +333,8 @@ struct FolderNavigatorPresentationTests {
     let coveredUnfiledFrame = try fixture.frame(identifier: "folder-unfiled")
 
     try fixture.click(fixture.element(label: "New folder"))
-    await fixture.settle()
+    let initialComposerFocused = try await fixture.waitForNewFolderComposer(isPresent: true)
+    try #require(initialComposerFocused)
     let field = try fixture.newFolderField()
     #expect(field.currentEditor() === fixture.window.firstResponder)
     #expect(fixture.isVisible(identifier: "folder-trash"))
@@ -334,15 +364,18 @@ struct FolderNavigatorPresentationTests {
     #expect(try fixture.newFolderField().stringValue == "Work")
 
     try fixture.sendKey(characters: "\u{1b}", keyCode: 53)
-    await fixture.settle()
+    let escapedComposerDismissed = try await fixture.waitForNewFolderComposer(isPresent: false)
+    try #require(escapedComposerDismissed)
     #expect(fixture.newFolderFieldIfPresent() == nil)
 
     try fixture.click(fixture.element(label: "New folder"))
-    await fixture.settle()
+    let reopenedComposerFocused = try await fixture.waitForNewFolderComposer(isPresent: true)
+    try #require(reopenedComposerFocused)
     #expect(try fixture.newFolderField().stringValue.isEmpty)
     try fixture.type("Created")
     try fixture.sendKey(characters: "\r", keyCode: 36)
-    await fixture.settle()
+    let createdComposerDismissed = try await fixture.waitForNewFolderComposer(isPresent: false)
+    try #require(createdComposerDismissed)
     #expect(fixture.newFolderFieldIfPresent() == nil)
     #expect(fixture.state.workspace.folders.map(\.name).contains("Created"))
     #expect(fixture.state.workspace.selectedNoteID == selectedNoteID)
@@ -550,6 +583,8 @@ private final class FolderNavigatorDraggingInfo: NSObject, NSDraggingInfo {
 
 @MainActor
 private final class FolderNavigatorFixture {
+  private static var nextMouseEventNumber = 1
+
   let root: URL
   let state: AppState
   let runtime: DictationRuntime
@@ -691,24 +726,72 @@ private final class FolderNavigatorFixture {
 
   func click(screenPoint: NSPoint) throws {
     let location = window.convertPoint(fromScreen: screenPoint)
-    for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-      let event = try #require(NSEvent.mouseEvent(
-        with: eventType,
+    let timestamp = ProcessInfo.processInfo.systemUptime
+    let mouseDownEventNumber = Self.nextMouseEventNumber
+    Self.nextMouseEventNumber += 1
+    let mouseUpEventNumber = Self.nextMouseEventNumber
+    Self.nextMouseEventNumber += 1
+    let mouseDown = try #require(
+      NSEvent.mouseEvent(
+        with: .leftMouseDown,
         location: location,
         modifierFlags: [],
-        timestamp: ProcessInfo.processInfo.systemUptime,
+        timestamp: timestamp,
         windowNumber: window.windowNumber,
         context: nil,
-        eventNumber: 0,
+        eventNumber: mouseDownEventNumber,
         clickCount: 1,
-        pressure: eventType == .leftMouseDown ? 1 : 0
+        pressure: 1
       ))
-      window.sendEvent(event)
-    }
+    let mouseUp = try #require(
+      NSEvent.mouseEvent(
+        with: .leftMouseUp,
+        location: location,
+        modifierFlags: [],
+        timestamp: timestamp,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: mouseUpEventNumber,
+        clickCount: 1,
+        pressure: 0
+      ))
+    window.postEvent(mouseUp, atStart: true)
+    window.sendEvent(mouseDown)
   }
 
   func newFolderFieldIfPresent() -> NSTextField? {
     textFields.first { $0.placeholderString == "New folder" }
+  }
+
+  func waitForNewFolderComposer(isPresent: Bool) async throws -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(2))
+
+    func stateMatches() -> Bool {
+      guard let field = newFolderFieldIfPresent() else { return !isPresent }
+      guard isPresent else { return false }
+      guard
+        field.window === window,
+        let editor = field.currentEditor(),
+        editor === window.firstResponder,
+        window.isKeyWindow,
+        NSApp.keyWindow === window,
+        NSApp.isActive
+      else { return false }
+      return true
+    }
+
+    while clock.now < deadline {
+      try Task.checkCancellation()
+      host.layoutSubtreeIfNeeded()
+      if stateMatches(), clock.now < deadline { return true }
+      let remaining = clock.now.duration(to: deadline)
+      guard remaining > .zero else { break }
+      try await Task.sleep(for: min(.milliseconds(25), remaining))
+    }
+
+    try Task.checkCancellation()
+    return false
   }
 
   func newFolderField() throws -> NSTextField {

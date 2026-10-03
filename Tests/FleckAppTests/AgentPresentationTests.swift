@@ -68,14 +68,79 @@ struct AgentPresentationTests {
     #expect(settings.contains("appState.addAgentProfile(named: integration.displayName)"))
     #expect(settings.contains("Connected Profiles"))
     #expect(settings.contains("Set up a local integration"))
-    #expect(settings.contains("DisclosureGroup(\"Activity\")"))
+    #expect(
+      settings.contains(
+        "DisclosureGroup(\"Activity\", isExpanded: $isActivityExpanded)"
+      ))
     #expect(settings.contains("Show agent update banners"))
     #expect(settings.contains("appState.preferences.showAgentUpdateBanners"))
     #expect(settings.contains("banners for future agent changes"))
     #expect(settings.contains("does not replay earlier changes"))
     #expect(settings.contains("Agent Activity remains available"))
-    #expect(settings.contains("DisclosureGroup(\"Access\")"))
+    #expect(
+      settings.contains(
+        "DisclosureGroup(\"Access\", isExpanded: $isAccessExpanded)"
+      ))
     #expect(!settings.contains("HStack {\n            addButton(\"Add Codex\""))
+  }
+
+  @Test @MainActor
+  func agentSettingsDisclosureButtonsHaveSeparateHitboxesAndToggleIndependently() async throws {
+    NSApplication.shared.accessibilitySetValue(
+      true,
+      forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+    )
+    let state = AgentSettingsDisclosureState()
+    let (window, host) = await hostedWindow(
+      rootView: AgentSettingsDisclosureHarness(state: state),
+      size: NSSize(width: 720, height: 100)
+    )
+    defer {
+      window.contentView = nil
+      window.orderOut(nil)
+    }
+    await settleAgentActivityHost(host)
+
+    let activity = try #require(agentActivityAccessibilityElement(host, label: "Activity"))
+    let access = try #require(agentActivityAccessibilityElement(host, label: "Access"))
+    let activityFrame = try #require(
+      activity.value(forKey: "accessibilityFrame") as? NSValue
+    ).rectValue
+    let accessFrame = try #require(
+      access.value(forKey: "accessibilityFrame") as? NSValue
+    ).rectValue
+    let gap = activityFrame.midY > accessFrame.midY
+      ? activityFrame.minY - accessFrame.maxY
+      : accessFrame.minY - activityFrame.maxY
+    let press = NSSelectorFromString("accessibilityPerformPress")
+
+    print(
+      "Collapsed Settings disclosure frames: Activity=\(activityFrame), "
+        + "Access=\(accessFrame), gap=\(gap)pt"
+    )
+    #expect(!activityFrame.intersects(accessFrame))
+    #expect(gap > 0 && gap <= 4)
+    #expect(activity.value(forKey: "accessibilityRole") as? String == "AXDisclosureTriangle")
+    #expect(access.value(forKey: "accessibilityRole") as? String == "AXDisclosureTriangle")
+    #expect(activity.responds(to: press))
+    #expect(access.responds(to: press))
+    #expect(!state.activityExpanded)
+    #expect(!state.accessExpanded)
+
+    _ = activity.perform(press)
+    await settleAgentActivityHost(host)
+    #expect(state.activityExpanded)
+    #expect(!state.accessExpanded)
+
+    _ = try #require(agentActivityAccessibilityElement(host, label: "Activity")).perform(press)
+    await settleAgentActivityHost(host)
+    #expect(!state.activityExpanded)
+    #expect(!state.accessExpanded)
+
+    _ = try #require(agentActivityAccessibilityElement(host, label: "Access")).perform(press)
+    await settleAgentActivityHost(host)
+    #expect(!state.activityExpanded)
+    #expect(state.accessExpanded)
   }
 
   @Test func agentSettingsUsesConsumerPreferenceRowsForVisibleConnectorContent() throws {
@@ -95,7 +160,28 @@ struct AgentPresentationTests {
     ))
     #expect(settings.contains("SettingsPreferenceRow(integration.displayName"))
     #expect(settings.contains("SettingsPreferenceRow(profile.displayName"))
-    #expect(settings.contains("SettingsPreferenceRow(\n        \"Set up a local integration\""))
+    let setupStart = try #require(settings.range(of: "private var setupInstructions:"))
+    let setupEnd = try #require(
+      settings.range(of: "private func setupStep", range: setupStart.upperBound..<settings.endIndex)
+    )
+    let setup = settings[setupStart.lowerBound..<setupEnd.lowerBound]
+    #expect(setup.contains("VStack(alignment: .leading, spacing: 10)"))
+    #expect(!setup.contains("SettingsPreferenceRow("))
+    #expect(setup.contains("Text(\"Set up a local integration\")"))
+    #expect(setup.contains(".font(.headline)"))
+    #expect(setup.contains("Connect a local tool and grant only the access it needs."))
+    #expect(setup.contains(".font(.caption)"))
+    #expect(setup.contains(".foregroundStyle(.secondary)"))
+    #expect(setup.contains(".fixedSize(horizontal: false, vertical: true)"))
+    #expect(setup.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
+    #expect(setup.contains(".settingsSearchAnchor(.agentsSetup, request: searchRequest)"))
+    #expect(setup.components(separatedBy: "setupStep(").count - 1 == 3)
+    #expect(setup.contains("title: \"Install the local connector\""))
+    #expect(setup.contains("The connector stays on this Mac and opens no network listener."))
+    #expect(setup.contains("title: \"Add an integration\""))
+    #expect(setup.contains("Choose one of the available integrations above."))
+    #expect(setup.contains("title: \"Use the generated local snippet\""))
+    #expect(setup.contains("Copy the snippet and grant only the note capabilities you need."))
   }
 
   @Test func agentConnectorActionDecisionMatchesInstalledStateAndIsDispatched() throws {
@@ -881,6 +967,31 @@ private struct AgentActivitySheetHarness: View {
       .sheet(isPresented: $presentation.isPresented) {
         AgentActivityView(onOpenNote: { _ in }, onDismiss: presentation.dismiss)
       }
+  }
+}
+
+@MainActor
+private final class AgentSettingsDisclosureState: ObservableObject {
+  @Published var activityExpanded = false
+  @Published var accessExpanded = false
+}
+
+@MainActor
+private struct AgentSettingsDisclosureHarness: View {
+  @ObservedObject var state: AgentSettingsDisclosureState
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      DisclosureGroup("Activity", isExpanded: $state.activityExpanded) {
+        Text("Activity content")
+      }
+      .disclosureGroupStyle(SettingsDisclosureGroupStyle())
+      DisclosureGroup("Access", isExpanded: $state.accessExpanded) {
+        Text("Access content")
+      }
+      .disclosureGroupStyle(SettingsDisclosureGroupStyle())
+    }
+    .frame(width: 720, alignment: .leading)
   }
 }
 

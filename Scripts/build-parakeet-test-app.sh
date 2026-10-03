@@ -10,6 +10,8 @@ readonly gemma_cleanup_package_manifest="$gemma_cleanup_package/Package.swift"
 readonly gemma_cleanup_resolved="$gemma_cleanup_package/Package.resolved"
 readonly info_plist="$repo_root/Sources/FleckApp/Info.plist"
 readonly canonical_mark="$repo_root/Assets/fleck-mark.png"
+readonly canonical_app_icon="$repo_root/Assets/FleckAppIcon.icns"
+readonly canonical_dark_app_icon="$repo_root/Assets/FleckAppIconDark.icns"
 readonly identity_tool="$script_dir/fleck-build-identity.py"
 readonly identity_mode="${FLECK_BUILD_IDENTITY_MODE:-local}"
 readonly manifest="$repo_root/Sources/FleckApp/Resources/EnhancedModelManifest.json"
@@ -69,7 +71,8 @@ for required_tool in \
 done
 
 for required_input in \
-  "$resolved" "$info_plist" "$canonical_mark" "$manifest" "$notices" \
+  "$resolved" "$info_plist" "$canonical_mark" "$canonical_app_icon" \
+  "$canonical_dark_app_icon" "$manifest" "$notices" \
   "$gemma_cleanup_manifest" "$gemma_cleanup_notice"; do
   if [[ -L "$required_input" ]]; then
     printf 'error: required input must not be a symlink: %s\n' "$required_input" >&2
@@ -599,6 +602,8 @@ readonly staged_gemma_resource_bundle="$staged_app/Contents/SharedSupport/mlx-sw
 /bin/cp -R "$gemma_resource_bundle" "$staged_gemma_resource_bundle"
 /bin/cp "$info_plist" "$staged_app/Contents/Info.plist"
 /bin/cp "$canonical_mark" "$staged_app/Contents/Resources/fleck-mark.png"
+/bin/cp "$canonical_app_icon" "$staged_app/Contents/Resources/FleckAppIcon.icns"
+/bin/cp "$canonical_dark_app_icon" "$staged_app/Contents/Resources/FleckAppIconDark.icns"
 /bin/cp -R "$resource_bundle" "$staged_bundle"
 /bin/chmod 755 \
   "$staged_app/Contents/MacOS/Fleck" \
@@ -709,7 +714,7 @@ for forbidden_suffix in \
   fi
 done
 
-expected_app_contents=$'Contents\nContents/Info.plist\nContents/MacOS\nContents/MacOS/Fleck\nContents/Resources\nContents/Resources/Fleck_FleckApp.bundle\nContents/Resources/Fleck_FleckApp.bundle/EnhancedModelManifest.json\nContents/Resources/Fleck_FleckApp.bundle/GemmaCleanupModelManifest.json\nContents/Resources/Fleck_FleckApp.bundle/GemmaCleanupNotice.md\nContents/Resources/Fleck_FleckApp.bundle/ThirdPartyNotices.md\nContents/Resources/fleck-mark.png\nContents/SharedSupport\nContents/SharedSupport/fleck-agent\nContents/SharedSupport/gemma-cleanup-helper\nContents/SharedSupport/mlx-swift_Cmlx.bundle\nContents/SharedSupport/mlx-swift_Cmlx.bundle/Contents\nContents/SharedSupport/mlx-swift_Cmlx.bundle/Contents/Info.plist\nContents/SharedSupport/mlx-swift_Cmlx.bundle/Contents/Resources\nContents/SharedSupport/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib'
+expected_app_contents=$'Contents\nContents/Info.plist\nContents/MacOS\nContents/MacOS/Fleck\nContents/Resources\nContents/Resources/FleckAppIcon.icns\nContents/Resources/FleckAppIconDark.icns\nContents/Resources/Fleck_FleckApp.bundle\nContents/Resources/Fleck_FleckApp.bundle/EnhancedModelManifest.json\nContents/Resources/Fleck_FleckApp.bundle/GemmaCleanupModelManifest.json\nContents/Resources/Fleck_FleckApp.bundle/GemmaCleanupNotice.md\nContents/Resources/Fleck_FleckApp.bundle/ThirdPartyNotices.md\nContents/Resources/fleck-mark.png\nContents/SharedSupport\nContents/SharedSupport/fleck-agent\nContents/SharedSupport/gemma-cleanup-helper\nContents/SharedSupport/mlx-swift_Cmlx.bundle\nContents/SharedSupport/mlx-swift_Cmlx.bundle/Contents\nContents/SharedSupport/mlx-swift_Cmlx.bundle/Contents/Info.plist\nContents/SharedSupport/mlx-swift_Cmlx.bundle/Contents/Resources\nContents/SharedSupport/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib'
 if [[ -n "$portable_swift_runtime_source" ]]; then
   expected_app_contents="$(
     printf '%s\n' "$expected_app_contents" \
@@ -752,6 +757,8 @@ fi
 for exact_pair in \
   "$info_plist|$staged_app/Contents/Info.plist" \
   "$canonical_mark|$staged_app/Contents/Resources/fleck-mark.png" \
+  "$canonical_app_icon|$staged_app/Contents/Resources/FleckAppIcon.icns" \
+  "$canonical_dark_app_icon|$staged_app/Contents/Resources/FleckAppIconDark.icns" \
   "$manifest|$staged_bundle/EnhancedModelManifest.json" \
   "$notices|$staged_bundle/ThirdPartyNotices.md" \
   "$gemma_cleanup_manifest|$staged_bundle/GemmaCleanupModelManifest.json" \
@@ -1008,6 +1015,11 @@ fi
 if [[ "$(/usr/bin/plutil -extract CFBundleExecutable raw -o - \
   "$staged_app/Contents/Info.plist")" != "Fleck" ]]; then
   printf '%s\n' 'error: staged app has unexpected CFBundleExecutable' >&2
+  exit 1
+fi
+if [[ "$(/usr/bin/plutil -extract CFBundleIconFile raw -o - \
+  "$staged_app/Contents/Info.plist")" != "FleckAppIcon.icns" ]]; then
+  printf '%s\n' 'error: staged app does not name its native app icon' >&2
   exit 1
 fi
 if [[ "$(/usr/bin/plutil -extract CFBundlePackageType raw -o - \

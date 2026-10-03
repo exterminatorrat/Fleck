@@ -5,6 +5,86 @@ import Testing
 
 @testable import FleckApp
 
+@Test
+func noteLinkPickerFieldUsesNeutralKeyboardFocusStyling() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let picker = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/NoteLinkPicker.swift"),
+    encoding: .utf8
+  )
+
+  #expect(picker.contains(".textFieldStyle(.plain)"))
+  #expect(picker.contains(".focusEffectDisabled()"))
+  #expect(picker.contains(".fleckNeutralControlOutline("))
+  #expect(picker.contains("isFocused: isQueryFocused"))
+  #expect(picker.contains("idleOpacity: 0.22"))
+  #expect(!picker.contains(".textFieldStyle(.roundedBorder)"))
+}
+
+@Test @MainActor func editorBodyLinkCaretAndSelectionInkFollowCanvasAcrossInverseAppearances() throws {
+  let target = UUID()
+  let token = NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)
+  let text = "Body \(token)"
+  let cases: [(NSAppearance.Name, String)] = [
+    (.darkAqua, "#FFFFFF"),
+    (.aqua, "#000000"),
+  ]
+
+  for (appearanceName, canvasHex) in cases {
+    let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 160))
+    textView.appearance = NSAppearance(named: appearanceName)
+    textView.string = text
+    let expectedCanvas = try #require(NSColor(hex: canvasHex))
+    NativeRichTextEditor.applyAppearance(
+      to: textView,
+      textColorHex: nil,
+      backgroundColorHex: canvasHex
+    )
+    NativeRichTextEditor.applyAccentAppearance(to: textView, accentColorHex: "#FFD600")
+    textView.refreshNoteLinks(
+      accentColorHex: "#FFD600",
+      liveNoteIDs: [target]
+    )
+
+    let actualCanvas = EditorCanvasInk.canvasColor(for: textView)
+    #expect(actualCanvas.isEqual(expectedCanvas))
+    let link = try #require(NoteLinkParser.links(in: text).first)
+    let bodyInk = try #require(
+      textView.layoutManager?.temporaryAttribute(
+        .foregroundColor,
+        atCharacterIndex: 0,
+        effectiveRange: nil
+      ) as? NSColor
+    )
+    let linkInk = try #require(
+      textView.layoutManager?.temporaryAttribute(
+        .foregroundColor,
+        atCharacterIndex: link.range.location,
+        effectiveRange: nil
+      ) as? NSColor
+    )
+    let selectionFill = try #require(
+      textView.selectedTextAttributes[.backgroundColor] as? NSColor
+    )
+    let selectionInk = try #require(
+      textView.selectedTextAttributes[.foregroundColor] as? NSColor
+    )
+
+    #expect(FleckColorContrast.contrastRatio(bodyInk, against: actualCanvas) >= 4.5)
+    #expect(FleckColorContrast.contrastRatio(linkInk, against: actualCanvas) >= 4.5)
+    #expect(FleckColorContrast.contrastRatio(textView.insertionPointColor, against: actualCanvas) >= 3)
+    #expect(
+      FleckColorContrast.contrastRatio(
+        selectionInk,
+        against: FleckColorContrast.composite(selectionFill, over: actualCanvas)
+      ) >= 4.5
+    )
+  }
+}
+
 @Test @MainActor func NoteLinkEditorInsertionIsOneUndoableRealTextViewEdit() throws {
   let textView = ListAwareTextView(frame: .zero)
   let window = NSWindow(
@@ -59,12 +139,14 @@ import Testing
   let token = NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)
   let text = "Before \(token) after"
   let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 160))
+  textView.appearance = NSAppearance(named: .aqua)
   let window = NSWindow(
     contentRect: NSRect(x: 0, y: 0, width: 420, height: 160),
     styleMask: [.titled],
     backing: .buffered,
     defer: false
   )
+  window.appearance = NSAppearance(named: .aqua)
   window.contentView = textView
   textView.allowsUndo = true
   textView.string = text
@@ -101,15 +183,34 @@ import Testing
   let originalTypingAttributes = NSDictionary(dictionary: textView.typingAttributes)
   let originalCanUndo = try #require(textView.undoManager).canUndo
   let link = try #require(NoteLinkParser.links(in: text).first)
+  let canvasColor = EditorCanvasInk.canvasColor(for: textView)
 
   textView.refreshNoteLinks(accentColorHex: "#FFD600", liveNoteIDs: [target])
   let yellow = try #require(NSColor(hex: "#FFD600"))
-  #expect(sRGBColor(textView.layoutManager?.temporaryAttribute(.foregroundColor, atCharacterIndex: link.range.location, effectiveRange: nil) as? NSColor) == sRGBColor(yellow))
+  let accessibleYellow = FleckColorContrast.accessibleForeground(yellow, against: canvasColor)
+  let temporaryYellow = try #require(
+    textView.layoutManager?.temporaryAttribute(
+      .foregroundColor,
+      atCharacterIndex: link.range.location,
+      effectiveRange: nil
+    ) as? NSColor
+  )
+  #expect(sRGBColor(temporaryYellow) == sRGBColor(accessibleYellow))
+  #expect(FleckColorContrast.contrastRatio(temporaryYellow, against: canvasColor) >= 4.5)
   #expect((textView.layoutManager?.temporaryAttribute(.underlineStyle, atCharacterIndex: link.range.location, effectiveRange: nil) as? Int) == NSUnderlineStyle.single.rawValue)
 
   textView.refreshNoteLinks(accentColorHex: "#30D158", liveNoteIDs: [target])
   let green = try #require(NSColor(hex: "#30D158"))
-  #expect(sRGBColor(textView.layoutManager?.temporaryAttribute(.foregroundColor, atCharacterIndex: link.range.location, effectiveRange: nil) as? NSColor) == sRGBColor(green))
+  let accessibleGreen = FleckColorContrast.accessibleForeground(green, against: canvasColor)
+  let temporaryGreen = try #require(
+    textView.layoutManager?.temporaryAttribute(
+      .foregroundColor,
+      atCharacterIndex: link.range.location,
+      effectiveRange: nil
+    ) as? NSColor
+  )
+  #expect(sRGBColor(temporaryGreen) == sRGBColor(accessibleGreen))
+  #expect(FleckColorContrast.contrastRatio(temporaryGreen, against: canvasColor) >= 4.5)
   #expect(textView.string == originalString)
   #expect(NSAttributedString(attributedString: try #require(textView.textStorage)).isEqual(to: originalAttributed))
   let currentRTF = try textView.textStorage?.data(
@@ -233,12 +334,14 @@ import Testing
   let target = UUID()
   let token = NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)
   let textView = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 520, height: 160))
+  textView.appearance = NSAppearance(named: .aqua)
   let window = NSWindow(
     contentRect: NSRect(x: 0, y: 0, width: 520, height: 160),
     styleMask: [.titled],
     backing: .buffered,
     defer: false
   )
+  window.appearance = NSAppearance(named: .aqua)
   window.contentView = textView
   textView.string = "Before \(token) after"
   let originalLink = try #require(NoteLinkParser.links(in: textView.string).first)
@@ -286,15 +389,19 @@ import Testing
     ) as? NSColor == nil
   )
   let accent = try #require(NSColor(hex: "#FFD600"))
-  #expect(
-    sRGBColor(
-      textView.layoutManager?.temporaryAttribute(
-        .foregroundColor,
-        atCharacterIndex: shiftedLink.range.location,
-        effectiveRange: nil
-      ) as? NSColor
-    ) == sRGBColor(accent)
+  let canvasColor = EditorCanvasInk.canvasColor(for: textView)
+  let accessibleAccent = FleckColorContrast.accessibleForeground(accent, against: canvasColor)
+  let temporaryAccent = try #require(
+    textView.layoutManager?.temporaryAttribute(
+      .foregroundColor,
+      atCharacterIndex: shiftedLink.range.location,
+      effectiveRange: nil
+    ) as? NSColor
   )
+  #expect(
+    sRGBColor(temporaryAccent) == sRGBColor(accessibleAccent)
+  )
+  #expect(FleckColorContrast.contrastRatio(temporaryAccent, against: canvasColor) >= 4.5)
   #expect(
     textView.layoutManager?.temporaryAttribute(
       .underlineStyle,
@@ -402,7 +509,12 @@ import Testing
         atCharacterIndex: link.range.location,
         effectiveRange: nil
       ) as? NSColor
-    ) == sRGBColor(.systemOrange)
+    ) == sRGBColor(
+      FleckColorContrast.accessibleForeground(
+        FleckThemeSnapshot.initial.nsColor(.warning),
+        against: EditorCanvasInk.canvasColor(for: textView)
+      )
+    )
   )
   let underline = try #require(
     textView.layoutManager?.temporaryAttribute(

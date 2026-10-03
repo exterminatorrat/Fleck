@@ -1,5 +1,6 @@
 #if os(macOS)
   import AppKit
+  import FleckCore
   import SwiftUI
 
   struct FleckColorHSB: Equatable {
@@ -110,13 +111,65 @@
     }
   }
 
+  enum FleckColorContrast {
+    static func accessibleForeground(
+      _ preferred: NSColor,
+      against background: NSColor,
+      minimumContrast: Double = 4.5
+    ) -> NSColor {
+      let preferred = preferred.usingColorSpace(.sRGB) ?? .black
+      guard contrastRatio(preferred, against: background) < minimumContrast else {
+        return preferred
+      }
+      let blackContrast = contrastRatio(.black, against: background)
+      let whiteContrast = contrastRatio(.white, against: background)
+      return blackContrast >= whiteContrast ? .black : .white
+    }
+
+    static func contrastRatio(_ foreground: NSColor, against background: NSColor) -> Double {
+      let foregroundLuminance = luminance(foreground)
+      let backgroundLuminance = luminance(background)
+      let lighter = max(foregroundLuminance, backgroundLuminance)
+      let darker = min(foregroundLuminance, backgroundLuminance)
+      return (lighter + 0.05) / (darker + 0.05)
+    }
+
+    static func composite(_ foreground: NSColor, over background: NSColor) -> NSColor {
+      let foreground = foreground.usingColorSpace(.sRGB) ?? .black
+      let background = background.usingColorSpace(.sRGB) ?? .white
+      let alpha = Double(foreground.alphaComponent)
+      return NSColor(
+        srgbRed: CGFloat(Double(foreground.redComponent) * alpha
+          + Double(background.redComponent) * (1 - alpha)),
+        green: CGFloat(Double(foreground.greenComponent) * alpha
+          + Double(background.greenComponent) * (1 - alpha)),
+        blue: CGFloat(Double(foreground.blueComponent) * alpha
+          + Double(background.blueComponent) * (1 - alpha)),
+        alpha: 1
+      )
+    }
+
+    private static func luminance(_ color: NSColor) -> Double {
+      let color = color.usingColorSpace(.sRGB) ?? .white
+      func linear(_ value: CGFloat) -> Double {
+        let value = Double(value)
+        return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+      }
+      return 0.2126 * linear(color.redComponent)
+        + 0.7152 * linear(color.greenComponent)
+        + 0.0722 * linear(color.blueComponent)
+    }
+  }
+
   struct FleckColorDraft: Equatable {
     private(set) var hsb: FleckColorHSB
     private(set) var hexText: String
     private(set) var isHexInvalid = false
 
-    init(hex: String?, fallbackHex: String = "#7C6CF2") {
-      let resolvedHex = hex.flatMap(FleckColorHex.normalized) ?? FleckColorHex.normalized(fallbackHex) ?? "#7C6CF2"
+    init(hex: String?, fallbackHex: String = AppPreferences.defaultAccentHex) {
+      let resolvedHex = hex.flatMap(FleckColorHex.normalized)
+        ?? FleckColorHex.normalized(fallbackHex)
+        ?? AppPreferences.defaultAccentHex
       let resolvedColor = FleckColorHex.nsColor(from: resolvedHex)
       hsb = FleckColorHex.hsb(from: resolvedColor) ?? FleckColorHSB(hue: 0, saturation: 0, brightness: 0)
       hexText = resolvedHex
@@ -219,18 +272,20 @@
   }
 
   struct FleckColorPicker: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     let currentHex: String?
     let currentLabel: String?
     let resetTitle: String?
     let onCommit: (String?) -> Void
     let onCancel: () -> Void
     @State private var draft: FleckColorDraft
+    @FocusState private var isHexFocused: Bool
 
     init(
       currentHex: String?,
       currentLabel: String? = nil,
       resetTitle: String? = nil,
-      fallbackHex: String = "#7C6CF2",
+      fallbackHex: String = AppPreferences.defaultAccentHex,
       onCommit: @escaping (String?) -> Void,
       onCancel: @escaping () -> Void
     ) {
@@ -255,7 +310,9 @@
               .font(.headline)
             Text(draft.isHexInvalid ? "Invalid hex" : (draft.committedHex ?? "Custom"))
               .font(.caption)
-              .foregroundStyle(draft.isHexInvalid ? .red : .secondary)
+              .foregroundStyle(
+                draft.isHexInvalid ? theme.color(.error) : theme.color(.textSecondary)
+              )
           }
           Spacer()
         }
@@ -263,7 +320,7 @@
         if let currentLabel {
           Text("Current: \(currentLabel)")
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.color(.textSecondary))
         }
 
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 48))], spacing: 8) {
@@ -273,7 +330,7 @@
             } label: {
               VStack(spacing: 4) {
                 Circle()
-                  .fill(Color(hex: option.hex) ?? .accentColor)
+                  .fill(Color(hex: option.hex) ?? theme.color(.accent))
                   .frame(width: 24, height: 24)
                 Text(option.name)
                   .font(.caption2)
@@ -320,7 +377,14 @@
             set: { draft.setHex($0) }
           )
         )
-        .textFieldStyle(.roundedBorder)
+        .textFieldStyle(.plain)
+        .focusEffectDisabled()
+        .focused($isHexFocused)
+        .fleckNeutralControlOutline(
+          isFocused: isHexFocused,
+          cornerRadius: 6,
+          idleOpacity: 0.22
+        )
         .accessibilityLabel("Hex color")
         .accessibilityHint("Enter a six-digit #RRGGBB value.")
         .accessibilityValue(draft.isHexInvalid ? "Invalid" : draft.hexText)
@@ -328,7 +392,7 @@
         if draft.isHexInvalid {
           Text("Enter a six-digit #RRGGBB value.")
             .font(.caption)
-            .foregroundStyle(.red)
+            .foregroundStyle(theme.color(.error))
             .accessibilityLabel("Invalid hex color")
         }
 

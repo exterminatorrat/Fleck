@@ -5,6 +5,7 @@
   struct TrashView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.fleckThemeSnapshot) private var theme
     let onDone: () -> Void
 
     var body: some View {
@@ -15,7 +16,7 @@
               .font(.title2.weight(.semibold))
             Text("Deleted notes are kept on this Mac for 30 days.")
               .font(.callout)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(theme.color(.textSecondary))
           }
           Spacer()
           Button("Done", action: onDone)
@@ -41,7 +42,7 @@
                   .lineLimit(1)
                 Text(deletionDescription(for: trashedNote))
                   .font(.caption)
-                  .foregroundStyle(.secondary)
+                  .foregroundStyle(theme.color(.textSecondary))
               }
               Spacer()
               Button("Restore") {
@@ -61,7 +62,7 @@
         if let error = appState.saveError {
           Text("Could not update Trash: \(error)")
             .font(.caption)
-            .foregroundStyle(.red)
+            .foregroundStyle(theme.color(.error))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal)
             .padding(.bottom, 10)

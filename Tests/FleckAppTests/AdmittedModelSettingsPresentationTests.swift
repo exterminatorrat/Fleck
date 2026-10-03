@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Testing
 
@@ -666,10 +667,26 @@ private func waitForPresentation(
   _ viewModel: AdmittedModelSettingsViewModel,
   phase: AdmittedModelInstallPhase
 ) async {
-  for _ in 0..<100 {
-    if viewModel.presentation.phase == phase { return }
-    await Task.yield()
+  guard viewModel.presentation.phase != phase else { return }
+
+  let observer = Task { @MainActor in
+    for await presentation in viewModel.$presentation.values {
+      if presentation.phase == phase { return true }
+    }
+    return false
   }
+  let phaseObserved = await withTaskGroup(of: Bool.self) { group in
+    group.addTask { await observer.value }
+    group.addTask {
+      try? await Task.sleep(for: .seconds(5))
+      return false
+    }
+    let phaseObserved = await group.next() ?? false
+    observer.cancel()
+    group.cancelAll()
+    return phaseObserved
+  }
+  #expect(phaseObserved)
 }
 
 @Test @MainActor

@@ -7,7 +7,8 @@ import Testing
 
 @Test func pinnedChromeMaterialPolicyUsesNativeGlassWhenAvailable() {
   #expect(
-    PinnedChromeMaterialPolicy.resolve(
+    FleckChromeMaterialPolicy.resolve(
+      appearance: .glass,
       supportsLiquidGlass: true,
       reduceTransparency: false,
       increasedContrast: false
@@ -17,7 +18,8 @@ import Testing
 
 @Test func pinnedChromeMaterialPolicyUsesLegacyMaterialWithoutGlass() {
   #expect(
-    PinnedChromeMaterialPolicy.resolve(
+    FleckChromeMaterialPolicy.resolve(
+      appearance: .glass,
       supportsLiquidGlass: false,
       reduceTransparency: false,
       increasedContrast: false
@@ -27,21 +29,24 @@ import Testing
 
 @Test func pinnedChromeMaterialPolicyUsesOpaqueAccessibilitySurface() {
   #expect(
-    PinnedChromeMaterialPolicy.resolve(
+    FleckChromeMaterialPolicy.resolve(
+      appearance: .glass,
       supportsLiquidGlass: true,
       reduceTransparency: true,
       increasedContrast: false
     ) == .opaque
   )
   #expect(
-    PinnedChromeMaterialPolicy.resolve(
+    FleckChromeMaterialPolicy.resolve(
+      appearance: .glass,
       supportsLiquidGlass: true,
       reduceTransparency: false,
       increasedContrast: true
     ) == .opaque
   )
   #expect(
-    PinnedChromeMaterialPolicy.resolve(
+    FleckChromeMaterialPolicy.resolve(
+      appearance: .glass,
       supportsLiquidGlass: true,
       reduceTransparency: true,
       increasedContrast: true
@@ -49,7 +54,30 @@ import Testing
   )
 }
 
+@Test func pinnedChromeDefaultsToSolidAndOnlyUsesGlassWhenSelected() {
+  #expect(
+    FleckChromeMaterialPolicy.resolve(
+      appearance: .solid,
+      supportsLiquidGlass: true,
+      reduceTransparency: false,
+      increasedContrast: false
+    ) == .opaque
+  )
+  #expect(
+    FleckChromeMaterialPolicy.resolve(
+      appearance: .glass,
+      supportsLiquidGlass: true,
+      reduceTransparency: false,
+      increasedContrast: false
+    ) == .liquidGlass
+  )
+}
+
 @Test @MainActor func pinnedChromeHostedPanelPreservesSizeAndResponderGeometry() async throws {
+  let application = NSApplication.shared
+  let previousApplicationAppearance = application.appearance
+  defer { application.appearance = previousApplicationAppearance }
+
   let fixture = try await hostedPinnedPanel()
   do {
     if let capturePath = ProcessInfo.processInfo.environment["FLECK_PINNED_CHROME_CAPTURE_PATH"] {
@@ -70,20 +98,31 @@ import Testing
     #expect(writingSurface.convert(writingSurface.bounds, to: fixture.host) == fixture.host.bounds)
     #expect(writingSurface.isOpaque)
     #expect(writingSurface.layer?.backgroundColor?.alpha == 1)
-    fixture.window.appearance = NSAppearance(named: .aqua)
+    fixture.state.updatePreferences {
+      $0.theme = .light
+      $0.colorTheme = .monochrome
+    }
     await settle(fixture.host)
     writingSurface.needsDisplay = true
     writingSurface.displayIfNeeded()
     let lightSurfaceColor = try #require(writingSurface.layer?.backgroundColor)
-    fixture.window.appearance = NSAppearance(named: .darkAqua)
+    let lightTheme = fixture.state.themeSnapshot
+    #expect(lightTheme.appearance == .light)
+    #expect(lightTheme.palette[.editorOpaque] == "#FFFFFF")
+    #expect(lightSurfaceColor == lightTheme.nsColor(.editorOpaque).cgColor)
+
+    fixture.state.updatePreferences { $0.theme = .dark }
     await settle(fixture.host)
     writingSurface.needsDisplay = true
     writingSurface.displayIfNeeded()
     let darkSurfaceColor = try #require(writingSurface.layer?.backgroundColor)
+    let darkTheme = fixture.state.themeSnapshot
+    #expect(darkTheme.appearance == .dark)
+    #expect(darkTheme.palette[.editorOpaque] == "#191A1B")
+    #expect(darkSurfaceColor == darkTheme.nsColor(.editorOpaque).cgColor)
     #expect(lightSurfaceColor.alpha == 1)
     #expect(darkSurfaceColor.alpha == 1)
     #expect(lightSurfaceColor != darkSurfaceColor)
-    fixture.window.appearance = nil
     #expect(fixture.window.makeFirstResponder(title))
     await settle(fixture.host)
     #expect(title.convert(title.bounds, to: fixture.host) == originalTitleFrame)
@@ -126,6 +165,7 @@ import Testing
 @MainActor
 private struct PinnedChromeFixture {
   let root: URL
+  let state: AppState
   let window: NSWindow
   let host: NSHostingView<AnyView>
   let runtime: DictationRuntime
@@ -151,13 +191,14 @@ private func hostedPinnedPanel() async throws -> PinnedChromeFixture {
   state.workspace = Workspace(notes: [note], selectedNoteID: note.id, folders: [])
   state.updatePreferences { $0.showFormattingBar = true }
   let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
-  let rootView = AnyView(NotesPanel(
-    dictationRuntime: runtime,
-    isPinned: true,
-    sizing: .container
-  )
-  .environmentObject(state)
-  .frame(width: 640, height: 430))
+  let rootView = AnyView(FleckThemeTestRoot(state: state) {
+    NotesPanel(
+      dictationRuntime: runtime,
+      isPinned: true,
+      sizing: .container
+    )
+    .frame(width: 640, height: 430)
+  })
   let host = NSHostingView(rootView: rootView)
   let window = NSWindow(
     contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
@@ -168,7 +209,13 @@ private func hostedPinnedPanel() async throws -> PinnedChromeFixture {
   window.contentView = host
   window.makeKeyAndOrderFront(nil)
   await settle(host)
-  return PinnedChromeFixture(root: root, window: window, host: host, runtime: runtime)
+  return PinnedChromeFixture(
+    root: root,
+    state: state,
+    window: window,
+    host: host,
+    runtime: runtime
+  )
 }
 
 @MainActor
