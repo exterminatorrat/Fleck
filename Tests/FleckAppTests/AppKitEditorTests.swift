@@ -2661,10 +2661,8 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
 }
 
 @Test @MainActor func formattingBarIconMenusHaveUniqueAccessibleHitFramesAcrossProfiles() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let profiles: [(
     label: String,
     appearance: NSAppearance.Name,
@@ -2801,10 +2799,8 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
     ) == CGSize(width: 620, height: 390)
   )
 
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let note = Note(title: "Toolbar fixture", body: "Body")
@@ -2958,10 +2954,8 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
 
 @Test @MainActor
 func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let expectedTags = [
     NSTextFinder.Action.showFindInterface.rawValue,
     NSTextFinder.Action.showReplaceInterface.rawValue,
@@ -3078,10 +3072,8 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
 }
 
 @Test @MainActor func toolbarOverflowPreservesPickerActionsAndFormattingStateAcrossWidths() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let note = Note(title: "Overflow actions", body: "Body")
@@ -3135,10 +3127,8 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
 }
 
 @Test @MainActor func toolbarOverflowDismissesWhenMeasuredSuffixChangesAndReopensComplete() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let note = Note(title: "Overflow lifecycle", body: "Body")
@@ -3199,10 +3189,8 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
 }
 
 @Test @MainActor func toolbarOverflowStaysOpenWithinTheSameMeasuredPrefix() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let note = Note(title: "Stable overflow", body: "Body")
@@ -3265,10 +3253,8 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
 }
 
 @Test @MainActor func toolbarDirectPickersAndPendingSizeSurviveMeasuredPrefixTransition() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let note = Note(title: "Direct picker transition", body: "Body")
@@ -3424,10 +3410,8 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
 }
 
 @Test @MainActor func toolbarHiddenUniformFontSizeSelectionSyncsBeforeFirstFieldReveal() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let attributedText = NSMutableAttributedString(
@@ -3511,10 +3495,8 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
 }
 
 @Test @MainActor func toolbarHiddenMixedFontSizeSelectionSyncsBeforeFirstFieldReveal() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let attributedText = NSMutableAttributedString(
@@ -3606,10 +3588,8 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
 }
 
 @Test @MainActor func toolbarOverflowRowsExposeCurrentAndMixedFormattingAccessibilityValues() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
   let note = Note(title: "Overflow AX", body: "Body")
@@ -4061,6 +4041,333 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   #expect(actualRTF == expectedRTF)
   #expect(commands.isBold)
   #expect(textView.undoManager?.canUndo == true)
+}
+
+@MainActor
+private func dictationGuideStaticTextElements(
+  in value: Any,
+  matching expectedText: String
+) -> [NSObject] {
+  let roleSelector = NSSelectorFromString("accessibilityRole")
+  let valueSelector = NSSelectorFromString("accessibilityValue")
+  let childrenSelector = NSSelectorFromString("accessibilityChildren")
+  var elements = [NSObject]()
+
+  func collect(_ value: Any) {
+    guard let element = value as? NSObject else { return }
+    let role = element.responds(to: roleSelector)
+      ? element.perform(roleSelector)?.takeUnretainedValue() as? String : nil
+    let accessibilityValue = element.responds(to: valueSelector)
+      ? element.perform(valueSelector)?.takeUnretainedValue() as? String : nil
+    if role == NSAccessibility.Role.staticText.rawValue,
+      accessibilityValue == expectedText
+    {
+      elements.append(element)
+    }
+    let children = element.responds(to: childrenSelector)
+      ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+    for child in children ?? [] { collect(child) }
+  }
+
+  collect(value)
+  return elements
+}
+
+@MainActor
+private func visibleOwnedDictationGuideStaticTextElements(
+  in owner: NSWindow,
+  matching expectedText: String
+) -> [NSObject] {
+  ownedWindowTree(owner).filter(\.isVisible)
+    .compactMap(\.contentView)
+    .flatMap { dictationGuideStaticTextElements(in: $0, matching: expectedText) }
+}
+
+@MainActor
+private func requireDictationShortcutHelpViewport(
+  window: NSWindow,
+  host: NSView,
+  width: CGFloat
+) throws {
+  let expectedSize = CGSize(width: width, height: 240)
+  let hostSize = host.bounds.size
+  let contentSize = window.contentLayoutRect.size
+  let matchesExpectedSize = abs(hostSize.width - expectedSize.width) <= 0.5
+    && abs(hostSize.height - expectedSize.height) <= 0.5
+    && abs(contentSize.width - expectedSize.width) <= 0.5
+    && abs(contentSize.height - expectedSize.height) <= 0.5
+  try #require(matchesExpectedSize)
+}
+
+@Test @MainActor
+func hostedDictationShortcutHelpRowKeepsTextAndControlsInsideNarrowWidths() async throws {
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("dictation-shortcut-help-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let state = await hostedPanelState(root: root, workspace: Workspace())
+  let longDestination = String(
+    repeating: "Long user-provided destination for archived research notes · ",
+    count: 5
+  )
+  let scenarios: [
+    (name: String, status: ModifierMonitorState, canChange: Bool,
+     destination: String)
+  ] = [
+    ("ready", .running, true, "Current dictation destination: Inbox"),
+    ("idle", .running, true, "Click in this note to dictate here."),
+    ("unauthorized", .unauthorized, true, ""),
+    ("failed", .failed, true, ""),
+    ("can-change-disabled", .running, false, longDestination),
+  ]
+
+  for scenario in scenarios {
+    let presentation = DictationModifierSettingsPresentation(
+      selected: .rightOption,
+      monitorStatus: scenario.status,
+      canChange: scenario.canChange
+    )
+    let mode = try #require(
+      DictationShortcutHelpMode.resolve(
+        isReady: presentation.isReady,
+        isCaptureActive: false,
+        showsGuide: true
+      )
+    )
+    let (window, host) = hostedDictationShortcutHelpRow(
+      state: state,
+      mode: mode,
+      presentation: presentation,
+      destinationCopy: scenario.destination,
+      onRecovery: {},
+      onDismissGuide: {}
+    )
+    do {
+      defer { closeHostedDictationShortcutHelpWindow(window) }
+      for width in [CGFloat(380), 384, 385, 386, 800] {
+        window.setContentSize(NSSize(width: width, height: 240))
+        await settleHostedView(host)
+        try requireDictationShortcutHelpViewport(window: window, host: host, width: width)
+
+        let viewport = window.convertToScreen(host.convert(host.bounds, to: nil))
+        let groupElements = fontPickerAccessibilityElements(
+          host,
+          label: presentation.capsuleAccessibilityLabel
+        )
+        #expect(groupElements.count == 1)
+        let group = try #require(groupElements.first)
+        let groupFrame = try #require(
+          group.value(forKey: "accessibilityFrame") as? NSValue
+        ).rectValue
+        let statusElements = dictationGuideStaticTextElements(
+          in: host,
+          matching: presentation.statusCopy
+        )
+        #expect(statusElements.count == 1)
+        let status = try #require(statusElements.first)
+        let statusFrame = try #require(
+          status.value(forKey: "accessibilityFrame") as? NSValue
+        ).rectValue
+        var textFrames = [statusFrame]
+        if let detailCopy = presentation.detailCopy {
+          let detailElements = dictationGuideStaticTextElements(
+            in: host,
+            matching: detailCopy
+          )
+          #expect(detailElements.count == 1)
+          let detail = try #require(detailElements.first)
+          textFrames.append(try #require(
+            detail.value(forKey: "accessibilityFrame") as? NSValue
+          ).rectValue)
+        }
+
+        var controlFrames: [CGRect] = []
+        var destinationFrame: CGRect?
+        if mode != .recovery {
+          let destinationElements = dictationGuideStaticTextElements(
+            in: host,
+            matching: scenario.destination
+          )
+          #expect(destinationElements.count == 1)
+          let destination = try #require(destinationElements.first)
+          destinationFrame = try #require(
+            destination.value(forKey: "accessibilityFrame") as? NSValue
+          ).rectValue
+          textFrames.append(try #require(destinationFrame))
+
+          let helpElements = fontPickerAccessibilityElements(host, label: "About Smart Capture")
+          #expect(helpElements.count == 1)
+          let help = try #require(helpElements.first)
+          controlFrames.append(try #require(
+            help.value(forKey: "accessibilityFrame") as? NSValue
+          ).rectValue)
+        }
+
+        let actionLabel = mode.canDismissGuide
+          ? "Dismiss shortcut guide"
+          : presentation.recoveryButtonTitle
+        if let actionLabel {
+          let actionElements = fontPickerAccessibilityElements(host, label: actionLabel)
+          #expect(actionElements.count == 1)
+          let action = try #require(actionElements.first)
+          controlFrames.append(try #require(
+            action.value(forKey: "accessibilityFrame") as? NSValue
+          ).rectValue)
+        }
+
+        let measuredFrames = [groupFrame] + textFrames + controlFrames
+        #expect(measuredFrames.allSatisfy { $0.width > 0 && $0.height > 0 })
+        #expect(measuredFrames.allSatisfy {
+          $0.minX >= viewport.minX - 0.5 && $0.maxX <= viewport.maxX + 0.5
+            && $0.minY >= viewport.minY - 0.5 && $0.maxY <= viewport.maxY + 0.5
+        })
+        #expect(textFrames.allSatisfy { groupFrame.insetBy(dx: -0.5, dy: -0.5).contains($0) })
+        #expect(controlFrames.allSatisfy {
+          groupFrame.insetBy(dx: -0.5, dy: -0.5).contains($0)
+        })
+        #expect(controlFrames.allSatisfy { control in
+          textFrames.allSatisfy { !control.intersects($0) }
+        })
+
+        let capturesNativeEvidence = (scenario.name == "unauthorized" && width == 385)
+          || (scenario.name == "idle" && width == 380)
+          || (scenario.name == "can-change-disabled" && width == 380)
+        if capturesNativeEvidence,
+          let evidenceDirectory = ProcessInfo.processInfo.environment["FLECK_EDITOR_EVIDENCE_DIR"],
+          !evidenceDirectory.isEmpty
+        {
+          let directory = URL(fileURLWithPath: evidenceDirectory, isDirectory: true)
+          if FileManager.default.fileExists(atPath: directory.path) {
+            let image = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: image)
+            try requireDictationShortcutHelpViewport(window: window, host: host, width: width)
+            let png = try #require(image.representation(using: .png, properties: [:]))
+            let filename = "dictation-shortcut-help-\(scenario.name)-\(Int(width))-\(UUID().uuidString).png"
+            try png.write(
+              to: directory.appendingPathComponent(filename),
+              options: .atomic
+            )
+          }
+        }
+
+        if scenario.name == "can-change-disabled", width <= 386 {
+          #expect(statusFrame.height > 14)
+          let longDestinationFrame = try #require(destinationFrame)
+          #expect(longDestinationFrame.height > 24)
+        }
+      }
+    }
+  }
+}
+
+@Test @MainActor
+func hostedDictationShortcutHelpRowAccessibilityActionsFireOnce() async throws {
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("dictation-shortcut-actions-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let state = await hostedPanelState(root: root, workspace: Workspace())
+  let pressSelector = NSSelectorFromString("accessibilityPerformPress")
+  let readyPresentation = DictationModifierSettingsPresentation(
+    selected: .rightOption,
+    monitorStatus: .running,
+    canChange: true
+  )
+  let readyMode = try #require(
+    DictationShortcutHelpMode.resolve(
+      isReady: readyPresentation.isReady,
+      isCaptureActive: false,
+      showsGuide: true
+    )
+  )
+  var dismissCount = 0
+  let (readyWindow, readyHost) = hostedDictationShortcutHelpRow(
+    state: state,
+    mode: readyMode,
+    presentation: readyPresentation,
+    destinationCopy: "Current dictation destination: Inbox",
+    onRecovery: {},
+    onDismissGuide: { dismissCount += 1 }
+  )
+  do {
+    defer { closeHostedDictationShortcutHelpWindow(readyWindow) }
+    readyWindow.setContentSize(NSSize(width: 385, height: 240))
+    await settleHostedView(readyHost)
+    try requireDictationShortcutHelpViewport(window: readyWindow, host: readyHost, width: 385)
+
+    let help = try #require(
+      fontPickerAccessibilityElement(readyHost, label: "About Smart Capture")
+    )
+    #expect(help.responds(to: pressSelector))
+    _ = help.perform(pressSelector)
+    await settleHostedView(readyHost)
+    let popoverTextElements = [
+      visibleOwnedDictationGuideStaticTextElements(in: readyWindow, matching: "Smart Capture"),
+      visibleOwnedDictationGuideStaticTextElements(
+        in: readyWindow,
+        matching: DictationShortcutHelpRow.smartCaptureHelp
+      ),
+      visibleOwnedDictationGuideStaticTextElements(
+        in: readyWindow,
+        matching: "Example: “Travel plans.”"
+      ),
+    ]
+    #expect(popoverTextElements.map(\.count) == [1, 1, 1])
+    for elements in popoverTextElements {
+      let text = try #require(elements.first)
+      let frame = try #require(text.value(forKey: "accessibilityFrame") as? NSValue).rectValue
+      #expect(frame.width > 0 && frame.height > 0)
+    }
+
+    let dismiss = try #require(
+      fontPickerAccessibilityElement(readyHost, label: "Dismiss shortcut guide")
+    )
+    #expect(dismiss.responds(to: pressSelector))
+    _ = dismiss.perform(pressSelector)
+    #expect(dismissCount == 1)
+  }
+
+  for (monitorStatus, expectedTitle) in [
+    (ModifierMonitorState.unauthorized, "Open Input Monitoring"),
+    (.failed, "Retry"),
+  ] {
+    let presentation = DictationModifierSettingsPresentation(
+      selected: .rightOption,
+      monitorStatus: monitorStatus,
+      canChange: true
+    )
+    let mode = try #require(
+      DictationShortcutHelpMode.resolve(
+        isReady: presentation.isReady,
+        isCaptureActive: false,
+        showsGuide: false
+      )
+    )
+    var recoveryCount = 0
+    let (window, host) = hostedDictationShortcutHelpRow(
+      state: state,
+      mode: mode,
+      presentation: presentation,
+      destinationCopy: "",
+      onRecovery: { recoveryCount += 1 },
+      onDismissGuide: {}
+    )
+    do {
+      defer { closeHostedDictationShortcutHelpWindow(window) }
+      window.setContentSize(NSSize(width: 385, height: 240))
+      await settleHostedView(host)
+      try requireDictationShortcutHelpViewport(window: window, host: host, width: 385)
+
+      let action = try #require(fontPickerAccessibilityElement(host, label: expectedTitle))
+      let frame = try #require(action.value(forKey: "accessibilityFrame") as? NSValue).rectValue
+      #expect(frame.width > 0 && frame.height > 0)
+      #expect(action.responds(to: pressSelector))
+      _ = action.perform(pressSelector)
+      #expect(recoveryCount == 1)
+    }
+  }
 }
 
 @Test @MainActor func hostedNotesPanelTitleScrollsWithBody() async throws {
@@ -4866,8 +5173,8 @@ private func withHostedTitleEditors(
 }
 
 @Test @MainActor func hostedCompactUnfiledKeepsNamedFolderPillInsideNavigator() async throws {
-  let previousNavigatorAccessibility = enableHostedNavigatorAccessibility()
-  defer { restoreHostedNavigatorAccessibility(previousNavigatorAccessibility) }
+  let previousNavigatorAccessibility = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousNavigatorAccessibility) }
   let unfiledRoot = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)
   let namedRoot = FileManager.default.temporaryDirectory
@@ -5043,8 +5350,8 @@ private func withHostedTitleEditors(
 }
 
 @Test @MainActor func hostedFolderKeyboardFocusAddsOutlineToUnselectedRow() async throws {
-  let previousNavigatorAccessibility = enableHostedNavigatorAccessibility()
-  defer { restoreHostedNavigatorAccessibility(previousNavigatorAccessibility) }
+  let previousNavigatorAccessibility = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousNavigatorAccessibility) }
   let previousApplicationAppearance = NSApp.appearance
   defer { NSApp.appearance = previousApplicationAppearance }
 
@@ -5437,6 +5744,10 @@ func hostedSelectedNoteTabUsesOpaqueTintFillAndPairedInkUnderGlass() async throw
 
         let commands = EditorCommands()
         let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+        defer {
+          window.orderOut(nil)
+          window.contentView = nil
+        }
         window.appearance = NSAppearance(named: windowAppearance)
         window.backgroundColor = backdrop
         window.isOpaque = false
@@ -5480,9 +5791,6 @@ func hostedSelectedNoteTabUsesOpaqueTintFillAndPairedInkUnderGlass() async throw
             hostSize: source.bounds.size
           ) > 0
         )
-
-        window.contentView = nil
-        window.orderOut(nil)
       }
     }
   }
@@ -5546,26 +5854,33 @@ func hostedGlassAndSolidMenuPanelsCaptureSyntheticChromeAndOpaqueEditor() async 
     window.hasShadow = false
     window.contentView = host
     window.makeKeyAndOrderFront(nil)
-    await settleHostedView(host)
 
-    let editor = try #require(hostedDescendant(in: host, as: NativeEditorDocumentView.self))
-    #expect(editor.isOpaque)
-    let canvasCGColor = try #require(editor.layer?.backgroundColor)
-    let canvasColor = try #require(NSColor(cgColor: canvasCGColor))
-    #expect(hostedThemeColorsMatch(canvasColor, state.themeSnapshot.nsColor(.editorOpaque)))
+    do {
+      await settleHostedView(host)
 
-    let image = try await hostedNativeWindowCapture(window)
-    captures.append((appearance, image))
-    if let captureDirectory = ProcessInfo.processInfo.environment[
-      "FLECK_GLASS_SYNTHETIC_CAPTURE_DIR"
-    ] {
-      let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-      let file = directory.appendingPathComponent("\(appearance).png")
-      let png = try #require(image.representation(using: .png, properties: [:]))
-      try png.write(to: file, options: .atomic)
+      let editor = try #require(hostedDescendant(in: host, as: NativeEditorDocumentView.self))
+      #expect(editor.isOpaque)
+      let canvasCGColor = try #require(editor.layer?.backgroundColor)
+      let canvasColor = try #require(NSColor(cgColor: canvasCGColor))
+      #expect(hostedThemeColorsMatch(canvasColor, state.themeSnapshot.nsColor(.editorOpaque)))
+
+      let image = try await hostedNativeWindowCapture(window)
+      captures.append((appearance, image))
+      if let captureDirectory = ProcessInfo.processInfo.environment[
+        "FLECK_GLASS_SYNTHETIC_CAPTURE_DIR"
+      ] {
+        let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("\(appearance).png")
+        let png = try #require(image.representation(using: .png, properties: [:]))
+        try png.write(to: file, options: .atomic)
+      }
+    } catch {
+      window.orderOut(nil)
+      window.contentView = nil
+      await runtime.shutdown()
+      throw error
     }
-
     window.orderOut(nil)
     window.contentView = nil
     await runtime.shutdown()
@@ -5941,7 +6256,7 @@ private func hostedNavigatorKeyViews(in view: NSView) -> [NSView] {
 }
 
 @MainActor
-private func enableHostedNavigatorAccessibility() -> Any? {
+private func enableHostedAccessibility() -> Any? {
   let application = NSApplication.shared
   let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
   let previousValue = application.accessibilityAttributeValue(attribute)
@@ -5950,7 +6265,7 @@ private func enableHostedNavigatorAccessibility() -> Any? {
 }
 
 @MainActor
-private func restoreHostedNavigatorAccessibility(_ value: Any?) {
+private func restoreHostedAccessibility(_ value: Any?) {
   NSApplication.shared.accessibilitySetValue(
     value,
     forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
@@ -6100,6 +6415,60 @@ private func hostedPanel(
   window.contentView = host
   window.makeKeyAndOrderFront(nil)
   return (window, host)
+}
+
+@MainActor
+private func hostedDictationShortcutHelpRow(
+  state: AppState,
+  mode: DictationShortcutHelpMode,
+  presentation: DictationModifierSettingsPresentation,
+  destinationCopy: String,
+  onRecovery: @escaping () -> Void,
+  onDismissGuide: @escaping () -> Void
+) -> (NSWindow, NSHostingView<AnyView>) {
+  let row = DictationShortcutHelpRow(
+    mode: mode,
+    presentation: presentation,
+    destinationCopy: destinationCopy,
+    onRecovery: onRecovery,
+    onDismissGuide: onDismissGuide
+  )
+  let commands = EditorCommands()
+  let editor = NativeRichTextEditor(
+    text: "Synthetic editor body",
+    richTextRTF: nil,
+    onChange: { _, _ in },
+    fontFamily: state.preferences.fontFamily,
+    fontSize: state.preferences.fontSize,
+    reduceMotion: true,
+    automaticLists: state.preferences.automaticLists,
+    commands: commands
+  )
+  let editorRegion = VStack(spacing: 0) {
+    row
+    editor.padding(.vertical, 10)
+  }
+  .frame(maxWidth: .infinity, maxHeight: .infinity)
+  let host = NSHostingView(
+    rootView: AnyView(FleckThemeTestRoot(state: state) { editorRegion })
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 380, height: 240),
+    styleMask: [.borderless], backing: .buffered, defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  return (window, host)
+}
+
+@MainActor
+private func closeHostedDictationShortcutHelpWindow(_ window: NSWindow) {
+  for child in ownedWindowTree(window).dropFirst().reversed() {
+    child.orderOut(nil)
+    child.close()
+  }
+  window.orderOut(nil)
+  window.contentView = nil
 }
 
 @MainActor
@@ -6570,14 +6939,21 @@ private func hostedThemeCapture(in view: NSView) throws -> NSBitmapImageRep {
 
 @MainActor
 private func hostedNativeWindowCapture(_ window: NSWindow) async throws -> NSBitmapImageRep {
-  let shareableContent = try await SCShareableContent.excludingDesktopWindows(
-    true,
-    onScreenWindowsOnly: true
-  )
-  let shareableWindow = try #require(
-    shareableContent.windows.first { $0.windowID == CGWindowID(window.windowNumber) }
-  )
-  let filter = SCContentFilter(desktopIndependentWindow: shareableWindow)
+  let targetWindowID = CGWindowID(window.windowNumber)
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: .seconds(2))
+  var shareableWindow: SCWindow?
+  repeat {
+    let shareableContent = try await SCShareableContent.excludingDesktopWindows(
+      true,
+      onScreenWindowsOnly: true
+    )
+    shareableWindow = shareableContent.windows.first { $0.windowID == targetWindowID }
+    guard shareableWindow == nil, clock.now < deadline else { break }
+    try await Task.sleep(for: .milliseconds(25))
+  } while clock.now < deadline
+  let capturedWindow = try #require(shareableWindow)
+  let filter = SCContentFilter(desktopIndependentWindow: capturedWindow)
   let configuration = SCStreamConfiguration()
   configuration.width = Int(window.frame.width * window.backingScaleFactor)
   configuration.height = Int(window.frame.height * window.backingScaleFactor)
@@ -6697,10 +7073,8 @@ private func hostedAccessibilityValue(_ element: NSObject) -> String? {
 }
 
 @Test @MainActor func fontPickerOverflowTargetsOwningPanelWhenWideDecoyIsVisible() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   let decoyRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   let targetRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer {
@@ -6800,7 +7174,8 @@ private func hostedAccessibilityValue(_ element: NSObject) -> String? {
 }
 
 @Test @MainActor func fontPickerHostedToolbarRetainsTitleAndBodyTargets() async throws {
-  NSApplication.shared.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   for isTitle in [true, false] {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -6879,10 +7254,8 @@ private func hostedAccessibilityValue(_ element: NSObject) -> String? {
 }
 
 @Test @MainActor func formattingBarCollapseDismissesFontPopoverAndPreservesEditor() async throws {
-  NSApplication.shared.accessibilitySetValue(
-    true,
-    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-  )
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
   for width in [CGFloat(380), CGFloat(800)] {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -6897,6 +7270,7 @@ private func hostedAccessibilityValue(_ element: NSObject) -> String? {
     }
     let commands = EditorCommands()
     let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+    defer { window.orderOut(nil) }
     window.setContentSize(NSSize(width: width, height: 430))
     await settleHostedView(host)
     let editor = try #require(hostedPanelEditor(in: host))
@@ -6940,7 +7314,6 @@ private func hostedAccessibilityValue(_ element: NSObject) -> String? {
       #expect(visibleAccessibilityElement(label: "Font", owner: window) == nil)
     }
     #expect(commands.textView === editor)
-    window.orderOut(nil)
   }
 }
 

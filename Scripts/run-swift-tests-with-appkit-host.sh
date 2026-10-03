@@ -278,7 +278,7 @@ launch_host() {
   local environment_name
   for environment_name in "${host_environment_names[@]}"; do
     if [[ ${!environment_name+x} ]]; then
-      open_arguments+=(--env "$environment_name")
+      open_arguments+=(--env "$environment_name=${!environment_name}")
     fi
   done
   open_arguments+=(--args "$bundle_binary" "$@" --host-config "$configuration_path")

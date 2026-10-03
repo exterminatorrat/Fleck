@@ -3983,6 +3983,7 @@
             .foregroundStyle(theme.color(.caption))
           }
         }
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         Spacer(minLength: 8)
         if mode.canDismissGuide {
           Button(action: onDismissGuide) {

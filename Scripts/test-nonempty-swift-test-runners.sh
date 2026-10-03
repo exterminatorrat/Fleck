@@ -281,7 +281,8 @@ if [ -f "$FAKE_STATE/environment-forwarding-contract" ]; then
     printf '%s\n' 'error: fake host lost a non-empty whitelist variable' >&2
     exit 97
   fi
-  if [[ "$FLECK_SETTINGS_MODELS_CAPTURE_DIR" != 'mock capture path with spaces' ]]; then
+  if [[ "$FLECK_SETTINGS_MODELS_CAPTURE_DIR" != \
+    'mock capture path with spaces = $literal * [glob]; "quoted"' ]]; then
     printf '%s\n' 'error: fake host changed a non-empty whitelist variable' >&2
     exit 97
   fi
@@ -424,7 +425,7 @@ cat > "$fixture_bin/open" <<'SH'
 #!/bin/bash
 set -eu
 
-printf '%s\n' "$*" >> "$FAKE_STATE/open-invocations"
+printf '%s\n' 'fake open invocation' >> "$FAKE_STATE/open-invocations"
 if [ -n "${FAKE_OPEN_PID_FILE:-}" ]; then
   printf '%s\n' "$$" > "$FAKE_OPEN_PID_FILE"
 fi
@@ -434,6 +435,7 @@ saw_new=0
 saw_wait=0
 app_arguments=()
 forwarded_environment_names=()
+forwarded_environment_assignments=()
 
 environment_name_is_forwarded() {
   local expected_name="$1"
@@ -463,9 +465,25 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     --env)
-      environment_name="${2:-}"
+      environment_argument="${2:-}"
+      if [[ "$environment_argument" = *=* ]]; then
+        environment_name="${environment_argument%%=*}"
+        environment_assignment="$environment_argument"
+      else
+        environment_name="$environment_argument"
+        environment_assignment="$environment_name="
+      fi
       forwarded_environment_names+=("$environment_name")
+      forwarded_environment_assignments+=("$environment_assignment")
       printf 'environment:%s\n' "$environment_name" >> "$FAKE_STATE/open-environments"
+      if [ -f "$FAKE_STATE/environment-forwarding-contract" ]; then
+        case "$environment_name" in
+          FLECK_SETTINGS_WINDOW_CAPTURE_DIR|FLECK_SETTINGS_MODELS_CAPTURE_DIR)
+            printf 'environment:%s\n' "$environment_assignment" \
+              >> "$FAKE_STATE/open-environment-probes"
+            ;;
+        esac
+      fi
       shift 2
       ;;
     --args)
@@ -510,13 +528,7 @@ if [ -f "$FAKE_STATE/environment-forwarding-contract" ]; then
   for probe_name in FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR \
     FLECK_SETTINGS_WINDOW_CAPTURE_DIR FLECK_SETTINGS_MODELS_CAPTURE_DIR \
     FLECK_TEST_UNWHITELISTED_CAPTURE_PROBE; do
-    if environment_name_is_forwarded "$probe_name"; then
-      if [[ "$probe_name" = FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR &&
-        ! ${!probe_name+x} ]]; then
-        printf -v "$probe_name" '%s' ''
-        export "$probe_name"
-      fi
-    else
+    if ! environment_name_is_forwarded "$probe_name"; then
       unset "$probe_name"
     fi
   done
@@ -529,7 +541,8 @@ if [ "${FAKE_OPEN_EXIT:-0}" != 0 ]; then
 fi
 if [ "${FAKE_OPEN_RETURN_EARLY:-0}" = 1 ] ||
   { [ "${FAKE_OPEN_RETURN_EARLY_RUN:-0}" = 1 ] && [ "$list_background" -eq 0 ]; }; then
-  "$host_binary" "${app_arguments[@]}" &
+  /usr/bin/env "${forwarded_environment_assignments[@]}" \
+    "$host_binary" "${app_arguments[@]}" &
   child_pid=$!
   if [ -n "${FAKE_OPEN_CHILD_PID_FILE:-}" ]; then
     printf '%s\n' "$child_pid" > "$FAKE_OPEN_CHILD_PID_FILE"
@@ -561,7 +574,8 @@ if [ "$list_background" -ne 1 ] &&
   printf '%s\n' 'error: list mode was not launched in the background' >&2
   exit 95
 fi
-exec "$host_binary" "${app_arguments[@]}"
+exec /usr/bin/env "${forwarded_environment_assignments[@]}" \
+  "$host_binary" "${app_arguments[@]}"
 SH
 /bin/chmod +x "$fixture_bin/open"
 
@@ -708,6 +722,7 @@ reset_invocations() {
   : > "$fixture_state/host-invocations"
   : > "$fixture_state/open-invocations"
   : > "$fixture_state/open-environments"
+  : > "$fixture_state/open-environment-probes"
   : > "$fixture_state/open-environment-name-blocks"
   : > "$fixture_state/host-app-paths"
   : > "$fixture_state/sample-pids"
@@ -754,7 +769,7 @@ run_appkit_environment_probe() {
     unset FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR FLECK_ENHANCED_CANDIDATE
     FLECK_SETTINGS_WINDOW_CAPTURE_DIR=''
     export FLECK_SETTINGS_WINDOW_CAPTURE_DIR
-    FLECK_SETTINGS_MODELS_CAPTURE_DIR='mock capture path with spaces'
+    FLECK_SETTINGS_MODELS_CAPTURE_DIR='mock capture path with spaces = $literal * [glob]; "quoted"'
     export FLECK_SETTINGS_MODELS_CAPTURE_DIR
     FLECK_TEST_UNWHITELISTED_CAPTURE_PROBE='mock unlisted value'
     export FLECK_TEST_UNWHITELISTED_CAPTURE_PROBE
@@ -1074,6 +1089,14 @@ for environment_name in FLECK_SETTINGS_WINDOW_CAPTURE_DIR \
   [[ "$forwarded_count" -eq 2 ]] ||
     fail 'AppKit host did not forward a set whitelist variable to both phases'
 done
+for environment_assignment in \
+  'FLECK_SETTINGS_WINDOW_CAPTURE_DIR=' \
+  'FLECK_SETTINGS_MODELS_CAPTURE_DIR=mock capture path with spaces = $literal * [glob]; "quoted"'; do
+  forwarded_count="$(/usr/bin/grep -Fxc "environment:$environment_assignment" \
+    "$fixture_state/open-environment-probes" || true)"
+  [[ "$forwarded_count" -eq 2 ]] ||
+    fail 'AppKit host did not forward the exact whitelist assignment to both phases'
+done
 for environment_name in FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR \
   FLECK_TEST_UNWHITELISTED_CAPTURE_PROBE; do
   if /usr/bin/grep -E -q "^environment:$environment_name(=|$)" \
@@ -1081,6 +1104,10 @@ for environment_name in FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR \
     fail 'AppKit host forwarded an unset or unwhitelisted environment name'
   fi
 done
+if /usr/bin/grep -Fq 'environment:FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR=' \
+  "$fixture_state/open-environment-probes"; then
+  fail 'AppKit host forwarded an unset whitelist assignment'
+fi
 if /usr/bin/grep -E -q '(^| )[^ ]+=' \
   "$fixture_state/open-environment-name-blocks"; then
   fail 'AppKit host serialized an environment value in the forwarded-name list'
@@ -1088,12 +1115,12 @@ fi
 if /usr/bin/grep -Fq 'mock capture path with spaces' \
   "$fixture_state/open-invocations" ||
   /usr/bin/grep -Fq 'mock unlisted value' "$fixture_state/open-invocations"; then
-  fail 'AppKit host serialized an environment value in LaunchServices arguments'
+  fail 'fake LaunchServices invocation log exposed an environment value'
 fi
 [[ "$(wc -l < "$fixture_state/host-environment-observations" | tr -d ' ')" -eq 2 ]] ||
-  fail 'AppKit list/run hosts did not both inherit the expected environment values'
+  fail 'AppKit list/run hosts did not both receive the expected environment values'
 /usr/bin/grep -Fxq 'pass' "$fixture_state/host-environment-observations" ||
-  fail 'AppKit host inherited-environment contract failed'
+  fail 'AppKit host forwarded-environment contract failed'
 assert_root_lock
 
 reset_invocations

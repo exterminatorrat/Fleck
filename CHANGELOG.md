@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.3-beta.1] - 2026-10-02
+
+Private development candidate only; this correction is not an accepted build or public release.
+
+### Fixed
+
+- Keep dictation shortcut-help text within the Notes panel at narrow widths, allowing status and
+  destination guidance to wrap without shifting its controls.
+
 ## [1.4.2-beta.1] - 2026-09-30
 
 Private development candidate only; this change is not an accepted build or public release.

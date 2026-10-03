@@ -1672,7 +1672,13 @@ import Testing
       window.orderOut(nil)
     }
 
-    sendResizeMouseEvent(.leftMouseDown, at: CGPoint(x: 1, y: 200), to: window, number: 40)
+    await withCheckedContinuation { continuation in
+      DispatchQueue.main.async {
+        sendResizeMouseEvent(.leftMouseDown, at: CGPoint(x: 1, y: 200), to: window, number: 40)
+        continuation.resume()
+      }
+    }
+    try #require(controller.isTracking)
     let dragScreenPoint = window.convertPoint(toScreen: CGPoint(x: -19, y: 200))
     sendResizeMouseEvent(.leftMouseDragged, atScreen: dragScreenPoint, to: window, number: 41)
     #expect(controller.isTracking)

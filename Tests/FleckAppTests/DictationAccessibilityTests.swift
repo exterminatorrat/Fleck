@@ -68,6 +68,25 @@ private func renderedView(with identifier: String, in host: NSView) -> NSView? {
 }
 
 @MainActor
+private func canonicalFleckMarkImage() -> NSImage? {
+  let sourceRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let markDirectory = sourceRoot.appendingPathComponent("Assets", isDirectory: true)
+  guard
+    case .image(let image) = FleckMark.load(
+      template: true,
+      resourceURL: markDirectory,
+      isPackagedApp: true
+    )
+  else {
+    return nil
+  }
+  return image
+}
+
+@MainActor
 private func brightPixelBounds<Content: View>(
   of content: Content,
   size: CGSize,
@@ -970,10 +989,12 @@ private func brightPixelBounds<Content: View>(
   controller.dismiss()
 }
 
-@Test @MainActor func DictationAccessibilityAdaptiveActionContentFitsHostedControllerFrames() {
+@Test @MainActor func DictationAccessibilityAdaptiveActionContentFitsHostedControllerFrames() throws
+{
   let visibleFrame = CGRect(x: 100, y: 200, width: 1_000, height: 800)
+  let mark = try #require(canonicalFleckMarkImage())
   let panel = DictationCapsulePanel()
-  let controller = DictationCapsuleController(panel: panel)
+  let controller = DictationCapsuleController(panel: panel, markLoader: { mark })
 
   controller.presentIdle(
     dock: .bottom,
@@ -985,6 +1006,7 @@ private func brightPixelBounds<Content: View>(
     status: DictationCapsuleStatus,
     action: DictationCapsuleAction
   ) {
+    panel.orderOut(nil)
     controller.render(status, action: action)
     let presentation = DictationCapsulePresentation(status: status, action: action)
     let frame = DictationCapsuleController.frame(
@@ -1021,10 +1043,11 @@ private func brightPixelBounds<Content: View>(
   controller.dismiss()
 }
 
-@Test @MainActor func DictationAccessibilityRecoveryActionsFitFailureFramesOnEveryDock() {
+@Test @MainActor func DictationAccessibilityRecoveryActionsFitFailureFramesOnEveryDock() throws {
   let visibleFrame = CGRect(x: 100, y: 200, width: 1_000, height: 800)
+  let mark = try #require(canonicalFleckMarkImage())
   let panel = DictationCapsulePanel()
-  let controller = DictationCapsuleController(panel: panel)
+  let controller = DictationCapsuleController(panel: panel, markLoader: { mark })
 
   controller.presentIdle(
     dock: .bottom,
@@ -1108,9 +1131,10 @@ private func brightPixelBounds<Content: View>(
   controller.dismiss()
 }
 
-@Test @MainActor func DictationAccessibilityNoSpeechWithoutActionFitsHostedFrame() {
+@Test @MainActor func DictationAccessibilityNoSpeechWithoutActionFitsHostedFrame() throws {
+  let mark = try #require(canonicalFleckMarkImage())
   let panel = DictationCapsulePanel()
-  let controller = DictationCapsuleController(panel: panel)
+  let controller = DictationCapsuleController(panel: panel, markLoader: { mark })
 
   controller.render(.noSpeech, action: nil)
   let presentation = DictationCapsulePresentation(status: .noSpeech, action: nil)
@@ -2023,9 +2047,12 @@ private actor AccessibilitySleepGate {
   controller.dismiss()
 }
 
-@Test @MainActor func DictationAccessibilityIdleDragTogglesIndicatorsOnlyAfterThreshold() {
+@Test @MainActor func DictationAccessibilityIdleDragTogglesIndicatorsOnlyAfterThreshold()
+  async throws
+{
+  let mark = try #require(canonicalFleckMarkImage())
   let panel = DictationCapsulePanel()
-  let controller = DictationCapsuleController(panel: panel)
+  let controller = DictationCapsuleController(panel: panel, markLoader: { mark })
   controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
 
   let host = panel.contentView!
@@ -2084,6 +2111,7 @@ private actor AccessibilitySleepGate {
   #expect(renderedView(with: "fleck-dock-indicators", in: host) == nil)
   eventHost.mouseDragged(with: thresholdDrag)
   #expect(controller.presentationModel.showsDockIndicators)
+  for _ in 0..<5 { await Task.yield() }
   host.layoutSubtreeIfNeeded()
   guard let indicators = renderedView(with: "fleck-dock-indicators", in: host) else {
     Issue.record("Expected rendered dock indicators after the drag threshold")
