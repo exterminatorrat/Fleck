@@ -1328,7 +1328,7 @@ import Testing
   let screen = try #require(NSScreen.main)
   let initialFrame = CGRect(
     x: screen.visibleFrame.midX - 300,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: 600,
     height: 430
   )
@@ -1628,7 +1628,7 @@ import Testing
   let screen = try #require(NSScreen.main)
   let initialFrame = CGRect(
     x: screen.visibleFrame.midX - 300,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: 600,
     height: 430
   )
@@ -1702,7 +1702,7 @@ import Testing
   let screen = try #require(NSScreen.main)
   let initialFrame = CGRect(
     x: screen.visibleFrame.midX - 300,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: 600,
     height: 430
   )
@@ -1759,7 +1759,7 @@ import Testing
   for mutation in ResizeEndStatusMutation.allCases {
     let initialFrame = CGRect(
       x: screen.visibleFrame.midX - 300,
-      y: screen.visibleFrame.midY - 215,
+      y: (screen.visibleFrame.midY - 215).rounded(),
       width: 600,
       height: 430
     )
@@ -1839,7 +1839,7 @@ import Testing
       }
       let initialFrame = CGRect(
         x: screen.visibleFrame.midX - 300,
-        y: screen.visibleFrame.midY - 215,
+        y: (screen.visibleFrame.midY - 215).rounded(),
         width: 600,
         height: 430
       )
@@ -1923,7 +1923,7 @@ import Testing
   for side in [MenuPanelFixedSide.left, .right] {
     let initialFrame = CGRect(
       x: screen.visibleFrame.midX - 420,
-      y: screen.visibleFrame.midY - 215,
+      y: (screen.visibleFrame.midY - 215).rounded(),
       width: initialWidth,
       height: 430
     )
@@ -2021,7 +2021,7 @@ import Testing
   )
   let initialFrame = CGRect(
     x: buttonFrame.maxX - initialWidth + 60,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: initialWidth,
     height: 430
   )
@@ -2073,7 +2073,7 @@ import Testing
   )
   let initialFrame = CGRect(
     x: buttonFrame.maxX - 800,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: 800,
     height: 430
   )
@@ -2197,7 +2197,7 @@ import Testing
   )
   let initialFrame = CGRect(
     x: buttonFrame.maxX - 600,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: 600,
     height: 430
   )
@@ -2389,7 +2389,7 @@ import Testing
   let screen = try #require(NSScreen.main)
   let initialFrame = CGRect(
     x: screen.visibleFrame.midX - 300,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: 600,
     height: 430
   )
@@ -3017,7 +3017,7 @@ import Testing
   )
   let initialFrame = CGRect(
     x: buttonFrame.minX,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: initialWidth,
     height: 430
   )
