@@ -81,6 +81,35 @@ struct FolderNavigatorPresentationTests {
     #expect(source.contains(".transition(composerTransition)"))
   }
 
+  @Test func focusedUnselectedFolderRowsUseAdaptiveNeutralOutlines() throws {
+    let source = try folderNavigatorSource()
+    #expect(source.contains(".fleckNeutralControlOutline("))
+    #expect(source.contains("isFocused: isFocused && !isSelected"))
+    #expect(source.contains("cornerRadius: 6"))
+    #expect(!source.contains(".strokeBorder(theme.color(.focusRing), lineWidth: 1)"))
+    #expect(source.contains("? theme.color(.hoverFill)"))
+    #expect(source.contains("isSelected ? theme.color(.selectionFill) : .clear"))
+    #expect(source.contains(".accessibilityHint(isEmpty ? \"Empty folder\" : \"\")"))
+  }
+
+  @Test func folderRenameFieldUsesNeutralKeyboardFocusStyling() throws {
+    let source = try folderNavigatorSource()
+    let editor = try #require(
+      source.components(separatedBy: "private func folderEditor(").last?
+        .components(separatedBy: "private struct FolderRowFocusPublisher").first
+    )
+
+    #expect(editor.contains(".textFieldStyle(.plain)"))
+    #expect(editor.contains(".focusEffectDisabled()"))
+    #expect(editor.contains(".focused($focusedRow, equals: focus)"))
+    #expect(editor.contains(".fleckNeutralControlOutline("))
+    #expect(editor.contains("isFocused: focusedRow == focus"))
+    #expect(editor.contains("idleOpacity: 0.22"))
+    #expect(!editor.contains(".textFieldStyle(.roundedBorder)"))
+    #expect(editor.contains(".onSubmit { commitFolderEditing() }"))
+    #expect(editor.contains(".onExitCommand { cancelFolderEditing() }"))
+  }
+
   @Test(arguments: [
     OverflowCase(width: 380, names: ["A"], overflows: false),
     OverflowCase(width: 520, names: ["A", "B"], overflows: false),
@@ -141,6 +170,13 @@ struct FolderNavigatorPresentationTests {
   @Test func compactRenameCreateAndDeleteRemeasureIntrinsicContent() async throws {
     let fixture = try await FolderNavigatorFixture(width: 420, names: ["A", "B"])
     defer { fixture.close() }
+    let diagnostics = FolderNavigatorNativeDiagnostics(
+      testName: "compactRenameCreateAndDeleteRemeasureIntrinsicContent",
+      window: fixture.window,
+      fieldProvider: { fixture.newFolderFieldIfPresent() },
+      contextProvider: { fixture.folderNavigatorDiagnosticContext() }
+    )
+    defer { diagnostics.finish() }
 
     #expect(fixture.isVisible(label: "Reveal earlier folders"))
     try fixture.click(fixture.element(label: "Collapse Unfiled"))
@@ -159,12 +195,26 @@ struct FolderNavigatorPresentationTests {
     #expect(!fixture.isVisible(label: "Reveal earlier folders"))
 
     try fixture.click(fixture.element(label: "New folder"))
+    let composerFocused = try await fixture.waitForNewFolderComposer(isPresent: true)
+    try #require(composerFocused)
     await fixture.settle()
+    diagnostics.attachCurrentField()
     try fixture.type("A newly created folder with a wider name")
+    diagnostics.beginKeyDispatch(label: "Return", characters: "\r", keyCode: 36)
     try fixture.sendKey(characters: "\r", keyCode: 36)
+    diagnostics.endKeyDispatch()
+    let createdComposerDismissed = try await fixture.waitForNewFolderComposer(isPresent: false)
+    if !createdComposerDismissed {
+      fixture.printCreationFailureSnapshot(
+        testName: "compactRenameCreateAndDeleteRemeasureIntrinsicContent",
+        expectedName: "A newly created folder with a wider name"
+      )
+    }
+    try #require(createdComposerDismissed)
     await fixture.settle()
     #expect(fixture.isVisible(label: "Reveal earlier folders"))
     let created = try #require(fixture.state.workspace.folders.last)
+    try #require(created.name == "A newly created folder with a wider name")
     try fixture.state.deleteFolder(id: created.id, activeFolderID: nil)
     await fixture.settle()
     #expect(!fixture.isVisible(label: "Reveal earlier folders"))
@@ -300,12 +350,21 @@ struct FolderNavigatorPresentationTests {
   @Test func composerFocusValidationCancellationAndCreationStayNative() async throws {
     let fixture = try await FolderNavigatorFixture(width: 380)
     defer { fixture.close() }
+    let diagnostics = FolderNavigatorNativeDiagnostics(
+      testName: "composerFocusValidationCancellationAndCreationStayNative",
+      window: fixture.window,
+      fieldProvider: { fixture.newFolderFieldIfPresent() },
+      contextProvider: { fixture.folderNavigatorDiagnosticContext() }
+    )
+    defer { diagnostics.finish() }
     let selectedNoteID = fixture.state.workspace.selectedNoteID
     let coveredUnfiledFrame = try fixture.frame(identifier: "folder-unfiled")
 
     try fixture.click(fixture.element(label: "New folder"))
-    await fixture.settle()
+    let initialComposerFocused = try await fixture.waitForNewFolderComposer(isPresent: true)
+    try #require(initialComposerFocused)
     let field = try fixture.newFolderField()
+    diagnostics.attachCurrentField()
     #expect(field.currentEditor() === fixture.window.firstResponder)
     #expect(fixture.isVisible(identifier: "folder-trash"))
     try fixture.click(screenPoint: NSPoint(x: coveredUnfiledFrame.midX, y: coveredUnfiledFrame.midY))
@@ -318,13 +377,17 @@ struct FolderNavigatorPresentationTests {
     #expect(fixture.newFolderFieldIfPresent() != nil)
 
     try fixture.type("   ")
+    diagnostics.beginKeyDispatch(label: "Return", characters: "\r", keyCode: 36)
     try fixture.sendKey(characters: "\r", keyCode: 36)
+    diagnostics.endKeyDispatch()
     await fixture.settle()
     #expect(fixture.state.workspace.folders.count == 2)
     #expect(try fixture.newFolderField().stringValue == "   ")
 
     try fixture.replaceDraft(with: "Work")
+    diagnostics.beginKeyDispatch(label: "Return", characters: "\r", keyCode: 36)
     try fixture.sendKey(characters: "\r", keyCode: 36)
+    diagnostics.endKeyDispatch()
     await fixture.settle()
     #expect(fixture.state.workspace.folders.count == 2)
     #expect(try fixture.newFolderField().stringValue == "Work")
@@ -333,16 +396,30 @@ struct FolderNavigatorPresentationTests {
     await fixture.settle()
     #expect(try fixture.newFolderField().stringValue == "Work")
 
+    diagnostics.beginKeyDispatch(label: "Escape", characters: "\u{1b}", keyCode: 53)
     try fixture.sendKey(characters: "\u{1b}", keyCode: 53)
-    await fixture.settle()
+    diagnostics.endKeyDispatch()
+    let escapedComposerDismissed = try await fixture.waitForNewFolderComposer(isPresent: false)
+    try #require(escapedComposerDismissed)
     #expect(fixture.newFolderFieldIfPresent() == nil)
 
     try fixture.click(fixture.element(label: "New folder"))
-    await fixture.settle()
+    let reopenedComposerFocused = try await fixture.waitForNewFolderComposer(isPresent: true)
+    try #require(reopenedComposerFocused)
     #expect(try fixture.newFolderField().stringValue.isEmpty)
+    diagnostics.attachCurrentField()
     try fixture.type("Created")
+    diagnostics.beginKeyDispatch(label: "Return", characters: "\r", keyCode: 36)
     try fixture.sendKey(characters: "\r", keyCode: 36)
-    await fixture.settle()
+    diagnostics.endKeyDispatch()
+    let createdComposerDismissed = try await fixture.waitForNewFolderComposer(isPresent: false)
+    if !createdComposerDismissed {
+      fixture.printCreationFailureSnapshot(
+        testName: "composerFocusValidationCancellationAndCreationStayNative",
+        expectedName: "Created"
+      )
+    }
+    try #require(createdComposerDismissed)
     #expect(fixture.newFolderFieldIfPresent() == nil)
     #expect(fixture.state.workspace.folders.map(\.name).contains("Created"))
     #expect(fixture.state.workspace.selectedNoteID == selectedNoteID)
@@ -365,14 +442,26 @@ struct FolderNavigatorPresentationTests {
   @Test func escapeCancelsComposerAfterFocusMovesToUncoveredRow() async throws {
     let fixture = try await FolderNavigatorFixture(width: 640)
     defer { fixture.close() }
+    let diagnostics = FolderNavigatorNativeDiagnostics(
+      testName: "escapeCancelsComposerAfterFocusMovesToUncoveredRow",
+      window: fixture.window,
+      fieldProvider: { fixture.newFolderFieldIfPresent() },
+      contextProvider: { fixture.folderNavigatorDiagnosticContext() }
+    )
+    defer { diagnostics.finish() }
     try fixture.click(fixture.element(label: "New folder"))
     await fixture.settle()
+    diagnostics.attachCurrentField()
     try fixture.click(fixture.element(identifier: "folder-unfiled"))
     await fixture.settle()
     #expect(try fixture.newFolderField().currentEditor() == nil)
 
+    diagnostics.beginKeyDispatch(label: "Escape", characters: "\u{1b}", keyCode: 53)
     try fixture.sendKey(characters: "\u{1b}", keyCode: 53)
+    diagnostics.endKeyDispatch()
     await fixture.settle()
+    let escapedComposerDismissed = try await fixture.waitForNewFolderComposer(isPresent: false)
+    try #require(escapedComposerDismissed)
     #expect(fixture.newFolderFieldIfPresent() == nil)
   }
 
@@ -405,6 +494,8 @@ struct FolderNavigatorPresentationTests {
     #expect(try fixture.newFolderField().currentEditor() === fixture.window.firstResponder)
     try fixture.sendKey(characters: "\r", keyCode: 36)
     await fixture.settle()
+    let composerDismissed = try await fixture.waitForNewFolderComposer(isPresent: false)
+    try #require(composerDismissed)
     #expect(fixture.newFolderFieldIfPresent() == nil)
     #expect(fixture.state.workspace.folders.map(\.name).contains("Projects"))
   }
@@ -548,8 +639,438 @@ private final class FolderNavigatorDraggingInfo: NSObject, NSDraggingInfo {
   func resetSpringLoading() {}
 }
 
+private struct FolderNavigatorDiagnosticContext {
+  let folderNames: [String]
+  let createButtonFound: Bool
+  let createButtonEnabled: Bool?
+  let saveError: String?
+}
+
+@MainActor
+private final class FolderNavigatorComposerIdentity {
+  weak var field: NSTextField?
+  weak var editor: NSText?
+  let fieldIdentity: String
+  var editorIdentity: String?
+
+  init(field: NSTextField, editor: NSText?, fieldIdentity: String, editorIdentity: String?) {
+    self.field = field
+    self.editor = editor
+    self.fieldIdentity = fieldIdentity
+    self.editorIdentity = editorIdentity
+  }
+
+  func matches(field: NSTextField?, editors: [NSText]) -> Bool {
+    if let field, self.field === field { return true }
+    guard let editor else { return false }
+    return editors.contains { $0 === editor }
+  }
+}
+
+private struct FolderNavigatorDiagnosticRecord: Encodable {
+  let testName: String
+  let phase: String
+  let requestedKeyEvent: String?
+  let commandSelector: String?
+  let commandHandled: Bool?
+  let delegateCommandSelectors: [String]
+  let delegateCommandHandled: [Bool]
+  let nativeNotification: String?
+  let nativeNotificationSourceIdentity: String?
+  let nativeNotificationComposerIdentities: [String]
+  let nativeNotificationEditorIdentities: [String]
+  let nativeNotifications: [String]
+  let proxyInstalled: Bool
+  let originalDelegateType: String?
+  let originalSelectorAvailability: [String: Bool]
+  let windowIdentity: String
+  let windowIsKey: Bool
+  let applicationIsActive: Bool
+  let applicationKeyWindowMatches: Bool
+  let firstResponderIdentity: String?
+  let fieldIdentity: String?
+  let fieldString: String?
+  let editorIdentity: String?
+  let editorString: String?
+  let editorHasMarkedText: Bool?
+  let markedRange: String?
+  let markedText: String?
+  let createButtonFound: Bool
+  let createButtonEnabled: Bool?
+  let folderNames: [String]
+  let folderCount: Int
+  let saveError: String?
+  let detail: String?
+}
+
+@MainActor
+private final class FolderNavigatorNativeDiagnostics: NSObject, NSTextFieldDelegate {
+  private static let nativeNotificationNames = [
+    NSControl.textDidBeginEditingNotification,
+    NSControl.textDidChangeNotification,
+    NSControl.textDidEndEditingNotification,
+    NSText.didBeginEditingNotification,
+    NSText.didChangeNotification,
+    NSText.didEndEditingNotification,
+  ]
+
+  private static let requiredDelegateSelectors: [(String, Selector)] = [
+    (
+      "controlTextDidBeginEditing:",
+      #selector(NSControlTextEditingDelegate.controlTextDidBeginEditing(_:))
+    ),
+    (
+      "controlTextDidChange:",
+      #selector(NSControlTextEditingDelegate.controlTextDidChange(_:))
+    ),
+    (
+      "controlTextDidEndEditing:",
+      #selector(NSControlTextEditingDelegate.controlTextDidEndEditing(_:))
+    ),
+    (
+      "control:textView:doCommandBySelector:",
+      #selector(NSControlTextEditingDelegate.control(_:textView:doCommandBy:))
+    ),
+  ]
+
+  private let testName: String
+  private let enabled: Bool
+  private weak var window: NSWindow?
+  private var fieldProvider: (@MainActor () -> NSTextField?)?
+  private var contextProvider: (@MainActor () -> FolderNavigatorDiagnosticContext)?
+  private weak var attachedField: NSTextField?
+  nonisolated(unsafe) private weak var originalDelegate: NSTextFieldDelegate?
+  private var originalDelegateType: String?
+  private var originalSelectorAvailability: [String: Bool] = [:]
+  private var trackedComposer: FolderNavigatorComposerIdentity?
+  private var endingComposer: FolderNavigatorComposerIdentity?
+  private var nativeNotifications: [String] = []
+  private var delegateCommandSelectors: [String] = []
+  private var delegateCommandHandled: [Bool] = []
+  private var requestedKeyEvent: String?
+  private var finished = false
+
+  init(
+    testName: String,
+    window: NSWindow,
+    fieldProvider: @escaping @MainActor () -> NSTextField?,
+    contextProvider: @escaping @MainActor () -> FolderNavigatorDiagnosticContext
+  ) {
+    self.testName = testName
+    enabled = ProcessInfo.processInfo.environment["FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC"] == "1"
+    self.window = window
+    self.fieldProvider = fieldProvider
+    self.contextProvider = contextProvider
+    super.init()
+
+    guard enabled else { return }
+    for name in Self.nativeNotificationNames {
+      NotificationCenter.default.addObserver(
+        self,
+        selector: #selector(receiveNativeTextNotification(_:)),
+        name: name,
+        object: nil
+      )
+    }
+  }
+
+  override func responds(to selector: Selector!) -> Bool {
+    super.responds(to: selector) || originalDelegate?.responds(to: selector) == true
+  }
+
+  override func forwardingTarget(for selector: Selector!) -> Any? {
+    guard let originalDelegate, originalDelegate.responds(to: selector) else {
+      return super.forwardingTarget(for: selector)
+    }
+    return originalDelegate
+  }
+
+  func attachCurrentField() {
+    guard enabled, let fieldProvider, let field = fieldProvider() else { return }
+    rememberComposerIdentity(for: field)
+    if attachedField === field {
+      guard field.delegate === self else {
+        appendRecord(phase: "proxy-unavailable", detail: "field delegate changed after proxy install")
+        restoreAttachedDelegate()
+        return
+      }
+      return
+    }
+
+    restoreAttachedDelegate()
+    guard let delegate = field.delegate else {
+      appendRecord(phase: "proxy-unavailable", detail: "native field delegate is nil")
+      return
+    }
+
+    originalDelegateType = String(reflecting: type(of: delegate))
+    originalSelectorAvailability = Dictionary(
+      uniqueKeysWithValues: Self.requiredDelegateSelectors.map { name, selector in
+        (name, delegate.responds(to: selector))
+      }
+    )
+    let unavailableSelectors = originalSelectorAvailability.filter { !$0.value }.keys.sorted()
+    guard unavailableSelectors.isEmpty else {
+      appendRecord(
+        phase: "proxy-unavailable",
+        detail: "native delegate lacks selectors: \(unavailableSelectors.joined(separator: ", "))"
+      )
+      return
+    }
+
+    originalDelegate = delegate
+    attachedField = field
+    field.delegate = self
+    guard field.delegate === self else {
+      appendRecord(phase: "proxy-unavailable", detail: "native field rejected forwarding delegate")
+      restoreAttachedDelegate()
+      return
+    }
+    appendRecord(phase: "proxy-installed")
+  }
+
+  func beginKeyDispatch(label: String, characters: String, keyCode: UInt16) {
+    guard enabled, !finished else { return }
+    delegateCommandSelectors.removeAll()
+    delegateCommandHandled.removeAll()
+    requestedKeyEvent = "\(label); characters=\(characters); keyCode=\(keyCode)"
+    attachCurrentField()
+    appendRecord(phase: "before-dispatch")
+  }
+
+  func endKeyDispatch() {
+    guard enabled, !finished else { return }
+    appendRecord(phase: "after-dispatch")
+    requestedKeyEvent = nil
+  }
+
+  func controlTextDidBeginEditing(_ notification: Notification) {
+    forwardDelegateNotification("controlTextDidBeginEditing", notification: notification) {
+      delegate, notification in
+      delegate.controlTextDidBeginEditing?(notification)
+    }
+  }
+
+  func controlTextDidChange(_ notification: Notification) {
+    forwardDelegateNotification("controlTextDidChange", notification: notification) {
+      delegate, notification in
+      delegate.controlTextDidChange?(notification)
+    }
+  }
+
+  func controlTextDidEndEditing(_ notification: Notification) {
+    forwardDelegateNotification("controlTextDidEndEditing", notification: notification) {
+      delegate, notification in
+      delegate.controlTextDidEndEditing?(notification)
+    }
+  }
+
+  func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+    let commandSelector = NSStringFromSelector(selector)
+    delegateCommandSelectors.append(commandSelector)
+    appendRecord(phase: "before-command-forward", commandSelector: commandSelector)
+    let handled = originalDelegate?.control?(control, textView: textView, doCommandBy: selector)
+      ?? false
+    delegateCommandHandled.append(handled)
+    appendRecord(
+      phase: "after-command-forward",
+      commandSelector: commandSelector,
+      commandHandled: handled
+    )
+    return handled
+  }
+
+  func finish() {
+    guard !finished else { return }
+    finished = true
+    appendRecord(phase: "test-finish")
+    NotificationCenter.default.removeObserver(self)
+    restoreAttachedDelegate()
+    trackedComposer = nil
+    endingComposer = nil
+    fieldProvider = nil
+    contextProvider = nil
+  }
+
+  @objc private func receiveNativeTextNotification(_ notification: Notification) {
+    guard enabled else { return }
+    let composers = composerIdentities(for: notification)
+    guard !composers.isEmpty else { return }
+    let name = notification.name.rawValue
+    nativeNotifications.append(name)
+    let editorSources = [
+      notification.object as? NSText,
+      notification.userInfo?["NSFieldEditor"] as? NSText,
+    ].compactMap { $0 }
+    appendRecord(
+      phase: "native-notification",
+      nativeNotification: name,
+      nativeNotificationSourceIdentity: (notification.object as? NSObject).map {
+        Self.identity(of: $0)
+      },
+      nativeNotificationComposerIdentities: Array(Set(composers.map(\.fieldIdentity))).sorted(),
+      nativeNotificationEditorIdentities: Array(
+        Set(
+          composers.compactMap(\.editorIdentity)
+            + editorSources.map { Self.identity(of: $0) }
+        )
+      ).sorted()
+    )
+  }
+
+  private func composerIdentities(for notification: Notification)
+    -> [FolderNavigatorComposerIdentity]
+  {
+    let sourceField = notification.object as? NSTextField
+    let sourceEditors = [
+      notification.object as? NSText,
+      notification.userInfo?["NSFieldEditor"] as? NSText,
+    ].compactMap { $0 }
+    let trackedComposers = [endingComposer, trackedComposer].compactMap { $0 }
+    let matchingField = trackedComposers.filter {
+      $0.matches(field: sourceField, editors: [])
+    }
+    if !matchingField.isEmpty { return matchingField }
+
+    let matchingEditor = trackedComposers.filter {
+      $0.matches(field: nil, editors: sourceEditors)
+    }
+    guard let field = fieldProvider?() else { return matchingEditor }
+    if sourceField === field {
+      rememberComposerIdentity(for: field)
+      return trackedComposer.map { [$0] } ?? []
+    }
+    guard let editor = field.currentEditor(), sourceEditors.contains(where: { $0 === editor }) else {
+      return matchingEditor
+    }
+
+    rememberComposerIdentity(for: field)
+    return [endingComposer, trackedComposer].compactMap { $0 }.filter {
+      $0.matches(field: nil, editors: sourceEditors)
+    }
+  }
+
+  private func rememberComposerIdentity(for field: NSTextField) {
+    let editor = field.currentEditor()
+    let identity = FolderNavigatorComposerIdentity(
+      field: field,
+      editor: editor,
+      fieldIdentity: Self.identity(of: field),
+      editorIdentity: editor.map { Self.identity(of: $0) }
+    )
+    if let trackedComposer, trackedComposer.field === field {
+      guard let editor, editor !== trackedComposer.editor else { return }
+      if trackedComposer.editor != nil {
+        endingComposer = trackedComposer
+      }
+      self.trackedComposer = identity
+      return
+    }
+    if let trackedComposer { endingComposer = trackedComposer }
+    trackedComposer = identity
+  }
+
+  private static func identity(of object: AnyObject) -> String {
+    "\(String(reflecting: type(of: object)))#\(ObjectIdentifier(object))"
+  }
+
+  private func forwardDelegateNotification(
+    _ name: String,
+    notification: Notification,
+    forward: (NSTextFieldDelegate, Notification) -> Void
+  ) {
+    appendRecord(phase: "before-\(name)-forward")
+    if let originalDelegate {
+      forward(originalDelegate, notification)
+    }
+    appendRecord(phase: "after-\(name)-forward")
+  }
+
+  private func appendRecord(
+    phase: String,
+    commandSelector: String? = nil,
+    commandHandled: Bool? = nil,
+    nativeNotification: String? = nil,
+    nativeNotificationSourceIdentity: String? = nil,
+    nativeNotificationComposerIdentities: [String] = [],
+    nativeNotificationEditorIdentities: [String] = [],
+    detail: String? = nil
+  ) {
+    guard enabled, let window, let contextProvider else { return }
+    let field = nativeNotification == nil ? fieldProvider?() : nil
+    let editor = field?.currentEditor() as? NSTextView
+    let markedRange = editor.flatMap { $0.hasMarkedText() ? $0.markedRange() : nil }
+    let markedText: String?
+    if let editor, let markedRange,
+      markedRange.location != NSNotFound,
+      NSMaxRange(markedRange) <= editor.string.utf16.count
+    {
+      markedText = (editor.string as NSString).substring(with: markedRange)
+    } else {
+      markedText = nil
+    }
+    let context = contextProvider()
+    let firstResponder = window.firstResponder.map {
+      "\(String(reflecting: type(of: $0)))#\(ObjectIdentifier($0))"
+    }
+    let record = FolderNavigatorDiagnosticRecord(
+      testName: testName,
+      phase: phase,
+      requestedKeyEvent: requestedKeyEvent,
+      commandSelector: commandSelector,
+      commandHandled: commandHandled,
+      delegateCommandSelectors: delegateCommandSelectors,
+      delegateCommandHandled: delegateCommandHandled,
+      nativeNotification: nativeNotification,
+      nativeNotificationSourceIdentity: nativeNotificationSourceIdentity,
+      nativeNotificationComposerIdentities: nativeNotificationComposerIdentities,
+      nativeNotificationEditorIdentities: nativeNotificationEditorIdentities,
+      nativeNotifications: nativeNotifications,
+      proxyInstalled: attachedField?.delegate === self,
+      originalDelegateType: originalDelegateType,
+      originalSelectorAvailability: originalSelectorAvailability,
+      windowIdentity: "\(String(reflecting: type(of: window)))#\(ObjectIdentifier(window))",
+      windowIsKey: window.isKeyWindow,
+      applicationIsActive: NSApp.isActive,
+      applicationKeyWindowMatches: NSApp.keyWindow === window,
+      firstResponderIdentity: firstResponder,
+      fieldIdentity: field.map { "\(String(reflecting: type(of: $0)))#\(ObjectIdentifier($0))" },
+      fieldString: field?.stringValue,
+      editorIdentity: editor.map { "\(String(reflecting: type(of: $0)))#\(ObjectIdentifier($0))" },
+      editorString: editor?.string,
+      editorHasMarkedText: editor?.hasMarkedText(),
+      markedRange: markedRange.map { "\($0.location):\($0.length)" },
+      markedText: markedText,
+      createButtonFound: context.createButtonFound,
+      createButtonEnabled: context.createButtonEnabled,
+      folderNames: context.folderNames,
+      folderCount: context.folderNames.count,
+      saveError: context.saveError,
+      detail: detail
+    )
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    guard let data = try? encoder.encode(record),
+      let line = String(data: data, encoding: .utf8)
+    else { return }
+    print("FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC \(line)")
+  }
+
+  private func restoreAttachedDelegate() {
+    if let attachedField, attachedField.delegate === self {
+      attachedField.delegate = originalDelegate
+    }
+    attachedField = nil
+    originalDelegate = nil
+    originalDelegateType = nil
+    originalSelectorAvailability = [:]
+  }
+}
+
 @MainActor
 private final class FolderNavigatorFixture {
+  private static var nextMouseEventNumber = 1
+
   let root: URL
   let state: AppState
   let runtime: DictationRuntime
@@ -691,24 +1212,174 @@ private final class FolderNavigatorFixture {
 
   func click(screenPoint: NSPoint) throws {
     let location = window.convertPoint(fromScreen: screenPoint)
-    for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-      let event = try #require(NSEvent.mouseEvent(
-        with: eventType,
+    let timestamp = ProcessInfo.processInfo.systemUptime
+    let mouseDownEventNumber = Self.nextMouseEventNumber
+    Self.nextMouseEventNumber += 1
+    let mouseUpEventNumber = Self.nextMouseEventNumber
+    Self.nextMouseEventNumber += 1
+    let mouseDown = try #require(
+      NSEvent.mouseEvent(
+        with: .leftMouseDown,
         location: location,
         modifierFlags: [],
-        timestamp: ProcessInfo.processInfo.systemUptime,
+        timestamp: timestamp,
         windowNumber: window.windowNumber,
         context: nil,
-        eventNumber: 0,
+        eventNumber: mouseDownEventNumber,
         clickCount: 1,
-        pressure: eventType == .leftMouseDown ? 1 : 0
+        pressure: 1
       ))
-      window.sendEvent(event)
-    }
+    let mouseUp = try #require(
+      NSEvent.mouseEvent(
+        with: .leftMouseUp,
+        location: location,
+        modifierFlags: [],
+        timestamp: timestamp,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: mouseUpEventNumber,
+        clickCount: 1,
+        pressure: 0
+      ))
+    window.postEvent(mouseUp, atStart: true)
+    window.sendEvent(mouseDown)
   }
 
   func newFolderFieldIfPresent() -> NSTextField? {
     textFields.first { $0.placeholderString == "New folder" }
+  }
+
+  func folderNavigatorDiagnosticContext() -> FolderNavigatorDiagnosticContext {
+    let createButton = elementIfPresent(label: "Create folder")
+    let createButtonEnabled: Bool?
+    if let accessible = createButton as? NSAccessibilityProtocol {
+      createButtonEnabled = accessible.isAccessibilityEnabled()
+    } else if let control = createButton as? NSControl {
+      createButtonEnabled = control.isEnabled
+    } else {
+      createButtonEnabled = nil
+    }
+    return FolderNavigatorDiagnosticContext(
+      folderNames: state.workspace.folders.map(\.name),
+      createButtonFound: createButton != nil,
+      createButtonEnabled: createButtonEnabled,
+      saveError: state.saveError
+    )
+  }
+
+  func printCreationFailureSnapshot(testName: String, expectedName: String) {
+    let folderNames = state.workspace.folders.map(\.name)
+    let saveError = state.saveError
+    let identity: (AnyObject) -> String = {
+      "\(String(reflecting: Swift.type(of: $0)))#\(ObjectIdentifier($0))"
+    }
+    let rawFields: [[String: Any]] = textFields
+      .filter { $0.placeholderString == "New folder" }
+      .map { field in
+        let fieldWindow = field.window
+        let parent = field.superview
+        let editor = field.currentEditor()
+        let editorView = editor as? NSTextView
+        let editorString = editor?.string
+        let markedRange = editorView.flatMap { $0.hasMarkedText() ? $0.markedRange() : nil }
+        var hiddenAncestor = parent
+        while let ancestor = hiddenAncestor, !ancestor.isHidden {
+          hiddenAncestor = ancestor.superview
+        }
+        let markedText: String?
+        if let editorString, let markedRange,
+          markedRange.location != NSNotFound,
+          NSMaxRange(markedRange) <= editorString.utf16.count
+        {
+          markedText = (editorString as NSString).substring(with: markedRange)
+        } else {
+          markedText = nil
+        }
+        return [
+          "fieldIdentity": identity(field),
+          "windowPresent": fieldWindow != nil,
+          "windowIdentity": fieldWindow.map { identity($0) as Any } ?? NSNull(),
+          "parentPresent": parent != nil,
+          "parentIdentity": parent.map { identity($0) as Any } ?? NSNull(),
+          "isHidden": field.isHidden,
+          "hiddenAncestorIdentity": hiddenAncestor.map { identity($0) as Any } ?? NSNull(),
+          "nativeString": field.stringValue,
+          "editorIdentity": editor.map { identity($0) as Any } ?? NSNull(),
+          "editorString": editorString.map { $0 as Any } ?? NSNull(),
+          "editorHasMarkedText": editorView.map { $0.hasMarkedText() as Any } ?? NSNull(),
+          "markedRange": markedRange.map { "\($0.location):\($0.length)" as Any } ?? NSNull(),
+          "markedText": markedText.map { $0 as Any } ?? NSNull(),
+        ]
+      }
+    let firstResponder = window.firstResponder
+    let applicationKeyWindow = NSApp.keyWindow
+    let fixtureWindowIdentity = identity(window)
+    let fixtureWindowIsKey = window.isKeyWindow
+    let applicationKeyWindowIdentity = applicationKeyWindow.map { identity($0) }
+    let applicationIsActive = NSApp.isActive
+    let firstResponderIdentity = firstResponder.map { identity($0) }
+    let createFolderPresent = elementIfPresent(label: "Create folder") != nil
+    let cancelNewFolderPresent = elementIfPresent(label: "Cancel new folder") != nil
+    let folderNewNamePresent = elementIfPresent(identifier: "folder-new-name") != nil
+    let snapshot: [String: Any] = [
+      "testName": testName,
+      "expectedName": expectedName,
+      "workspaceFolderNames": folderNames,
+      "workspaceFolderCount": folderNames.count,
+      "saveError": saveError.map { $0 as Any } ?? NSNull(),
+      "rawNewFolderFields": rawFields,
+      "fixtureWindowIdentity": fixtureWindowIdentity,
+      "fixtureWindowIsKey": fixtureWindowIsKey,
+      "applicationKeyWindowIdentity": applicationKeyWindowIdentity.map { $0 as Any }
+        ?? NSNull(),
+      "applicationKeyWindowMatchesFixture": applicationKeyWindow === window,
+      "applicationIsActive": applicationIsActive,
+      "firstResponderIdentity": firstResponderIdentity.map { $0 as Any } ?? NSNull(),
+      "publicAX": [
+        "createFolderPresent": createFolderPresent,
+        "cancelNewFolderPresent": cancelNewFolderPresent,
+        "folderNewNamePresent": folderNewNamePresent,
+      ],
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys]),
+      let line = String(data: data, encoding: .utf8)
+    else { return }
+    print("FLECK_FOLDER_CREATION_FAILURE_DIAGNOSTIC \(line)")
+  }
+
+  func waitForNewFolderComposer(isPresent: Bool) async throws -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(2))
+
+    func stateMatches() -> Bool {
+      guard let field = newFolderFieldIfPresent() else {
+        return !isPresent
+          && elementIfPresent(label: "Create folder") == nil
+          && elementIfPresent(label: "Cancel new folder") == nil
+      }
+      guard isPresent else { return false }
+      guard
+        field.window === window,
+        let editor = field.currentEditor(),
+        editor === window.firstResponder,
+        window.isKeyWindow,
+        NSApp.keyWindow === window,
+        NSApp.isActive
+      else { return false }
+      return true
+    }
+
+    while clock.now < deadline {
+      try Task.checkCancellation()
+      host.layoutSubtreeIfNeeded()
+      if stateMatches() { return true }
+      let remaining = clock.now.duration(to: deadline)
+      guard remaining > .zero else { break }
+      try await Task.sleep(for: min(.milliseconds(25), remaining))
+    }
+
+    try Task.checkCancellation()
+    return stateMatches()
   }
 
   func newFolderField() throws -> NSTextField {

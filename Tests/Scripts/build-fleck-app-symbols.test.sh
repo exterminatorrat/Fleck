@@ -55,10 +55,13 @@ cat > "$fixture_root/Sources/FleckApp/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>CFBundleExecutable</key><string>Fleck</string>
+  <key>CFBundleIconFile</key><string>FleckAppIcon.icns</string>
   <key>CFBundleIdentifier</key><string>test.fleck.packager</string>
 </dict></plist>
 PLIST
 printf 'fixture mark\n' > "$fixture_root/Assets/fleck-mark.png"
+printf 'fixture light icon\n' > "$fixture_root/Assets/FleckAppIcon.icns"
+printf 'fixture dark icon\n' > "$fixture_root/Assets/FleckAppIconDark.icns"
 
 cat > "$fake_bin/uname" <<'SCRIPT'
 #!/bin/sh
@@ -167,6 +170,14 @@ packaged_app="$("$fixture_root/Scripts/fleck-build-identity.py" read-result \
 packaged="$packaged_app/Contents/MacOS/Fleck"
 test -f "$original"
 test -f "$packaged"
+packaged_resources="$(/usr/bin/dirname "$packaged")/../Resources"
+for icon_name in FleckAppIcon.icns FleckAppIconDark.icns; do
+  /usr/bin/cmp -s "$fixture_root/Assets/$icon_name" "$packaged_resources/$icon_name" \
+    || fail "packager did not stage $icon_name"
+done
+[[ "$(/usr/bin/plutil -extract CFBundleIconFile raw -o - \
+  "$(/usr/bin/dirname "$packaged")/../Info.plist")" == 'FleckAppIcon.icns' ]] \
+  || fail 'packaged Info.plist does not name the primary native app icon'
 /usr/bin/grep -Fq 'DEBUG_SYMBOLS' "$original" \
   || fail 'packager changed the original release executable'
 if /usr/bin/grep -Fq 'DEBUG_SYMBOLS' "$packaged"; then

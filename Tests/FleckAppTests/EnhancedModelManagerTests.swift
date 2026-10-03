@@ -807,6 +807,12 @@ struct EnhancedModelManagerTests {
       let audio = EnhancedAudioSpy(samples: [0.2])
       let capture = EnhancedSpeechCapture(
         modelManager: fixture.manager,
+        permissions: DictationPermissionController(
+          microphoneStatus: { .authorized },
+          speechStatus: { .authorized },
+          requestMicrophone: { true },
+          requestSpeech: { true }
+        ),
         makeInference: { inference },
         makeAudio: { _ in audio }
       )
@@ -887,6 +893,12 @@ struct EnhancedModelManagerTests {
       defer { observedFailures.continuation.finish() }
       let capture = EnhancedSpeechCapture(
         modelManager: fixture.manager,
+        permissions: DictationPermissionController(
+          microphoneStatus: { .authorized },
+          speechStatus: { .authorized },
+          requestMicrophone: { true },
+          requestSpeech: { true }
+        ),
         makeInference: { inference },
         makeAudio: { _ in EnhancedAudioSpy(samples: []) }
       )

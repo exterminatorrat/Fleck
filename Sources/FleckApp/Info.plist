@@ -6,6 +6,8 @@
   <string>Fleck</string>
   <key>CFBundleExecutable</key>
   <string>Fleck</string>
+  <key>CFBundleIconFile</key>
+  <string>FleckAppIcon.icns</string>
   <key>CFBundleIdentifier</key>
   <string>com.harryjin.fleck</string>
   <key>CFBundleName</key>

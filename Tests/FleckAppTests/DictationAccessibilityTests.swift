@@ -68,6 +68,25 @@ private func renderedView(with identifier: String, in host: NSView) -> NSView? {
 }
 
 @MainActor
+private func canonicalFleckMarkImage() -> NSImage? {
+  let sourceRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let markDirectory = sourceRoot.appendingPathComponent("Assets", isDirectory: true)
+  guard
+    case .image(let image) = FleckMark.load(
+      template: true,
+      resourceURL: markDirectory,
+      isPackagedApp: true
+    )
+  else {
+    return nil
+  }
+  return image
+}
+
+@MainActor
 private func brightPixelBounds<Content: View>(
   of content: Content,
   size: CGSize,
@@ -101,11 +120,20 @@ private func brightPixelBounds<Content: View>(
 @Test @MainActor func DictationAccessibilityKeepsActiveProgressTileAtCrispBaseSize() throws {
   let padding: CGFloat = 10
   let activeTile = 1
+  let theme = FleckThemeSnapshot.resolve(
+    colorTheme: .codex,
+    mode: .dark,
+    systemAppearance: .light,
+    reduceTransparency: false,
+    increasedContrast: false
+  )
+  let colors = FleckRailColors(theme: theme)
   let painted = try #require(
     try brightPixelBounds(
       of: FleckRailMark(
         layout: .rail(reversed: false),
-        treatments: [.pending, .active, .pending, .pending]
+        treatments: [.pending, .active, .pending, .pending],
+        colors: colors
       )
       .padding(padding)
       .background(Color.black),
@@ -961,10 +989,12 @@ private func brightPixelBounds<Content: View>(
   controller.dismiss()
 }
 
-@Test @MainActor func DictationAccessibilityAdaptiveActionContentFitsHostedControllerFrames() {
+@Test @MainActor func DictationAccessibilityAdaptiveActionContentFitsHostedControllerFrames() throws
+{
   let visibleFrame = CGRect(x: 100, y: 200, width: 1_000, height: 800)
+  let mark = try #require(canonicalFleckMarkImage())
   let panel = DictationCapsulePanel()
-  let controller = DictationCapsuleController(panel: panel)
+  let controller = DictationCapsuleController(panel: panel, markLoader: { mark })
 
   controller.presentIdle(
     dock: .bottom,
@@ -976,6 +1006,7 @@ private func brightPixelBounds<Content: View>(
     status: DictationCapsuleStatus,
     action: DictationCapsuleAction
   ) {
+    panel.orderOut(nil)
     controller.render(status, action: action)
     let presentation = DictationCapsulePresentation(status: status, action: action)
     let frame = DictationCapsuleController.frame(
@@ -1012,10 +1043,11 @@ private func brightPixelBounds<Content: View>(
   controller.dismiss()
 }
 
-@Test @MainActor func DictationAccessibilityRecoveryActionsFitFailureFramesOnEveryDock() {
+@Test @MainActor func DictationAccessibilityRecoveryActionsFitFailureFramesOnEveryDock() throws {
   let visibleFrame = CGRect(x: 100, y: 200, width: 1_000, height: 800)
+  let mark = try #require(canonicalFleckMarkImage())
   let panel = DictationCapsulePanel()
-  let controller = DictationCapsuleController(panel: panel)
+  let controller = DictationCapsuleController(panel: panel, markLoader: { mark })
 
   controller.presentIdle(
     dock: .bottom,
@@ -1099,9 +1131,10 @@ private func brightPixelBounds<Content: View>(
   controller.dismiss()
 }
 
-@Test @MainActor func DictationAccessibilityNoSpeechWithoutActionFitsHostedFrame() {
+@Test @MainActor func DictationAccessibilityNoSpeechWithoutActionFitsHostedFrame() throws {
+  let mark = try #require(canonicalFleckMarkImage())
   let panel = DictationCapsulePanel()
-  let controller = DictationCapsuleController(panel: panel)
+  let controller = DictationCapsuleController(panel: panel, markLoader: { mark })
 
   controller.render(.noSpeech, action: nil)
   let presentation = DictationCapsulePresentation(status: .noSpeech, action: nil)
@@ -1142,21 +1175,44 @@ private func brightPixelBounds<Content: View>(
   controller.dismiss()
 }
 
-@Test func DictationAccessibilityResolvesContrastSafeFleckColors() {
-  let colors = FleckRailColors()
-  #expect(colors.accentHex == "#7C6CF2")
-  #expect(colors.displayCoreHex == "#7C6CF2")
-  #expect(colors.displayLiveHex == "#A79DFF")
-  #expect(colors.shellHex == "#17151C")
-  #expect(colors.shellOpacity == 0.96)
-  #expect(FleckRailColors.contrastRatio(colors.displayCore, against: colors.shell) >= 3)
-  #expect(FleckRailColors.contrastRatio(colors.displayLive, against: colors.shell) >= 3)
+@Test func DictationAccessibilityResolvesContrastSafeFleckColorsForEveryPalette() {
+  for family in FleckColorTheme.allCases {
+    for (mode, appearance) in [(AppTheme.light, FleckThemeAppearance.light), (.dark, .dark)] {
+      let theme = FleckThemeSnapshot.resolve(
+        colorTheme: family,
+        mode: mode,
+        systemAppearance: appearance,
+        reduceTransparency: false,
+        increasedContrast: false
+      )
+      let colors = FleckRailColors(theme: theme)
 
-  let custom = FleckRailColors(accentHex: "#302040")
-  #expect(custom.accentHex == "#302040")
-  #expect(custom.displayCoreHex != custom.accentHex)
-  #expect(FleckRailColors.contrastRatio(custom.displayCore, against: custom.shell) >= 3)
-  #expect(FleckRailColors.contrastRatio(custom.displayLive, against: custom.shell) >= 3)
+      #expect(theme.appearance == appearance)
+      #expect(colors.accentHex == theme.palette[.accent])
+      #expect(colors.displayCoreHex == theme.palette[.accent])
+      #expect(colors.displayLiveHex == theme.palette[.focusRing])
+      #expect(colors.shell.hex == theme.palette[.capsuleSurface])
+      #expect(colors.primaryText.hex == theme.palette[.capsuleText])
+      #expect(colors.effectiveShellOpacity == FleckRailColors.shellOpacity)
+      #expect(FleckRailColors.contrastRatio(colors.primaryText, against: colors.shell) >= 4.5)
+      #expect(FleckRailColors.contrastRatio(colors.displayCore, against: colors.shell) >= 3)
+      #expect(FleckRailColors.contrastRatio(colors.displayLive, against: colors.shell) >= 3)
+      #expect(FleckRailColors.contrastRatio(colors.success, against: colors.shell) >= 3)
+      #expect(FleckRailColors.contrastRatio(colors.warning, against: colors.shell) >= 3)
+      #expect(FleckRailColors.contrastRatio(colors.failure, against: colors.shell) >= 3)
+
+      let opaqueTheme = FleckThemeSnapshot.resolve(
+        colorTheme: family,
+        mode: mode,
+        systemAppearance: appearance,
+        reduceTransparency: true,
+        increasedContrast: false
+      )
+      let opaqueColors = FleckRailColors(theme: opaqueTheme)
+      #expect(opaqueColors.reduceTransparency)
+      #expect(opaqueColors.effectiveShellOpacity == 1)
+    }
+  }
 }
 
 @Test func DictationAccessibilityMapsIncreaseContrastWithoutColorDifferentiation() {
@@ -1991,9 +2047,12 @@ private actor AccessibilitySleepGate {
   controller.dismiss()
 }
 
-@Test @MainActor func DictationAccessibilityIdleDragTogglesIndicatorsOnlyAfterThreshold() {
+@Test @MainActor func DictationAccessibilityIdleDragTogglesIndicatorsOnlyAfterThreshold()
+  async throws
+{
+  let mark = try #require(canonicalFleckMarkImage())
   let panel = DictationCapsulePanel()
-  let controller = DictationCapsuleController(panel: panel)
+  let controller = DictationCapsuleController(panel: panel, markLoader: { mark })
   controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
 
   let host = panel.contentView!
@@ -2052,6 +2111,7 @@ private actor AccessibilitySleepGate {
   #expect(renderedView(with: "fleck-dock-indicators", in: host) == nil)
   eventHost.mouseDragged(with: thresholdDrag)
   #expect(controller.presentationModel.showsDockIndicators)
+  for _ in 0..<5 { await Task.yield() }
   host.layoutSubtreeIfNeeded()
   guard let indicators = renderedView(with: "fleck-dock-indicators", in: host) else {
     Issue.record("Expected rendered dock indicators after the drag threshold")
@@ -2374,14 +2434,18 @@ private actor AccessibilitySleepGate {
     contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
     encoding: .utf8
   )
+  let viewModelSource = try String(
+    contentsOf: repository.appendingPathComponent(
+      "Sources/FleckApp/PersonalDictionarySettingsViewModel.swift"
+    ),
+    encoding: .utf8
+  )
 
   for label in [
-    "Personal dictionary filter",
     "Add a new vocabulary word or phrase",
     "Search vocabulary",
     "Clear vocabulary search",
     "Edit \\(entry.preferredForm)",
-    "Enable \\(entry.preferredForm)",
     "Approve \\(suggestion.preferredForm)",
     "Edit and approve \\(suggestion.preferredForm)",
     "Dismiss \\(suggestion.preferredForm)",
@@ -2393,6 +2457,27 @@ private actor AccessibilitySleepGate {
   ] {
     #expect(settingsSource.contains("accessibilityLabel(\"\(label)\")"))
   }
+  let headerStart = try #require(
+    settingsSource.range(of: "private var suggestionsHeaderAction: some View")
+  )
+  let searchTriggerStart = try #require(
+    settingsSource.range(
+      of: "private var searchTrigger: some View",
+      range: headerStart.upperBound..<settingsSource.endIndex
+    )
+  )
+  let headerSource = settingsSource[headerStart.lowerBound..<searchTriggerStart.lowerBound]
+  #expect(headerSource.contains("if let title = viewModel.suggestionsHeaderActionTitle"))
+  #expect(headerSource.contains("Button(title)"))
+  #expect(headerSource.contains(".accessibilityLabel(title)"))
+  #expect(headerSource.contains("Opens the review queue for pending suggestions"))
+  #expect(headerSource.contains("Returns to all dictionary entries"))
+  #expect(viewModelSource.contains("if filter == .suggestions { return \"Back to words\" }"))
+  #expect(viewModelSource.contains("return \"Review suggestions (\\(suggestions.count))\""))
+  #expect(settingsSource.contains("Toggle(\"Use this word in dictation\", isOn: $isEnabled)"))
+  #expect(settingsSource.contains(
+    ".accessibilityHint(\"Keeps this vocabulary entry active for dictation\")"
+  ))
   #expect(settingsSource.contains("accessibilityLabel(\"Word or phrase\")"))
   #expect(settingsSource.contains("accessibilityLabel(\"Correct from\")"))
   #expect(settingsSource.contains("accessibilityLabel(\"Delete vocabulary word\")"))

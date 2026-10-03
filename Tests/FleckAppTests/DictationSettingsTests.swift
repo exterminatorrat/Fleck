@@ -1,6 +1,8 @@
 import AppKit
+import CoreGraphics
 import Foundation
 import FleckCore
+import ObjectiveC.runtime
 import SwiftUI
 import Testing
 
@@ -19,54 +21,71 @@ import Testing
     contentsOf: repository.appendingPathComponent("Sources/FleckApp/FleckApp.swift"),
     encoding: .utf8
   )
+  let modelsViewSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/ModelsView.swift"),
+    encoding: .utf8
+  )
 
-  #expect(source.contains(
-    "@ObservedObject private var admittedModelSettingsViewModel: AdmittedModelSettingsViewModel"
-  ))
-  #expect(source.contains(
-    "@ObservedObject private var cleanupAdmittedModelSettingsViewModel: AdmittedModelSettingsViewModel"
-  ))
-  #expect(source.contains("_admittedModelSettingsViewModel = ObservedObject("))
-  #expect(source.contains("wrappedValue: runtime.admittedModelSettingsViewModel"))
-  #expect(source.contains("_cleanupAdmittedModelSettingsViewModel = ObservedObject("))
-  #expect(source.contains("wrappedValue: runtime.cleanupAdmittedModelSettingsViewModel"))
-  #expect(source.contains("AdmittedModelSettingsPresentation"))
-  #expect(source.contains("SettingsPreferenceRow(\n          \"Dictation model\""))
-  #expect(source.contains("SettingsPreferenceRow(\n          \"Cleanup model\""))
-  #expect(source.contains(
-    "presentation: admittedModelSettingsViewModel.presentation,\n" +
-      "            viewModel: admittedModelSettingsViewModel,"
-  ))
-  #expect(source.contains(
-    "presentation: cleanupAdmittedModelSettingsViewModel.presentation,\n" +
-      "            viewModel: cleanupAdmittedModelSettingsViewModel,"
-  ))
+  #expect(!source.contains("@ObservedObject private var speechViewModel"))
+  #expect(!source.contains("@ObservedObject private var cleanupViewModel"))
+  #expect(!source.contains("AdmittedModelSettingsPresentation"))
+  #expect(!source.contains("SettingsPreferenceRow(\n          \"Dictation model\""))
+  #expect(!source.contains("SettingsPreferenceRow(\n          \"Cleanup model\""))
   #expect(!source.contains(#"Section("Speech Engine")"#))
   #expect(!source.contains(#"Text("Active engine:"#))
-  #expect(source.contains(#"Text("Model: \(presentation.modelLabel)")"#))
-  #expect(source.contains("presentation.modelLabel"))
-  #expect(source.contains("if presentation.showsStatus"))
-  #expect(source.contains("if presentation.showsDetail"))
-  #expect(source.contains("SettingsPreferenceRow(\n          \"Theme\""))
-  #expect(source.contains("SettingsPreferenceRow(\n          \"Editor text color\""))
+  #expect(source.contains("private var dictationReadinessButton: some View"))
+  #expect(source.contains("private var dictationReadinessPopover: some View"))
+  #expect(source.contains(".popover(isPresented: $isReadinessPopoverPresented"))
+  #expect(source.contains(".settingsSearchAnchor(.dictationStatus, request: searchRequest)"))
+  #expect(source.contains(".accessibilityIdentifier(\"settings-dictation-readiness-button\")"))
+  #expect(source.contains(".accessibilityIdentifier(\"settings-dictation-readiness-popover\")"))
+  #expect(source.contains("accessibilityValue(isReady ? \"Ready\" : \"Needs attention\")"))
+  #expect(source.contains(".accessibilityHint(\"Show dictation readiness and recovery actions.\")"))
+  #expect(source.contains("if !dictationModifierPresentation.isReady"))
+  #expect(source.contains("ForEach(availabilityIssues, id: \\.title)"))
+  #expect(source.contains("ForEach(recoveryActions, id: \\.pane)"))
+  #expect(source.contains("runtime.openSystemSettings(action)"))
+  #expect(source.contains("case .enableInputMonitoring"))
+  #expect(source.contains("Button(\"Enable Input Monitoring\")"))
+  #expect(source.contains("case .retry"))
+  #expect(source.contains("Button(\"Retry\")"))
+  #expect(source.contains("Button(\"Open Models\", action: openModelsFromSettingsNavigation)"))
+  #expect(source.contains("private var modelsLink: some View"))
+  #expect(source.contains(".buttonStyle(.link)"))
+  #expect(source.contains("private var modelsBrowser: some View"))
+  #expect(source.contains("ModelsBrowserView("))
+  #expect(source.contains("if section == .models"))
+  #expect(source.contains("if result.destination == .models"))
+  #expect(source.contains("selectedSection = .models"))
+  #expect(!source.contains("ModelLibraryLayout.windowIdentifier"))
+  #expect(source.contains("SettingsPreferenceRow(\n          \"Appearance\""))
+  #expect(source.contains("SettingsPreferenceRow(\n          \"Color theme\""))
   #expect(source.contains("SettingsPreferenceRow(\n          \"Width\""))
   #expect(source.contains("ScrollView"))
   #expect(runtimeSource.contains(".defaultSize(width: 840, height: 600)"))
   #expect(runtimeSource.contains(".windowResizability(.contentMinSize)"))
-  #expect(source.contains(".focusable(presentation.isKeyboardFocusable)"))
   #expect(source.contains(".accessibilityElement(children: .contain)"))
-  #expect(source.contains(".accessibilityLabel(presentation.accessibilityLabel)"))
-  #expect(source.contains(".accessibilityValue(presentation.accessibilityValue)"))
-  #expect(source.contains("await admittedModelSettingsViewModel.refresh()"))
-  #expect(source.contains("await cleanupAdmittedModelSettingsViewModel.refresh()"))
-  #expect(source.contains("Button(label) { viewModel.perform(action) }"))
-  #expect(source.contains(
-    #"progressAccessibilityLabel: "Enhanced local dictation installation progress""#
-  ))
-  #expect(source.contains(
-    #"progressAccessibilityLabel: "Enhanced local cleanup installation progress""#
-  ))
-  #expect(source.contains(".accessibilityLabel(progressAccessibilityLabel)"))
+  #expect(modelsViewSource.contains(".accessibilityLabel(\"Installation state\")"))
+  #expect(modelsViewSource.contains(".accessibilityValue(presentation.compactStatus)"))
+  #expect(modelsViewSource.contains("External results"))
+  #expect(modelsViewSource.contains("ModelLibraryExternalEvidenceCatalog.evidence(for: entry.descriptor)"))
+  #expect(!modelsViewSource.contains("≈110× RTF"))
+  #expect(!modelsViewSource.contains("2.01% WER"))
+  #expect(!modelsViewSource.contains("≈212 decode tok/s"))
+  #expect(modelsViewSource.contains("Cleanup accuracy"))
+  #expect(!modelsViewSource.contains("Benchmarks"))
+  #expect(!modelsViewSource.contains("ratingSlots"))
+  #expect(modelsViewSource.contains("await speechViewModel.refresh()"))
+  #expect(modelsViewSource.contains("await cleanupViewModel.refresh()"))
+  #expect(modelsViewSource.contains("entry.viewModel.perform(action)"))
+  #expect(modelsViewSource.contains("ProgressView(value: progress)"))
+  #expect(modelsViewSource.contains(#".accessibilityLabel("\(entry.title) installation progress")"#))
+  #expect(modelsViewSource.contains(".focused($focusedModelID, equals: entry.id)"))
+  #expect(modelsViewSource.contains(#".accessibilityIdentifier("models-action-\(entry.id)")"#))
+  #expect(modelsViewSource.contains("Button(role: action == .remove ? .destructive : nil)"))
+  #expect(!runtimeSource.contains("Window(\"Models\", id:"))
+  #expect(runtimeSource.contains("SettingsView(runtime: dictationRuntime)"))
+  #expect(runtimeSource.contains(".windowResizability(.contentMinSize)"))
   #expect(!source.contains("cleanupModelLabel"))
   #expect(!source.contains("runtime.availability.foundationModelAvailability"))
   #expect(!source.contains(#"LabeledContent("Cleanup", value:"#))
@@ -78,7 +97,6 @@ import Testing
   #expect(!source.contains("Supported languages"))
   #expect(!source.contains("Download size"))
   #expect(!source.contains("Installed size"))
-  #expect(!source.contains(" bytes"))
   #expect(!source.contains("Admitted model installation progress"))
   #expect(!source.contains("Picker(\"Engine\""))
   #expect(!source.contains("ModelConsentView"))
@@ -107,7 +125,7 @@ import Testing
 
   let sourcePaths = [
     "Sources/FleckApp/AdmittedModelSettingsPresentation.swift",
-    "Sources/FleckApp/SettingsView.swift",
+    "Sources/FleckApp/ModelsView.swift",
     "Sources/FleckApp/ParakeetTDTTestActivation.swift",
   ]
   let sources = try sourcePaths.map { path in
@@ -132,7 +150,7 @@ import Testing
     "Enhanced local dictation failed:"
   ))
   #expect(sources[1].1.contains(
-    #"progressAccessibilityLabel: "Enhanced local dictation installation progress""#
+    #".accessibilityLabel("\(entry.title) installation progress")"#
   ))
   #expect(sources[2].1.contains(
     "Repair the experimental enhanced local model candidate in Dictation Settings"
@@ -161,7 +179,7 @@ func candidateStartupUsesActivatedConfigurationAndRefreshesItsInstaller() throws
 
 @Test func DictationSettingsExposesNativeSidebarGroupsAndMetadata() {
   #expect(SettingsSection.fleckCases == [.editing, .appearance, .shortcuts])
-  #expect(SettingsSection.voiceAndWritingCases == [.dictation, .vocabulary])
+  #expect(SettingsSection.voiceAndWritingCases == [.dictation, .models, .vocabulary])
   #expect(SettingsSection.connectionCases == [.agents])
   #expect(SettingsSection.informationCases == [.about])
   #expect(SettingsSection.editing.title == "General")
@@ -227,6 +245,139 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   }
 }
 
+@Test @MainActor
+func DictationSettingsHostedSidebarSelectionUsesPaletteInKeyWindow() async throws {
+  let application = NSApplication.shared
+  try await withSettingsTestApplicationActivationState(application) {
+    for family in [FleckColorTheme.monochrome, .capy] {
+      let theme = FleckThemeSnapshot.resolve(
+        colorTheme: family,
+        mode: .dark,
+        systemAppearance: .dark,
+        reduceTransparency: false,
+        increasedContrast: false
+      )
+      let host = NSHostingView(
+        rootView: SettingsSidebarThemeTestHost()
+          .environment(\.fleckThemeSnapshot, theme)
+          .environment(\.colorScheme, .dark)
+          .frame(width: 220, height: 520)
+          .background(theme.color(.sidebar))
+      )
+      let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 220, height: 520),
+        styleMask: [.titled, .closable],
+        backing: .buffered,
+        defer: false
+      )
+      window.appearance = NSAppearance(named: .darkAqua)
+      window.contentView = host
+      defer {
+        window.contentView = nil
+        window.orderOut(nil)
+      }
+      window.makeKeyAndOrderFront(nil)
+      try #require(await activateSettingsTestApplication(application, keyWindow: window))
+      await settleSettingsHost(host)
+      try #require(
+        await waitForSettingsAppKitState {
+          application.isActive && application.keyWindow === window && window.isKeyWindow
+        }
+      )
+
+      let outline = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
+      let row = try #require(settingsSidebarRow(.appearance, in: outline))
+
+      #expect(window.isKeyWindow)
+      #expect(outline.selectedRow == row)
+      #expect(outline.accessibilitySelectedRows()?.count == 1)
+      #expect(outline.selectionHighlightStyle == .none)
+      let rowView = try #require(outline.rowView(atRow: row, makeIfNecessary: true))
+      let image = try #require(rowView.bitmapImageRepForCachingDisplay(in: rowView.bounds))
+      rowView.cacheDisplay(in: rowView.bounds, to: image)
+      let fill = try #require(
+        image.colorAt(
+          x: Int(CGFloat(image.pixelsWide) * 0.85),
+          y: image.pixelsHigh / 2
+        ))
+      let expectedFill = theme.nsColor(.selectionFill)
+      #expect(abs(fill.redComponent - expectedFill.redComponent) < 0.12)
+      #expect(abs(fill.greenComponent - expectedFill.greenComponent) < 0.12)
+      #expect(abs(fill.blueComponent - expectedFill.blueComponent) < 0.12)
+      #expect(fill.blueComponent < 0.5)
+      let expectedInk = theme.nsColor(.selectionText)
+      func hasSelectedInk(_ image: NSBitmapImageRep) -> Bool {
+        (0..<image.pixelsHigh).contains { y in
+          (20..<Int(CGFloat(image.pixelsWide) * 0.65)).contains { x in
+            guard let pixel = image.colorAt(x: x, y: y) else { return false }
+            return abs(pixel.redComponent - expectedInk.redComponent) < 0.05
+              && abs(pixel.greenComponent - expectedInk.greenComponent) < 0.05
+              && abs(pixel.blueComponent - expectedInk.blueComponent) < 0.05
+          }
+        }
+      }
+      #expect(hasSelectedInk(image))
+      if family == .monochrome {
+        #expect(abs(fill.redComponent - fill.greenComponent) < 0.04)
+      } else {
+        #expect(fill.greenComponent > fill.redComponent + 0.07)
+      }
+
+      if let captureDirectory = ProcessInfo.processInfo.environment[
+        "FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR"
+      ] {
+        let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let screenshot = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: screenshot)
+        let png = try #require(screenshot.representation(using: .png, properties: [:]))
+        try png.write(
+          to: directory.appendingPathComponent("settings-sidebar-\(family.rawValue).png"))
+      }
+
+      let otherWindow = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 180, height: 120),
+        styleMask: [.titled],
+        backing: .buffered,
+        defer: false
+      )
+      defer { otherWindow.orderOut(nil) }
+      otherWindow.makeKeyAndOrderFront(nil)
+      await settleSettingsHost(host)
+      try #require(
+        await waitForSettingsAppKitState {
+          application.isActive
+            && application.keyWindow === otherWindow
+            && otherWindow.isKeyWindow
+            && !window.isKeyWindow
+        }
+      )
+      #expect(!window.isKeyWindow)
+      #expect(outline.selectedRow == row)
+      #expect(outline.accessibilitySelectedRows()?.count == 1)
+      let inactiveImage = try #require(rowView.bitmapImageRepForCachingDisplay(in: rowView.bounds))
+      rowView.cacheDisplay(in: rowView.bounds, to: inactiveImage)
+      let inactiveFill = try #require(
+        inactiveImage.colorAt(
+          x: Int(CGFloat(inactiveImage.pixelsWide) * 0.85),
+          y: inactiveImage.pixelsHigh / 2
+        ))
+      #expect(abs(inactiveFill.redComponent - fill.redComponent) < 0.04)
+      #expect(abs(inactiveFill.greenComponent - fill.greenComponent) < 0.04)
+      #expect(abs(inactiveFill.blueComponent - fill.blueComponent) < 0.04)
+      #expect(hasSelectedInk(inactiveImage))
+    }
+  }
+}
+
+private struct SettingsSidebarThemeTestHost: View {
+  @State private var selection = SettingsSection.appearance
+
+  var body: some View {
+    SettingsSectionSidebar(selection: $selection)
+  }
+}
+
 @Test func DictationSettingsUsesNativeSidebarAccessibilityAndSelectionContracts() throws {
   let repository = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
@@ -251,7 +402,11 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   #expect(source.contains(".accessibilityHint(detail)"))
   #expect(source.contains(".accessibilityIdentifier(title)"))
   #expect(source.contains("case .editing:\n        \"gearshape\""))
-  #expect(source.contains(".padding(.top, 38)"))
+  #expect(source.contains(".padding(.top, 44)"))
+  #expect(source.contains("settings-fleck-sidebar-heading"))
+  #expect(source.contains("Text(\"Fleck\")"))
+  #expect(source.contains("sectionRows(SettingsSection.fleckCases)"))
+  #expect(!source.contains(".padding(.leading, 58)"))
   let sectionGroupStart = try #require(source.range(of: "private func sectionGroup("))
   let sidebarSurfaceStart = try #require(
     source.range(
@@ -313,7 +468,7 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   #expect(settingsSource.contains("SettingsToggleRow(\n          title: \"Create lists automatically\""))
   #expect(settingsSource.contains("SettingsToggleRow(\n          title: \"Confirm before moving notes to Trash\""))
   #expect(settingsSource.contains("SettingsToggleRow(\n          title: \"Launch at login\""))
-  #expect(settingsSource.contains("SettingsPreferenceRow(\n          \"Theme\""))
+  #expect(settingsSource.contains("SettingsPreferenceRow(\n          \"Appearance\""))
   #expect(settingsSource.contains("SettingsPreferenceRow(\n          \"Modifier key\""))
   #expect(settingsSource.contains("SettingsToggleRow(\n          title: \"Show status capsule\""))
   #expect(!settingsSource.contains("SettingsSectionCard(\"Behavior\")"))
@@ -336,11 +491,15 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
     encoding: .utf8
   )
 
-  #expect(source.contains("Color.black.opacity(0.10)"))
-  #expect(source.contains("Glass.regular.tint(Color.black.opacity(0.18))"))
+  #expect(!source.contains("Glass.regular.tint(Color.primary.opacity"))
+  #expect(!source.contains("Color.primary.opacity(0.04)"))
+  #expect(source.contains(".glassEffect(.regular, in: shape)"))
   #expect(source.contains("shape.fill(.ultraThinMaterial)"))
-  #expect(source.contains("if reduceTransparency"))
-  #expect(source.contains("Color(nsColor: .windowBackgroundColor)"))
+  #expect(source.contains("FleckChromeMaterialPolicy.current("))
+  #expect(source.contains("reduceTransparency: reduceTransparency"))
+  #expect(source.contains("increasedContrast: colorSchemeContrast == .increased"))
+  #expect(source.contains("theme.color(.window)"))
+  #expect(source.contains("theme.color(.sidebar)"))
 }
 
 @Test func DictationSettingsUsesReadinessCaptureAndHistoryGroups() throws {
@@ -354,21 +513,51 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   )
 
   #expect(DictationSettingsGroup.allCases.map(\.rawValue) == [
-    "Status",
-    "Models",
     "Capture",
     "Experience & history",
     "Privacy",
   ])
-  #expect(source.contains("private var readiness"))
+  #expect(source.contains("private var dictationReadinessButton: some View"))
+  #expect(source.contains("private var dictationReadinessPopover: some View"))
+  #expect(source.contains("private var dictationModifierRecoveryButton: some View"))
+  #expect(source.contains(".settingsSearchAnchor(.dictationStatus, request: searchRequest)"))
+  #expect(source.contains(".accessibilityLabel(\"Dictation readiness\")"))
+  #expect(source.contains(".accessibilityValue(isReady ? \"Ready\" : \"Needs attention\")"))
+  #expect(source.contains(
+    ".accessibilityHint(\"Show dictation readiness and recovery actions.\")"
+  ))
+  #expect(source.contains(".accessibilityIdentifier(\"settings-dictation-readiness-button\")"))
   #expect(source.contains("Text(DictationSettingsGroup.capture.rawValue)"))
   #expect(source.contains(
     "Text(DictationSettingsGroup.experience.rawValue)"
   ))
   #expect(source.contains("isReady ? \"Ready\" : \"Needs attention\""))
-  #expect(source.contains("Text(DictationSettingsGroup.models.rawValue)"))
-  #expect(source.contains("DisclosureGroup(DictationSettingsGroup.privacy.rawValue)"))
+  #expect(source.contains("private var modelsLink: some View"))
+  #expect(source.contains("Button(\"Open Models\", action: openModelsFromSettingsNavigation)"))
+  #expect(source.contains("DisclosureGroup(isExpanded: $isDictationPrivacyExpanded)"))
+  #expect(!source.contains("Text(DictationSettingsGroup.models.rawValue)"))
   #expect(!source.contains("SettingsSectionCard(\"Controls\")"))
+
+  let captureStart = try #require(source.range(of: "private var capture: some View {"))
+  let experienceStart = try #require(source.range(
+    of: "private var experienceAndHistory: some View {",
+    range: captureStart.upperBound..<source.endIndex
+  ))
+  let captureSource = source[captureStart.lowerBound..<experienceStart.lowerBound]
+  #expect(captureSource.contains("dictationModifierRecoveryButton"))
+
+  let readinessPopoverStart = try #require(
+    source.range(of: "private var dictationReadinessPopover: some View {")
+  )
+  let readinessEnd = try #require(source.range(
+    of: "private var isDictationReady:",
+    range: readinessPopoverStart.upperBound..<source.endIndex
+  ))
+  let readinessPopoverSource = source[readinessPopoverStart.lowerBound..<readinessEnd.lowerBound]
+  #expect(readinessPopoverSource.contains("ScrollView(.vertical)"))
+  #expect(readinessPopoverSource.contains(
+    ".frame(width: 340, height: isReady ? 160 : 300, alignment: .topLeading)"
+  ))
 }
 
 @Test func DictationSettingsRendersItsDestinationGroupsInReadingOrder() throws {
@@ -386,11 +575,10 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
   )
   let dictationSource = source[dictationStart.lowerBound..<vocabularyStart.lowerBound]
   let markers = [
-    "        readiness",
-    "        models",
+    "        modelsLink",
     "        capture",
     "        experienceAndHistory",
-    "        DisclosureGroup(DictationSettingsGroup.privacy.rawValue)",
+    "        DisclosureGroup(isExpanded: $isDictationPrivacyExpanded)",
   ]
   var cursor = dictationSource.startIndex
   for marker in markers {
@@ -422,6 +610,211 @@ func DictationSettingsHostedWindowDoesNotEnableFullSizeContentViewChrome()
 
   window.contentView = nil
   window.orderOut(nil)
+}
+
+@Test @MainActor
+func DictationSettingsModelsPaneKeepsSidebarAndFitsRequestedSizes() async throws {
+  let previousAccessibility = enableSettingsAccessibility()
+  defer { restoreSettingsAccessibility(previousAccessibility) }
+  let modelViewModels = try fixtureModelViewModels()
+  let fixture = try await RuntimeFixture(
+    finalText: nil,
+    capsuleEnabled: false,
+    speechModelViewModel: modelViewModels.speech,
+    cleanupModelViewModel: modelViewModels.cleanup
+  )
+  let sizes = [NSSize(width: 840, height: 600), NSSize(width: 760, height: 520)]
+  let speechID = ModelLibraryEntry.pinKey(
+    for: .asr,
+    modelID: ModelLibraryCatalog.parakeetModelID
+  )
+  let cleanupID = ModelLibraryEntry.pinKey(
+    for: .cleanup,
+    modelID: ModelLibraryCatalog.gemmaModelID
+  )
+
+  for size in sizes {
+    let host = NSHostingView(
+      rootView: SettingsView(runtime: fixture.runtime)
+        .environmentObject(fixture.appState)
+        .fleckTheme(fixture.appState)
+    )
+    let window = NSWindow(
+      contentRect: NSRect(origin: .zero, size: size),
+      styleMask: [.titled, .resizable, .closable],
+      backing: .buffered,
+      defer: false
+    )
+    window.title = "Settings"
+    window.contentView = host
+    window.setContentSize(size)
+    window.makeKeyAndOrderFront(nil)
+    await settleSettingsHost(host)
+
+    let outline = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
+    let modelsRow = try #require(settingsSidebarRow(.models, in: outline))
+    outline.selectRowIndexes(IndexSet(integer: modelsRow), byExtendingSelection: false)
+    NotificationCenter.default.post(
+      name: NSTableView.selectionDidChangeNotification,
+      object: outline
+    )
+    await settleSettingsHost(host)
+
+    let sidebarFrame = outline.convert(outline.bounds, to: nil)
+    let browser = try #require(settingsView(withAccessibilityIdentifier: "models-browser", in: host))
+    let browserFrame = browser.convert(browser.bounds, to: nil)
+    #expect(outline.selectedRow == modelsRow)
+    #expect(!outline.isHidden)
+    #expect(!sidebarFrame.isEmpty)
+    #expect(!browserFrame.isEmpty)
+    #expect(ModelLibraryLayout.stacksDetails(width: browserFrame.width, dynamicTypeSize: .medium))
+    #expect(settingsAccessibilityElements(in: host, identifier: "models-provider-filter").count == 1)
+    #expect(settingsAccessibilityElements(in: host, identifier: "models-type-filter").count == 1)
+    #expect(
+      settingsAccessibilityElements(in: host, identifier: "models-row-\(speechID)").count == 1
+    )
+    #expect(
+      settingsAccessibilityElements(in: host, identifier: "models-row-\(cleanupID)").count == 1
+    )
+    let speechRow = try #require(
+      settingsAccessibilityElements(in: host, identifier: "models-row-\(speechID)").first
+    )
+    let speechValue = try #require(settingsAccessibilityValue(speechRow))
+    #expect(speechValue.contains("Overall audio throughput: 145.8× RTFx"))
+    #expect(speechValue.contains("Mean per-file WER: 2.1%"))
+    #expect(speechValue.contains("External benchmark on M4 Pro"))
+    #expect(!speechValue.contains("LibriSpeech test-clean"))
+    #expect(!speechValue.contains("asr-benchmark"))
+    let cleanupRow = try #require(
+      settingsAccessibilityElements(in: host, identifier: "models-row-\(cleanupID)").first
+    )
+    let cleanupValue = try #require(settingsAccessibilityValue(cleanupRow))
+    #expect(cleanupValue.contains("Aggregate output throughput: 204.29 output tok/s"))
+    #expect(cleanupValue.contains("Cleanup accuracy: Not measured"))
+    #expect(cleanupValue.contains("External benchmark on M4 Max"))
+    #expect(!cleanupValue.contains("65,536 output tokens"))
+    #expect(!cleanupValue.contains("128 prompts"))
+    #expect(
+      settingsAccessibilityElements(in: host, identifier: "models-action-\(speechID)").count == 1
+    )
+
+    var sort = try #require(
+      settingsAccessibilityElements(in: host, identifier: "models-sort-name").first
+    )
+    if settingsAccessibilityValue(sort) != "A to Z" {
+      #expect(performSettingsAccessibilityPress(sort))
+      await settleSettingsHost(host)
+      sort = try #require(
+        settingsAccessibilityElements(in: host, identifier: "models-sort-name").first
+      )
+    }
+    #expect(settingsAccessibilityValue(sort) == "A to Z")
+
+    if let captureDirectory = ProcessInfo.processInfo.environment[
+      "FLECK_SETTINGS_MODELS_CAPTURE_DIR"
+    ] {
+      let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      let image = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+      host.cacheDisplay(in: host.bounds, to: image)
+      let png = try #require(image.representation(using: .png, properties: [:]))
+      try png.write(
+        to: directory.appendingPathComponent(
+          "settings-models-\(Int(size.width))x\(Int(size.height)).png"
+        )
+      )
+    }
+
+    #expect(performSettingsAccessibilityPress(sort))
+    await settleSettingsHost(host)
+    sort = try #require(
+      settingsAccessibilityElements(in: host, identifier: "models-sort-name").first
+    )
+    #expect(settingsAccessibilityValue(sort) == "Z to A")
+
+    #expect(performSettingsAccessibilityPress(sort))
+    await settleSettingsHost(host)
+    let ascendingSort = try #require(
+      settingsAccessibilityElements(in: host, identifier: "models-sort-name").first
+    )
+    #expect(settingsAccessibilityValue(ascendingSort) == "A to Z")
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+}
+
+@Test @MainActor
+func DictationSettingsOpenModelsAndSearchNavigateIntoTheSamePane() async throws {
+  let previousAccessibility = enableSettingsAccessibility()
+  defer { restoreSettingsAccessibility(previousAccessibility) }
+  let modelViewModels = try fixtureModelViewModels()
+  let fixture = try await RuntimeFixture(
+    finalText: nil,
+    capsuleEnabled: false,
+    speechModelViewModel: modelViewModels.speech,
+    cleanupModelViewModel: modelViewModels.cleanup
+  )
+  let host = NSHostingView(
+    rootView: SettingsView(runtime: fixture.runtime)
+      .environmentObject(fixture.appState)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 840, height: 600),
+    styleMask: [.titled, .resizable, .closable],
+    backing: .buffered,
+    defer: false
+  )
+  window.title = "Settings"
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  defer {
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+  await settleSettingsHost(host)
+
+  let outline = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
+  let dictationRow = try #require(settingsSidebarRow(.dictation, in: outline))
+  outline.selectRowIndexes(IndexSet(integer: dictationRow), byExtendingSelection: false)
+  NotificationCenter.default.post(
+    name: NSTableView.selectionDidChangeNotification,
+    object: outline
+  )
+  await settleSettingsHost(host)
+
+  let openModels = try #require(
+    settingsAccessibilityElements(in: host, identifier: "settings-dictation-open-models").first
+  )
+  #expect(performSettingsAccessibilityPress(openModels))
+  await settleSettingsHost(host)
+
+  let modelsRow = try #require(settingsSidebarRow(.models, in: outline))
+  #expect(outline.selectedRow == modelsRow)
+  #expect(settingsView(withAccessibilityIdentifier: "models-browser", in: host) != nil)
+
+  let searchField = try #require(
+    settingsView(withAccessibilityIdentifier: "settings-search-field", in: host) as? NSSearchField
+  )
+  searchField.stringValue = "Cleanup model"
+  let searchCoordinator = try #require(searchField.delegate as? SettingsSearchField.Coordinator)
+  searchCoordinator.controlTextDidChange(
+    Notification(name: NSControl.textDidChangeNotification, object: searchField)
+  )
+  await settleSettingsHost(host)
+  #expect(
+    SettingsSearchIndex.results(for: searchField.stringValue).first?.target
+      == .dictationCleanupModel
+  )
+  #expect(searchCoordinator.control(
+    searchField,
+    textView: NSTextView(),
+    doCommandBy: #selector(NSResponder.insertNewline(_:))
+  ))
+  await settleSettingsHost(host)
+
+  #expect(outline.selectedRow == modelsRow)
+  #expect(searchField.stringValue.isEmpty)
+  #expect(settingsView(withAccessibilityIdentifier: "models-browser", in: host) != nil)
 }
 
 @Test @MainActor
@@ -466,6 +859,10 @@ func DictationSettingsHostedWindowUsesNormalMinimizableChromeWithoutFullScreen()
 func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
   async throws
 {
+  let application = NSApplication.shared
+  try requireSettingsTestApplicationBaseline(application)
+  let previousAccessibility = enableSettingsAccessibility()
+  defer { restoreSettingsAccessibility(previousAccessibility) }
   let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
   let sizes = [
     NSSize(width: 840, height: 600),
@@ -477,6 +874,7 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
     let host = NSHostingView(
       rootView: SettingsView(runtime: fixture.runtime)
         .environmentObject(fixture.appState)
+        .fleckTheme(fixture.appState)
         .environment(\.dynamicTypeSize, .large)
     )
     let window = NSWindow(
@@ -494,7 +892,13 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
     window.contentView = host
     window.setContentSize(size)
     window.makeKeyAndOrderFront(nil)
+    application.activate(ignoringOtherApps: true)
     await settleSettingsHost(host)
+    window.displayIfNeeded()
+    host.displayIfNeeded()
+    await settleSettingsHost(host)
+    #expect(application.isActive, "Expected NSApp to be active for the hosted Settings window")
+    #expect(window.isKeyWindow, "Expected the hosted Settings window to be key")
 
     #expect(window.standardWindowButton(.closeButton)?.isHidden == false)
     #expect(window.standardWindowButton(.miniaturizeButton)?.isHidden == false)
@@ -548,6 +952,9 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
         object: outline
       )
       await settleSettingsHost(host)
+      window.displayIfNeeded()
+      host.displayIfNeeded()
+      await settleSettingsHost(host)
 
       #expect(outline.selectedRow == row)
 
@@ -571,6 +978,34 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
       }
       #expect(currentTrafficLightFrames.allSatisfy { !$0.intersects(sidebarFrame) })
 
+      if destination == .models {
+        let modelsBrowser = try #require(
+          settingsView(withAccessibilityIdentifier: "models-browser", in: host)
+        )
+        let modelsBrowserFrame = modelsBrowser.convert(modelsBrowser.bounds, to: nil)
+        #expect(!modelsBrowserFrame.isEmpty)
+        #expect(baselineLayoutRect.contains(modelsBrowserFrame.center))
+        #expect(modelsBrowserFrame.minX >= baselineLayoutRect.minX - 1)
+        #expect(modelsBrowserFrame.maxX <= baselineLayoutRect.maxX + 1)
+        #expect(modelsBrowserFrame.minY >= baselineLayoutRect.minY - 1)
+        #expect(modelsBrowserFrame.maxY <= baselineLayoutRect.maxY + 1)
+        #expect(modelsBrowserFrame.width >= 400)
+        #expect(
+          ModelLibraryLayout.stacksDetails(
+            width: modelsBrowserFrame.width,
+            dynamicTypeSize: .large
+          )
+        )
+        #expect(
+          settingsAccessibilityElements(in: host, identifier: "models-provider-filter").count
+            == 1
+        )
+        #expect(
+          settingsAccessibilityElements(in: host, identifier: "models-type-filter").count == 1
+        )
+        continue
+      }
+
       let detailScroll = settingsHostedScrollViews(of: host)
         .first { $0 !== sidebarScroll }
       #expect(detailScroll != nil)
@@ -591,11 +1026,17 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
       let detailTopGap = baselineLayoutRect.maxY - detailDocumentFrame.maxY
       #expect(detailTopGap >= -1)
       #expect(detailTopGap <= 20)
-      let pageTitle = try #require(
-        settingsView(withAccessibilityIdentifier: "settings-page-header", in: detailDocument)
-      )
+      let pageTitleName = destination == .vocabulary ? "Dictionary" : destination.rawValue
+      let pageTitleProbes = settingsSidebarDescendants(of: detailDocument).filter {
+        String(reflecting: type(of: $0)).contains("SettingsPageHeaderProbe")
+      }
+      #expect(pageTitleProbes.count == 1, "Expected visible \(pageTitleName) page title")
+      guard let pageTitle = pageTitleProbes.first else { continue }
+      #expect(pageTitle.isDescendant(of: detailDocument))
+      #expect(settingsScrollViewAncestor(of: pageTitle) === detailScroll)
       let pageTitleFrame = pageTitle.convert(pageTitle.bounds, to: nil)
       #expect(!pageTitleFrame.isEmpty)
+      #expect(detailFrame.contains(pageTitleFrame.center))
       #expect(pageTitleFrame.minX >= detailDocumentFrame.minX - 1)
       #expect(pageTitleFrame.maxX <= detailDocumentFrame.maxX + 1)
       let pageTitleTopGap = baselineLayoutRect.maxY - pageTitleFrame.maxY
@@ -609,6 +1050,200 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
     #expect(!detailScrollViews.isEmpty)
     window.contentView = nil
     window.orderOut(nil)
+  }
+}
+
+@Test @MainActor
+func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async throws {
+  let application = NSApplication.shared
+  try await withSettingsTestApplicationActivationState(application) {
+    let fixture = try await RuntimeFixture(
+      finalText: nil,
+      capsuleEnabled: false,
+      monitorAccessGranted: false,
+      monitorRequestAccessResult: false,
+      permissionController: DictationPermissionController(
+        microphoneStatus: { .denied },
+        speechStatus: { .denied }
+      ),
+      availability: .evaluate(
+        .init(
+          osMajorVersion: 13,
+          architecture: .intel,
+          microphonePermission: .denied,
+          speechPermission: .denied,
+          appleOnDeviceRecognitionSupported: false,
+          enhancedModelReady: false,
+          foundationModelAvailable: false
+        ))
+    )
+    await fixture.runtime.awaitStartupAssessment()
+    fixture.runtime.preferencesDidChange()
+    #expect(fixture.runtime.modifierMonitorState == .unauthorized)
+
+    let host = NSHostingView(
+      rootView: SettingsView(runtime: fixture.runtime)
+        .environmentObject(fixture.appState)
+        .environment(\.dynamicTypeSize, .accessibility5)
+        .environment(\.colorScheme, .light)
+    )
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 840, height: 600),
+      styleMask: [.titled, .resizable, .closable],
+      backing: .buffered,
+      defer: false
+    )
+    window.title = "Settings"
+    window.appearance = NSAppearance(named: .aqua)
+    window.contentView = host
+    window.center()
+    defer {
+      window.contentView = nil
+      window.orderOut(nil)
+    }
+    window.makeKeyAndOrderFront(nil)
+    try #require(
+      await activateSettingsTestApplication(application, keyWindow: window)
+    )
+    await settleSettingsHost(host)
+
+    let sidebar = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
+    let dictationRow = try #require(settingsSidebarRow(.dictation, in: sidebar))
+    sidebar.selectRowIndexes(IndexSet(integer: dictationRow), byExtendingSelection: false)
+    NotificationCenter.default.post(
+      name: NSTableView.selectionDidChangeNotification,
+      object: sidebar
+    )
+    await settleSettingsHost(host)
+
+    let readinessAnchor = try #require(
+      settingsView(
+        withAccessibilityIdentifier: "settings-search-target-dictation-status",
+        in: host
+      )
+    )
+    let readinessCenter = readinessAnchor.convert(
+      NSPoint(x: readinessAnchor.bounds.midX, y: readinessAnchor.bounds.midY),
+      to: nil
+    )
+    try #require(
+      await waitForSettingsAppKitState {
+        application.isActive && application.keyWindow === window && window.isKeyWindow
+      }
+    )
+    let mouseDown = try #require(
+      NSEvent.mouseEvent(
+        with: .leftMouseDown,
+        location: readinessCenter,
+        modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: 1,
+        clickCount: 1,
+        pressure: 1
+      ))
+    let mouseUp = try #require(
+      NSEvent.mouseEvent(
+        with: .leftMouseUp,
+        location: readinessCenter,
+        modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime + 0.01,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: 2,
+        clickCount: 1,
+        pressure: 0
+      ))
+    NSApp.sendEvent(mouseDown)
+    NSApp.sendEvent(mouseUp)
+    await settleSettingsHost(host)
+
+    #expect(
+      settingsView(
+        withAccessibilityIdentifier: "settings-keyboard-focus-dictation-status", in: host)
+        != nil
+    )
+    #expect(
+      settingsView(
+        withAccessibilityIdentifier: "settings-keyboard-focus-cue-dictation-status",
+        in: host
+      ) == nil
+    )
+
+    let popoverWindow = try #require(
+      NSApplication.shared.windows.first {
+        $0 !== window
+          && $0.contentView.map {
+            settingsView(
+              withAccessibilityIdentifier: "settings-dictation-readiness-popover",
+              in: $0
+            ) != nil
+          } == true
+      }
+    )
+    defer { popoverWindow.orderOut(nil) }
+    let popover = try #require(popoverWindow.contentView)
+    await settleSettingsHost(popover)
+    popoverWindow.displayIfNeeded()
+    let popoverScrollViews = settingsHostedScrollViews(of: popover)
+    let scrollView = try #require(popoverScrollViews.first)
+    let documentView = try #require(scrollView.documentView)
+    let visibleViewportHeight =
+      scrollView.contentView.bounds.height
+      - scrollView.contentInsets.top
+      - scrollView.contentInsets.bottom
+    #expect(scrollView.hasVerticalScroller)
+    #expect(visibleViewportHeight <= 300)
+    #expect(documentView.frame.height > visibleViewportHeight)
+
+    let captureDirectory = ProcessInfo.processInfo.environment[
+      "FLECK_SETTINGS_WINDOW_CAPTURE_DIR"
+    ]
+    if let captureDirectory {
+      let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      let visibleFrame = try #require(window.screen?.visibleFrame)
+      popoverWindow.setFrameOrigin(
+        NSPoint(
+          x: visibleFrame.midX - popoverWindow.frame.width / 2,
+          y: visibleFrame.midY - popoverWindow.frame.height / 2
+        ))
+      await settleSettingsHost(popover)
+      popoverWindow.displayIfNeeded()
+      for (name, captureWindow) in [
+        ("settings-dictation-840x600", window),
+        ("settings-dictation-readiness-popover", popoverWindow),
+      ] {
+        let cgImage = try #require(
+          CGWindowListCreateImage(
+            .null,
+            .optionIncludingWindow,
+            CGWindowID(captureWindow.windowNumber),
+            .bestResolution
+          ))
+        if captureWindow === window {
+          #expect(cgImage.width >= 840)
+          #expect(cgImage.height >= 600)
+        } else if cgImage.width < 300 || cgImage.height < 250 {
+          print(
+            "Readiness popover window-level capture was incomplete: "
+              + "\(cgImage.width)×\(cgImage.height) pixels for a "
+              + "\(Int(captureWindow.frame.width))×\(Int(captureWindow.frame.height))-point window."
+          )
+          continue
+        }
+        let image = NSBitmapImageRep(cgImage: cgImage)
+        let png = try #require(image.representation(using: .png, properties: [:]))
+        try png.write(to: directory.appendingPathComponent("\(name).png"))
+      }
+    }
+    #expect(
+      settingsView(
+        withAccessibilityIdentifier: "settings-dictation-readiness-popover",
+        in: popover
+      ) != nil
+    )
   }
 }
 
@@ -676,7 +1311,7 @@ func DictationSettingsHostedWindowKeepsInsetSidebarAndTrafficLightsContained()
     )
   })
 
-  for destination in SettingsSection.allCases {
+  for destination in SettingsSection.allCases where destination != .models {
     let row = try #require(settingsSidebarRow(destination, in: outline))
     outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
     NotificationCenter.default.post(
@@ -706,6 +1341,195 @@ func DictationSettingsHostedWindowKeepsInsetSidebarAndTrafficLightsContained()
 
   window.contentView = nil
   window.orderOut(nil)
+}
+
+@Test @MainActor
+func DictationSettingsHostedSidebarSearchFitsBetweenTrafficLightsAndFleckHeaderAtMinimumSizes()
+  async throws
+{
+  let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
+  let sizes = [NSSize(width: 760, height: 520), NSSize(width: 840, height: 600)]
+  let dynamicTypeSizes: [DynamicTypeSize] = [.large, .accessibility3]
+  var windowIndex = 0
+
+  for size in sizes {
+    for dynamicTypeSize in dynamicTypeSizes {
+      let host = NSHostingView(
+        rootView: SettingsView(runtime: fixture.runtime)
+          .environmentObject(fixture.appState)
+          .environment(\.dynamicTypeSize, dynamicTypeSize)
+      )
+      let window = NSWindow(
+        contentRect: NSRect(origin: .zero, size: size),
+        styleMask: [.titled, .resizable, .closable, .fullSizeContentView],
+        backing: .buffered,
+        defer: false
+      )
+      window.toolbar = NSToolbar(
+        identifier: "settings-hosted-header-row-\(windowIndex)"
+      )
+      windowIndex += 1
+      window.toolbarStyle = .unifiedCompact
+      window.contentView = host
+      window.setContentSize(size)
+      window.makeKeyAndOrderFront(nil)
+      await settleSettingsHost(host)
+
+      let closeButton = try #require(window.standardWindowButton(.closeButton))
+      let minimizeButton = try #require(window.standardWindowButton(.miniaturizeButton))
+      let trafficLightFrames = [closeButton, minimizeButton].map {
+        $0.convert($0.bounds, to: nil)
+      }
+      let sidebar = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
+      let fleckHeading = try #require(
+        settingsView(
+          withAccessibilityIdentifier: "settings-fleck-sidebar-heading",
+          in: sidebar
+        )
+      )
+      let searchField = try #require(
+        settingsView(withAccessibilityIdentifier: "settings-search-field", in: host)
+          as? NSSearchField
+      )
+      let fleckHeadingFrame = fleckHeading.convert(fleckHeading.bounds, to: nil)
+      let searchFieldFrame = searchField.convert(searchField.bounds, to: nil)
+      let pageHeader = try #require(
+        settingsView(withAccessibilityIdentifier: "settings-page-header", in: host)
+      )
+      let pageHeaderFrame = pageHeader.convert(pageHeader.bounds, to: nil)
+      let sidebarSurface = try #require(settingsSidebarSurface(of: host))
+      let sidebarSurfaceFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
+      let generalRow = try #require(settingsSidebarRow(.editing, in: sidebar))
+      let generalRowView = try #require(sidebar.rowView(atRow: generalRow, makeIfNecessary: true))
+      let generalRowFrame = generalRowView.convert(generalRowView.bounds, to: nil)
+      let trafficLightsBottom = try #require(trafficLightFrames.map(\.minY).min())
+      let fleckHeaderTop = fleckHeadingFrame.maxY
+      let gapAboveSearch = trafficLightsBottom - searchFieldFrame.maxY
+      let gapBelowSearch = searchFieldFrame.minY - fleckHeaderTop
+      let fleckHeaders = settingsSidebarDescendants(of: host)
+        .filter { $0.accessibilityIdentifier() == "settings-fleck-sidebar-heading" }
+
+      #expect(!fleckHeadingFrame.isEmpty)
+      #expect(!searchFieldFrame.isEmpty)
+      #expect(searchFieldFrame.width > 100)
+      #expect(fleckHeading.isDescendant(of: sidebar))
+      #expect(fleckHeadingFrame.minY > generalRowFrame.midY)
+      #expect(fleckHeaders.count == 1)
+      #expect(sidebarSurfaceFrame.contains(searchFieldFrame))
+      #expect(searchFieldFrame.maxY <= trafficLightsBottom + 1)
+      #expect(searchFieldFrame.minY >= fleckHeaderTop - 1)
+      #expect(gapAboveSearch >= 0)
+      #expect(gapBelowSearch >= 0)
+      #expect(abs(gapAboveSearch - gapBelowSearch) <= 1)
+      #expect(searchFieldFrame.minY < size.height - 74)
+      #expect(abs(fleckHeaderTop - (size.height - 95)) <= 1)
+      #expect(abs(trafficLightFrames[0].midY - trafficLightFrames[1].midY) <= 1)
+      #expect(trafficLightFrames.allSatisfy { !$0.intersects(fleckHeadingFrame) })
+      #expect(trafficLightFrames.allSatisfy { !$0.intersects(searchFieldFrame) })
+      #expect(!fleckHeadingFrame.intersects(searchFieldFrame))
+      #expect(!searchFieldFrame.intersects(pageHeaderFrame))
+
+      let searchCenter = NSPoint(x: searchFieldFrame.midX, y: searchFieldFrame.midY)
+      let searchHit = host.hitTest(searchCenter)
+      #expect(searchHit === searchField || searchHit?.isDescendant(of: searchField) == true)
+
+      searchField.stringValue = "definitely-not-a-setting"
+      let searchCoordinator = try #require(
+        searchField.delegate as? SettingsSearchField.Coordinator
+      )
+      searchCoordinator.controlTextDidChange(
+        Notification(name: NSControl.textDidChangeNotification, object: searchField)
+      )
+      await settleSettingsHost(host)
+
+      let emptyResults = try #require(
+        settingsView(withAccessibilityIdentifier: "settings-search-empty", in: host)
+      )
+      let emptyResultsFrame = emptyResults.convert(emptyResults.bounds, to: nil)
+      #expect(!emptyResultsFrame.isEmpty)
+      #expect(!searchFieldFrame.intersects(emptyResultsFrame))
+      #expect(emptyResultsFrame.maxY <= searchFieldFrame.minY)
+      #expect(sidebarSurfaceFrame.contains(emptyResultsFrame))
+
+      searchField.stringValue = ""
+      searchCoordinator.controlTextDidChange(
+        Notification(name: NSControl.textDidChangeNotification, object: searchField)
+      )
+      await settleSettingsHost(host)
+
+      for button in [closeButton, minimizeButton] {
+        let superview = try #require(button.superview)
+        let centerInSuperview = button.convert(
+          NSPoint(x: button.bounds.midX, y: button.bounds.midY),
+          to: superview
+        )
+        let hit = superview.hitTest(centerInSuperview)
+        #expect(hit === button || hit?.isDescendant(of: button) == true)
+      }
+
+      let activeSidebar = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
+      #expect(activeSidebar.isDescendant(of: host))
+      let appearanceRow = try #require(settingsSidebarRow(.appearance, in: activeSidebar))
+      #expect(window.makeFirstResponder(searchField))
+      await settleSettingsHost(host)
+      #expect(
+        window.firstResponder === searchField
+          || window.firstResponder === searchField.currentEditor()
+      )
+      activeSidebar.selectRowIndexes(IndexSet(integer: appearanceRow), byExtendingSelection: false)
+      NotificationCenter.default.post(
+        name: NSTableView.selectionDidChangeNotification,
+        object: activeSidebar
+      )
+      await settleSettingsHost(host)
+
+      #expect(activeSidebar.selectedRow == appearanceRow)
+      let activeSidebarScroll = try #require(settingsScrollViewAncestor(of: activeSidebar))
+      let detailScroll = try #require(
+        settingsHostedScrollViews(of: host).first { $0 !== activeSidebarScroll }
+      )
+      let detailDocument = try #require(detailScroll.documentView)
+      let appearanceHeader = try #require(
+        settingsView(withAccessibilityIdentifier: "settings-page-header", in: detailDocument)
+      )
+      let appearanceThemeContent = try #require(
+        settingsView(
+          withAccessibilityIdentifier: "settings-search-target-appearance-theme",
+          in: detailDocument
+        )
+      )
+      let appearanceHeaderFrame = appearanceHeader.convert(appearanceHeader.bounds, to: nil)
+      let appearanceThemeFrame = appearanceThemeContent.convert(
+        appearanceThemeContent.bounds,
+        to: nil
+      )
+      let detailFrame = detailScroll.convert(detailScroll.bounds, to: nil)
+      let searchFieldAfterSwitch = try #require(
+        settingsView(withAccessibilityIdentifier: "settings-search-field", in: host)
+          as? NSSearchField
+      )
+      let searchFieldFrameAfterSwitch = searchFieldAfterSwitch.convert(
+        searchFieldAfterSwitch.bounds,
+        to: nil
+      )
+      #expect(!appearanceHeaderFrame.isEmpty)
+      #expect(appearanceHeader.isDescendant(of: detailDocument))
+      #expect(!appearanceThemeFrame.isEmpty)
+      #expect(appearanceThemeContent.isDescendant(of: detailDocument))
+      #expect(detailFrame.contains(appearanceThemeFrame.center))
+      #expect(sidebarSurfaceFrame.contains(searchFieldFrameAfterSwitch))
+      #expect(!searchFieldFrameAfterSwitch.intersects(appearanceHeaderFrame))
+      #expect(searchFieldAfterSwitch === searchField)
+      await settleSettingsHost(host)
+      #expect(
+        window.firstResponder === searchFieldAfterSwitch
+          || window.firstResponder === searchFieldAfterSwitch.currentEditor()
+      )
+
+      window.contentView = nil
+      window.orderOut(nil)
+    }
+  }
 }
 
 @Test @MainActor
@@ -826,7 +1650,7 @@ func DictationSettingsHostedWindowResetsDetailScrollWhenSwitchingDestinations()
     initialDetailScroll.contentView.bounds.origin.y > initialBounds.origin.y + 1
   )
 
-  for destination in SettingsSection.allCases {
+  for destination in SettingsSection.allCases where destination != .models {
     try await select(destination)
 
     let detailScroll = try #require(
@@ -1079,6 +1903,68 @@ private func settingsView(withAccessibilityIdentifier identifier: String, in vie
 }
 
 @MainActor
+private func settingsAccessibilityElements(in value: Any?, identifier: String) -> [NSObject] {
+  guard let element = value as? NSObject else { return [] }
+  let identifierSelector = NSSelectorFromString("accessibilityIdentifier")
+  let matchesIdentifier = element.responds(to: identifierSelector)
+    && element.perform(identifierSelector)?.takeUnretainedValue() as? String == identifier
+  var matches = matchesIdentifier ? [element] : []
+  let childrenSelector = NSSelectorFromString("accessibilityChildren")
+  let rawChildren = element.responds(to: childrenSelector)
+    ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+  for child in NSAccessibility.unignoredChildren(from: rawChildren ?? []) {
+    matches.append(contentsOf: settingsAccessibilityElements(in: child, identifier: identifier))
+  }
+  return matches
+}
+
+@MainActor
+private func settingsAccessibilityValue(_ element: NSObject) -> String? {
+  let selector = NSSelectorFromString("accessibilityValue")
+  guard element.responds(to: selector) else { return nil }
+  return element.perform(selector)?.takeUnretainedValue() as? String
+}
+
+@MainActor
+private func enableSettingsAccessibility() -> Any? {
+  let application = NSApplication.shared
+  let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  let previousValue = application.accessibilityAttributeValue(attribute)
+  application.accessibilitySetValue(true, forAttribute: attribute)
+  return previousValue
+}
+
+@MainActor
+private func restoreSettingsAccessibility(_ value: Any?) {
+  NSApplication.shared.accessibilitySetValue(
+    value,
+    forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+}
+
+@MainActor
+private func performSettingsAccessibilityPress(_ element: NSObject) -> Bool {
+  let selector = NSSelectorFromString("accessibilityPerformPress")
+  guard let method = class_getInstanceMethod(type(of: element), selector),
+    let typeEncoding = method_getTypeEncoding(method)
+  else {
+    return false
+  }
+  let returnType = String(cString: typeEncoding).first
+  guard returnType == "B" || returnType == "c" else { return false }
+  let press = unsafeBitCast(
+    method_getImplementation(method),
+    to: (@convention(c) (AnyObject, Selector) -> Bool).self
+  )
+  if press(element, selector) { return true }
+  if let cell = element as? NSCell {
+    cell.performClick(nil)
+    return true
+  }
+  return false
+}
+
+@MainActor
 private func settingsRoundedSurfaceContains(
   _ candidate: NSRect,
   in surface: NSRect,
@@ -1187,6 +2073,84 @@ private func settingsColorDistance(_ lhs: NSColor, _ rhs: NSColor) -> CGFloat {
   #expect(!dictationSource.contains("PersonalDictionarySettingsSection"))
 }
 
+@Test func SettingsSearchConnectsGlobalResultsToExistingControlAnchors() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let settings = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+    encoding: .utf8
+  )
+  let agents = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/AgentSettingsView.swift"),
+    encoding: .utf8
+  )
+  let about = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/AboutSettingsView.swift"),
+    encoding: .utf8
+  )
+
+  #expect(settings.contains("SettingsSearchField("))
+  #expect(settings.contains("SettingsSearchResultsView("))
+  #expect(settings.contains("SettingsSearchIndex.results(for: searchQuery)"))
+  #expect(settings.contains("onSubmit: submitHighlightedSearchResult"))
+  #expect(settings.contains("searchRequest = SettingsSearchRequest(target: result.target, anchor: anchor)"))
+  #expect(settings.contains("if result.destination == .models"))
+  #expect(settings.contains("if section == .models"))
+  #expect(settings.contains("private func openModelsFromSettingsNavigation()"))
+  #expect(settings.contains("selectedSection = .models"))
+  #expect(settings.contains("ModelsBrowserView("))
+  #expect(!settings.contains("openWindow(id: ModelLibraryLayout.windowIdentifier)"))
+  #expect(!settings.contains("private var modelLibraryDestination: some View"))
+  #expect(settings.contains(".settingsSearchAnchor(.dictationStatus, request: searchRequest)"))
+  #expect(settings.contains("isReadinessPopoverPresented = result.target == .dictationStatus"))
+  #expect(settings.contains("proxy.scrollTo(pageScrollAnchor, anchor: isTransferFooter ? .bottom : .center)"))
+  #expect(settings.contains(".id(SettingsSearchTarget.vocabularyTransferFooter)"))
+  #expect(settings.contains("if searchRequest.anchor.usesVocabularyFocusLifecycle"))
+  #expect(settings.contains(".environment(\\.settingsSearchRequest, searchRequest)"))
+  #expect(settings.contains(".settingsSearchAnchor(.appearanceTheme, request: searchRequest)"))
+  #expect(settings.contains(".settingsSearchAnchor(.dictationPrivacy, request: searchRequest)"))
+  #expect(
+    settings.range(
+      of: #"SettingsPageHeader\(\s*section: \.vocabulary,\s*title: "Dictionary",\s*searchRequest: visibleSearchRequest\s*\)"#,
+      options: .regularExpression
+    ) != nil
+  )
+
+  let sharedHeaderStart = try #require(settings.range(of: "struct SettingsPageHeader: View"))
+  let sharedHeaderEnd = try #require(
+    settings.range(
+      of: "struct SettingsSectionCard<Content: View>",
+      range: sharedHeaderStart.upperBound..<settings.endIndex
+    )
+  )
+  let sharedHeaderSource = settings[sharedHeaderStart.lowerBound..<sharedHeaderEnd.lowerBound]
+  #expect(
+    sharedHeaderSource.components(
+      separatedBy: ".settingsSearchAnchor(.section(section), request: searchRequest)"
+    ).count == 2
+  )
+  #expect(
+    settings.range(
+      of: #"if selectedSection != \.vocabulary\s*\{\s*SettingsPageHeader\(\s*section: selectedSection,\s*searchRequest: searchRequest,\s*accessory: selectedSection == \.dictation\s*\?\s*AnyView\(dictationReadinessButton\)\s*:\s*nil\s*\)\s*\}"#,
+      options: .regularExpression
+    ) != nil
+  )
+  #expect(!settings.contains("vocabularyFilter"))
+  #expect(settings.contains(".settingsSearchAnchor(.vocabularySort, request: visibleSearchRequest)"))
+  #expect(settings.contains(".settingsSearchAnchor(.vocabularyReload, request: visibleSearchRequest)"))
+  #expect(settings.contains("settingsSearchAnchor(.vocabularyTransfer, request: optionsSearchRequest)"))
+  #expect(settings.contains("searchRequest: $searchRequest"))
+  #expect(settings.contains("pageScrollReadyRequestID: vocabularyPageScrollRequestID"))
+  #expect(agents.contains(".settingsSearchAnchor(.agentsActivity, request: searchRequest)"))
+  #expect(agents.contains(".settingsSearchAnchor(.agentsAccess, request: searchRequest)"))
+  #expect(agents.contains("isActivityExpanded = true"))
+  #expect(agents.contains("isAccessExpanded = true"))
+  #expect(about.contains(".settingsSearchAnchor(.aboutMetadata, request: searchRequest)"))
+  #expect(about.contains("isMetadataExpanded = true"))
+}
+
 @Test @MainActor func DictationSettingsPendingRouteIsDurableAndConsumedOnce() async throws {
   let fixture = try await RuntimeFixture(finalText: nil, capsuleEnabled: false)
   fixture.runtime.requestSettings(.dictation)
@@ -1256,16 +2220,118 @@ private func settleSettingsHost(_ view: NSView) async {
   }
 }
 
+@MainActor
+private struct SettingsTestApplicationActivationState {
+  private let activationPolicy: NSApplication.ActivationPolicy
+  private let wasActive: Bool
+
+  init(_ application: NSApplication) {
+    activationPolicy = application.activationPolicy()
+    wasActive = application.isActive
+  }
+
+  func restore(_ application: NSApplication) async {
+    defer {
+      #expect(application.activationPolicy() == activationPolicy)
+      #expect(application.isActive == wasActive)
+    }
+
+    if application.activationPolicy() != activationPolicy {
+      Issue.record("NSApp's activation policy changed during the test; host policy was not reset")
+      return
+    }
+
+    if wasActive && !application.isActive {
+      application.activate(ignoringOtherApps: true)
+      guard
+        await waitForSettingsAppKitState(condition: {
+          application.activationPolicy() == activationPolicy && application.isActive
+        })
+      else {
+        Issue.record("Failed to restore NSApp's active state")
+        return
+      }
+    }
+  }
+}
+
+@MainActor
+private func withSettingsTestApplicationActivationState(
+  _ application: NSApplication,
+  operation: @MainActor () async throws -> Void
+) async throws {
+  try requireSettingsTestApplicationBaseline(application)
+  let activationState = SettingsTestApplicationActivationState(application)
+  do {
+    try await operation()
+    await Task { @MainActor in
+      await activationState.restore(application)
+    }.value
+  } catch {
+    await Task { @MainActor in
+      await activationState.restore(application)
+    }.value
+    throw error
+  }
+}
+
+@MainActor
+private func requireSettingsTestApplicationBaseline(_ application: NSApplication) throws {
+  try #require(
+    application.activationPolicy() == .regular,
+    "Expected the test host's declared .regular activation policy"
+  )
+  try #require(application.isActive, "Expected the test host's active application baseline")
+}
+
+@MainActor
+private func activateSettingsTestApplication(
+  _ application: NSApplication,
+  keyWindow: NSWindow
+) async -> Bool {
+  guard application.activationPolicy() == .regular else { return false }
+  application.activate(ignoringOtherApps: true)
+  return await waitForSettingsAppKitState {
+    application.isActive && application.keyWindow === keyWindow && keyWindow.isKeyWindow
+  }
+}
+
+@MainActor
+private func waitForSettingsAppKitState(
+  timeout: TimeInterval = 2,
+  condition: @MainActor () -> Bool
+) async -> Bool {
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: .milliseconds(Int64(timeout * 1_000)))
+  while true {
+    guard !Task.isCancelled else { return false }
+    if condition() { return true }
+    let remaining = clock.now.duration(to: deadline)
+    guard remaining > .zero else { return false }
+    do {
+      try await Task.sleep(for: min(.milliseconds(10), remaining))
+    } catch {
+      return false
+    }
+  }
+}
+
 @Test @MainActor func DictationRuntimeUpdatesRailAccentWithoutRewritingPreference() async throws {
   let fixture = try await RuntimeFixture(finalText: "saved", capsuleEnabled: true)
   await fixture.runtime.awaitStartupAssessment()
 
-  let accentHex = "#E64A19"
-  fixture.appState.updatePreferences { $0.accentHex = accentHex }
+  let legacyAccentHex = "#E64A19"
+  fixture.appState.updatePreferences {
+    $0.accentHex = legacyAccentHex
+    $0.colorTheme = .capy
+  }
   fixture.runtime.preferencesDidChange()
 
-  #expect(fixture.runtime.capsuleController.presentationModel.colors.accentHex == accentHex)
-  #expect(fixture.appState.preferences.accentHex == accentHex)
+  #expect(
+    fixture.runtime.capsuleController.presentationModel.colors.accentHex
+      == fixture.appState.themeSnapshot.palette[.accent]
+  )
+  #expect(fixture.appState.preferences.accentHex == legacyAccentHex)
 }
 
 @Test @MainActor func DictationRuntimeMapsTheRealSaveBoundaryToSaving() {
@@ -4264,6 +5330,8 @@ private final class RuntimeFixture {
       foundationModelAvailable: true
     )),
     availabilityProvider: (@MainActor () -> DictationAvailability)? = nil,
+    speechModelViewModel: AdmittedModelSettingsViewModel? = nil,
+    cleanupModelViewModel: AdmittedModelSettingsViewModel? = nil,
     routingNotes: [Note] = [],
     ambiguousRouting: Bool = false,
     cleanupFails: Bool = false,
@@ -4339,9 +5407,8 @@ private final class RuntimeFixture {
       delete: { _ in },
       clear: {}
     )
-    let admittedModelSettingsViewModel = AdmittedModelSettingsViewModel(
-      installer: makeAdmittedModelInstaller()
-    )
+    let admittedModelSettingsViewModel = speechModelViewModel
+      ?? AdmittedModelSettingsViewModel(installer: makeAdmittedModelInstaller())
     let coordinator = DictationCoordinator(
       engineProvider: provider,
       preferredEngine: { [weak appState, admittedModelSettingsViewModel] in
@@ -4396,6 +5463,7 @@ private final class RuntimeFixture {
         if startupBlocked { await gate.wait() }
       },
       admittedModelSettingsViewModel: admittedModelSettingsViewModel,
+      cleanupAdmittedModelSettingsViewModel: cleanupModelViewModel,
       availabilityProvider: availabilityProvider ?? { availability },
       capsuleSleeper: capsuleSleeper,
       scheduleEscapeCancellation: scheduleEscapeCancellation,

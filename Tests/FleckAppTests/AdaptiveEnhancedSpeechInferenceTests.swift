@@ -28,6 +28,7 @@ private final class AdaptiveInferenceProbe: EnhancedSpeechInferring {
   private(set) var transcribedSamples: [[Float]] = []
   private(set) var cancelCount = 0
   private(set) var releaseCount = 0
+  private(set) var completedReleaseCount = 0
 
   func load(from repositoryURL: URL) async throws {
     events.append("load:\(repositoryURL.lastPathComponent)")
@@ -63,6 +64,7 @@ private final class AdaptiveInferenceProbe: EnhancedSpeechInferring {
     if let releaseGate {
       await releaseGate.wait()
     }
+    completedReleaseCount += 1
   }
 }
 
@@ -97,6 +99,7 @@ private final class AdaptiveCompletionProbe {
 @MainActor
 private final class AdaptiveManualSleeper {
   private var continuations: [CheckedContinuation<Void, Error>?] = []
+  private var isFinished = false
   private(set) var requestedDurations: [Duration] = []
 
   var pendingCount: Int {
@@ -104,6 +107,7 @@ private final class AdaptiveManualSleeper {
   }
 
   func sleep(for duration: Duration) async throws {
+    guard !isFinished else { throw CancellationError() }
     requestedDurations.append(duration)
     try await withCheckedThrowingContinuation { continuation in
       continuations.append(continuation)
@@ -121,6 +125,15 @@ private final class AdaptiveManualSleeper {
   func resumeAll() {
     for index in continuations.indices {
       resume(at: index)
+    }
+  }
+
+  func finish() {
+    isFinished = true
+    for index in continuations.indices {
+      guard let continuation = continuations[index] else { continue }
+      continuations[index] = nil
+      continuation.resume(throwing: CancellationError())
     }
   }
 }
@@ -174,6 +187,16 @@ private let gib: UInt64 = 1_024 * 1_024 * 1_024
 
 private let adaptiveRepository = URL(fileURLWithPath: "/models/parakeet-a")
 private let replacementRepository = URL(fileURLWithPath: "/models/parakeet-b")
+
+@Test @MainActor
+func adaptiveManualSleeperFinishRejectsFutureRegistrations() async {
+  let sleeper = AdaptiveManualSleeper()
+  sleeper.finish()
+
+  await #expect(throws: CancellationError.self) {
+    try await sleeper.sleep(for: .seconds(15))
+  }
+}
 
 @Test @MainActor
 func healthyEightGiBReleaseSchedulesAtMostFifteenSecondsAndWarmLoadReusesRepository() async throws {
@@ -538,16 +561,36 @@ func repositorySubstitutionReleasesOldRepositoryBeforeLoadingNewOne() async thro
 @Test @MainActor
 func repeatedReleaseDoesNotExtendTimerOrDoubleRelease() async throws {
   let fixture = makeFixture()
+  defer { fixture.sleeper.finish() }
 
   try await fixture.wrapper.load(from: adaptiveRepository)
   await fixture.wrapper.releaseResources()
   await fixture.wrapper.releaseResources()
-  await drainAdaptiveTasks()
+  let clock = ContinuousClock()
+  let timerDeadline = clock.now.advanced(by: .seconds(2))
+  while fixture.sleeper.pendingCount != 1, clock.now < timerDeadline {
+    try Task.checkCancellation()
+    let remaining = clock.now.duration(to: timerDeadline)
+    try await Task.sleep(for: min(.milliseconds(1), remaining))
+  }
+  try #require(
+    fixture.sleeper.pendingCount == 1,
+    "Timed out waiting for retention timer registration"
+  )
   #expect(fixture.sleeper.requestedDurations == [.seconds(15)])
   #expect(fixture.inference.releaseCount == 0)
 
   fixture.sleeper.resume(at: 0)
-  await drainAdaptiveTasks()
+  let releaseDeadline = clock.now.advanced(by: .seconds(2))
+  while fixture.inference.completedReleaseCount == 0, clock.now < releaseDeadline {
+    try Task.checkCancellation()
+    let remaining = clock.now.duration(to: releaseDeadline)
+    try await Task.sleep(for: min(.milliseconds(1), remaining))
+  }
+  try #require(
+    fixture.inference.completedReleaseCount > 0,
+    "Timed out waiting for backend release completion"
+  )
   await fixture.wrapper.releaseResources()
 
   #expect(fixture.inference.releaseCount == 1)

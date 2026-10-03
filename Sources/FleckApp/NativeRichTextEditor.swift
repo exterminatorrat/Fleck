@@ -4,6 +4,18 @@
   import FleckCore
   import SwiftUI
 
+  @MainActor
+  enum EditorCanvasInk {
+    static func canvasColor(for textView: NSTextView) -> NSColor {
+      var color = NSColor.textBackgroundColor
+      textView.effectiveAppearance.performAsCurrentDrawingAppearance {
+        color = (textView.drawsBackground ? textView.backgroundColor : .textBackgroundColor)
+          .usingColorSpace(.sRGB) ?? .white
+      }
+      return color
+    }
+  }
+
   private func editorTextExactlyMatches(_ lhs: String, _ rhs: String) -> Bool {
     lhs.utf16.elementsEqual(rhs.utf16)
   }
@@ -858,8 +870,14 @@
   }
 
   private final class NoteTitleCell: NSTextFieldCell {
-    var accentColor: NSColor = .controlAccentColor {
-      didSet { fieldEditor?.insertionPointColor = accentColor }
+    var accentColor: NSColor = FleckThemeSnapshot.initial.nsColor(.focusRing) {
+      didSet { updateCaretColor() }
+    }
+    var canvasColor: NSColor = .textBackgroundColor {
+      didSet { updateCaretColor() }
+    }
+    var titleTextColor: NSColor = .labelColor {
+      didSet { fieldEditor?.textColor = titleTextColor }
     }
     private let titleFieldEditor: NSTextView = {
       let editor = NoteTitleFieldEditor(frame: .zero)
@@ -880,7 +898,8 @@
           originalCaretColor = editor.insertionPointColor
           fieldEditor = editor
         }
-        editor.insertionPointColor = accentColor
+        editor.textColor = titleTextColor
+        updateCaretColor()
       }
       return editor
     }
@@ -898,6 +917,14 @@
       fieldEditor = nil
       originalCaretColor = nil
     }
+
+    private func updateCaretColor() {
+      fieldEditor?.insertionPointColor = FleckColorContrast.accessibleForeground(
+        accentColor,
+        against: canvasColor,
+        minimumContrast: 3
+      )
+    }
   }
 
   final class NativeEditorDocumentView: NSView {
@@ -905,18 +932,28 @@
 
     let titleField: NSTextField
     let textView: ListAwareTextView
-    var isPinned: Bool
+    private var canvasColor: NSColor?
+    private var titleTextColor: NSColor
 
     override var isFlipped: Bool { true }
+    override var isOpaque: Bool { true }
 
-    init(titleField: NSTextField, textView: ListAwareTextView, isPinned: Bool = false) {
+    init(
+      titleField: NSTextField,
+      textView: ListAwareTextView,
+      titleTextColor: NSColor = .labelColor,
+      canvasColor: NSColor? = nil
+    ) {
       self.titleField = titleField
       self.textView = textView
-      self.isPinned = isPinned
+      self.titleTextColor = titleTextColor
+      self.canvasColor = canvasColor
       super.init(frame: .zero)
+      wantsLayer = true
       autoresizingMask = [.width]
       addSubview(titleField)
       addSubview(textView)
+      updateCanvasColor()
     }
 
     @available(*, unavailable)
@@ -924,10 +961,47 @@
       fatalError("init(coder:) has not been implemented")
     }
 
+    override func updateLayer() {
+      updateCanvasColor()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+      super.viewDidChangeEffectiveAppearance()
+      updateCanvasColor()
+    }
+
+    func setCanvasColor(_ color: NSColor?, titleTextColor: NSColor) {
+      canvasColor = color
+      self.titleTextColor = titleTextColor
+      updateCanvasColor()
+    }
+
+    private func updateCanvasColor() {
+      var backgroundColor = NSColor.textBackgroundColor.cgColor
+      var resolvedCanvasColor = NSColor.textBackgroundColor
+      var resolvedTitleTextColor = titleTextColor
+      effectiveAppearance.performAsCurrentDrawingAppearance {
+        resolvedCanvasColor = (canvasColor ?? .textBackgroundColor)
+          .usingColorSpace(.sRGB) ?? .white
+        backgroundColor = resolvedCanvasColor.cgColor
+        resolvedTitleTextColor = FleckColorContrast.accessibleForeground(
+          titleTextColor,
+          against: resolvedCanvasColor
+        )
+      }
+      layer?.backgroundColor = backgroundColor
+      titleField.textColor = resolvedTitleTextColor
+      (titleField.currentEditor() as? NSTextView)?.textColor = resolvedTitleTextColor
+      if let titleCell = titleField.cell as? NoteTitleCell {
+        titleCell.titleTextColor = resolvedTitleTextColor
+        titleCell.canvasColor = resolvedCanvasColor
+      }
+    }
+
     func updateLayout(width: CGFloat, minimumHeight: CGFloat) {
       let width = max(0, width)
       let titleHeight = max(24, titleField.fittingSize.height)
-      let leadingCompensation = isPinned ? Self.nativeTitleTextInset : 0
+      let leadingCompensation = Self.nativeTitleTextInset
       let titleFrame = NSRect(
         x: 16 - leadingCompensation,
         y: 12,
@@ -1115,6 +1189,7 @@
   struct NativeRichTextEditor: NSViewRepresentable {
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.fleckThemeSnapshot) private var theme
 
     let text: String
     let richTextRTF: Data?
@@ -1126,9 +1201,6 @@
     let onChange: (String, Data?) -> Void
     let fontFamily: String
     let fontSize: Double
-    let textColorHex: String?
-    let backgroundColorHex: String?
-    let accentColorHex: String
     let reduceMotion: Bool
     let automaticLists: Bool
     let commands: EditorCommands
@@ -1151,9 +1223,9 @@
       onChange: @escaping (String, Data?) -> Void,
       fontFamily: String,
       fontSize: Double,
-      textColorHex: String?,
-      backgroundColorHex: String?,
-      accentColorHex: String,
+      textColorHex: String? = nil,
+      backgroundColorHex: String? = nil,
+      accentColorHex: String = AppPreferences.defaultAccentHex,
       reduceMotion: Bool,
       automaticLists: Bool,
       commands: EditorCommands,
@@ -1175,9 +1247,6 @@
       self.onChange = onChange
       self.fontFamily = fontFamily
       self.fontSize = fontSize
-      self.textColorHex = textColorHex
-      self.backgroundColorHex = backgroundColorHex
-      self.accentColorHex = accentColorHex
       self.reduceMotion = reduceMotion
       self.automaticLists = automaticLists
       self.commands = commands
@@ -1201,7 +1270,7 @@
 
       let titleField = NSTextField()
       let titleCell = NoteTitleCell(textCell: "")
-      titleCell.accentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
+      titleCell.accentColor = theme.nsColor(.focusRing)
       titleField.cell = titleCell
       titleField.placeholderString = "Note title"
       titleField.stringValue = title
@@ -1212,7 +1281,8 @@
       titleField.drawsBackground = false
       titleField.focusRingType = .none
       titleField.font = EditorTypography.titleNSFont(family: titleFontFamily)
-      titleField.textColor = isPinned ? .textColor : .labelColor
+      let titleTextColor = theme.nsColor(.textPrimary)
+      titleField.textColor = titleTextColor
       titleField.usesSingleLineMode = false
       titleField.cell?.wraps = false
       titleField.cell?.isScrollable = true
@@ -1255,15 +1325,18 @@
       textView.setAccessibilityLabel("Note body")
       loadContent(into: textView)
       textView.automaticLists = automaticLists
-      textView.checklistAccentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
+      textView.checklistAccentColor = theme.nsColor(.accent)
+      textView.checklistSecondaryColor = theme.nsColor(.textSecondary)
+      textView.noteLinkWarningColor = theme.nsColor(.warning)
       textView.reduceMotion = reduceMotion
       applyColors(to: textView)
-      Self.applyAccentAppearance(to: textView, accentColorHex: accentColorHex)
+      Self.applyAccentAppearance(to: textView, palette: theme.palette)
       configureNoteLinks(on: textView)
       let documentView = NativeEditorDocumentView(
         titleField: titleField,
         textView: textView,
-        isPinned: isPinned
+        titleTextColor: titleTextColor,
+        canvasColor: theme.nsColor(.editorOpaque)
       )
       scrollView.documentView = documentView
       documentView.autoresizingMask = [.width]
@@ -1328,22 +1401,26 @@
       textView.automaticLists = automaticLists
       textView.isEditable = isEnabled
       textView.isSelectable = isEnabled
-      textView.checklistAccentColor = NSColor(hex: accentColorHex) ?? .controlAccentColor
+      textView.checklistAccentColor = theme.nsColor(.accent)
+      textView.checklistSecondaryColor = theme.nsColor(.textSecondary)
+      textView.noteLinkWarningColor = theme.nsColor(.warning)
       textView.reduceMotion = reduceMotion
-      (documentView.titleField.cell as? NoteTitleCell)?.accentColor =
-        NSColor(hex: accentColorHex) ?? .controlAccentColor
+      (documentView.titleField.cell as? NoteTitleCell)?.accentColor = theme.nsColor(.focusRing)
+      let titleTextColor = theme.nsColor(.textPrimary)
       documentView.titleField.isEnabled = isEnabled
       documentView.titleField.setAccessibilityElement(isEnabled)
       documentView.titleField.font = EditorTypography.titleNSFont(family: titleFontFamily)
-      documentView.titleField.textColor = isPinned ? .textColor : .labelColor
-      documentView.isPinned = isPinned
       if documentView.titleField.stringValue != title {
         documentView.titleField.stringValue = title
       }
       textView.clearNoteLinkPresentation()
       let reloadedContent = applyExternalContentIfNeeded(to: textView, coordinator: context.coordinator)
       applyColors(to: textView)
-      Self.applyAccentAppearance(to: textView, accentColorHex: accentColorHex)
+      documentView.setCanvasColor(
+        theme.nsColor(.editorOpaque),
+        titleTextColor: titleTextColor
+      )
+      Self.applyAccentAppearance(to: textView, palette: theme.palette)
       configureNoteLinks(on: textView)
       if !reloadedContent,
         context.coordinator.fontFamily != fontFamily
@@ -1362,7 +1439,7 @@
       textView.onOpenNoteLink = onOpenNoteLink
       textView.onUnavailableNoteLink = onUnavailableNoteLink
       textView.refreshNoteLinks(
-        accentColorHex: accentColorHex,
+        accentColorHex: theme.palette[.link],
         liveNoteIDs: liveNoteIDs
       )
     }
@@ -1544,11 +1621,15 @@
     }
 
     private func applyColors(to textView: NSTextView) {
-      Self.applyAppearance(
-        to: textView,
-        textColorHex: textColorHex,
-        backgroundColorHex: backgroundColorHex
-      )
+      Self.applyAppearance(to: textView, palette: theme.palette)
+    }
+
+    static func applyAppearance(to textView: NSTextView, palette: FleckThemePalette) {
+      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
+      let background = NSColor(hex: palette[.editorOpaque])!
+      textView.drawsBackground = true
+      textView.backgroundColor = background
+      applyDefaultForegroundColor(NSColor(hex: palette[.textPrimary])!, to: textView)
     }
 
     static func applyAppearance(
@@ -1557,23 +1638,46 @@
       backgroundColorHex: String?
     ) {
       (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
-      applyDefaultForegroundColor(
-        NSColor(hex: textColorHex) ?? .textColor,
-        to: textView
-      )
       if let background = NSColor(hex: backgroundColorHex) {
         textView.drawsBackground = true
         textView.backgroundColor = background
       } else {
         textView.drawsBackground = false
+        textView.backgroundColor = .textBackgroundColor
       }
+      let defaultForeground = backgroundColorHex == nil
+        ? NSColor.textColor
+        : FleckColorContrast.accessibleForeground(
+          .textColor,
+          against: EditorCanvasInk.canvasColor(for: textView)
+        )
+      applyDefaultForegroundColor(NSColor(hex: textColorHex) ?? defaultForeground, to: textView)
     }
 
     static func applyAccentAppearance(to textView: NSTextView, accentColorHex: String) {
       let accent = NSColor(hex: accentColorHex) ?? .controlAccentColor
-      textView.insertionPointColor = accent
+      let canvasColor = EditorCanvasInk.canvasColor(for: textView)
+      textView.insertionPointColor = FleckColorContrast.accessibleForeground(
+        accent,
+        against: canvasColor,
+        minimumContrast: 3
+      )
+      let selectionColor = accent.withAlphaComponent(0.35)
+      let selectionCanvas = FleckColorContrast.composite(selectionColor, over: canvasColor)
       var selectionAttributes = textView.selectedTextAttributes
-      selectionAttributes[.backgroundColor] = accent.withAlphaComponent(0.35)
+      selectionAttributes[.backgroundColor] = selectionColor
+      selectionAttributes[.foregroundColor] = FleckColorContrast.accessibleForeground(
+        accent,
+        against: selectionCanvas
+      )
+      textView.selectedTextAttributes = selectionAttributes
+    }
+
+    static func applyAccentAppearance(to textView: NSTextView, palette: FleckThemePalette) {
+      textView.insertionPointColor = NSColor(hex: palette[.focusRing])!
+      var selectionAttributes = textView.selectedTextAttributes
+      selectionAttributes[.backgroundColor] = NSColor(hex: palette[.selectionFill])!
+      selectionAttributes[.foregroundColor] = NSColor(hex: palette[.selectionText])!
       textView.selectedTextAttributes = selectionAttributes
     }
 
@@ -1664,7 +1768,7 @@
         richTextRTF = updatedRTF
         if let linkTextView = textView as? ListAwareTextView {
           linkTextView.refreshNoteLinks(
-            accentColorHex: parent.accentColorHex,
+            accentColorHex: parent.theme.palette[.link],
             liveNoteIDs: parent.liveNoteIDs
           )
         }
@@ -1746,7 +1850,13 @@
     var onUnavailableNoteLink: (() -> Void)?
     var inlineImageStore: InlineNoteImageStore?
     var onInlineImageError: ((String) -> Void)?
-    var checklistAccentColor = NSColor.controlAccentColor {
+    var checklistAccentColor = FleckThemeSnapshot.initial.nsColor(.accent) {
+      didSet { needsDisplay = true }
+    }
+    var checklistSecondaryColor = FleckThemeSnapshot.initial.nsColor(.textSecondary) {
+      didSet { needsDisplay = true }
+    }
+    var noteLinkWarningColor = FleckThemeSnapshot.initial.nsColor(.warning) {
       didSet { needsDisplay = true }
     }
     var reduceMotion = false
@@ -2118,7 +2228,10 @@
       needsDisplay = true
     }
 
-    func refreshNoteLinks(accentColorHex: String, liveNoteIDs: Set<UUID>) {
+    func refreshNoteLinks(
+      accentColorHex: String,
+      liveNoteIDs: Set<UUID>
+    ) {
       self.liveNoteIDs = liveNoteIDs
       clearNoteLinkPresentation()
       guard let layoutManager, let textContainer else { return }
@@ -2131,7 +2244,13 @@
         return
       }
       layoutManager.ensureLayout(for: textContainer)
-      let accent = NSColor(hex: accentColorHex) ?? .controlAccentColor
+      let canvasColor = EditorCanvasInk.canvasColor(for: self)
+      let rawAccent = NSColor(hex: accentColorHex) ?? .controlAccentColor
+      let accent = FleckColorContrast.accessibleForeground(rawAccent, against: canvasColor)
+      let unavailableLinkColor = FleckColorContrast.accessibleForeground(
+        noteLinkWarningColor,
+        against: canvasColor
+      )
       for link in links {
         let presentation = TemporaryNoteLinkPresentation(
           foregroundColor: temporaryAttributeSlices(
@@ -2145,7 +2264,7 @@
             layoutManager: layoutManager
           )
         )
-        let color = liveNoteIDs.contains(link.targetNoteID) ? accent : .systemOrange
+        let color = liveNoteIDs.contains(link.targetNoteID) ? accent : unavailableLinkColor
         layoutManager.addTemporaryAttribute(
           .foregroundColor,
           value: color,
@@ -2322,7 +2441,7 @@
         } else {
           ChecklistMarkerDrawing.drawOpen(
             in: rect,
-            strokeColor: .secondaryLabelColor,
+            strokeColor: checklistSecondaryColor,
             hoverColor: isHovered ? hoverColor : nil,
             opacity: opacity
           )

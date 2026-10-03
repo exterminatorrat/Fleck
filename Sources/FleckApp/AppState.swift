@@ -79,11 +79,23 @@
         if !preferences.showAgentUpdateBanners {
           agentBannerPresentation = nil
         }
+        if preferences.theme != oldValue.theme {
+          applyApplicationAppearance()
+        } else if preferences.colorTheme != oldValue.colorTheme {
+          refreshThemeSnapshot()
+        }
         if preferences != oldValue {
           persistenceGeneration += 1
         }
       }
     }
+    @Published private(set) var themeSnapshot = FleckThemeSnapshot.resolve(
+      colorTheme: .monochrome,
+      mode: .system,
+      systemAppearance: .light,
+      reduceTransparency: false,
+      increasedContrast: false
+    )
     @Published var saveError: String?
     @Published private(set) var selectedNoteFileReferences: [NoteFileReferencePresentation] = []
     @Published private(set) var noteFileReferenceError: String?
@@ -146,6 +158,7 @@
     private var persistenceTransactionWaiters: [CheckedContinuation<Void, Never>] = []
     private var initialLoadWaiters: [CheckedContinuation<Void, Never>] = []
     private var saveStatusResetTask: Task<Void, Never>?
+    private var themeSystemObserver: FleckThemeSystemObserver?
     private var agentConnectorStatusGeneration: UInt64 = 0
     private var pendingTrashNotes: [UUID: Note] = [:] {
       didSet {
@@ -265,6 +278,10 @@
           )
         }
       self.startupMigrationError = startupMigrationError
+      themeSystemObserver = FleckThemeSystemObserver { [weak self] in
+        self?.refreshThemeSnapshot()
+      }
+      applyApplicationAppearance()
       workspace.ensureNoteExists()
       Task {
         if let startupMigrationError {
@@ -295,6 +312,43 @@
         refreshAgentActivity()
         finishInitialLoad()
       }
+    }
+
+    func refreshThemeSnapshot() {
+      let systemAppearance = NSApplication.shared.effectiveAppearance
+      let appearance = systemAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        ? FleckThemeAppearance.dark
+        : FleckThemeAppearance.light
+      let candidate = FleckThemeSnapshot.resolve(
+        colorTheme: preferences.colorTheme,
+        mode: preferences.theme,
+        systemAppearance: appearance,
+        reduceTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency,
+        increasedContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast,
+        revision: themeSnapshot.revision
+      )
+      guard candidate != themeSnapshot else { return }
+      themeSnapshot = FleckThemeSnapshot.resolve(
+        colorTheme: preferences.colorTheme,
+        mode: preferences.theme,
+        systemAppearance: appearance,
+        reduceTransparency: candidate.reduceTransparency,
+        increasedContrast: candidate.increasedContrast,
+        revision: themeSnapshot.revision &+ 1
+      )
+    }
+
+    private func applyApplicationAppearance() {
+      let application = NSApplication.shared
+      switch preferences.theme {
+      case .system:
+        application.appearance = nil
+      case .light:
+        application.appearance = NSAppearance(named: .aqua)
+      case .dark:
+        application.appearance = NSAppearance(named: .darkAqua)
+      }
+      refreshThemeSnapshot()
     }
 
     convenience init(

@@ -47,6 +47,9 @@
     static let visualTrackInset: CGFloat = 3
 
     private var heldVisualKnobLength: CGFloat?
+    var knobColor = NSColor.secondaryLabelColor {
+      didSet { needsDisplay = true }
+    }
 
     override class var isCompatibleWithOverlayScrollers: Bool { true }
 
@@ -79,7 +82,7 @@
     override func drawKnob() {
       let rect = visualKnobRect
       guard !rect.isEmpty else { return }
-      NSColor.secondaryLabelColor.setFill()
+      knobColor.withAlphaComponent(0.7).setFill()
       NSBezierPath(
         roundedRect: rect,
         xRadius: Self.visualKnobWidth / 2,
@@ -105,16 +108,22 @@
   }
 
   struct AgentActivityScrollViewConfigurator: NSViewRepresentable {
+    @Environment(\.fleckThemeSnapshot) private var theme
+
     func makeNSView(context: Context) -> AgentActivityScrollViewConfigurationView {
-      AgentActivityScrollViewConfigurationView()
+      let view = AgentActivityScrollViewConfigurationView()
+      view.updateKnobColor(theme.nsColor(.textSecondary))
+      return view
     }
 
     func updateNSView(_ view: AgentActivityScrollViewConfigurationView, context: Context) {
-      view.configureScrollView()
+      view.updateKnobColor(theme.nsColor(.textSecondary))
     }
   }
 
   final class AgentActivityScrollViewConfigurationView: NSView {
+    private var knobColor = NSColor.secondaryLabelColor
+
     override func viewDidMoveToSuperview() {
       super.viewDidMoveToSuperview()
       configureScrollView()
@@ -139,10 +148,19 @@
       var scrollerInsets = scrollView.scrollerInsets
       scrollerInsets.right = 2
       scrollView.scrollerInsets = scrollerInsets
-      if !(scrollView.verticalScroller is AgentActivityScroller) {
-        scrollView.verticalScroller = AgentActivityScroller()
+      if let scroller = scrollView.verticalScroller as? AgentActivityScroller {
+        scroller.knobColor = knobColor
+      } else {
+        let scroller = AgentActivityScroller()
+        scroller.knobColor = knobColor
+        scrollView.verticalScroller = scroller
         scrollView.reflectScrolledClipView(scrollView.contentView)
       }
+    }
+
+    func updateKnobColor(_ color: NSColor) {
+      knobColor = color
+      configureScrollView()
     }
   }
 
@@ -207,6 +225,7 @@
 
   struct AgentActivityView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.fleckThemeSnapshot) private var theme
     let onOpenNote: (UUID) -> Void
     let onDismiss: () -> Void
     @State private var showsClearConfirmation = false
@@ -280,9 +299,11 @@
       VStack(alignment: .leading, spacing: 8) {
         HStack {
           Text(row.integrationName).font(.headline)
-          Text("· \(row.noteTitle)").foregroundStyle(.secondary)
+          Text("· \(row.noteTitle)").foregroundStyle(theme.color(.textSecondary))
           Spacer()
-          Text(row.timestamp, style: .relative).font(.caption).foregroundStyle(.secondary)
+          Text(row.timestamp, style: .relative)
+            .font(.caption)
+            .foregroundStyle(theme.color(.caption))
         }
         Text(row.operationDescription).font(.callout)
         patch("Before", row.beforeText)
@@ -308,7 +329,9 @@
 
     private func patch(_ label: String, _ text: String) -> some View {
       VStack(alignment: .leading, spacing: 2) {
-        Text(label).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+        Text(label)
+          .font(.caption.weight(.medium))
+          .foregroundStyle(theme.color(.caption))
         Text(text.isEmpty ? "—" : text)
           .font(.system(.caption, design: .monospaced))
           .textSelection(.enabled)

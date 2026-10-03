@@ -31,7 +31,89 @@
     #expect(hitRect.maxX == clamped.maxX)
   }
 
-  @Test @MainActor func completedChecklistMarkerContainsAccentFillAndWhiteCheck() throws {
+  @Test @MainActor func completedChecklistMarkerUsesContrastSafeRasterInk() throws {
+    let accents = [
+      NSColor(srgbRed: 0.12, green: 0.42, blue: 0.92, alpha: 1),
+      NSColor(srgbRed: 0.91, green: 0.91, blue: 0.92, alpha: 1),
+    ]
+
+    for accent in accents {
+      let representation = try #require(
+        NSBitmapImageRep(
+          bitmapDataPlanes: nil,
+          pixelsWide: 24,
+          pixelsHigh: 24,
+          bitsPerSample: 8,
+          samplesPerPixel: 4,
+          hasAlpha: true,
+          isPlanar: false,
+          colorSpaceName: .deviceRGB,
+          bitmapFormat: [.alphaFirst],
+          bytesPerRow: 0,
+          bitsPerPixel: 0
+        )
+      )
+      let context = try #require(NSGraphicsContext(bitmapImageRep: representation))
+      context.cgContext.clear(CGRect(x: 0, y: 0, width: 24, height: 24))
+      NSGraphicsContext.saveGraphicsState()
+      NSGraphicsContext.current = context
+      ChecklistMarkerDrawing.drawCompleted(
+        in: NSRect(x: 3, y: 3, width: 18, height: 18),
+        accentColor: accent,
+        flipped: false
+      )
+      context.flushGraphics()
+      NSGraphicsContext.restoreGraphicsState()
+
+      let checkmarkColor = ChecklistMarkerDrawing.checkmarkColor(for: accent)
+      let expectsLightInk = (checkmarkColor.usingColorSpace(.sRGB)?.redComponent ?? 0) > 0.5
+      var renderedCheckPixels = 0
+      for y in 0..<representation.pixelsHigh {
+        for x in 0..<representation.pixelsWide {
+          guard let color = representation.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+            color.alphaComponent > 0.5
+          else { continue }
+          if expectsLightInk,
+            color.redComponent > 0.90,
+            color.greenComponent > 0.90,
+            color.blueComponent > 0.90
+          {
+            renderedCheckPixels += 1
+          } else if !expectsLightInk,
+            color.redComponent < 0.10,
+            color.greenComponent < 0.10,
+            color.blueComponent < 0.10
+          {
+            renderedCheckPixels += 1
+          }
+        }
+      }
+
+      #expect(renderedCheckPixels > 3)
+      #expect(FleckColorContrast.contrastRatio(checkmarkColor, against: accent) >= 4.5)
+    }
+  }
+
+  @Test @MainActor func animatedChecklistCheckmarkUsesContrastSafeInk() throws {
+    for accent in [NSColor.darkGray, NSColor.lightGray] {
+      let overlay = ChecklistCompletionOverlay(
+        frame: NSRect(x: 0, y: 0, width: 18, height: 18),
+        accentColor: accent
+      )
+      let checkmarkLayer = try #require(
+        overlay.layer?.sublayers?.compactMap { $0 as? CAShapeLayer }.first
+      )
+      let strokeColor = try #require(checkmarkLayer.strokeColor)
+      let checkmarkColor = try #require(NSColor(cgColor: strokeColor))
+      let overlayFill = try #require(overlay.layer?.backgroundColor)
+      let fillColor = try #require(NSColor(cgColor: overlayFill))
+
+      #expect(FleckColorContrast.contrastRatio(checkmarkColor, against: accent) >= 4.5)
+      #expect(FleckColorContrast.contrastRatio(checkmarkColor, against: fillColor) >= 4.5)
+    }
+  }
+
+  @Test @MainActor func completedChecklistMarkerContainsAccentFillAndContrastSafeCheck() throws {
     let representation = try #require(
       NSBitmapImageRep(
         bitmapDataPlanes: nil,
@@ -51,15 +133,18 @@
     context.cgContext.clear(CGRect(x: 0, y: 0, width: 24, height: 24))
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = context
+    let accent = NSColor(calibratedRed: 0.12, green: 0.42, blue: 0.92, alpha: 1)
+    let checkmarkColor = ChecklistMarkerDrawing.checkmarkColor(for: accent)
     ChecklistMarkerDrawing.drawCompleted(
       in: NSRect(x: 3, y: 3, width: 18, height: 18),
-      accentColor: NSColor(calibratedRed: 0.12, green: 0.42, blue: 0.92, alpha: 1),
+      accentColor: accent,
       flipped: false
     )
     context.flushGraphics()
     NSGraphicsContext.restoreGraphicsState()
     var accentPixels = 0
-    var whitePixels = 0
+    var checkmarkPixels = 0
+    let expectsWhiteInk = (checkmarkColor.usingColorSpace(.sRGB)?.redComponent ?? 0) > 0.5
     for y in 0..<representation.pixelsHigh {
       for x in 0..<representation.pixelsWide {
         guard let color = representation.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else {
@@ -68,18 +153,27 @@
         if color.blueComponent > 0.70, color.redComponent < 0.40 {
           accentPixels += 1
         }
-        if color.redComponent > 0.90,
+        if color.alphaComponent > 0.50,
+          expectsWhiteInk,
+          color.redComponent > 0.90,
           color.greenComponent > 0.90,
-          color.blueComponent > 0.90,
-          color.alphaComponent > 0.50
+          color.blueComponent > 0.90
         {
-          whitePixels += 1
+          checkmarkPixels += 1
+        } else if color.alphaComponent > 0.50,
+          !expectsWhiteInk,
+          color.redComponent < 0.10,
+          color.greenComponent < 0.10,
+          color.blueComponent < 0.10
+        {
+          checkmarkPixels += 1
         }
       }
     }
 
     #expect(accentPixels > 80)
-    #expect(whitePixels > 3)
+    #expect(checkmarkPixels > 3)
+    #expect(FleckColorContrast.contrastRatio(checkmarkColor, against: accent) >= 4.5)
   }
 
   @Test @MainActor func emptyChecklistOpacityMultipliesTheWholeControl() throws {

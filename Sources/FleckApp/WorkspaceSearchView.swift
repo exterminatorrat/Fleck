@@ -7,7 +7,8 @@
   func workspaceSearchHighlightedAttributedString(
     _ text: String,
     query: String,
-    accent: Color
+    accent: Color,
+    underlineMatches: Bool = false
   ) -> AttributedString {
     let ranges = workspaceSearchHighlightRanges(in: text, query: query)
     guard !ranges.isEmpty else { return AttributedString(text) }
@@ -21,6 +22,9 @@
       }
       var match = AttributedString(String(text[range]))
       match.foregroundColor = accent
+      if underlineMatches {
+        match.underlineStyle = .single
+      }
       highlighted.append(match)
       cursor = range.upperBound
     }
@@ -632,6 +636,7 @@
   }
 
   struct WorkspaceSearchView: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     @ObservedObject var controller: WorkspaceSearchController
     let notes: [Note]
     let accent: Color
@@ -656,7 +661,8 @@
               .foregroundStyle(.secondary)
               .accessibilityHidden(true)
             TextField("Search notes", text: $controller.query)
-              .textFieldStyle(.roundedBorder)
+              .textFieldStyle(.plain)
+              .focusEffectDisabled()
               .focused($isQueryFocused)
               .accessibilityLabel("Search notes")
               .accessibilityHint("Search note titles and bodies")
@@ -753,20 +759,27 @@
                           workspaceSearchHighlightedAttributedString(
                             result.displayTitle,
                             query: controller.query,
-                            accent: accent
+                            accent: isSelected ? theme.color(.selectionText) : accent,
+                            underlineMatches: isSelected
                           )
                         )
                           .font(.body.weight(.semibold))
+                          .foregroundStyle(
+                            isSelected ? theme.color(.selectionText) : theme.color(.textPrimary)
+                          )
                           .lineLimit(1)
                         Text(
                           workspaceSearchHighlightedAttributedString(
                             result.snippet,
                             query: controller.query,
-                            accent: accent
+                            accent: isSelected ? theme.color(.selectionText) : accent,
+                            underlineMatches: isSelected
                           )
                         )
                           .font(.caption)
-                          .foregroundStyle(.secondary)
+                          .foregroundStyle(
+                            isSelected ? theme.color(.selectionText) : theme.color(.caption)
+                          )
                           .lineLimit(2)
                       }
                       .frame(maxWidth: .infinity, alignment: .leading)
@@ -774,7 +787,7 @@
                       .padding(.vertical, 6)
                       .background(
                         RoundedRectangle(cornerRadius: 6)
-                          .fill(isSelected ? Color.accentColor.opacity(0.14) : .clear)
+                          .fill(isSelected ? theme.color(.selectionFill) : .clear)
                       )
                     }
                     .buttonStyle(.plain)

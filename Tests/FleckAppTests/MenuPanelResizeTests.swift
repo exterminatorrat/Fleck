@@ -1328,7 +1328,7 @@ import Testing
   let screen = try #require(NSScreen.main)
   let initialFrame = CGRect(
     x: screen.visibleFrame.midX - 300,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: 600,
     height: 430
   )
@@ -1449,6 +1449,11 @@ import Testing
         window.orderOut(nil)
       }
       await settleResizeHost(host)
+      await withCheckedContinuation { continuation in
+        DispatchQueue.main.async {
+          continuation.resume()
+        }
+      }
       let startingFrame = window.frame
       let anchoredButtonFrame = try #require(geometryStore.cachedStatusButton?.screenFrame)
 
@@ -1481,8 +1486,16 @@ import Testing
       }
       if changesHeight { release.y -= heightDelta }
 
-      sendResizeMouseEvent(.leftMouseDown, at: mouseDown, to: window, number: eventNumber)
+      let mouseDownEventNumber = eventNumber
+      await withCheckedContinuation { continuation in
+        DispatchQueue.main.async {
+          sendResizeMouseEvent(
+            .leftMouseDown, at: mouseDown, to: window, number: mouseDownEventNumber)
+          continuation.resume()
+        }
+      }
       eventNumber += 1
+      try #require(controller.isTracking)
       sendResizeMouseEvent(.leftMouseDragged, atScreen: release, to: window, number: eventNumber)
       eventNumber += 1
       sendResizeMouseEvent(.leftMouseUp, atScreen: release, to: window, number: eventNumber)
@@ -1615,7 +1628,7 @@ import Testing
   let screen = try #require(NSScreen.main)
   let initialFrame = CGRect(
     x: screen.visibleFrame.midX - 300,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: 600,
     height: 430
   )
@@ -1648,13 +1661,24 @@ import Testing
     window.orderFront(nil)
     host.installIfNeeded()
     await settleResizeHost(host)
+    await withCheckedContinuation { continuation in
+      DispatchQueue.main.async {
+        continuation.resume()
+      }
+    }
     defer {
       host.uninstall()
       window.contentView = nil
       window.orderOut(nil)
     }
 
-    sendResizeMouseEvent(.leftMouseDown, at: CGPoint(x: 1, y: 200), to: window, number: 40)
+    await withCheckedContinuation { continuation in
+      DispatchQueue.main.async {
+        sendResizeMouseEvent(.leftMouseDown, at: CGPoint(x: 1, y: 200), to: window, number: 40)
+        continuation.resume()
+      }
+    }
+    try #require(controller.isTracking)
     let dragScreenPoint = window.convertPoint(toScreen: CGPoint(x: -19, y: 200))
     sendResizeMouseEvent(.leftMouseDragged, atScreen: dragScreenPoint, to: window, number: 41)
     #expect(controller.isTracking)
@@ -1678,7 +1702,7 @@ import Testing
   let screen = try #require(NSScreen.main)
   let initialFrame = CGRect(
     x: screen.visibleFrame.midX - 300,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: 600,
     height: 430
   )
@@ -1735,7 +1759,7 @@ import Testing
   for mutation in ResizeEndStatusMutation.allCases {
     let initialFrame = CGRect(
       x: screen.visibleFrame.midX - 300,
-      y: screen.visibleFrame.midY - 215,
+      y: (screen.visibleFrame.midY - 215).rounded(),
       width: 600,
       height: 430
     )
@@ -1815,7 +1839,7 @@ import Testing
       }
       let initialFrame = CGRect(
         x: screen.visibleFrame.midX - 300,
-        y: screen.visibleFrame.midY - 215,
+        y: (screen.visibleFrame.midY - 215).rounded(),
         width: 600,
         height: 430
       )
@@ -1899,7 +1923,7 @@ import Testing
   for side in [MenuPanelFixedSide.left, .right] {
     let initialFrame = CGRect(
       x: screen.visibleFrame.midX - 420,
-      y: screen.visibleFrame.midY - 215,
+      y: (screen.visibleFrame.midY - 215).rounded(),
       width: initialWidth,
       height: 430
     )
@@ -1997,7 +2021,7 @@ import Testing
   )
   let initialFrame = CGRect(
     x: buttonFrame.maxX - initialWidth + 60,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: initialWidth,
     height: 430
   )
@@ -2049,7 +2073,7 @@ import Testing
   )
   let initialFrame = CGRect(
     x: buttonFrame.maxX - 800,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: 800,
     height: 430
   )
@@ -2173,7 +2197,7 @@ import Testing
   )
   let initialFrame = CGRect(
     x: buttonFrame.maxX - 600,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: 600,
     height: 430
   )
@@ -2365,7 +2389,7 @@ import Testing
   let screen = try #require(NSScreen.main)
   let initialFrame = CGRect(
     x: screen.visibleFrame.midX - 300,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: 600,
     height: 430
   )
@@ -2993,7 +3017,7 @@ import Testing
   )
   let initialFrame = CGRect(
     x: buttonFrame.minX,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: initialWidth,
     height: 430
   )

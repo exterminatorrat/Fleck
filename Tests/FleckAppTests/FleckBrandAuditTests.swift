@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 
@@ -64,11 +65,14 @@ import Testing
 
   #expect(titleArea.contains("AgentActivityIndicator("))
   #expect(activityIndicator[mark.upperBound...].contains("Image(nsImage: mark)"))
+  #expect(!activityIndicator.contains("MCP"))
   #expect(activityIndicator.contains("case .missingPackagedResource:"))
   #expect(activityIndicator.contains("Text(\"!\")"))
-  #expect(activityIndicator.contains(".foregroundStyle(.red)"))
+  #expect(activityIndicator.contains(".foregroundStyle(theme.color(.error))"))
+  #expect(!activityIndicator.contains(".foregroundStyle(.red)"))
   #expect(!titleArea.contains("Text(\"Fleck\")"))
   #expect(!titleArea.contains(".accessibilityLabel(\"Fleck\")"))
+  #expect(activityIndicator.contains("Button(action: action)"))
   #expect(activityIndicator.contains(".accessibilityLabel(presentation.state.accessibilityLabel)"))
   #expect(activityIndicator.contains(".accessibilityHint(\"Open Agent Activity\")"))
 }
@@ -121,6 +125,48 @@ import Testing
   case .missingPackagedResource:
     Issue.record("The canonical Fleck mark should load for the header")
   }
+}
+
+@Test @MainActor
+func canonicalFleckMarkUsesRetinaResolutionWithSafeTemplateMargins() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let markURL = root.appendingPathComponent("Assets/fleck-mark.png")
+  let representation = try #require(
+    NSBitmapImageRep(data: Data(contentsOf: markURL))
+  )
+
+  #expect(representation.pixelsWide == 54)
+  #expect(representation.pixelsHigh == 54)
+
+  var minX = representation.pixelsWide
+  var maxX = -1
+  var minY = representation.pixelsHigh
+  var maxY = -1
+  for y in 0..<representation.pixelsHigh {
+    for x in 0..<representation.pixelsWide {
+      let color = try #require(
+        representation.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+      )
+      guard color.alphaComponent > 0 else { continue }
+      minX = min(minX, x)
+      maxX = max(maxX, x)
+      minY = min(minY, y)
+      maxY = max(maxY, y)
+      #expect(color.redComponent == 0)
+      #expect(color.greenComponent == 0)
+      #expect(color.blueComponent == 0)
+    }
+  }
+
+  #expect(minX >= 2)
+  #expect(representation.pixelsWide - 1 - maxX >= 2)
+  #expect(minY >= 3)
+  #expect(representation.pixelsHigh - 1 - maxY >= 3)
+  #expect(maxX - minX + 1 >= 48)
+  #expect(maxY - minY + 1 >= 46)
 }
 
 @Test @MainActor

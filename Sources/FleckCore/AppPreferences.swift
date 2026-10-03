@@ -4,9 +4,14 @@ public enum AppTheme: String, Codable, CaseIterable, Sendable {
   case system, light, dark
 }
 
+public enum FleckChromeAppearance: String, Codable, CaseIterable, Sendable {
+  case solid, glass
+}
+
 public struct AppPreferences: Codable, Equatable, Sendable {
   public static let currentEditorTypographyVersion = 1
   public static let currentPanelSizingVersion = 2
+  public static let defaultAccentHex = "#6B6B70"
 
   public var fontFamily: String
   public var fontSize: Double
@@ -16,6 +21,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   public var editorBackgroundHex: String?
   public var panelOpacity: Double
   public var theme: AppTheme
+  public var colorTheme: FleckColorTheme
+  public var chromeAppearance: FleckChromeAppearance
   public var panelWidth: Double
   public var panelHeight: Double
   public var panelSizingVersion: Int
@@ -41,14 +48,18 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   public var dictationCapsuleEnabled: Bool
   public var showDictationShortcutGuide: Bool
   public var dictationMicrophoneUID: String?
+  public var pinnedLocalModelKeys: [String]
   public var onboardingProgress: OnboardingProgress?
 
   public init(
     fontFamily: String = "Avenir Next", fontSize: Double = 17,
     editorTypographyVersion: Int = AppPreferences.currentEditorTypographyVersion,
-    accentHex: String = "#7C6CF2", editorTextHex: String? = nil,
+    accentHex: String = AppPreferences.defaultAccentHex, editorTextHex: String? = nil,
     editorBackgroundHex: String? = nil, panelOpacity: Double = 0.82,
-    theme: AppTheme = .system, panelWidth: Double = 800, panelHeight: Double = 430,
+    theme: AppTheme = .system,
+    colorTheme: FleckColorTheme = .monochrome,
+    chromeAppearance: FleckChromeAppearance = .solid,
+    panelWidth: Double = 800, panelHeight: Double = 430,
     panelSizingVersion: Int = AppPreferences.currentPanelSizingVersion,
     pinnedPanelWidth: Double = 800, pinnedPanelHeight: Double = 430,
     showFormattingBar: Bool = true, showAgentUpdateBanners: Bool = true,
@@ -64,6 +75,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     dictationCapsuleEnabled: Bool = true,
     showDictationShortcutGuide: Bool = true,
     dictationMicrophoneUID: String? = nil,
+    pinnedLocalModelKeys: [String] = [],
     onboardingProgress: OnboardingProgress? = nil
   ) {
     self.fontFamily = fontFamily
@@ -74,6 +86,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     self.editorBackgroundHex = editorBackgroundHex
     self.panelOpacity = panelOpacity
     self.theme = theme
+    self.colorTheme = colorTheme
+    self.chromeAppearance = chromeAppearance
     self.panelWidth = Self.clampedPanelDimension(panelWidth, minimum: 380)
     self.panelHeight = Self.clampedPanelDimension(panelHeight, minimum: 300)
     self.panelSizingVersion = panelSizingVersion
@@ -97,21 +111,28 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     self.dictationCapsuleEnabled = dictationCapsuleEnabled
     self.showDictationShortcutGuide = showDictationShortcutGuide
     self.dictationMicrophoneUID = dictationMicrophoneUID
+    self.pinnedLocalModelKeys = Array(Set(pinnedLocalModelKeys)).sorted()
     self.onboardingProgress = onboardingProgress
   }
 
   private enum CodingKeys: String, CodingKey {
     case fontFamily, fontSize, editorTypographyVersion, accentHex, editorTextHex,
-      editorBackgroundHex, panelOpacity, theme, panelWidth, panelHeight, panelSizingVersion,
+      editorBackgroundHex, panelOpacity, theme, colorTheme, chromeAppearance, panelWidth, panelHeight, panelSizingVersion,
       pinnedPanelWidth, pinnedPanelHeight, showFormattingBar, showAgentUpdateBanners,
       isUnfiledCompact, confirmBeforeMovingNotesToTrash, automaticLists,
       launchAtLogin, shortcuts, dictationSpeechEngine,
       legacyDictationShortcut = "dictationShortcut", dictationModifierKey,
       dictationCapsuleDock, dictationHistoryEnabled, dictationCapsuleEnabled,
-      showDictationShortcutGuide, dictationMicrophoneUID, onboardingProgress
+      showDictationShortcutGuide, dictationMicrophoneUID, pinnedLocalModelKeys,
+      onboardingProgress
   }
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
+    let decodedChromeAppearance = try c.decodeIfPresent(
+      FleckChromeAppearance.self,
+      forKey: .chromeAppearance
+    )
+    let decodedAccentHex = try c.decodeIfPresent(String.self, forKey: .accentHex)
     let decodedFamily =
       try c.decodeIfPresent(String.self, forKey: .fontFamily)
       ?? "Avenir Next"
@@ -184,11 +205,13 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       fontSize: migratesUntouchedTypography ? 17 : decodedSize,
       editorTypographyVersion:
         decodedTypographyVersion ?? Self.currentEditorTypographyVersion,
-      accentHex: try c.decodeIfPresent(String.self, forKey: .accentHex) ?? "#7C6CF2",
+      accentHex: decodedAccentHex ?? Self.defaultAccentHex,
       editorTextHex: try c.decodeIfPresent(String.self, forKey: .editorTextHex),
       editorBackgroundHex: try c.decodeIfPresent(String.self, forKey: .editorBackgroundHex),
       panelOpacity: try c.decodeIfPresent(Double.self, forKey: .panelOpacity) ?? 0.82,
       theme: try c.decodeIfPresent(AppTheme.self, forKey: .theme) ?? .system,
+      colorTheme: try c.decodeIfPresent(FleckColorTheme.self, forKey: .colorTheme) ?? .monochrome,
+      chromeAppearance: decodedChromeAppearance ?? .solid,
       panelWidth: resolvedPanelWidth,
       panelHeight: resolvedPanelHeight,
       panelSizingVersion: max(
@@ -230,6 +253,10 @@ public struct AppPreferences: Codable, Equatable, Sendable {
         forKey: .showDictationShortcutGuide
       ) ?? true,
       dictationMicrophoneUID: try c.decodeIfPresent(String.self, forKey: .dictationMicrophoneUID),
+      pinnedLocalModelKeys: try c.decodeIfPresent(
+        [String].self,
+        forKey: .pinnedLocalModelKeys
+      ) ?? [],
       onboardingProgress: try c.decodeIfPresent(
         OnboardingProgress.self,
         forKey: .onboardingProgress

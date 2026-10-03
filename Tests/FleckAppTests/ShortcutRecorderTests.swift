@@ -533,7 +533,7 @@
     #expect(!settingsSource.contains("Set the key combination used to"))
     #expect(
       settingsSource.contains(
-        "Click a shortcut and press the complete chord. Conflicting combinations are highlighted and disabled shortcuts can be restored at any time."
+        "Click a shortcut, then press the key combination. Conflicts are highlighted. Restore brings back the default shortcut."
       )
     )
     #expect(settingsSource.contains("setShortcutEnabled"))

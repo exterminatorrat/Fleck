@@ -38,8 +38,27 @@ struct FormattingToolbarHoverTests {
     #expect(marker.contains(".frame(width: 28, height: 26)"))
     #expect(marker.contains(".contentShape(RoundedRectangle(cornerRadius: 5))"))
     #expect(icon.contains(".frame(width: 28, height: 26)"))
-    #expect(icon.contains("isActive ? Color.accentColor.opacity(0.24) : .clear"))
+    #expect(icon.contains("isActive ? theme.color(.selectionFill) : .clear"))
     #expect(icon.contains(".contentShape(RoundedRectangle(cornerRadius: 5))"))
+  }
+
+  @Test func fontSizeFieldUsesNeutralKeyboardFocusStyling() throws {
+    let source = try notesPanelSource()
+    let field = try #require(
+      source.components(separatedBy: "private func fontSizeField(").last?
+        .components(separatedBy: "private var isFontTitleTarget").first
+    )
+
+    #expect(field.contains(".textFieldStyle(.plain)"))
+    #expect(field.contains(".focusEffectDisabled()"))
+    #expect(field.contains(".focused($isFontSizeFocused)"))
+    #expect(field.contains(".fleckNeutralControlOutline("))
+    #expect(field.contains("isFocused: isFontSizeFocused"))
+    #expect(field.contains("idleOpacity: 0.22"))
+    #expect(!field.contains(".textFieldStyle(.roundedBorder)"))
+    #expect(field.contains(".onSubmit { applyFontSizeText(targetNoteID: targetNoteID) }"))
+    #expect(field.contains("if wasFocused && !isFocused {"))
+    #expect(field.contains("applyFontSizeText(targetNoteID: targetNoteID)"))
   }
 
   private func notesPanelSource() throws -> String {

@@ -5,6 +5,28 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      own_window_capture_probe:
+        description: >-
+          Run the supplemental hosted own-window capture probe; it does not replace
+          required CI.
+        required: false
+        type: boolean
+        default: false
+      folder_navigator_probe:
+        description: >-
+          Run the supplemental folder navigator diagnostic suites; normal full-graph
+          jobs remain unchanged.
+        required: false
+        type: boolean
+        default: false
+      folder_navigator_recording:
+        description: >-
+          Record native folder field diagnostics in supplemental folder navigator
+          probes only; this does not request product or screen-capture access.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -37,9 +59,24 @@ jobs:
           python3 -B -m unittest discover -s Tests/Scripts -p test_build_identity.py
           python3 -B Scripts/fleck-build-identity.py check
       - name: Test ordinary graph
+        env:
+          FLECK_NATIVE_CAPTURE_QA: "0"
         run: |
           unset FLECK_ENHANCED_CANDIDATE
           Scripts/run-nonempty-swift-tests.sh '^.+$'
+      - name: Declare native capture boundary (ordinary graph)
+        if: always()
+        run: |
+          message='Strict native screenshot/pixel capture: NOT RUN in GitHub-hosted CI (FLECK_NATIVE_CAPTURE_QA=0).
+          The strict case requires separate native-QA artifact and status-receipt evidence.
+          Passing CI does not prove this case ran; this workflow does not claim full native screenshot coverage.
+          All other full-graph selectors and assertions remain enabled.'
+          printf '%s\n' "$message"
+          {
+            printf '## Native screenshot capture boundary\n\n'
+            printf '%s\n\n' "$message"
+            printf '%s\n' 'Separate native-QA output must include the PNGs and console status receipt.'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Build Fleck release product
         run: |
           unset FLECK_ENHANCED_CANDIDATE
@@ -91,9 +128,24 @@ jobs:
       - name: Verify Enhanced Local candidate pin
         run: Scripts/test-enhanced-candidate-pin.sh
       - name: Test Enhanced Local candidate graph
+        env:
+          FLECK_NATIVE_CAPTURE_QA: "0"
         run: |
           Scripts/run-nonempty-enhanced-tests.sh '^.+$'
           git diff --exit-code -- Package.resolved
+      - name: Declare native capture boundary (candidate graph)
+        if: always()
+        run: |
+          message='Strict native screenshot/pixel capture: NOT RUN in GitHub-hosted CI (FLECK_NATIVE_CAPTURE_QA=0).
+          The strict case requires separate native-QA artifact and status-receipt evidence.
+          Passing CI does not prove this case ran; this workflow does not claim full native screenshot coverage.
+          All other full-graph selectors and assertions remain enabled.'
+          printf '%s\n' "$message"
+          {
+            printf '## Native screenshot capture boundary\n\n'
+            printf '%s\n\n' "$message"
+            printf '%s\n' 'Separate native-QA output must include the PNGs and console status receipt.'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Preserve ordinary lock from a foreign working directory
         run: |
           Scripts/test-enhanced-candidate-lock-preservation.sh
@@ -101,4 +153,123 @@ jobs:
       - name: Reject candidate release
         run: |
           Scripts/check-candidate-release-rejected.sh
+          git diff --exit-code -- Package.resolved
+
+  own-window-capture-probe:
+    name: Supplemental own-window capture probe
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.own_window_capture_probe }}
+    runs-on: macos-26
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository (actions/checkout v6.0.2, without credentials)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Prepare diagnostic output directory
+        run: |
+          FLECK_GLASS_SYNTHETIC_CAPTURE_DIR="$RUNNER_TEMP/fleck-own-window-capture-probe/captures"
+          mkdir -p \
+            "$RUNNER_TEMP/fleck-own-window-capture-probe" \
+            "$FLECK_GLASS_SYNTHETIC_CAPTURE_DIR"
+          printf 'FLECK_GLASS_SYNTHETIC_CAPTURE_DIR=%s\n' \
+            "$FLECK_GLASS_SYNTHETIC_CAPTURE_DIR" >> "$GITHUB_ENV"
+      - name: Log diagnostic metadata
+        run: |
+          set -o pipefail
+          {
+            printf 'Git commit SHA: '
+            git rev-parse --verify HEAD
+            printf 'Runner image: GitHub-hosted macos-26\n'
+            sw_vers
+            xcodebuild -version
+            swift --version
+          } 2>&1 | tee "$RUNNER_TEMP/fleck-own-window-capture-probe/console.log"
+      - name: Run exact own-window capture capability probe
+        run: |
+          set -o pipefail
+          Scripts/run-nonempty-swift-tests.sh \
+            '^FleckAppTests\.hostedOwnWindowCaptureCapabilityProbe\(\)$' 2>&1 |
+            tee -a "$RUNNER_TEMP/fleck-own-window-capture-probe/console.log"
+      - name: Verify expected probe artifact files
+        if: ${{ always() }}
+        run: |
+          test -s "$RUNNER_TEMP/fleck-own-window-capture-probe/console.log"
+          test -s "$FLECK_GLASS_SYNTHETIC_CAPTURE_DIR/glass.png"
+          test -s "$FLECK_GLASS_SYNTHETIC_CAPTURE_DIR/solid.png"
+      - name: Upload own-window capture diagnostics (actions/upload-artifact v7.0.1)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: own-window-capture-probe
+          path: |
+            ${{ runner.temp }}/fleck-own-window-capture-probe/console.log
+            ${{ runner.temp }}/fleck-own-window-capture-probe/captures/
+          if-no-files-found: error
+
+  folder-navigator-diagnostic:
+    name: Supplemental folder navigator diagnostic (ordinary)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe }}
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC: ${{ inputs.folder_navigator_recording && '1' || '0' }}
+    steps:
+      - name: Check out repository (actions/checkout v6.0.2, without credentials)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Verify dispatched source pin
+        run: |
+          source_commit="$(git rev-parse --verify 'HEAD^{commit}')"
+          test "$source_commit" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          printf 'Source commit: %s\n' "$source_commit"
+          printf 'Source tree: %s\n' "$(git rev-parse --verify 'HEAD^{tree}')"
+      - name: Install and verify ripgrep
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            brew install ripgrep
+          fi
+          rg --version
+      - name: Run folder navigator diagnostic tests (ordinary graph)
+        run: |
+          unset FLECK_ENHANCED_CANDIDATE
+          Scripts/run-nonempty-swift-tests.sh '^.*FolderNavigatorPresentationTests.*$'
+
+  folder-navigator-diagnostic-enhanced:
+    name: Supplemental folder navigator diagnostic (Enhanced)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe }}
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC: ${{ inputs.folder_navigator_recording && '1' || '0' }}
+    steps:
+      - name: Check out repository (actions/checkout v6.0.2, without credentials)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Verify dispatched source pin
+        run: |
+          source_commit="$(git rev-parse --verify 'HEAD^{commit}')"
+          test "$source_commit" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          printf 'Source commit: %s\n' "$source_commit"
+          printf 'Source tree: %s\n' "$(git rev-parse --verify 'HEAD^{tree}')"
+      - name: Install and verify ripgrep
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            brew install ripgrep
+          fi
+          rg --version
+      - name: Verify Enhanced Local candidate pin
+        run: Scripts/test-enhanced-candidate-pin.sh
+      - name: Run folder navigator diagnostic tests (Enhanced graph)
+        run: |
+          Scripts/run-nonempty-enhanced-tests.sh '^.*FolderNavigatorPresentationTests.*$'
           git diff --exit-code -- Package.resolved
