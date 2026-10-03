@@ -826,7 +826,13 @@ func WorkspaceSearchHostingRestoresTheTargetEditorAfterCrossNoteActivation()
   searchController.present(for: originalID)
   await settleWorkspaceSearchHost(host)
   searchController.setQuery("Target", in: state.workspace.notes)
-  await settleWorkspaceSearchHost(host)
+  try #require(
+    await waitForWorkspaceSearchHostState(host) {
+      searchController.resultsAreCurrent
+        && searchController.results.map(\.noteID) == [target.id]
+    },
+    "Timed out waiting for the target search result to publish"
+  )
   #expect(searchController.results.map(\.noteID) == [target.id])
 
   var activations: [UUID] = []
@@ -840,7 +846,21 @@ func WorkspaceSearchHostingRestoresTheTargetEditorAfterCrossNoteActivation()
       }
     )
   )
-  await settleWorkspaceSearchHost(host)
+  try #require(
+    await waitForWorkspaceSearchHostState(host) {
+      guard state.workspace.selectedNoteID == target.id,
+        !searchController.isPresented,
+        let targetEditor = hostedWorkspaceSearchDescendants(
+          in: host,
+          as: ListAwareTextView.self
+        ).first(where: { $0.string == target.body })
+      else {
+        return false
+      }
+      return window.firstResponder === targetEditor
+    },
+    "Timed out waiting for the activated note's editor to regain focus"
+  )
 
   #expect(activations == [target.id])
   #expect(state.workspace.selectedNoteID == target.id)
@@ -1239,7 +1259,13 @@ func WorkspaceSearchHostingActivatesNamedFolderResultThroughProductionScope()
   searchController.present(for: unfiled.id)
   await settleWorkspaceSearchHost(host)
   searchController.setQuery(target.title, in: state.workspace.notes)
-  await settleWorkspaceSearchHost(host)
+  try #require(
+    await waitForWorkspaceSearchHostState(host) {
+      searchController.resultsAreCurrent
+        && searchController.results.map(\.noteID) == [target.id]
+    },
+    "Timed out waiting for the named-folder search result to publish"
+  )
   #expect(searchController.results.map(\.noteID) == [target.id])
   let queryField = try #require(
     hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
@@ -1261,7 +1287,22 @@ func WorkspaceSearchHostingActivatesNamedFolderResultThroughProductionScope()
     )
   )
   window.sendEvent(returnEvent)
-  await settleWorkspaceSearchHost(host)
+  try #require(
+    await waitForWorkspaceSearchHostState(host) {
+      guard state.workspace.selectedNoteID == target.id,
+        !searchController.isPresented,
+        let targetEditor = hostedWorkspaceSearchDescendants(
+          in: host,
+          as: ListAwareTextView.self
+        ).first(where: { $0.string == target.body })
+      else {
+        return false
+      }
+      return commands.textView === targetEditor
+        && window.firstResponder === targetEditor
+    },
+    "Timed out waiting for Return activation to restore the target editor"
+  )
 
   #expect(state.workspace.selectedNoteID == target.id)
   #expect(state.folderID(for: target.id) == work.id)
@@ -1598,6 +1639,23 @@ private func settleWorkspaceSearchHost(_ view: NSView) async {
   for _ in 0..<40 {
     view.layoutSubtreeIfNeeded()
     await Task.yield()
+  }
+}
+
+@MainActor
+private func waitForWorkspaceSearchHostState(
+  _ view: NSView,
+  until condition: @MainActor () -> Bool
+) async throws -> Bool {
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: .seconds(2))
+  while true {
+    try Task.checkCancellation()
+    view.layoutSubtreeIfNeeded()
+    if condition() { return true }
+    let now = clock.now
+    guard now < deadline else { return false }
+    try await Task.sleep(for: min(.milliseconds(10), now.duration(to: deadline)))
   }
 }
 

@@ -15,6 +15,13 @@ readonly fixture_scripts="$fixture_root/Scripts"
 readonly fixture_bin="$temp_root/bin"
 readonly fixture_state="$temp_root/state"
 readonly foreign_root="$temp_root/foreign"
+readonly app_resource_source="$script_dir/../Sources/FleckApp/Resources"
+readonly candidate_resource_names=(
+  EnhancedModelManifest.json
+  GemmaCleanupModelManifest.json
+  GemmaCleanupNotice.md
+  ThirdPartyNotices.md
+)
 decoy_pid=''
 
 cleanup() {
@@ -42,9 +49,15 @@ done
 /bin/mkdir -p "$fixture_scripts" "$fixture_bin" "$fixture_state" "$foreign_root" \
   "$fixture_root/Tests/Support" \
   "$fixture_state/platform/Developer/Library/Frameworks/Testing.framework" \
-  "$fixture_state/sdk"
+  "$fixture_state/sdk" "$fixture_state/app-resource-source"
 /bin/cp "$ordinary_runner" "$enhanced_runner" "$appkit_runner" "$fixture_scripts/"
 /bin/cp "$appkit_host_source" "$fixture_root/Tests/Support/"
+for resource_name in "${candidate_resource_names[@]}"; do
+  [[ -f "$app_resource_source/$resource_name" && ! -L "$app_resource_source/$resource_name" ]] ||
+    fail "required App resource is missing or unsafe: $resource_name"
+  /bin/cp "$app_resource_source/$resource_name" \
+    "$fixture_state/app-resource-source/$resource_name"
+done
 printf '// fixture package\n' > "$fixture_root/Package.swift"
 printf 'ordinary root lock\n' > "$fixture_root/Package.resolved"
 
@@ -113,6 +126,40 @@ if [ "${1:-}" = build ] && [ "${2:-}" = --build-tests ]; then
       printf '%s\n' 'fake second test bundle' > "$second/OtherPackageTests"
       /bin/chmod +x "$second/OtherPackageTests"
     fi
+  fi
+  if [ "${FLECK_ENHANCED_CANDIDATE:-}" = 1 ] &&
+    [ "${FAKE_CANDIDATE_RESOURCE_BUNDLE_MISSING:-0}" != 1 ]; then
+    candidate_bundle="$FAKE_STATE/bin/Fleck_FleckApp.bundle"
+    if [ "${FAKE_CANDIDATE_RESOURCE_BUNDLE_SYMLINK:-0}" = 1 ]; then
+      candidate_bundle_target="$FAKE_STATE/candidate-resource-bundle-target"
+      /bin/rm -rf "$candidate_bundle_target"
+      /bin/mkdir -p "$candidate_bundle_target"
+      candidate_bundle_output="$candidate_bundle_target"
+    else
+      /bin/mkdir -p "$candidate_bundle"
+      candidate_bundle_output="$candidate_bundle"
+    fi
+    for resource_name in EnhancedModelManifest.json \
+      GemmaCleanupModelManifest.json GemmaCleanupNotice.md ThirdPartyNotices.md; do
+      if [ "${FAKE_CANDIDATE_RESOURCE_MISSING:-}" = "$resource_name" ]; then
+        continue
+      fi
+      if [ "${FAKE_CANDIDATE_RESOURCE_SYMLINK:-}" = "$resource_name" ]; then
+        /bin/ln -s "$FAKE_STATE/app-resource-source/$resource_name" \
+          "$candidate_bundle_output/$resource_name"
+      else
+        /bin/cp "$FAKE_STATE/app-resource-source/$resource_name" \
+          "$candidate_bundle_output/$resource_name"
+      fi
+    done
+    if [ "${FAKE_CANDIDATE_RESOURCE_EXTRA:-0}" = 1 ]; then
+      printf '%s\n' 'unrequested model data' > "$candidate_bundle_output/weights.safetensors"
+    fi
+    if [ "${FAKE_CANDIDATE_RESOURCE_BUNDLE_SYMLINK:-0}" = 1 ]; then
+      /bin/ln -s "$candidate_bundle_output" "$candidate_bundle"
+    fi
+    printf '%s\n' 'unpackaged model weights' > "$FAKE_STATE/bin/model.safetensors"
+    printf '%s\n' 'unpackaged helper executable' > "$FAKE_STATE/bin/gemma-cleanup-helper"
   fi
   exit "${FAKE_BUILD_EXIT:-0}"
 fi
@@ -401,6 +448,22 @@ case "${1:-}" in
       exit "$FAKE_CODESIGN_SIGN_EXIT"
     fi
     [[ -x "$app_path/Contents/MacOS/AppKitTestHost" ]] || exit 98
+    if [ "${FLECK_ENHANCED_CANDIDATE:-}" = 1 ]; then
+      candidate_bundle="$app_path/Contents/Resources/Fleck_FleckApp.bundle"
+      [[ -d "$candidate_bundle" && ! -L "$candidate_bundle" ]] || exit 101
+      [[ "$(/usr/bin/find "$app_path/Contents/Resources" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" = 1 && \
+        "$(/usr/bin/find "$candidate_bundle" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" = 4 ]] || exit 101
+      for resource_name in EnhancedModelManifest.json \
+        GemmaCleanupModelManifest.json GemmaCleanupNotice.md ThirdPartyNotices.md; do
+        [[ -f "$candidate_bundle/$resource_name" && ! -L "$candidate_bundle/$resource_name" ]] || exit 101
+        /usr/bin/cmp -s "$FAKE_STATE/bin/Fleck_FleckApp.bundle/$resource_name" \
+          "$candidate_bundle/$resource_name" || exit 101
+      done
+      [[ ! -e "$app_path/Contents/Resources/model.safetensors" && \
+        ! -e "$app_path/Contents/Resources/gemma-cleanup-helper" ]] || exit 101
+    else
+      [[ ! -e "$app_path/Contents/Resources" && ! -L "$app_path/Contents/Resources" ]] || exit 101
+    fi
     printf '%s\n' "$app_path" >> "$FAKE_STATE/signed-app-paths"
     printf '%s\n' 'ad-hoc fixture signature' > \
       "$app_path/Contents/.fixture-adhoc-signature"
@@ -519,6 +582,23 @@ bundle_id="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - \
   printf '%s\n' 'error: fake LaunchServices received an unsigned or unverified AppKit test host' >&2
   exit 97
 }
+if [ "${FLECK_ENHANCED_CANDIDATE:-}" = 1 ]; then
+  candidate_bundle="$app_path/Contents/Resources/Fleck_FleckApp.bundle"
+  [[ -d "$candidate_bundle" && ! -L "$candidate_bundle" ]] || {
+    printf '%s\n' 'error: fake LaunchServices received a candidate host without resources' >&2
+    exit 98
+  }
+  for resource_name in EnhancedModelManifest.json \
+    GemmaCleanupModelManifest.json GemmaCleanupNotice.md ThirdPartyNotices.md; do
+    [[ -f "$candidate_bundle/$resource_name" && ! -L "$candidate_bundle/$resource_name" ]] && \
+      /usr/bin/cmp -s "$FAKE_STATE/bin/Fleck_FleckApp.bundle/$resource_name" \
+        "$candidate_bundle/$resource_name" || {
+      printf 'error: fake LaunchServices received mismatched candidate resource: %s\n' \
+        "$resource_name" >&2
+      exit 98
+    }
+  done
+fi
 printf '%s\n' "$app_path" >> "$FAKE_STATE/host-app-paths"
 if [ -n "${FAKE_PRESERVE_HOST_APP_PATH:-}" ] &&
   [ ! -e "$FAKE_PRESERVE_HOST_APP_PATH" ]; then
@@ -706,6 +786,44 @@ assert_configured_host_rejected() {
   assert_root_lock
 }
 
+assert_candidate_resource_source_rejected() {
+  local expected_error="$1"
+  shift
+  reset_invocations
+  FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+    run_capture "$fixture_state/output" run_enhanced_with_controls \
+      '^FleckCoreTests\.known\(\)$' "$@"
+  assert_status 1
+  /usr/bin/grep -Fq -- "$expected_error" "$fixture_state/output" ||
+    fail "candidate SwiftPM resource bundle was not rejected with: $expected_error"
+  [[ ! -s "$fixture_state/codesign-invocations" && \
+    ! -s "$fixture_state/open-invocations" && \
+    ! -s "$fixture_state/host-app-paths" ]] ||
+    fail 'candidate SwiftPM resource rejection signed or launched an AppKit host'
+  assert_root_lock
+}
+
+assert_configured_candidate_host_rejected() {
+  local app_path="$1" expected_error="$2" temporary_host_app
+  reset_invocations
+  FLECK_TEST_APPKIT_HOST_APP_PATH="$app_path" \
+    FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+    run_capture "$fixture_state/output" run_enhanced \
+      '^FleckCoreTests\.known\(\)$'
+  assert_status 1
+  /usr/bin/grep -Fq -- "$expected_error" "$fixture_state/output" ||
+    fail "configured candidate AppKit host was not rejected with: $expected_error"
+  [[ ! -s "$fixture_state/open-invocations" && \
+    ! -s "$fixture_state/host-app-paths" ]] ||
+    fail 'LaunchServices received a configured candidate host before resource validation completed'
+  [[ "$(wc -l < "$fixture_state/codesign-invocations" | tr -d ' ')" -ge 2 ]] ||
+    fail 'configured candidate-host validation skipped signing or verifying the expected temporary helper'
+  temporary_host_app="$(/usr/bin/sed -n '1p' "$fixture_state/signed-app-paths")"
+  [[ -n "$temporary_host_app" && ! -e "$temporary_host_app" ]] ||
+    fail 'configured candidate-host rejection retained its owned temporary helper app'
+  assert_root_lock
+}
+
 assert_completion_error() {
   /usr/bin/grep -Fq \
     'error: Swift test exited successfully without a final non-empty passing test summary' \
@@ -760,6 +878,23 @@ run_enhanced() {
       FAKE_STATE="$fixture_state" \
       FAKE_ACTUAL_ROOT="$fixture_root" \
       "$fixture_scripts/run-nonempty-enhanced-tests.sh" "$@"
+  )
+}
+
+run_enhanced_with_controls() {
+  local identifier_regex="$1"
+  shift
+  (
+    cd "$foreign_root"
+    /usr/bin/env \
+      PATH="$fixture_bin:$PATH" \
+      FLECK_TEST_APPKIT_OPEN_PATH="$fixture_bin/open" \
+      FLECK_TEST_APPKIT_SAMPLE_PATH="$fixture_bin/sample" \
+      FLECK_TEST_APPKIT_CODESIGN_PATH="$fixture_bin/codesign" \
+      FAKE_STATE="$fixture_state" \
+      FAKE_ACTUAL_ROOT="$fixture_root" \
+      "$@" \
+      "$fixture_scripts/run-nonempty-enhanced-tests.sh" "$identifier_regex"
   )
 }
 
@@ -991,6 +1126,9 @@ assert_root_lock
 existing_host_app="$fixture_state/preserved-host.app"
 [[ -d "$existing_host_app" && ! -L "$existing_host_app" ]] ||
   fail 'fake LaunchServices did not preserve a reusable host app'
+[[ ! -e "$existing_host_app/Contents/Resources" && \
+  ! -L "$existing_host_app/Contents/Resources" ]] ||
+  fail 'ordinary test host unexpectedly contains candidate app resources'
 preserved_host_files=(
   "$existing_host_app/Contents/Info.plist"
   "$existing_host_app/Contents/MacOS/AppKitTestHost"
@@ -1686,5 +1824,99 @@ run_capture "$fixture_state/output" env \
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'real resolver accepted an existing scratch path'
 /bin/rm -rf -- "$fixture_state/existing-scratch"
 assert_root_lock
+
+assert_candidate_resource_source_rejected \
+  'candidate SwiftPM App resource bundle is missing or unsafe' \
+  FAKE_CANDIDATE_RESOURCE_BUNDLE_MISSING=1
+assert_candidate_resource_source_rejected \
+  'candidate SwiftPM App resource bundle is missing or unsafe' \
+  FAKE_CANDIDATE_RESOURCE_BUNDLE_SYMLINK=1
+assert_candidate_resource_source_rejected \
+  'candidate SwiftPM App resource bundle does not contain exactly the expected metadata documents' \
+  FAKE_CANDIDATE_RESOURCE_MISSING=ThirdPartyNotices.md
+assert_candidate_resource_source_rejected \
+  'candidate SwiftPM App resource bundle does not contain exactly the expected metadata documents' \
+  FAKE_CANDIDATE_RESOURCE_EXTRA=1
+assert_candidate_resource_source_rejected \
+  'candidate SwiftPM App resource document is missing or unsafe: ThirdPartyNotices.md' \
+  FAKE_CANDIDATE_RESOURCE_SYMLINK=ThirdPartyNotices.md
+
+reset_invocations
+FAKE_PRESERVE_HOST_APP_PATH="$fixture_state/candidate-preserved-host.app" \
+FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+  run_capture "$fixture_state/output" run_enhanced \
+    '^FleckCoreTests\.known\(\)$'
+assert_status 0
+candidate_preserved_host="$fixture_state/candidate-preserved-host.app"
+candidate_preserved_resource_bundle="$candidate_preserved_host/Contents/Resources/Fleck_FleckApp.bundle"
+[[ -d "$candidate_preserved_resource_bundle" && ! -L "$candidate_preserved_resource_bundle" ]] ||
+  fail 'candidate test host did not preserve the SwiftPM app resources'
+[[ "$(/usr/bin/find "$candidate_preserved_host/Contents/Resources" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" = 1 && \
+  "$(/usr/bin/find "$candidate_preserved_resource_bundle" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" = 4 ]] ||
+  fail 'candidate test host did not preserve exactly the four flat metadata documents'
+for resource_name in "${candidate_resource_names[@]}"; do
+  /usr/bin/cmp -s "$fixture_state/bin/Fleck_FleckApp.bundle/$resource_name" \
+    "$candidate_preserved_resource_bundle/$resource_name" ||
+    fail "candidate test host resource bytes differ from the SwiftPM output: $resource_name"
+done
+[[ ! -e "$candidate_preserved_resource_bundle/weights.safetensors" && \
+  ! -e "$candidate_preserved_host/Contents/Resources/model.safetensors" && \
+  ! -e "$candidate_preserved_host/Contents/Resources/gemma-cleanup-helper" ]] ||
+  fail 'candidate test host included model weights or a helper executable'
+candidate_preserved_host_files=(
+  "$candidate_preserved_host/Contents/Info.plist"
+  "$candidate_preserved_host/Contents/MacOS/AppKitTestHost"
+  "$candidate_preserved_host/Contents/.fixture-adhoc-signature"
+  "$candidate_preserved_resource_bundle/EnhancedModelManifest.json"
+  "$candidate_preserved_resource_bundle/GemmaCleanupModelManifest.json"
+  "$candidate_preserved_resource_bundle/GemmaCleanupNotice.md"
+  "$candidate_preserved_resource_bundle/ThirdPartyNotices.md"
+)
+/usr/bin/shasum -a 256 "${candidate_preserved_host_files[@]}" \
+  > "$fixture_state/candidate-preserved-before.sha256"
+assert_root_lock
+
+reset_invocations
+FLECK_TEST_APPKIT_HOST_APP_PATH="$candidate_preserved_host" \
+FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+  run_capture "$fixture_state/output" run_enhanced \
+    '^FleckCoreTests\.known\(\)$'
+assert_status 0
+[[ "$(wc -l < "$fixture_state/host-app-paths" | /usr/bin/tr -d ' ')" -eq 2 ]] ||
+  fail 'configured candidate host was not reused for list and run phases'
+while IFS= read -r host_app_path; do
+  [[ "$host_app_path" = "$candidate_preserved_host" ]] ||
+    fail 'LaunchServices did not receive the exactly matching configured candidate host'
+done < "$fixture_state/host-app-paths"
+/usr/bin/shasum -a 256 "${candidate_preserved_host_files[@]}" \
+  > "$fixture_state/candidate-preserved-after.sha256"
+/usr/bin/cmp -s "$fixture_state/candidate-preserved-before.sha256" \
+  "$fixture_state/candidate-preserved-after.sha256" ||
+  fail 'configured candidate host changed during resource verification or reuse'
+assert_root_lock
+
+/bin/cp -R "$candidate_preserved_host" \
+  "$fixture_state/mismatched-candidate-resource-host.app"
+printf '%s\n' 'mismatched candidate resource' > \
+  "$fixture_state/mismatched-candidate-resource-host.app/Contents/Resources/Fleck_FleckApp.bundle/ThirdPartyNotices.md"
+mismatched_candidate_resource_files=(
+  "$fixture_state/mismatched-candidate-resource-host.app/Contents/Info.plist"
+  "$fixture_state/mismatched-candidate-resource-host.app/Contents/MacOS/AppKitTestHost"
+  "$fixture_state/mismatched-candidate-resource-host.app/Contents/.fixture-adhoc-signature"
+  "$fixture_state/mismatched-candidate-resource-host.app/Contents/Resources/Fleck_FleckApp.bundle/EnhancedModelManifest.json"
+  "$fixture_state/mismatched-candidate-resource-host.app/Contents/Resources/Fleck_FleckApp.bundle/GemmaCleanupModelManifest.json"
+  "$fixture_state/mismatched-candidate-resource-host.app/Contents/Resources/Fleck_FleckApp.bundle/GemmaCleanupNotice.md"
+  "$fixture_state/mismatched-candidate-resource-host.app/Contents/Resources/Fleck_FleckApp.bundle/ThirdPartyNotices.md"
+)
+/usr/bin/shasum -a 256 "${mismatched_candidate_resource_files[@]}" \
+  > "$fixture_state/mismatched-candidate-resource-before.sha256"
+assert_configured_candidate_host_rejected \
+  "$fixture_state/mismatched-candidate-resource-host.app" \
+  'configured AppKit test host candidate resource does not match the current build: ThirdPartyNotices.md'
+/usr/bin/shasum -a 256 "${mismatched_candidate_resource_files[@]}" \
+  > "$fixture_state/mismatched-candidate-resource-after.sha256"
+/usr/bin/cmp -s "$fixture_state/mismatched-candidate-resource-before.sha256" \
+  "$fixture_state/mismatched-candidate-resource-after.sha256" ||
+  fail 'configured candidate-host resource rejection modified the configured host'
 
 printf '%s\n' 'Non-empty Swift test runner contracts passed.'
