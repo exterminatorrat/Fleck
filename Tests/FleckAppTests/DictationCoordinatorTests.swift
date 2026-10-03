@@ -506,8 +506,8 @@ func captureFirstLongReleaseReceiptReservesOriginBeforeToolbarFinish() async thr
   let processing = ProcessingProbe(result: processingResult("Held result"))
   let fixture = try Fixture(
     processing: processing,
-    clock: clock.clock,
     onFocusedProvisionalUpdate: { Task { await provisional.complete() } },
+    clock: clock.clock,
     holdSleeper: { _ in await threshold.wait() }
   )
   let flushGate = Gate()
