@@ -691,34 +691,22 @@ private final class CleanupAvailabilityRuntimeFixture {
 
   func waitForRuntimeAvailability(cleanupAvailable expectedReady: Bool) async throws -> Bool {
     let expectedPhase = installer.snapshot.phase
-    let reachedExpectedState = await withTaskGroup(of: Bool.self) { group in
-      group.addTask { @MainActor [runtime, expectedPhase] in
-        let cleanupSettings = runtime.cleanupAdmittedModelSettingsViewModel
-        let updates = runtime.$availability
-          .combineLatest(cleanupSettings.$presentation)
-          .buffer(size: 1, prefetch: .byRequest, whenFull: .dropOldest)
-        for await _ in updates.values {
-          if cleanupSettings.presentation.phase == expectedPhase,
-             runtime.availability.cleanupAvailable == expectedReady {
-            return true
-          }
-        }
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(2))
+    let cleanupSettings = runtime.cleanupAdmittedModelSettingsViewModel
+    while true {
+      try Task.checkCancellation()
+      if cleanupSettings.presentation.phase == expectedPhase,
+         runtime.availability.cleanupAvailable == expectedReady {
+        return true
+      }
+      let now = clock.now
+      guard now < deadline else {
+        try Task.checkCancellation()
         return false
       }
-      group.addTask {
-        do {
-          try await Task.sleep(for: .seconds(2))
-        } catch {
-          return false
-        }
-        return false
-      }
-      let reachedExpectedState = await group.next() ?? false
-      group.cancelAll()
-      return reachedExpectedState
+      try await clock.sleep(until: min(now.advanced(by: .milliseconds(10)), deadline))
     }
-    try Task.checkCancellation()
-    return reachedExpectedState
   }
 
   func removeTemporaryFiles() {
