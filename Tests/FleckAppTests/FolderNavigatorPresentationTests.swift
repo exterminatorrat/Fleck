@@ -204,6 +204,12 @@ struct FolderNavigatorPresentationTests {
     try fixture.sendKey(characters: "\r", keyCode: 36)
     diagnostics.endKeyDispatch()
     let createdComposerDismissed = try await fixture.waitForNewFolderComposer(isPresent: false)
+    if !createdComposerDismissed {
+      fixture.printCreationFailureSnapshot(
+        testName: "compactRenameCreateAndDeleteRemeasureIntrinsicContent",
+        expectedName: "A newly created folder with a wider name"
+      )
+    }
     try #require(createdComposerDismissed)
     await fixture.settle()
     #expect(fixture.isVisible(label: "Reveal earlier folders"))
@@ -407,6 +413,12 @@ struct FolderNavigatorPresentationTests {
     try fixture.sendKey(characters: "\r", keyCode: 36)
     diagnostics.endKeyDispatch()
     let createdComposerDismissed = try await fixture.waitForNewFolderComposer(isPresent: false)
+    if !createdComposerDismissed {
+      fixture.printCreationFailureSnapshot(
+        testName: "composerFocusValidationCancellationAndCreationStayNative",
+        expectedName: "Created"
+      )
+    }
     try #require(createdComposerDismissed)
     #expect(fixture.newFolderFieldIfPresent() == nil)
     #expect(fixture.state.workspace.folders.map(\.name).contains("Created"))
@@ -1253,6 +1265,86 @@ private final class FolderNavigatorFixture {
       createButtonEnabled: createButtonEnabled,
       saveError: state.saveError
     )
+  }
+
+  func printCreationFailureSnapshot(testName: String, expectedName: String) {
+    let folderNames = state.workspace.folders.map(\.name)
+    let saveError = state.saveError
+    let identity: (AnyObject) -> String = {
+      "\(String(reflecting: type(of: $0)))#\(ObjectIdentifier($0))"
+    }
+    let rawFields: [[String: Any]] = textFields
+      .filter { $0.placeholderString == "New folder" }
+      .map { field in
+        let fieldWindow = field.window
+        let parent = field.superview
+        let editor = field.currentEditor()
+        let editorView = editor as? NSTextView
+        let editorString = editor?.string
+        let markedRange = editorView.flatMap { $0.hasMarkedText() ? $0.markedRange() : nil }
+        var hiddenAncestor = parent
+        while let ancestor = hiddenAncestor, !ancestor.isHidden {
+          hiddenAncestor = ancestor.superview
+        }
+        let markedText: String?
+        if let editorString, let markedRange,
+          markedRange.location != NSNotFound,
+          NSMaxRange(markedRange) <= editorString.utf16.count
+        {
+          markedText = (editorString as NSString).substring(with: markedRange)
+        } else {
+          markedText = nil
+        }
+        return [
+          "fieldIdentity": identity(field),
+          "windowPresent": fieldWindow != nil,
+          "windowIdentity": fieldWindow.map { identity($0) as Any } ?? NSNull(),
+          "parentPresent": parent != nil,
+          "parentIdentity": parent.map { identity($0) as Any } ?? NSNull(),
+          "isHidden": field.isHidden,
+          "hiddenAncestorIdentity": hiddenAncestor.map { identity($0) as Any } ?? NSNull(),
+          "nativeString": field.stringValue,
+          "editorIdentity": editor.map { identity($0) as Any } ?? NSNull(),
+          "editorString": editorString.map { $0 as Any } ?? NSNull(),
+          "editorHasMarkedText": editorView.map { $0.hasMarkedText() as Any } ?? NSNull(),
+          "markedRange": markedRange.map { "\($0.location):\($0.length)" as Any } ?? NSNull(),
+          "markedText": markedText.map { $0 as Any } ?? NSNull(),
+        ]
+      }
+    let firstResponder = window.firstResponder
+    let applicationKeyWindow = NSApp.keyWindow
+    let fixtureWindowIdentity = identity(window)
+    let fixtureWindowIsKey = window.isKeyWindow
+    let applicationKeyWindowIdentity = applicationKeyWindow.map { identity($0) }
+    let applicationIsActive = NSApp.isActive
+    let firstResponderIdentity = firstResponder.map { identity($0) }
+    let createFolderPresent = elementIfPresent(label: "Create folder") != nil
+    let cancelNewFolderPresent = elementIfPresent(label: "Cancel new folder") != nil
+    let folderNewNamePresent = elementIfPresent(identifier: "folder-new-name") != nil
+    let snapshot: [String: Any] = [
+      "testName": testName,
+      "expectedName": expectedName,
+      "workspaceFolderNames": folderNames,
+      "workspaceFolderCount": folderNames.count,
+      "saveError": saveError.map { $0 as Any } ?? NSNull(),
+      "rawNewFolderFields": rawFields,
+      "fixtureWindowIdentity": fixtureWindowIdentity,
+      "fixtureWindowIsKey": fixtureWindowIsKey,
+      "applicationKeyWindowIdentity": applicationKeyWindowIdentity.map { $0 as Any }
+        ?? NSNull(),
+      "applicationKeyWindowMatchesFixture": applicationKeyWindow === window,
+      "applicationIsActive": applicationIsActive,
+      "firstResponderIdentity": firstResponderIdentity.map { $0 as Any } ?? NSNull(),
+      "publicAX": [
+        "createFolderPresent": createFolderPresent,
+        "cancelNewFolderPresent": cancelNewFolderPresent,
+        "folderNewNamePresent": folderNewNamePresent,
+      ],
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys]),
+      let line = String(data: data, encoding: .utf8)
+    else { return }
+    print("FLECK_FOLDER_CREATION_FAILURE_DIAGNOSTIC \(line)")
   }
 
   func waitForNewFolderComposer(isPresent: Bool) async throws -> Bool {
