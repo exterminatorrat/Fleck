@@ -1271,7 +1271,7 @@ private final class FolderNavigatorFixture {
     let folderNames = state.workspace.folders.map(\.name)
     let saveError = state.saveError
     let identity: (AnyObject) -> String = {
-      "\(String(reflecting: type(of: $0)))#\(ObjectIdentifier($0))"
+      "\(String(reflecting: Swift.type(of: $0)))#\(ObjectIdentifier($0))"
     }
     let rawFields: [[String: Any]] = textFields
       .filter { $0.placeholderString == "New folder" }
