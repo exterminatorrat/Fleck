@@ -68,6 +68,18 @@ readonly state_dir
 readonly expected_host_app="$state_dir/AppKitTestHost.app"
 readonly expected_host_contents="$expected_host_app/Contents"
 readonly expected_host_binary="$expected_host_contents/MacOS/AppKitTestHost"
+readonly expected_host_resource_root="$expected_host_contents/Resources"
+readonly expected_host_resource_bundle="$expected_host_resource_root/Fleck_FleckApp.bundle"
+readonly candidate_resource_names=(
+  EnhancedModelManifest.json
+  GemmaCleanupModelManifest.json
+  GemmaCleanupNotice.md
+  ThirdPartyNotices.md
+)
+candidate_graph_selected=0
+if [[ "${FLECK_ENHANCED_CANDIDATE:-}" = 1 ]]; then
+  candidate_graph_selected=1
+fi
 host_app="$expected_host_app"
 host_binary="$expected_host_binary"
 readonly host_environment_names=(
@@ -95,6 +107,51 @@ active_host_log_path=''
 active_host_pid_path=''
 active_host_phase_path=''
 active_host_nonce=''
+
+directory_entry_count() {
+  local directory="$1" entry count=0
+  for entry in "$directory"/* "$directory"/.[!.]* "$directory"/..?*; do
+    [[ -e "$entry" || -L "$entry" ]] || continue
+    count=$((count + 1))
+  done
+  printf '%s\n' "$count"
+}
+
+verify_configured_host_resources() {
+  local configured_contents="$1"
+  local configured_resource_root="$configured_contents/Resources"
+  local configured_resource_bundle="$configured_resource_root/Fleck_FleckApp.bundle"
+  local resource_name
+
+  if (( ! candidate_graph_selected )); then
+    if [[ -e "$configured_resource_root" || -L "$configured_resource_root" ]]; then
+      printf '%s\n' 'error: configured AppKit test host has unexpected resources for the ordinary test graph' >&2
+      return 1
+    fi
+    return 0
+  fi
+
+  if [[ ! -d "$configured_resource_root" || -L "$configured_resource_root" ||
+    ! -d "$configured_resource_bundle" || -L "$configured_resource_bundle" ]]; then
+    printf '%s\n' 'error: configured AppKit test host candidate resources are missing or unsafe' >&2
+    return 1
+  fi
+  if [[ "$(directory_entry_count "$configured_resource_root")" != 1 ||
+    "$(directory_entry_count "$configured_resource_bundle")" != "${#candidate_resource_names[@]}" ]]; then
+    printf '%s\n' 'error: configured AppKit test host candidate resources do not match the current build' >&2
+    return 1
+  fi
+  for resource_name in "${candidate_resource_names[@]}"; do
+    if [[ ! -f "$configured_resource_bundle/$resource_name" ||
+      -L "$configured_resource_bundle/$resource_name" ]] ||
+      ! /usr/bin/cmp -s "$expected_host_resource_bundle/$resource_name" \
+        "$configured_resource_bundle/$resource_name"; then
+      printf 'error: configured AppKit test host candidate resource does not match the current build: %s\n' \
+        "$resource_name" >&2
+      return 1
+    fi
+  done
+}
 
 read_owned_host_pid() {
   [[ -f "$active_host_pid_path" && ! -L "$active_host_pid_path" ]] || return 1
@@ -391,6 +448,27 @@ if [[ "$bin_path" != /* || ! -d "$bin_path" || -L "$bin_path" || "$bin_path" == 
 fi
 readonly bin_path
 
+readonly candidate_resource_bundle="$bin_path/Fleck_FleckApp.bundle"
+if (( candidate_graph_selected )); then
+  if [[ ! -d "$candidate_resource_bundle" || -L "$candidate_resource_bundle" ]]; then
+    printf '%s\n' 'error: candidate SwiftPM App resource bundle is missing or unsafe' >&2
+    exit 1
+  fi
+  if [[ "$(directory_entry_count "$candidate_resource_bundle")" != \
+    "${#candidate_resource_names[@]}" ]]; then
+    printf '%s\n' 'error: candidate SwiftPM App resource bundle does not contain exactly the expected metadata documents' >&2
+    exit 1
+  fi
+  for resource_name in "${candidate_resource_names[@]}"; do
+    if [[ ! -f "$candidate_resource_bundle/$resource_name" ||
+      -L "$candidate_resource_bundle/$resource_name" ]]; then
+      printf 'error: candidate SwiftPM App resource document is missing or unsafe: %s\n' \
+        "$resource_name" >&2
+      exit 1
+    fi
+  done
+fi
+
 readonly bundle_candidates="$state_dir/test-bundles"
 /usr/bin/find "$bin_path" -maxdepth 1 -type d -name '*.xctest' -print \
   > "$bundle_candidates"
@@ -440,6 +518,19 @@ cat > "$expected_host_contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+if (( candidate_graph_selected )); then
+  /bin/mkdir -p "$expected_host_resource_bundle"
+  for resource_name in "${candidate_resource_names[@]}"; do
+    /bin/cp "$candidate_resource_bundle/$resource_name" \
+      "$expected_host_resource_bundle/$resource_name"
+    if ! /usr/bin/cmp -s "$candidate_resource_bundle/$resource_name" \
+      "$expected_host_resource_bundle/$resource_name"; then
+      printf 'error: copied candidate SwiftPM App resource does not match its build output: %s\n' \
+        "$resource_name" >&2
+      exit 1
+    fi
+  done
+fi
 set +e
 "$swiftc_path" -parse-as-library -sdk "$sdk_path" -F "$framework_path" \
   -framework AppKit -framework Testing \
@@ -501,6 +592,9 @@ if [[ ${FLECK_TEST_APPKIT_HOST_APP_PATH+x} ]]; then
   fi
   if ! /usr/bin/cmp -s "$expected_host_contents/Info.plist" "$configured_host_info"; then
     printf '%s\n' 'error: configured AppKit test host Info.plist does not match the current build' >&2
+    exit 1
+  fi
+  if ! verify_configured_host_resources "$configured_host_contents"; then
     exit 1
   fi
   if "$codesign_path" --verify --deep --strict --verbose=2 "$configured_host_app"; then
