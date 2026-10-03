@@ -541,7 +541,7 @@ while [ "$#" -gt 0 ]; do
       printf 'environment:%s\n' "$environment_name" >> "$FAKE_STATE/open-environments"
       if [ -f "$FAKE_STATE/environment-forwarding-contract" ]; then
         case "$environment_name" in
-          FLECK_SETTINGS_WINDOW_CAPTURE_DIR|FLECK_SETTINGS_MODELS_CAPTURE_DIR)
+          FLECK_SETTINGS_WINDOW_CAPTURE_DIR|FLECK_SETTINGS_MODELS_CAPTURE_DIR|FLECK_NATIVE_CAPTURE_QA)
             printf 'environment:%s\n' "$environment_assignment" \
               >> "$FAKE_STATE/open-environment-probes"
             ;;
@@ -1213,6 +1213,7 @@ assert_configured_host_rejected "$fixture_state/unsigned-host.app" \
 
 reset_invocations
 : > "$fixture_state/environment-forwarding-contract"
+unset FLECK_NATIVE_CAPTURE_QA
 run_capture "$fixture_state/output" run_appkit_environment_probe
 assert_status 0
 [[ "$(wc -l < "$fixture_state/open-environment-name-blocks" | tr -d ' ')" -eq 2 ]] ||
@@ -1236,7 +1237,7 @@ for environment_assignment in \
     fail 'AppKit host did not forward the exact whitelist assignment to both phases'
 done
 for environment_name in FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR \
-  FLECK_TEST_UNWHITELISTED_CAPTURE_PROBE; do
+  FLECK_TEST_UNWHITELISTED_CAPTURE_PROBE FLECK_NATIVE_CAPTURE_QA; do
   if /usr/bin/grep -E -q "^environment:$environment_name(=|$)" \
     "$fixture_state/open-environments"; then
     fail 'AppKit host forwarded an unset or unwhitelisted environment name'
@@ -1259,6 +1260,35 @@ fi
   fail 'AppKit list/run hosts did not both receive the expected environment values'
 /usr/bin/grep -Fxq 'pass' "$fixture_state/host-environment-observations" ||
   fail 'AppKit host forwarded-environment contract failed'
+
+for native_capture_value in 0 1; do
+  reset_invocations
+  : > "$fixture_state/environment-forwarding-contract"
+  FLECK_NATIVE_CAPTURE_QA="$native_capture_value" \
+    run_capture "$fixture_state/output" run_appkit_environment_probe
+  assert_status 0
+  forwarded_count="$(/usr/bin/grep -Fxc \
+    "environment:FLECK_NATIVE_CAPTURE_QA=$native_capture_value" \
+    "$fixture_state/open-environment-probes" || true)"
+  [[ "$forwarded_count" -eq 2 ]] ||
+    fail "AppKit host did not forward FLECK_NATIVE_CAPTURE_QA=$native_capture_value to both phases"
+done
+
+unset FLECK_NATIVE_CAPTURE_QA
+for invalid_native_capture_value in '' 2 true; do
+  reset_invocations
+  FLECK_NATIVE_CAPTURE_QA="$invalid_native_capture_value" \
+    run_capture "$fixture_state/output" run_appkit_environment_probe
+  [[ "$RUN_STATUS" -ne 0 ]] ||
+    fail "AppKit host accepted invalid FLECK_NATIVE_CAPTURE_QA value '$invalid_native_capture_value'"
+  /usr/bin/grep -Fq 'FLECK_NATIVE_CAPTURE_QA' "$fixture_state/output" ||
+    fail 'invalid native capture opt-in was not reported explicitly'
+  [[ ! -s "$fixture_state/xcrun-invocations" && \
+    ! -s "$fixture_state/swiftc-invocations" && \
+    ! -s "$fixture_state/open-invocations" ]] ||
+    fail 'invalid native capture opt-in reached a build or host launch'
+done
+unset FLECK_NATIVE_CAPTURE_QA
 assert_root_lock
 
 reset_invocations
@@ -1918,5 +1948,370 @@ assert_configured_candidate_host_rejected \
 /usr/bin/cmp -s "$fixture_state/mismatched-candidate-resource-before.sha256" \
   "$fixture_state/mismatched-candidate-resource-after.sha256" ||
   fail 'configured candidate-host resource rejection modified the configured host'
+
+native_qa_runner="$script_dir/run-native-capture-qa.sh"
+[[ -x "$native_qa_runner" ]] || fail 'native capture QA entrypoint is missing or not executable'
+native_qa_fixture="$temp_root/native-qa-repo"
+native_qa_scripts="$native_qa_fixture/Scripts"
+native_qa_bin="$native_qa_fixture/bin"
+native_qa_tmp="$temp_root/native-qa-output"
+native_qa_log="$native_qa_fixture/invocations"
+native_qa_commit_change_marker="$native_qa_fixture/commit-changed"
+native_qa_worktree_change_marker="$native_qa_fixture/worktree-changed"
+/bin/mkdir -p "$native_qa_scripts" "$native_qa_bin" "$native_qa_tmp"
+/bin/cp "$native_qa_runner" "$native_qa_scripts/"
+/bin/cp "$script_dir/../VERSION" "$native_qa_fixture/VERSION"
+: > "$native_qa_log"
+
+cat > "$native_qa_bin/git" <<'SH'
+#!/bin/sh
+set -eu
+[ "${1:-}" = -C ] || exit 90
+shift 2
+case "${1:-}" in
+  rev-parse)
+    shift
+    case "$*" in
+      '--verify HEAD^{commit}')
+        [ "${FAKE_NATIVE_QA_GIT_FAILURE:-}" != commit ] || exit 93
+        if [ "${FAKE_NATIVE_QA_GIT_BAD_HASH:-0}" = 1 ]; then
+          printf '%s\n' 'short-id'
+        elif [ -n "${FAKE_NATIVE_QA_COMMIT_CHANGE_MARKER:-}" ] &&
+          [ -f "$FAKE_NATIVE_QA_COMMIT_CHANGE_MARKER" ]; then
+          printf '%s\n' '3333333333333333333333333333333333333333'
+        else
+          printf '%s\n' '1111111111111111111111111111111111111111'
+        fi
+        ;;
+      '--verify 1111111111111111111111111111111111111111^{tree}')
+        [ "${FAKE_NATIVE_QA_GIT_FAILURE:-}" != tree ] || exit 94
+        printf '%s\n' '2222222222222222222222222222222222222222'
+        ;;
+      '--verify 3333333333333333333333333333333333333333^{tree}')
+        [ "${FAKE_NATIVE_QA_GIT_FAILURE:-}" != tree ] || exit 94
+        printf '%s\n' '4444444444444444444444444444444444444444'
+        ;;
+      *) exit 92 ;;
+    esac
+    ;;
+  status)
+    shift
+    [ "$*" = '--porcelain --untracked-files=all --ignore-submodules=none' ] || exit 92
+    [ "${FAKE_NATIVE_QA_GIT_FAILURE:-}" != status ] || exit 95
+    if [ "${FAKE_NATIVE_QA_INITIAL_DIRTY:-0}" = 1 ] ||
+      { [ -n "${FAKE_NATIVE_QA_WORKTREE_CHANGE_MARKER:-}" ] &&
+        [ -f "$FAKE_NATIVE_QA_WORKTREE_CHANGE_MARKER" ]; }; then
+      printf '%s\n' ' M Sources/fixture.swift'
+    fi
+    ;;
+  *) exit 91 ;;
+esac
+SH
+/bin/chmod +x "$native_qa_bin/git"
+
+cat > "$native_qa_scripts/run-nonempty-swift-tests.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'flag=%s\n' "${FLECK_NATIVE_CAPTURE_QA-unset}" >> "$FAKE_NATIVE_QA_LOG"
+printf 'capture_dir=%s\n' "${FLECK_GLASS_SYNTHETIC_CAPTURE_DIR-unset}" >> "$FAKE_NATIVE_QA_LOG"
+printf 'selector=%s\n' "${1:-}" >> "$FAKE_NATIVE_QA_LOG"
+printf 'host=%s\n' "${FLECK_TEST_APPKIT_HOST_APP_PATH-unset}" >> "$FAKE_NATIVE_QA_LOG"
+printf 'candidate=%s\n' "${FLECK_ENHANCED_CANDIDATE-unset}" >> "$FAKE_NATIVE_QA_LOG"
+[[ "${FLECK_NATIVE_CAPTURE_QA:-}" = 1 ]] || exit 88
+[[ ! ${FLECK_ENHANCED_CANDIDATE+x} ]] || exit 91
+case "${FLECK_GLASS_SYNTHETIC_CAPTURE_DIR:-}" in
+  "$TMPDIR"/fleck-native-capture-qa.*) ;;
+  *) exit 89 ;;
+esac
+[[ "$#" -eq 1 && "$1" = '^FleckAppTests\.hostedGlassAndSolidMenuPanelsCaptureSyntheticChromeAndOpaqueEditor\(\)$' ]] || exit 90
+case "${FAKE_NATIVE_QA_CHANGE_AFTER_RUN:-}" in
+  commit) : > "$FAKE_NATIVE_QA_COMMIT_CHANGE_MARKER" ;;
+  worktree) : > "$FAKE_NATIVE_QA_WORKTREE_CHANGE_MARKER" ;;
+esac
+exit "${FAKE_NATIVE_QA_STATUS:-0}"
+SH
+/bin/chmod +x "$native_qa_scripts/run-nonempty-swift-tests.sh"
+
+for source_lookup_failure in commit tree status; do
+  FAKE_NATIVE_QA_GIT_FAILURE="$source_lookup_failure" \
+  FAKE_NATIVE_QA_COMMIT_CHANGE_MARKER="$native_qa_commit_change_marker" \
+  FAKE_NATIVE_QA_WORKTREE_CHANGE_MARKER="$native_qa_worktree_change_marker" \
+  TMPDIR="$native_qa_tmp" \
+  PATH="$native_qa_bin:/usr/bin:/bin" \
+  FAKE_NATIVE_QA_LOG="$native_qa_log" \
+    run_capture "$native_qa_fixture/lookup-$source_lookup_failure-output" \
+      "$native_qa_scripts/run-native-capture-qa.sh"
+  [[ "$RUN_STATUS" -ne 0 ]] ||
+    fail "native capture QA accepted failed $source_lookup_failure provenance lookup"
+  [[ ! -s "$native_qa_log" ]] ||
+    fail "native capture QA launched its runner after failed $source_lookup_failure provenance lookup"
+  if /usr/bin/grep -q '^Output directory:' \
+    "$native_qa_fixture/lookup-$source_lookup_failure-output"; then
+    fail "native capture QA created output evidence after failed $source_lookup_failure provenance lookup"
+  fi
+done
+
+FAKE_NATIVE_QA_GIT_BAD_HASH=1 \
+FAKE_NATIVE_QA_COMMIT_CHANGE_MARKER="$native_qa_commit_change_marker" \
+FAKE_NATIVE_QA_WORKTREE_CHANGE_MARKER="$native_qa_worktree_change_marker" \
+TMPDIR="$native_qa_tmp" \
+PATH="$native_qa_bin:/usr/bin:/bin" \
+FAKE_NATIVE_QA_LOG="$native_qa_log" \
+  run_capture "$native_qa_fixture/short-hash-output" \
+    "$native_qa_scripts/run-native-capture-qa.sh"
+[[ "$RUN_STATUS" -ne 0 ]] || fail 'native capture QA accepted a short source commit ID'
+[[ ! -s "$native_qa_log" ]] || fail 'native capture QA launched its runner after a short source ID'
+
+FAKE_NATIVE_QA_INITIAL_DIRTY=1 \
+FAKE_NATIVE_QA_COMMIT_CHANGE_MARKER="$native_qa_commit_change_marker" \
+FAKE_NATIVE_QA_WORKTREE_CHANGE_MARKER="$native_qa_worktree_change_marker" \
+TMPDIR="$native_qa_tmp" \
+PATH="$native_qa_bin:/usr/bin:/bin" \
+FAKE_NATIVE_QA_LOG="$native_qa_log" \
+  run_capture "$native_qa_fixture/dirty-source-output" \
+    "$native_qa_scripts/run-native-capture-qa.sh"
+[[ "$RUN_STATUS" -ne 0 ]] || fail 'native capture QA accepted a dirty committed source checkout'
+[[ ! -s "$native_qa_log" ]] || fail 'native capture QA launched its runner from a dirty source checkout'
+if /usr/bin/grep -q '^Output directory:' "$native_qa_fixture/dirty-source-output"; then
+  fail 'native capture QA created output evidence for a dirty source checkout'
+fi
+if compgen -G "$native_qa_tmp/fleck-native-capture-qa.*" > /dev/null; then
+  fail 'native capture QA created an output directory before source preflight passed'
+fi
+
+FLECK_NATIVE_CAPTURE_QA=0 \
+FLECK_GLASS_SYNTHETIC_CAPTURE_DIR="$native_qa_fixture/ignored-output" \
+FLECK_TEST_APPKIT_HOST_APP_PATH="$native_qa_fixture/Existing Host.app" \
+TMPDIR="$native_qa_tmp" \
+PATH="$native_qa_bin:/usr/bin:/bin" \
+FAKE_NATIVE_QA_LOG="$native_qa_log" \
+FAKE_NATIVE_QA_COMMIT_CHANGE_MARKER="$native_qa_commit_change_marker" \
+FAKE_NATIVE_QA_WORKTREE_CHANGE_MARKER="$native_qa_worktree_change_marker" \
+FLECK_ENHANCED_CANDIDATE=1 \
+  run_capture "$native_qa_fixture/first-output" "$native_qa_scripts/run-native-capture-qa.sh"
+[[ "$RUN_STATUS" -eq 0 ]] ||
+  fail "expected native capture QA status 0, got $RUN_STATUS; output: $(cat "$native_qa_fixture/first-output")"
+native_qa_directory_1="$(/usr/bin/sed -n 's/^Output directory: //p' \
+  "$native_qa_fixture/first-output")"
+[[ -n "$native_qa_directory_1" && -d "$native_qa_directory_1" && \
+  ! -L "$native_qa_directory_1" && -f "$native_qa_directory_1/console.log" && \
+  ! -L "$native_qa_directory_1/console.log" ]] ||
+  fail 'native capture QA did not preserve a unique safe output directory and console receipt'
+case "$native_qa_directory_1" in
+  "$native_qa_tmp"/fleck-native-capture-qa.*) ;;
+  *) fail 'native capture QA output directory was not created under the caller temp parent' ;;
+esac
+[[ "$(/usr/bin/stat -f %Lp "$native_qa_directory_1")" = 700 ]] ||
+  fail 'native capture QA output directory permissions are not private'
+/usr/bin/grep -Fqx "flag=1" "$native_qa_log" ||
+  fail 'native capture QA did not override a caller 0 opt-in with literal 1'
+/usr/bin/grep -Fqx "capture_dir=$native_qa_directory_1" "$native_qa_log" ||
+  fail 'native capture QA did not route capture output to its fresh directory'
+/usr/bin/grep -Fqx \
+  'selector=^FleckAppTests\.hostedGlassAndSolidMenuPanelsCaptureSyntheticChromeAndOpaqueEditor\(\)$' \
+  "$native_qa_log" || fail 'native capture QA did not use the exact strict test selector'
+/usr/bin/grep -Fqx "host=$native_qa_fixture/Existing Host.app" "$native_qa_log" ||
+  fail 'native capture QA did not preserve the caller-configured host path'
+/usr/bin/grep -Fqx 'candidate=unset' "$native_qa_log" ||
+  fail 'native capture QA did not select the ordinary test graph'
+/usr/bin/grep -Fq 'Source commit: 1111111111111111111111111111111111111111' \
+  "$native_qa_directory_1/console.log" || fail 'native capture QA omitted its source commit receipt'
+/usr/bin/grep -Fq 'Source tree: 2222222222222222222222222222222222222222' \
+  "$native_qa_directory_1/console.log" || fail 'native capture QA omitted its source tree receipt'
+/usr/bin/grep -Fq 'Working source status: clean' "$native_qa_directory_1/console.log" ||
+  fail 'native capture QA omitted its initial clean source status receipt'
+/usr/bin/grep -Fq 'Native capture QA source verification after run: clean and unchanged' \
+  "$native_qa_directory_1/console.log" ||
+  fail 'native capture QA did not verify the committed source remained clean after execution'
+/usr/bin/grep -Fq "Fleck version: $(tr -d '\n' < "$script_dir/../VERSION")" \
+  "$native_qa_directory_1/console.log" || fail 'native capture QA omitted its version receipt'
+
+unset FLECK_NATIVE_CAPTURE_QA
+TMPDIR="$native_qa_tmp" \
+PATH="$native_qa_bin:/usr/bin:/bin" \
+FAKE_NATIVE_QA_LOG="$native_qa_log" \
+FAKE_NATIVE_QA_COMMIT_CHANGE_MARKER="$native_qa_commit_change_marker" \
+FAKE_NATIVE_QA_WORKTREE_CHANGE_MARKER="$native_qa_worktree_change_marker" \
+  run_capture "$native_qa_fixture/second-output" "$native_qa_scripts/run-native-capture-qa.sh"
+[[ "$RUN_STATUS" -eq 0 ]] ||
+  fail "expected native capture QA status 0, got $RUN_STATUS; output: $(cat "$native_qa_fixture/second-output")"
+native_qa_directory_2="$(/usr/bin/sed -n 's/^Output directory: //p' \
+  "$native_qa_fixture/second-output")"
+[[ -n "$native_qa_directory_2" && "$native_qa_directory_2" != "$native_qa_directory_1" && \
+  -d "$native_qa_directory_2" && ! -L "$native_qa_directory_2" && \
+  -f "$native_qa_directory_2/console.log" ]] ||
+  fail 'native capture QA reused or overwrote a prior output directory'
+/usr/bin/grep -Fqx "flag=1" "$native_qa_log" ||
+  fail 'native capture QA false-passed without an inherited opt-in value'
+/usr/bin/grep -Fqx "capture_dir=$native_qa_directory_2" "$native_qa_log" ||
+  fail 'native capture QA did not create a fresh directory on its second invocation'
+
+FAKE_NATIVE_QA_STATUS=37 \
+TMPDIR="$native_qa_tmp" \
+PATH="$native_qa_bin:/usr/bin:/bin" \
+FAKE_NATIVE_QA_LOG="$native_qa_log" \
+FAKE_NATIVE_QA_COMMIT_CHANGE_MARKER="$native_qa_commit_change_marker" \
+FAKE_NATIVE_QA_WORKTREE_CHANGE_MARKER="$native_qa_worktree_change_marker" \
+  run_capture "$native_qa_fixture/failure-output" "$native_qa_scripts/run-native-capture-qa.sh"
+[[ "$RUN_STATUS" -eq 37 ]] ||
+  fail "expected native capture QA status 37, got $RUN_STATUS; output: $(cat "$native_qa_fixture/failure-output")"
+native_qa_failure_directory="$(/usr/bin/sed -n 's/^Output directory: //p' \
+  "$native_qa_fixture/failure-output")"
+/usr/bin/grep -Fq 'Native capture QA runner exit status: 37' \
+  "$native_qa_failure_directory/console.log" ||
+  fail 'native capture QA did not retain its nonzero status receipt'
+/usr/bin/grep -Fq 'Native capture QA source verification after run: clean and unchanged' \
+  "$native_qa_failure_directory/console.log" ||
+  fail 'native capture QA did not verify source after a failed test run'
+
+for source_change in commit worktree; do
+  FAKE_NATIVE_QA_CHANGE_AFTER_RUN="$source_change" \
+  FAKE_NATIVE_QA_COMMIT_CHANGE_MARKER="$native_qa_commit_change_marker" \
+  FAKE_NATIVE_QA_WORKTREE_CHANGE_MARKER="$native_qa_worktree_change_marker" \
+  TMPDIR="$native_qa_tmp" \
+  PATH="$native_qa_bin:/usr/bin:/bin" \
+  FAKE_NATIVE_QA_LOG="$native_qa_log" \
+    run_capture "$native_qa_fixture/source-change-$source_change-output" \
+      "$native_qa_scripts/run-native-capture-qa.sh"
+  [[ "$RUN_STATUS" -ne 0 ]] ||
+    fail "native capture QA accepted a $source_change source change during execution"
+  native_qa_source_change_directory="$(/usr/bin/sed -n 's/^Output directory: //p' \
+    "$native_qa_fixture/source-change-$source_change-output")"
+  [[ -n "$native_qa_source_change_directory" && \
+    -f "$native_qa_source_change_directory/console.log" ]] ||
+    fail "native capture QA did not preserve the $source_change source-change receipt"
+  /usr/bin/grep -Fq 'Native capture QA source verification after run: FAILED' \
+    "$native_qa_source_change_directory/console.log" ||
+    fail "native capture QA falsely claimed unchanged source after $source_change change"
+  /usr/bin/grep -Fq 'Native capture QA runner exit status: 0' \
+    "$native_qa_source_change_directory/console.log" ||
+    fail "native capture QA omitted the successful test status after $source_change change"
+  /bin/rm -f "$native_qa_commit_change_marker" "$native_qa_worktree_change_marker"
+done
+
+python3 - "$script_dir/.." <<'PY'
+import hashlib
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1]).resolve()
+workflow_path = root / ".github/workflows/ci.yml"
+current_workflow = workflow_path.read_text()
+
+def step_block(contents, name):
+    match = re.search(rf"^      - name: {re.escape(name)}\n", contents, re.M)
+    if match is None:
+        raise SystemExit(f"missing CI step: {name}")
+    following = re.search(r"^      - name: ", contents[match.end():], re.M)
+    end = match.end() + following.start() if following else len(contents)
+    return match.start(), end, contents[match.start():end]
+
+ordinary_name = "Test ordinary graph"
+candidate_name = "Test Enhanced Local candidate graph"
+ordinary = step_block(current_workflow, ordinary_name)[2]
+candidate = step_block(current_workflow, candidate_name)[2]
+for name, block, selector in (
+    (ordinary_name, ordinary, "Scripts/run-nonempty-swift-tests.sh '^.+$'"),
+    (candidate_name, candidate, "Scripts/run-nonempty-enhanced-tests.sh '^.+$'"),
+):
+    if 'FLECK_NATIVE_CAPTURE_QA: "0"' not in block or selector not in block:
+        raise SystemExit(f"CI {name} did not explicitly disable only native capture QA")
+
+boundary_names = (
+    "Declare native capture boundary (ordinary graph)",
+    "Declare native capture boundary (candidate graph)",
+)
+normalized_workflow = current_workflow
+for name in boundary_names:
+    start, end, block = step_block(normalized_workflow, name)
+    for required in (
+        "Strict native screenshot/pixel capture: NOT RUN",
+        "separate native-QA artifact and status-receipt evidence",
+        "does not claim full native screenshot coverage",
+        "All other full-graph selectors and assertions remain enabled",
+        '>> "$GITHUB_STEP_SUMMARY"',
+    ):
+        if required not in block:
+            raise SystemExit(f"CI disclosure step {name} omitted: {required}")
+    normalized_workflow = normalized_workflow[:start] + normalized_workflow[end:]
+
+for name in (ordinary_name, candidate_name):
+    start, end, block = step_block(normalized_workflow, name)
+    environment = '        env:\n          FLECK_NATIVE_CAPTURE_QA: "0"\n'
+    if block.count(environment) != 1:
+        raise SystemExit(f"CI {name} has unexpected native-capture environment changes")
+    normalized_workflow = (
+        normalized_workflow[:start]
+        + block.replace(environment, "", 1)
+        + normalized_workflow[end:]
+    )
+if hashlib.sha256(normalized_workflow.encode()).hexdigest() != (
+    "da0fb3074c3cb3dcf77223d43f4cf536f4cf36bbd9699d5027a89f9385a5aa0e"
+):
+    raise SystemExit("CI changed outside the declared native-capture boundary fixture")
+
+test_name = "hostedGlassAndSolidMenuPanelsCaptureSyntheticChromeAndOpaqueEditor"
+test_path = root / "Tests/FleckAppTests/AppKitEditorTests.swift"
+current_tests = test_path.read_text()
+
+def test_function(contents, name):
+    match = re.search(
+        rf"^(?:private )?func {re.escape(name)}\(\) async throws \{{\n(.*?)^\}}",
+        contents,
+        re.M | re.S,
+    )
+    if match is None:
+        raise SystemExit(f"missing native capture test function: {name}")
+    return match.group(1)
+
+if test_function(current_tests, test_name) != (
+    "  try #require(CGPreflightScreenCaptureAccess())\n"
+    "  try await captureHostedGlassAndSolidMenuPanels()\n"
+):
+    raise SystemExit("strict native capture test body changed")
+if current_tests.count('ProcessInfo.processInfo.environment["FLECK_NATIVE_CAPTURE_QA"]') != 1:
+    raise SystemExit("strict native capture test has unexpected opt-in traits")
+strict_declaration = current_tests[current_tests.rfind("@Test", 0, current_tests.index(f"func {test_name}")):current_tests.index(f"func {test_name}")]
+expected_declaration = (
+    "@Test(\n"
+    "  .enabled(\n"
+    '    if: ProcessInfo.processInfo.environment["FLECK_NATIVE_CAPTURE_QA"] == "1"\n'
+    "  )\n"
+    ")\n"
+    "@MainActor\n"
+)
+if strict_declaration != expected_declaration:
+    raise SystemExit("strict native capture test is not gated only by the explicit 1 opt-in")
+
+capture_helper_body = test_function(current_tests, "captureHostedGlassAndSolidMenuPanels")
+if hashlib.sha256(capture_helper_body.encode()).hexdigest() != (
+    "d60b00e7db651347ddaabff61d058fe0ef75b8033e65bdbc43a115fd5a00fbbc"
+):
+    raise SystemExit("strict native capture helper body changed from its approved fixture")
+
+probe_name = "hostedOwnWindowCaptureCapabilityProbe"
+probe_function_start = current_tests.index(f"func {probe_name}")
+probe_annotation_start = current_tests.rfind("@Test", 0, probe_function_start)
+probe_declaration = current_tests[probe_annotation_start:probe_function_start]
+expected_probe_declaration = (
+    "@Test(\n"
+    "  .enabled(\n"
+    '    if: ProcessInfo.processInfo.environment["FLECK_GLASS_SYNTHETIC_CAPTURE_DIR"] != nil\n'
+    "  )\n"
+    ")\n"
+    "@MainActor\n"
+)
+expected_probe_body = (
+    "  let preflightObservation = CGPreflightScreenCaptureAccess()\n"
+    '  print("CGPreflightScreenCaptureAccess() observation only: \\(preflightObservation)")\n'
+    "  try await captureHostedGlassAndSolidMenuPanels()\n"
+)
+if (
+    probe_declaration != expected_probe_declaration
+    or test_function(current_tests, probe_name) != expected_probe_body
+):
+    raise SystemExit("supplemental own-window capture probe changed")
+PY
 
 printf '%s\n' 'Non-empty Swift test runner contracts passed.'
