@@ -222,6 +222,12 @@ jobs:
           test -z "$(git status --porcelain)"
           printf 'Source commit: %s\n' "$source_commit"
           printf 'Source tree: %s\n' "$(git rev-parse --verify 'HEAD^{tree}')"
+      - name: Install and verify ripgrep
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            brew install ripgrep
+          fi
+          rg --version
       - name: Run folder navigator diagnostic tests (ordinary graph)
         run: |
           unset FLECK_ENHANCED_CANDIDATE
@@ -248,6 +254,12 @@ jobs:
           test -z "$(git status --porcelain)"
           printf 'Source commit: %s\n' "$source_commit"
           printf 'Source tree: %s\n' "$(git rev-parse --verify 'HEAD^{tree}')"
+      - name: Install and verify ripgrep
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            brew install ripgrep
+          fi
+          rg --version
       - name: Verify Enhanced Local candidate pin
         run: Scripts/test-enhanced-candidate-pin.sh
       - name: Run folder navigator diagnostic tests (Enhanced graph)
