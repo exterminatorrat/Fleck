@@ -1372,14 +1372,14 @@ private final class FolderNavigatorFixture {
     while clock.now < deadline {
       try Task.checkCancellation()
       host.layoutSubtreeIfNeeded()
-      if stateMatches(), clock.now < deadline { return true }
+      if stateMatches() { return true }
       let remaining = clock.now.duration(to: deadline)
       guard remaining > .zero else { break }
       try await Task.sleep(for: min(.milliseconds(25), remaining))
     }
 
     try Task.checkCancellation()
-    return false
+    return stateMatches()
   }
 
   func newFolderField() throws -> NSTextField {
