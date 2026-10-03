@@ -188,6 +188,8 @@ struct FolderNavigatorPresentationTests {
     #expect(!fixture.isVisible(label: "Reveal earlier folders"))
 
     try fixture.click(fixture.element(label: "New folder"))
+    let composerFocused = try await fixture.waitForNewFolderComposer(isPresent: true)
+    try #require(composerFocused)
     await fixture.settle()
     try fixture.type("A newly created folder with a wider name")
     try fixture.sendKey(characters: "\r", keyCode: 36)

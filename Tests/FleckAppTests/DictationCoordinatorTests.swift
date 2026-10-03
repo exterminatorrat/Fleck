@@ -502,9 +502,11 @@ func captureFirstLongReleaseReceiptKeepsLivePartialAndExactStopOrigin() async th
 func captureFirstLongReleaseReceiptReservesOriginBeforeToolbarFinish() async throws {
   let clock = ManualDictationClock()
   let threshold = Gate()
+  let provisional = CompletionProbe()
   let processing = ProcessingProbe(result: processingResult("Held result"))
   let fixture = try Fixture(
     processing: processing,
+    onFocusedProvisionalUpdate: { Task { await provisional.complete() } },
     clock: clock.clock,
     holdSleeper: { _ in await threshold.wait() }
   )
@@ -536,6 +538,7 @@ func captureFirstLongReleaseReceiptReservesOriginBeforeToolbarFinish() async thr
     stableText: "Held ",
     provisionalTail: "partial"
   ))
+  #expect(await waitForCompletion(provisional, timeout: .seconds(1)))
   #expect(fixture.editor.provisionalTexts == ["Held partial"])
 
   clock.advance(by: .seconds(1))
