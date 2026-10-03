@@ -118,8 +118,6 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-    env:
-      FLECK_GLASS_SYNTHETIC_CAPTURE_DIR: ${{ runner.temp }}/fleck-own-window-capture-probe/captures
     steps:
       - name: Check out repository (actions/checkout v6.0.2, without credentials)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -127,9 +125,12 @@ jobs:
           persist-credentials: false
       - name: Prepare diagnostic output directory
         run: |
+          FLECK_GLASS_SYNTHETIC_CAPTURE_DIR="$RUNNER_TEMP/fleck-own-window-capture-probe/captures"
           mkdir -p \
             "$RUNNER_TEMP/fleck-own-window-capture-probe" \
             "$FLECK_GLASS_SYNTHETIC_CAPTURE_DIR"
+          printf 'FLECK_GLASS_SYNTHETIC_CAPTURE_DIR=%s\n' \
+            "$FLECK_GLASS_SYNTHETIC_CAPTURE_DIR" >> "$GITHUB_ENV"
       - name: Log diagnostic metadata
         run: |
           set -o pipefail
