@@ -7,6 +7,16 @@ if (( $# != 3 )); then
   exit 2
 fi
 
+if [[ ${FLECK_NATIVE_CAPTURE_QA+x} ]]; then
+  case "$FLECK_NATIVE_CAPTURE_QA" in
+    0|1) ;;
+    *)
+      printf '%s\n' 'error: FLECK_NATIVE_CAPTURE_QA must be unset, 0, or 1' >&2
+      exit 2
+      ;;
+  esac
+fi
+
 readonly package_root="$1"
 readonly scratch_path="$2"
 readonly identifier_regex="$3"
@@ -91,6 +101,7 @@ readonly host_environment_names=(
   FLECK_FILE_REFERENCE_EVIDENCE_DIR FLECK_FOLDER_CAPTURE_DIR
   FLECK_FONT_PICKER_ALIGNMENT_EVIDENCE_DIRECTORY
   FLECK_FONT_PICKER_EVIDENCE_DIRECTORY FLECK_GLASS_SYNTHETIC_CAPTURE_DIR
+  FLECK_NATIVE_CAPTURE_QA
   FLECK_LAYOUT_EVIDENCE_DIR FLECK_MODEL_LIBRARY_VISUAL_CAPTURE_DIRECTORY
   FLECK_PACKET_C_CAPTURE_DIR FLECK_PINNED_CHROME_CAPTURE_PATH
   FLECK_RAIL_CAPTURE_DIR FLECK_SEARCH_TEST_CAPTURE_DIR

@@ -5796,7 +5796,12 @@ func hostedSelectedNoteTabUsesOpaqueTintFillAndPairedInkUnderGlass() async throw
   }
 }
 
-@Test @MainActor
+@Test(
+  .enabled(
+    if: ProcessInfo.processInfo.environment["FLECK_NATIVE_CAPTURE_QA"] == "1"
+  )
+)
+@MainActor
 func hostedGlassAndSolidMenuPanelsCaptureSyntheticChromeAndOpaqueEditor() async throws {
   try #require(CGPreflightScreenCaptureAccess())
   try await captureHostedGlassAndSolidMenuPanels()

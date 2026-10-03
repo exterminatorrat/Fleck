@@ -45,9 +45,24 @@ jobs:
           python3 -B -m unittest discover -s Tests/Scripts -p test_build_identity.py
           python3 -B Scripts/fleck-build-identity.py check
       - name: Test ordinary graph
+        env:
+          FLECK_NATIVE_CAPTURE_QA: "0"
         run: |
           unset FLECK_ENHANCED_CANDIDATE
           Scripts/run-nonempty-swift-tests.sh '^.+$'
+      - name: Declare native capture boundary (ordinary graph)
+        if: always()
+        run: |
+          message='Strict native screenshot/pixel capture: NOT RUN in GitHub-hosted CI (FLECK_NATIVE_CAPTURE_QA=0).
+          The strict case requires separate native-QA artifact and status-receipt evidence.
+          Passing CI does not prove this case ran; this workflow does not claim full native screenshot coverage.
+          All other full-graph selectors and assertions remain enabled.'
+          printf '%s\n' "$message"
+          {
+            printf '## Native screenshot capture boundary\n\n'
+            printf '%s\n\n' "$message"
+            printf '%s\n' 'Separate native-QA output must include the PNGs and console status receipt.'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Build Fleck release product
         run: |
           unset FLECK_ENHANCED_CANDIDATE
@@ -99,9 +114,24 @@ jobs:
       - name: Verify Enhanced Local candidate pin
         run: Scripts/test-enhanced-candidate-pin.sh
       - name: Test Enhanced Local candidate graph
+        env:
+          FLECK_NATIVE_CAPTURE_QA: "0"
         run: |
           Scripts/run-nonempty-enhanced-tests.sh '^.+$'
           git diff --exit-code -- Package.resolved
+      - name: Declare native capture boundary (candidate graph)
+        if: always()
+        run: |
+          message='Strict native screenshot/pixel capture: NOT RUN in GitHub-hosted CI (FLECK_NATIVE_CAPTURE_QA=0).
+          The strict case requires separate native-QA artifact and status-receipt evidence.
+          Passing CI does not prove this case ran; this workflow does not claim full native screenshot coverage.
+          All other full-graph selectors and assertions remain enabled.'
+          printf '%s\n' "$message"
+          {
+            printf '## Native screenshot capture boundary\n\n'
+            printf '%s\n\n' "$message"
+            printf '%s\n' 'Separate native-QA output must include the PNGs and console status receipt.'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Preserve ordinary lock from a foreign working directory
         run: |
           Scripts/test-enhanced-candidate-lock-preservation.sh
