@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      own_window_capture_probe:
+        description: >-
+          Run the supplemental hosted own-window capture probe; it does not replace
+          required CI.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -102,3 +110,56 @@ jobs:
         run: |
           Scripts/check-candidate-release-rejected.sh
           git diff --exit-code -- Package.resolved
+
+  own-window-capture-probe:
+    name: Supplemental own-window capture probe
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.own_window_capture_probe }}
+    runs-on: macos-26
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository (actions/checkout v6.0.2, without credentials)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Prepare diagnostic output directory
+        run: |
+          FLECK_GLASS_SYNTHETIC_CAPTURE_DIR="$RUNNER_TEMP/fleck-own-window-capture-probe/captures"
+          mkdir -p \
+            "$RUNNER_TEMP/fleck-own-window-capture-probe" \
+            "$FLECK_GLASS_SYNTHETIC_CAPTURE_DIR"
+          printf 'FLECK_GLASS_SYNTHETIC_CAPTURE_DIR=%s\n' \
+            "$FLECK_GLASS_SYNTHETIC_CAPTURE_DIR" >> "$GITHUB_ENV"
+      - name: Log diagnostic metadata
+        run: |
+          set -o pipefail
+          {
+            printf 'Git commit SHA: '
+            git rev-parse --verify HEAD
+            printf 'Runner image: GitHub-hosted macos-26\n'
+            sw_vers
+            xcodebuild -version
+            swift --version
+          } 2>&1 | tee "$RUNNER_TEMP/fleck-own-window-capture-probe/console.log"
+      - name: Run exact own-window capture capability probe
+        run: |
+          set -o pipefail
+          Scripts/run-nonempty-swift-tests.sh \
+            '^FleckAppTests\.hostedOwnWindowCaptureCapabilityProbe\(\)$' 2>&1 |
+            tee -a "$RUNNER_TEMP/fleck-own-window-capture-probe/console.log"
+      - name: Verify expected probe artifact files
+        if: ${{ always() }}
+        run: |
+          test -s "$RUNNER_TEMP/fleck-own-window-capture-probe/console.log"
+          test -s "$FLECK_GLASS_SYNTHETIC_CAPTURE_DIR/glass.png"
+          test -s "$FLECK_GLASS_SYNTHETIC_CAPTURE_DIR/solid.png"
+      - name: Upload own-window capture diagnostics (actions/upload-artifact v7.0.1)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: own-window-capture-probe
+          path: |
+            ${{ runner.temp }}/fleck-own-window-capture-probe/console.log
+            ${{ runner.temp }}/fleck-own-window-capture-probe/captures/
+          if-no-files-found: error

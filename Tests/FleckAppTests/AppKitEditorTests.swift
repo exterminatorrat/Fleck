@@ -5799,6 +5799,23 @@ func hostedSelectedNoteTabUsesOpaqueTintFillAndPairedInkUnderGlass() async throw
 @Test @MainActor
 func hostedGlassAndSolidMenuPanelsCaptureSyntheticChromeAndOpaqueEditor() async throws {
   try #require(CGPreflightScreenCaptureAccess())
+  try await captureHostedGlassAndSolidMenuPanels()
+}
+
+@Test(
+  .enabled(
+    if: ProcessInfo.processInfo.environment["FLECK_GLASS_SYNTHETIC_CAPTURE_DIR"] != nil
+  )
+)
+@MainActor
+func hostedOwnWindowCaptureCapabilityProbe() async throws {
+  let preflightObservation = CGPreflightScreenCaptureAccess()
+  print("CGPreflightScreenCaptureAccess() observation only: \(preflightObservation)")
+  try await captureHostedGlassAndSolidMenuPanels()
+}
+
+@MainActor
+private func captureHostedGlassAndSolidMenuPanels() async throws {
   let previousApplicationAppearance = NSApp.appearance
   defer { NSApp.appearance = previousApplicationAppearance }
 
