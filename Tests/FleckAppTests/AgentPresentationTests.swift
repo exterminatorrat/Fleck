@@ -86,10 +86,8 @@ struct AgentPresentationTests {
 
   @Test @MainActor
   func agentSettingsDisclosureButtonsHaveSeparateHitboxesAndToggleIndependently() async throws {
-    NSApplication.shared.accessibilitySetValue(
-      true,
-      forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-    )
+    let previousAXEnhancedUserInterface = enableAgentPresentationAccessibility()
+    defer { restoreAgentPresentationAccessibility(previousAXEnhancedUserInterface) }
     let state = AgentSettingsDisclosureState()
     let (window, host) = await hostedWindow(
       rootView: AgentSettingsDisclosureHarness(state: state),
@@ -440,10 +438,8 @@ struct AgentPresentationTests {
 
   @Test @MainActor
   func disablingAgentUpdateBannersClearsMenuAndPinnedHostsTogether() async throws {
-    NSApplication.shared.accessibilitySetValue(
-      true,
-      forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-    )
+    let previousAXEnhancedUserInterface = enableAgentPresentationAccessibility()
+    defer { restoreAgentPresentationAccessibility(previousAXEnhancedUserInterface) }
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("AgentBannerHosts-\(UUID().uuidString)", isDirectory: true)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -678,10 +674,8 @@ struct AgentPresentationTests {
 
   @Test @MainActor
   func agentActivityDoneClearsOwningStateWithoutClosingParentWindow() async throws {
-    NSApplication.shared.accessibilitySetValue(
-      true,
-      forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-    )
+    let previousAXEnhancedUserInterface = enableAgentPresentationAccessibility()
+    defer { restoreAgentPresentationAccessibility(previousAXEnhancedUserInterface) }
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("AgentActivityDone-\(UUID().uuidString)", isDirectory: true)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -745,10 +739,8 @@ struct AgentPresentationTests {
 
   @Test @MainActor
   func unpinnedNotesPanelKeepsAgentActivityInsideItsVisibleHost() async throws {
-    NSApplication.shared.accessibilitySetValue(
-      true,
-      forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-    )
+    let previousAXEnhancedUserInterface = enableAgentPresentationAccessibility()
+    defer { restoreAgentPresentationAccessibility(previousAXEnhancedUserInterface) }
     for size in [NSSize(width: 380, height: 300), NSSize(width: 800, height: 430)] {
       let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("AgentActivityPanel-\(UUID().uuidString)", isDirectory: true)
@@ -772,6 +764,12 @@ struct AgentPresentationTests {
         .environmentObject(state),
         size: size
       )
+      defer {
+        if window.contentView != nil || window.isVisible {
+          window.contentView = nil
+          window.orderOut(nil)
+        }
+      }
       let initialFrame = window.frame
 
       let indicator = try #require(
@@ -943,6 +941,23 @@ struct AgentPresentationTests {
       if let match = hostedDescendant(in: subview, as: type) { return match }
     }
     return nil
+  }
+
+  @MainActor
+  private func enableAgentPresentationAccessibility() -> Any? {
+    let application = NSApplication.shared
+    let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+    let previousValue = application.accessibilityAttributeValue(attribute)
+    application.accessibilitySetValue(true, forAttribute: attribute)
+    return previousValue
+  }
+
+  @MainActor
+  private func restoreAgentPresentationAccessibility(_ value: Any?) {
+    NSApplication.shared.accessibilitySetValue(
+      value,
+      forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+    )
   }
 }
 
