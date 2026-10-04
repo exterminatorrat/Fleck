@@ -35,6 +35,80 @@ struct FolderNavigatorPresentationTests {
     #expect(occlusion.covers(nil))
   }
 
+  @Test func retainedComposerOwnershipAndNativeHitTestingRemainObservable() throws {
+    let retainedField = NSTextField(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
+    #expect(folderComposerIsInactive(retainedField, hasEditor: false, firstResponder: nil))
+    #expect(!folderComposerIsInactive(retainedField, hasEditor: true, firstResponder: nil))
+    #expect(
+      !folderComposerIsInactive(
+        retainedField,
+        hasEditor: false,
+        firstResponder: retainedField
+      )
+    )
+
+    let parent = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 120))
+    let host = NSView(frame: NSRect(x: 30, y: 20, width: 240, height: 60))
+    parent.addSubview(host)
+    let fixtureWindow = NSWindow(
+      contentRect: parent.bounds,
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false
+    )
+    fixtureWindow.contentView = parent
+    let retainedGhost = NSTextField(frame: NSRect(x: 20, y: 18, width: 180, height: 24))
+    retainedGhost.placeholderString = "New folder"
+    retainedGhost.setAccessibilityIdentifier("folder-new-name")
+    host.addSubview(retainedGhost)
+    let rawField = NSTextField(frame: NSRect(x: 20, y: 18, width: 180, height: 24))
+    rawField.setAccessibilityIdentifier("folder-new-name")
+    host.addSubview(rawField)
+    let liveCandidates = [retainedGhost, rawField].filter {
+      isLiveNativeFolderComposerCandidate($0, fixtureWindow: fixtureWindow, host: host)
+    }
+    #expect(liveCandidates.count == 1)
+    #expect(try uniqueNativeFolderComposerCandidate(liveCandidates) === rawField)
+    #expect(
+      nativeFolderComposerInteractionRegion(for: rawField, in: host)
+        == NSRect(x: 20, y: 18, width: 180, height: 24)
+    )
+    let foreignWindow = NSWindow(
+      contentRect: parent.bounds,
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false
+    )
+    #expect(
+      !isLiveNativeFolderComposerCandidate(rawField, fixtureWindow: foreignWindow, host: host)
+    )
+    let occluder = NSView(frame: rawField.frame)
+    host.addSubview(occluder)
+    #expect(!isLiveNativeFolderComposerCandidate(rawField, fixtureWindow: fixtureWindow, host: host))
+    occluder.removeFromSuperview()
+    #expect(!formerFolderComposerRegionIsInert(rawField.frame, in: host, rawFields: [rawField]))
+
+    let emptyHost = NSView(frame: host.frame)
+    parent.addSubview(emptyHost)
+    #expect(formerFolderComposerRegionIsInert(rawField.frame, in: emptyHost, rawFields: [rawField]))
+
+    let descendant = NSView(frame: rawField.bounds)
+    rawField.addSubview(descendant)
+    #expect(isLiveNativeFolderComposerCandidate(rawField, fixtureWindow: fixtureWindow, host: host))
+    #expect(!formerFolderComposerRegionIsInert(rawField.frame, in: host, rawFields: [rawField]))
+
+    let secondLiveField = NSTextField(frame: NSRect(x: 205, y: 18, width: 30, height: 24))
+    secondLiveField.setAccessibilityIdentifier("folder-new-name")
+    host.addSubview(secondLiveField)
+    let ambiguousCandidates = [rawField, secondLiveField].filter {
+      isLiveNativeFolderComposerCandidate($0, fixtureWindow: fixtureWindow, host: host)
+    }
+    #expect(ambiguousCandidates.count == 2)
+    #expect(throws: NativeFolderComposerLookupError.self) {
+      try uniqueNativeFolderComposerCandidate(ambiguousCandidates)
+    }
+  }
+
   @Test func narrowMaskFullyHidesUnderlyingRowsWithoutOverrunningTheBand() {
     let mask = FolderNavigatorMaskPresentation(bandWidth: 280)
     #expect(mask.composerWidth == 280)
@@ -173,7 +247,7 @@ struct FolderNavigatorPresentationTests {
     let diagnostics = FolderNavigatorNativeDiagnostics(
       testName: "compactRenameCreateAndDeleteRemeasureIntrinsicContent",
       window: fixture.window,
-      fieldProvider: { fixture.newFolderFieldIfPresent() },
+      fieldProvider: { try? fixture.liveNewFolderFieldIfPresent() },
       contextProvider: { fixture.folderNavigatorDiagnosticContext() }
     )
     defer { diagnostics.finish() }
@@ -200,10 +274,14 @@ struct FolderNavigatorPresentationTests {
     await fixture.settle()
     diagnostics.attachCurrentField()
     try fixture.type("A newly created folder with a wider name")
+    let formerInteractionRegion = try fixture.liveNewFolderComposerInteractionRegion()
     diagnostics.beginKeyDispatch(label: "Return", characters: "\r", keyCode: 36)
     try fixture.sendKey(characters: "\r", keyCode: 36)
     diagnostics.endKeyDispatch()
-    let createdComposerDismissed = try await fixture.waitForNewFolderComposer(isPresent: false)
+    let createdComposerDismissed = try await fixture.waitForNewFolderComposer(
+      isPresent: false,
+      formerInteractionRegion: formerInteractionRegion
+    )
     if !createdComposerDismissed {
       fixture.printCreationFailureSnapshot(
         testName: "compactRenameCreateAndDeleteRemeasureIntrinsicContent",
@@ -213,6 +291,11 @@ struct FolderNavigatorPresentationTests {
     try #require(createdComposerDismissed)
     await fixture.settle()
     #expect(fixture.isVisible(label: "Reveal earlier folders"))
+    #expect(fixture.state.workspace.folders.count == 3)
+    #expect(
+      fixture.state.workspace.folders.map(\.name)
+        == ["A", "B", "A newly created folder with a wider name"]
+    )
     let created = try #require(fixture.state.workspace.folders.last)
     try #require(created.name == "A newly created folder with a wider name")
     try fixture.state.deleteFolder(id: created.id, activeFolderID: nil)
@@ -332,9 +415,8 @@ struct FolderNavigatorPresentationTests {
     try fixture.click(newFolder)
     await fixture.settle()
 
-    _ = try #require(
-      fixture.textFields.first { $0.placeholderString == "New folder" }
-    )
+    let liveNewFolderField = try fixture.liveNewFolderFieldIfPresent()
+    _ = try #require(liveNewFolderField)
     let unfiledAfter = try fixture.frame(identifier: "folder-unfiled")
     let trashAfter = try fixture.frame(identifier: "folder-trash")
 
@@ -353,7 +435,7 @@ struct FolderNavigatorPresentationTests {
     let diagnostics = FolderNavigatorNativeDiagnostics(
       testName: "composerFocusValidationCancellationAndCreationStayNative",
       window: fixture.window,
-      fieldProvider: { fixture.newFolderFieldIfPresent() },
+      fieldProvider: { try? fixture.liveNewFolderFieldIfPresent() },
       contextProvider: { fixture.folderNavigatorDiagnosticContext() }
     )
     defer { diagnostics.finish() }
@@ -363,7 +445,7 @@ struct FolderNavigatorPresentationTests {
     try fixture.click(fixture.element(label: "New folder"))
     let initialComposerFocused = try await fixture.waitForNewFolderComposer(isPresent: true)
     try #require(initialComposerFocused)
-    let field = try fixture.newFolderField()
+    let field = try fixture.liveNewFolderField()
     diagnostics.attachCurrentField()
     #expect(field.currentEditor() === fixture.window.firstResponder)
     #expect(fixture.isVisible(identifier: "folder-trash"))
@@ -374,7 +456,7 @@ struct FolderNavigatorPresentationTests {
     try fixture.performAccessibilityPress(identifier: "folder-unfiled")
     await fixture.settle()
     #expect(fixture.state.workspace.selectedNoteID == selectedNoteID)
-    #expect(fixture.newFolderFieldIfPresent() != nil)
+    #expect(try fixture.liveNewFolderFieldIfPresent() != nil)
 
     try fixture.type("   ")
     diagnostics.beginKeyDispatch(label: "Return", characters: "\r", keyCode: 36)
@@ -382,7 +464,7 @@ struct FolderNavigatorPresentationTests {
     diagnostics.endKeyDispatch()
     await fixture.settle()
     #expect(fixture.state.workspace.folders.count == 2)
-    #expect(try fixture.newFolderField().stringValue == "   ")
+    #expect(try fixture.liveNewFolderField().stringValue == "   ")
 
     try fixture.replaceDraft(with: "Work")
     diagnostics.beginKeyDispatch(label: "Return", characters: "\r", keyCode: 36)
@@ -390,29 +472,40 @@ struct FolderNavigatorPresentationTests {
     diagnostics.endKeyDispatch()
     await fixture.settle()
     #expect(fixture.state.workspace.folders.count == 2)
-    #expect(try fixture.newFolderField().stringValue == "Work")
+    #expect(try fixture.liveNewFolderField().stringValue == "Work")
 
     try fixture.click(fixture.element(identifier: "folder-new"))
     await fixture.settle()
-    #expect(try fixture.newFolderField().stringValue == "Work")
+    #expect(try fixture.liveNewFolderField().stringValue == "Work")
 
+    let formerInteractionRegion = try fixture.liveNewFolderComposerInteractionRegion()
     diagnostics.beginKeyDispatch(label: "Escape", characters: "\u{1b}", keyCode: 53)
     try fixture.sendKey(characters: "\u{1b}", keyCode: 53)
     diagnostics.endKeyDispatch()
-    let escapedComposerDismissed = try await fixture.waitForNewFolderComposer(isPresent: false)
+    let escapedComposerDismissed = try await fixture.waitForNewFolderComposer(
+      isPresent: false,
+      formerInteractionRegion: formerInteractionRegion
+    )
     try #require(escapedComposerDismissed)
-    #expect(fixture.newFolderFieldIfPresent() == nil)
+    #expect(try fixture.liveNewFolderFieldIfPresent() == nil)
 
     try fixture.click(fixture.element(label: "New folder"))
     let reopenedComposerFocused = try await fixture.waitForNewFolderComposer(isPresent: true)
     try #require(reopenedComposerFocused)
-    #expect(try fixture.newFolderField().stringValue.isEmpty)
+    let reopenedField = try fixture.liveNewFolderField()
+    #expect(try fixture.liveNewFolderField() === reopenedField)
+    #expect(reopenedField.stringValue.isEmpty)
+    #expect(reopenedField.currentEditor() === fixture.window.firstResponder)
     diagnostics.attachCurrentField()
     try fixture.type("Created")
+    let createdFormerInteractionRegion = try fixture.liveNewFolderComposerInteractionRegion()
     diagnostics.beginKeyDispatch(label: "Return", characters: "\r", keyCode: 36)
     try fixture.sendKey(characters: "\r", keyCode: 36)
     diagnostics.endKeyDispatch()
-    let createdComposerDismissed = try await fixture.waitForNewFolderComposer(isPresent: false)
+    let createdComposerDismissed = try await fixture.waitForNewFolderComposer(
+      isPresent: false,
+      formerInteractionRegion: createdFormerInteractionRegion
+    )
     if !createdComposerDismissed {
       fixture.printCreationFailureSnapshot(
         testName: "composerFocusValidationCancellationAndCreationStayNative",
@@ -420,7 +513,7 @@ struct FolderNavigatorPresentationTests {
       )
     }
     try #require(createdComposerDismissed)
-    #expect(fixture.newFolderFieldIfPresent() == nil)
+    #expect(try fixture.liveNewFolderFieldIfPresent() == nil)
     #expect(fixture.state.workspace.folders.map(\.name).contains("Created"))
     #expect(fixture.state.workspace.selectedNoteID == selectedNoteID)
   }
@@ -436,7 +529,7 @@ struct FolderNavigatorPresentationTests {
     await fixture.settle()
 
     #expect(fixture.state.workspace.selectedNoteID == unfiledNote.id)
-    #expect(fixture.newFolderFieldIfPresent() != nil)
+    #expect(try fixture.liveNewFolderFieldIfPresent() != nil)
   }
 
   @Test func escapeCancelsComposerAfterFocusMovesToUncoveredRow() async throws {
@@ -445,7 +538,7 @@ struct FolderNavigatorPresentationTests {
     let diagnostics = FolderNavigatorNativeDiagnostics(
       testName: "escapeCancelsComposerAfterFocusMovesToUncoveredRow",
       window: fixture.window,
-      fieldProvider: { fixture.newFolderFieldIfPresent() },
+      fieldProvider: { try? fixture.liveNewFolderFieldIfPresent() },
       contextProvider: { fixture.folderNavigatorDiagnosticContext() }
     )
     defer { diagnostics.finish() }
@@ -454,15 +547,19 @@ struct FolderNavigatorPresentationTests {
     diagnostics.attachCurrentField()
     try fixture.click(fixture.element(identifier: "folder-unfiled"))
     await fixture.settle()
-    #expect(try fixture.newFolderField().currentEditor() == nil)
+    #expect(try fixture.liveNewFolderField().currentEditor() == nil)
 
+    let formerInteractionRegion = try fixture.liveNewFolderComposerInteractionRegion()
     diagnostics.beginKeyDispatch(label: "Escape", characters: "\u{1b}", keyCode: 53)
     try fixture.sendKey(characters: "\u{1b}", keyCode: 53)
     diagnostics.endKeyDispatch()
     await fixture.settle()
-    let escapedComposerDismissed = try await fixture.waitForNewFolderComposer(isPresent: false)
+    let escapedComposerDismissed = try await fixture.waitForNewFolderComposer(
+      isPresent: false,
+      formerInteractionRegion: formerInteractionRegion
+    )
     try #require(escapedComposerDismissed)
-    #expect(fixture.newFolderFieldIfPresent() == nil)
+    #expect(try fixture.liveNewFolderFieldIfPresent() == nil)
   }
 
   @Test func initialSpaceBelongsToTheNativeFolderField() async throws {
@@ -470,7 +567,7 @@ struct FolderNavigatorPresentationTests {
     defer { fixture.close() }
     try fixture.click(fixture.element(label: "New folder"))
     await fixture.settle()
-    let field = try fixture.newFolderField()
+    let field = try fixture.liveNewFolderField()
     #expect(field.currentEditor() === fixture.window.firstResponder)
 
     try fixture.sendKey(characters: " ", keyCode: 49)
@@ -486,17 +583,21 @@ struct FolderNavigatorPresentationTests {
     try fixture.type("Projects")
     try fixture.click(fixture.element(identifier: "folder-unfiled"))
     await fixture.settle()
-    #expect(try fixture.newFolderField().currentEditor() == nil)
+    #expect(try fixture.liveNewFolderField().currentEditor() == nil)
 
-    let field = try fixture.newFolderField()
+    let field = try fixture.liveNewFolderField()
     #expect(fixture.window.makeFirstResponder(field))
     await fixture.settle()
-    #expect(try fixture.newFolderField().currentEditor() === fixture.window.firstResponder)
+    #expect(try fixture.liveNewFolderField().currentEditor() === fixture.window.firstResponder)
+    let formerInteractionRegion = try fixture.liveNewFolderComposerInteractionRegion()
     try fixture.sendKey(characters: "\r", keyCode: 36)
     await fixture.settle()
-    let composerDismissed = try await fixture.waitForNewFolderComposer(isPresent: false)
+    let composerDismissed = try await fixture.waitForNewFolderComposer(
+      isPresent: false,
+      formerInteractionRegion: formerInteractionRegion
+    )
     try #require(composerDismissed)
-    #expect(fixture.newFolderFieldIfPresent() == nil)
+    #expect(try fixture.liveNewFolderFieldIfPresent() == nil)
     #expect(fixture.state.workspace.folders.map(\.name).contains("Projects"))
   }
 
@@ -505,7 +606,7 @@ struct FolderNavigatorPresentationTests {
     defer { fixture.close() }
     try fixture.click(fixture.element(label: "New folder"))
     await fixture.settle()
-    let field = try fixture.newFolderField()
+    let field = try fixture.liveNewFolderField()
     let editor = try #require(field.currentEditor() as? NSTextView)
 
     editor.setMarkedText(
@@ -523,7 +624,7 @@ struct FolderNavigatorPresentationTests {
 
     try fixture.sendKey(characters: "\r", keyCode: 36)
     await fixture.settle()
-    #expect(fixture.newFolderFieldIfPresent() != nil)
+    #expect(try fixture.liveNewFolderFieldIfPresent() != nil)
     #expect(!fixture.state.workspace.folders.map(\.name).contains("かな"))
   }
 
@@ -644,6 +745,93 @@ private struct FolderNavigatorDiagnosticContext {
   let createButtonFound: Bool
   let createButtonEnabled: Bool?
   let saveError: String?
+}
+
+@MainActor
+private func folderComposerIsInactive(
+  _ field: NSTextField,
+  hasEditor: Bool,
+  firstResponder: NSResponder?
+) -> Bool {
+  guard !hasEditor, firstResponder !== field else { return false }
+  if let firstResponderView = firstResponder as? NSView,
+    firstResponderView.isDescendant(of: field)
+  {
+    return false
+  }
+  return true
+}
+
+@MainActor
+private func formerFolderComposerRegionIsInert(
+  _ region: NSRect,
+  in host: NSView,
+  rawFields: [NSTextField]
+) -> Bool {
+  guard !region.isEmpty, host.bounds.contains(region) else { return false }
+  let coordinates: [CGFloat] = [0.25, 0.5, 0.75]
+  let points = coordinates.flatMap { x in
+    coordinates.map { y in
+      NSPoint(x: region.minX + region.width * x, y: region.minY + region.height * y)
+    }
+  }
+  return points.allSatisfy { point in
+    let pointInSuperview = host.convert(point, to: host.superview)
+    guard let hitView = host.hitTest(pointInSuperview) else { return true }
+    return rawFields.allSatisfy { field in
+      hitView !== field && !hitView.isDescendant(of: field)
+    }
+  }
+}
+
+@MainActor
+private func nativeFolderComposerInteractionRegion(
+  for field: NSTextField,
+  in host: NSView
+) -> NSRect? {
+  let region = field.convert(field.bounds, to: host)
+  guard !region.isEmpty, host.bounds.contains(region) else { return nil }
+
+  let coordinates: [CGFloat] = [0.25, 0.5, 0.75]
+  let points = coordinates.flatMap { x in
+    coordinates.map { y in
+      NSPoint(x: region.minX + region.width * x, y: region.minY + region.height * y)
+    }
+  }
+  let editor: NSView? = field.currentEditor()
+  let hitsBelongToComposer = points.allSatisfy { point in
+    let pointInSuperview = host.convert(point, to: host.superview)
+    guard let hitView = host.hitTest(pointInSuperview) else { return false }
+    if hitView === field || hitView.isDescendant(of: field) { return true }
+    guard let editor else { return false }
+    return hitView === editor || hitView.isDescendant(of: editor)
+  }
+  return hitsBelongToComposer ? region : nil
+}
+
+@MainActor
+private func isLiveNativeFolderComposerCandidate(
+  _ field: NSTextField,
+  fixtureWindow: NSWindow,
+  host: NSView
+) -> Bool {
+  field.accessibilityIdentifier() == "folder-new-name"
+    && field.window === fixtureWindow
+    && nativeFolderComposerInteractionRegion(for: field, in: host) != nil
+}
+
+@MainActor
+private func uniqueNativeFolderComposerCandidate(
+  _ candidates: [NSTextField]
+) throws -> NSTextField? {
+  guard candidates.count <= 1 else {
+    throw NativeFolderComposerLookupError.multipleInteractiveFields
+  }
+  return candidates.first
+}
+
+private enum NativeFolderComposerLookupError: Error {
+  case multipleInteractiveFields
 }
 
 @MainActor
@@ -1245,8 +1433,31 @@ private final class FolderNavigatorFixture {
     window.sendEvent(mouseDown)
   }
 
-  func newFolderFieldIfPresent() -> NSTextField? {
-    textFields.first { $0.placeholderString == "New folder" }
+  func rawNewFolderFields() -> [NSTextField] {
+    textFields.filter { $0.placeholderString == "New folder" }
+  }
+
+  func liveNewFolderFieldIfPresent() throws -> NSTextField? {
+    let candidates = textFields.filter {
+      isLiveNativeFolderComposerCandidate($0, fixtureWindow: window, host: host)
+    }
+    return try uniqueNativeFolderComposerCandidate(candidates)
+  }
+
+  func liveNewFolderComposerInteractionRegion() throws -> NSRect {
+    let field = try liveNewFolderField()
+    return try #require(nativeFolderComposerInteractionRegion(for: field, in: host))
+  }
+
+  private func rawNewFolderComposersAreInactive() -> Bool {
+    let firstResponder = window.firstResponder
+    return rawNewFolderFields().allSatisfy { field in
+      folderComposerIsInactive(
+        field,
+        hasEditor: field.currentEditor() != nil,
+        firstResponder: firstResponder
+      )
+    }
   }
 
   func folderNavigatorDiagnosticContext() -> FolderNavigatorDiagnosticContext {
@@ -1273,8 +1484,7 @@ private final class FolderNavigatorFixture {
     let identity: (AnyObject) -> String = {
       "\(String(reflecting: Swift.type(of: $0)))#\(ObjectIdentifier($0))"
     }
-    let rawFields: [[String: Any]] = textFields
-      .filter { $0.placeholderString == "New folder" }
+    let rawFields: [[String: Any]] = rawNewFolderFields()
       .map { field in
         let fieldWindow = field.window
         let parent = field.superview
@@ -1347,17 +1557,37 @@ private final class FolderNavigatorFixture {
     print("FLECK_FOLDER_CREATION_FAILURE_DIAGNOSTIC \(line)")
   }
 
-  func waitForNewFolderComposer(isPresent: Bool) async throws -> Bool {
+  func waitForNewFolderComposer(
+    isPresent: Bool,
+    formerInteractionRegion: NSRect? = nil
+  ) async throws -> Bool {
+    if !isPresent { try #require(formerInteractionRegion != nil) }
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: .seconds(2))
 
-    func stateMatches() -> Bool {
-      guard let field = newFolderFieldIfPresent() else {
-        return !isPresent
-          && elementIfPresent(label: "Create folder") == nil
-          && elementIfPresent(label: "Cancel new folder") == nil
+    func stateMatches() throws -> Bool {
+      let field = try liveNewFolderFieldIfPresent()
+      guard isPresent else {
+        guard field == nil,
+          matchingElements(host, matching: "accessibilityIdentifier", value: "folder-new-name")
+            .isEmpty,
+          matchingElements(host, matching: "accessibilityLabel", value: "Create folder").isEmpty,
+          matchingElements(
+            host,
+            matching: "accessibilityLabel",
+            value: "Cancel new folder"
+          ).isEmpty,
+          rawNewFolderComposersAreInactive(),
+          let formerInteractionRegion,
+          formerFolderComposerRegionIsInert(
+            formerInteractionRegion,
+            in: host,
+            rawFields: rawNewFolderFields()
+          )
+        else { return false }
+        return true
       }
-      guard isPresent else { return false }
+      guard let field else { return false }
       guard
         field.window === window,
         let editor = field.currentEditor(),
@@ -1372,27 +1602,32 @@ private final class FolderNavigatorFixture {
     while clock.now < deadline {
       try Task.checkCancellation()
       host.layoutSubtreeIfNeeded()
-      if stateMatches() { return true }
+      if try stateMatches() { return true }
       let remaining = clock.now.duration(to: deadline)
       guard remaining > .zero else { break }
       try await Task.sleep(for: min(.milliseconds(25), remaining))
     }
 
     try Task.checkCancellation()
-    return stateMatches()
+    return try stateMatches()
   }
 
-  func newFolderField() throws -> NSTextField {
-    try #require(newFolderFieldIfPresent())
+  func liveNewFolderField() throws -> NSTextField {
+    let field = try liveNewFolderFieldIfPresent()
+    return try #require(field)
   }
 
   func type(_ string: String) throws {
-    let editor = try #require(newFolderField().currentEditor() as? NSTextView)
+    let field = try liveNewFolderField()
+    let currentEditor = field.currentEditor() as? NSTextView
+    let editor = try #require(currentEditor)
     editor.insertText(string, replacementRange: editor.selectedRange())
   }
 
   func replaceDraft(with string: String) throws {
-    let editor = try #require(newFolderField().currentEditor() as? NSTextView)
+    let field = try liveNewFolderField()
+    let currentEditor = field.currentEditor() as? NSTextView
+    let editor = try #require(currentEditor)
     editor.setSelectedRange(NSRange(location: 0, length: editor.string.utf16.count))
     editor.insertText(string, replacementRange: editor.selectedRange())
   }
@@ -1437,22 +1672,39 @@ private final class FolderNavigatorFixture {
   private func findElement(_ value: Any?, matching selectorName: String, value expected: String)
     -> NSObject?
   {
-    guard let element = value as? NSObject else { return nil }
+    matchingElements(value, matching: selectorName, value: expected).first
+  }
+
+  private func matchingElements(
+    _ value: Any?,
+    matching selectorName: String,
+    value expected: String
+  ) -> [NSObject] {
+    guard let element = value as? NSObject else { return [] }
     let selector = NSSelectorFromString(selectorName)
+    var matches: [NSObject] = []
     if element.responds(to: selector),
       element.perform(selector)?.takeUnretainedValue() as? String == expected
     {
-      return element
+      matches.append(element)
     }
     let childrenSelector = NSSelectorFromString("accessibilityChildren")
-    let rawChildren = element.responds(to: childrenSelector)
-      ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+    let rawChildren: [Any]?
+    if element.responds(to: childrenSelector) {
+      rawChildren = element.perform(childrenSelector)?.takeUnretainedValue() as? [Any]
+    } else {
+      rawChildren = nil
+    }
     let children = NSAccessibility.unignoredChildren(from: rawChildren ?? [])
     for child in children {
-      if let match = findElement(child, matching: selectorName, value: expected) {
-        return match
-      }
+      matches.append(
+        contentsOf: matchingElements(
+          child,
+          matching: selectorName,
+          value: expected
+        )
+      )
     }
-    return nil
+    return matches
   }
 }
