@@ -234,20 +234,114 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
     window.orderOut(nil)
   }
 
+  let rowIdentifier = "settings-vocabulary-entry-frame-\(deletedEntry.id.uuidString)"
   let row = try #require(
     personalDictionarySettingsView(
-      withAccessibilityIdentifier: "settings-vocabulary-entry-frame-\(deletedEntry.id.uuidString)",
+      withAccessibilityIdentifier: rowIdentifier,
       in: host
     )
   )
-  let rowFrame = host.convert(row.bounds, from: row)
   let deleteID = "settings-vocabulary-entry-delete-\(deletedEntry.id.uuidString)"
+
+  let application = NSApplication.shared
+  application.activate(ignoringOtherApps: true)
+  window.makeKeyAndOrderFront(nil)
+  await settlePersonalDictionarySettingsHost(host)
+  window.displayIfNeeded()
+  host.displayIfNeeded()
+  let windowIsActiveAndKey =
+    application.isActive && window.isKeyWindow && application.keyWindow === window
+      && window.isVisible
+  if !windowIsActiveAndKey {
+    print(
+      personalDictionaryDeleteAdmissionDiagnostic(
+        row: row,
+        entryID: deletedEntry.id,
+        deleteIdentifier: deleteID,
+        in: host,
+        window: window,
+        viewModel: viewModel
+      )
+    )
+  }
+  try #require(windowIsActiveAndKey)
+
+  let rowFrame = host.convert(row.bounds, from: row)
+  let pointerOutsideRows = NSPoint(
+    x: host.bounds.minX + 8,
+    y: host.isFlipped ? host.bounds.minY + 8 : host.bounds.maxY - 8
+  )
+  if rowFrame.contains(pointerOutsideRows) {
+    print(
+      personalDictionaryDeleteAdmissionDiagnostic(
+        row: row,
+        entryID: deletedEntry.id,
+        deleteIdentifier: deleteID,
+        in: host,
+        window: window,
+        viewModel: viewModel
+      )
+    )
+  }
+  try #require(!rowFrame.contains(pointerOutsideRows))
+  try movePersonalDictionaryPointer(to: pointerOutsideRows, in: host, window: window)
+  await settlePersonalDictionarySettingsHost(host)
+  let pointerAfterExit = host.convert(
+    window.convertFromScreen(NSRect(origin: NSEvent.mouseLocation, size: .zero)).origin,
+    from: nil
+  )
+  if rowFrame.contains(pointerAfterExit) {
+    print(
+      personalDictionaryDeleteAdmissionDiagnostic(
+        row: row,
+        entryID: deletedEntry.id,
+        deleteIdentifier: deleteID,
+        in: host,
+        window: window,
+        viewModel: viewModel
+      )
+    )
+  }
+  try #require(!rowFrame.contains(pointerAfterExit))
+
   try movePersonalDictionaryPointer(
-    to: NSPoint(x: rowFrame.maxX - 13, y: rowFrame.midY),
+    to: NSPoint(x: rowFrame.midX, y: rowFrame.midY),
     in: host,
     window: window
   )
   await settlePersonalDictionarySettingsHost(host)
+  window.displayIfNeeded()
+  host.displayIfNeeded()
+  let rowFrameAfterEntry = host.convert(row.bounds, from: row)
+  let pointerAfterEntry = host.convert(
+    window.convertFromScreen(NSRect(origin: NSEvent.mouseLocation, size: .zero)).origin,
+    from: nil
+  )
+  let pointerEnteredRow = rowFrameAfterEntry.contains(pointerAfterEntry)
+  let windowRemainsActiveAndKey =
+    application.isActive && window.isKeyWindow && application.keyWindow === window
+      && window.isVisible
+  if !pointerEnteredRow || !windowRemainsActiveAndKey {
+    print(
+      personalDictionaryDeleteAdmissionDiagnostic(
+        row: row,
+        entryID: deletedEntry.id,
+        deleteIdentifier: deleteID,
+        in: host,
+        window: window,
+        viewModel: viewModel
+      )
+    )
+  }
+  try #require(pointerEnteredRow && windowRemainsActiveAndKey)
+  try await requirePersonalDictionaryDeleteAccessibilityElement(
+    deleteID,
+    row: row,
+    entryID: deletedEntry.id,
+    in: host,
+    window: window,
+    viewModel: viewModel
+  )
   try clickPersonalDictionaryControlAtPaddedEdge(deleteID, in: host, window: window)
   await settlePersonalDictionarySettingsHost(host)
   #expect(viewModel.pendingEntryDeletion?.id == deletedEntry.id)
@@ -271,12 +365,32 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
   #expect(await gate.requestCount == 0)
   await settlePersonalDictionarySettingsHost(host)
 
-  try movePersonalDictionaryPointer(
-    to: NSPoint(x: rowFrame.maxX - 13, y: rowFrame.midY),
-    in: host,
-    window: window
+  let rowFrameAfterCancellation = host.convert(row.bounds, from: row)
+  let pointerAfterCancellation = host.convert(
+    window.convertFromScreen(NSRect(origin: NSEvent.mouseLocation, size: .zero)).origin,
+    from: nil
   )
-  await settlePersonalDictionarySettingsHost(host)
+  if !rowFrameAfterCancellation.contains(pointerAfterCancellation) {
+    print(
+      personalDictionaryDeleteAdmissionDiagnostic(
+        row: row,
+        entryID: deletedEntry.id,
+        deleteIdentifier: deleteID,
+        in: host,
+        window: window,
+        viewModel: viewModel
+      )
+    )
+  }
+  try #require(rowFrameAfterCancellation.contains(pointerAfterCancellation))
+  try await requirePersonalDictionaryDeleteAccessibilityElement(
+    deleteID,
+    row: row,
+    entryID: deletedEntry.id,
+    in: host,
+    window: window,
+    viewModel: viewModel
+  )
   try clickPersonalDictionaryControlAtPaddedEdge(deleteID, in: host, window: window)
   await settlePersonalDictionarySettingsHost(host)
 
@@ -2110,6 +2224,108 @@ private func personalDictionarySettingsWindow(
   }
   guard matchingWindows.count == 1 else { return nil }
   return matchingWindows[0]
+}
+
+@MainActor
+private func requirePersonalDictionaryDeleteAccessibilityElement(
+  _ identifier: String,
+  row: NSView,
+  entryID: UUID,
+  in host: NSView,
+  window: NSWindow,
+  viewModel: PersonalDictionarySettingsViewModel
+) async throws {
+  let application = NSApplication.shared
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: .seconds(2))
+  do {
+    while clock.now < deadline {
+      try Task.checkCancellation()
+      host.layoutSubtreeIfNeeded()
+      host.displayIfNeeded()
+      window.displayIfNeeded()
+      try Task.checkCancellation()
+      await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        DispatchQueue.main.async {
+          continuation.resume()
+        }
+      }
+      try Task.checkCancellation()
+      guard clock.now < deadline else { break }
+      let deleteElementIsReady = application.isActive
+        && window.isKeyWindow
+        && application.keyWindow === window
+        && window.isVisible
+        && personalDictionarySettingsAccessibilityElement(
+          withAccessibilityIdentifier: identifier,
+          in: host
+        ) != nil
+      try Task.checkCancellation()
+      guard clock.now < deadline else { break }
+      if deleteElementIsReady {
+        return
+      }
+      try Task.checkCancellation()
+      try await clock.sleep(until: min(deadline, clock.now.advanced(by: .milliseconds(10))))
+      try Task.checkCancellation()
+    }
+    try #require(clock.now < deadline)
+  } catch {
+    print(
+      personalDictionaryDeleteAdmissionDiagnostic(
+        row: row,
+        entryID: entryID,
+        deleteIdentifier: identifier,
+        in: host,
+        window: window,
+        viewModel: viewModel
+      )
+    )
+    throw error
+  }
+}
+
+@MainActor
+private func personalDictionaryDeleteAdmissionDiagnostic(
+  row: NSView,
+  entryID: UUID,
+  deleteIdentifier: String,
+  in host: NSView,
+  window: NSWindow,
+  viewModel: PersonalDictionarySettingsViewModel
+) -> String {
+  let pointerOnScreen = NSEvent.mouseLocation
+  let pointerInHost = host.convert(
+    window.convertFromScreen(NSRect(origin: pointerOnScreen, size: .zero)).origin,
+    from: nil
+  )
+  let rowFrame = host.convert(row.bounds, from: row)
+  let expectedIdentifiers = [
+    "settings-vocabulary-entry-frame-\(entryID.uuidString)",
+    "settings-vocabulary-entry-\(entryID.uuidString)",
+    deleteIdentifier,
+    "settings-vocabulary-entry-priority-\(entryID.uuidString)",
+    "settings-vocabulary-delete-cancellation",
+    "settings-vocabulary-delete-confirmation",
+  ]
+  let actualIdentifiers = expectedIdentifiers.filter {
+    personalDictionarySettingsAccessibilityElement(
+      withAccessibilityIdentifier: $0,
+      in: host
+    ) != nil
+  }
+  return """
+  [passive synthetic failure-only Dictionary Delete admission diagnostic]
+  rowID=settings-vocabulary-entry-frame-\(entryID.uuidString)
+  pointerScreen=\(pointerOnScreen) pointerLocal=\(pointerInHost)
+  hostBounds=\(host.bounds) hostVisibleRect=\(host.visibleRect)
+  rowBounds=\(row.bounds) rowFrame=\(rowFrame) rowVisibleRect=\(row.visibleRect)
+  rowHidden=\(row.isHiddenOrHasHiddenAncestor) rowAlpha=\(row.alphaValue)
+  windowFrame=\(window.frame) windowVisible=\(window.isVisible) windowIsKey=\(window.isKeyWindow)
+  appActive=\(NSApplication.shared.isActive) appKeyWindowMatches=\(NSApplication.shared.keyWindow === window)
+  actualAXIdentifiers=\(actualIdentifiers)
+  pendingRequest=\(String(describing: viewModel.pendingEntryDeletion))
+  """
 }
 
 @MainActor
