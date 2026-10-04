@@ -233,10 +233,14 @@
         )
       }
 
-      func addSection(_ section: SettingsSection, aliases: [String] = []) {
+      func addSection(
+        _ section: SettingsSection,
+        title: String? = nil,
+        aliases: [String] = []
+      ) {
         add(
           .section(section),
-          section.title,
+          title ?? section.title,
           to: section,
           aliases: [section.rawValue, section.description] + aliases
         )
@@ -320,7 +324,7 @@
       add(.dictationClearHistory, "Clear History", to: .dictation, aliases: ["delete history"])
       add(.dictationPrivacy, DictationSettingsGroup.privacy.rawValue, to: .dictation)
 
-      addSection(.vocabulary, aliases: ["suggestions"])
+      addSection(.vocabulary, title: "Dictionary", aliases: ["suggestions"])
       add(.vocabularyAdd, "Add New", to: .vocabulary, aliases: ["new word phrase correction"])
       add(.vocabularySearch, "Search vocabulary", to: .vocabulary)
       add(
@@ -417,6 +421,11 @@
     ) -> Int? {
       let title = normalize(result.title)
       if title == query { return 0 }
+      if result.target == .section(result.destination),
+        normalize(result.destination.title) == query
+      {
+        return 0
+      }
       if title.hasPrefix(query) { return 1 }
       if tokens.allSatisfy(title.contains) { return 2 }
 

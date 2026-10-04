@@ -925,6 +925,17 @@
     }
   }
 
+  enum MenuPanelResizeBeginReadiness {
+    case ready(
+      snapshot: MenuPanelResizeSnapshot,
+      handle: MenuPanelResizeHandle,
+      ownerID: UUID,
+      statusButtonSource: MenuPanelStatusButtonSourceIdentity
+    )
+    case reconciling
+    case blocked
+  }
+
   @MainActor
   final class MenuPanelResizeHostView: NSView {
     typealias FallbackVisibleFrameProvider = @MainActor (NSWindow) -> CGRect?
@@ -1341,9 +1352,13 @@
       }
     }
 
-    private func begin(_ event: NSEvent, in window: NSWindow) -> Bool {
-      guard isLiveResizeEligible(in: window), queuedRevision == nil,
-        let attachmentID,
+    func beginReadiness(
+      at locationInWindow: CGPoint,
+      in window: NSWindow
+    ) -> MenuPanelResizeBeginReadiness {
+      guard isLiveResizeEligible(in: window) else { return .blocked }
+      guard queuedRevision == nil else { return .reconciling }
+      guard let attachmentID,
         controller.isPresentationOwner(attachmentID),
         let statusButton = geometryStore?.resolveStatusButton(),
         let screen = window.screen,
@@ -1357,11 +1372,11 @@
         ),
         fixedSide == alignedFixedSide,
         let handle = MenuPanelResizeGeometry.handle(
-          at: convert(event.locationInWindow, from: nil),
+          at: convert(locationInWindow, from: nil),
           in: bounds,
           fixedSide: fixedSide
         )
-      else { return false }
+      else { return .blocked }
       let contentRect = window.contentRect(forFrameRect: window.frame)
       let insets = MenuPanelFrameInsets(
         top: window.frame.maxY - contentRect.maxY,
@@ -1370,7 +1385,7 @@
         right: window.frame.maxX - contentRect.maxX
       )
       let snapshot = MenuPanelResizeSnapshot(
-        initialPointer: window.convertPoint(toScreen: event.locationInWindow),
+        initialPointer: window.convertPoint(toScreen: locationInWindow),
         initialFrame: window.frame,
         initialContentSize: contentRect.size,
         frameInsets: insets,
@@ -1378,12 +1393,25 @@
         statusLabelFrame: statusButton.screenFrame,
         fixedSide: fixedSide
       )
-      guard controller.begin(snapshot: snapshot, handle: handle, ownerID: attachmentID) else {
+      return .ready(
+        snapshot: snapshot,
+        handle: handle,
+        ownerID: attachmentID,
+        statusButtonSource: statusButton.sourceIdentity
+      )
+    }
+
+    private func begin(_ event: NSEvent, in window: NSWindow) -> Bool {
+      guard case let .ready(snapshot, handle, ownerID, statusButtonSource) = beginReadiness(
+        at: event.locationInWindow,
+        in: window
+      ) else { return false }
+      guard controller.begin(snapshot: snapshot, handle: handle, ownerID: ownerID) else {
         return false
       }
       invalidateQueuedWork()
-      activeStatusButtonSource = statusButton.sourceIdentity
-      setCursor(cursor(for: handle, fixedSide: fixedSide))
+      activeStatusButtonSource = statusButtonSource
+      setCursor(cursor(for: handle, fixedSide: snapshot.fixedSide))
       return true
     }
 

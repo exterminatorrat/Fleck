@@ -1486,6 +1486,12 @@ import Testing
       }
       if changesHeight { release.y -= heightDelta }
 
+      guard try await requireResizeBeginReadiness(
+        host,
+        at: mouseDown,
+        in: window
+      ) else { return }
+      try Task.checkCancellation()
       let mouseDownEventNumber = eventNumber
       await withCheckedContinuation { continuation in
         DispatchQueue.main.async {
@@ -1793,6 +1799,12 @@ import Testing
       window.orderOut(nil)
     }
 
+    guard try await requireResizeBeginReadiness(
+      host,
+      at: CGPoint(x: 1, y: 200),
+      in: window
+    ) else { return }
+    try Task.checkCancellation()
     sendResizeMouseEvent(.leftMouseDown, at: CGPoint(x: 1, y: 200), to: window, number: 47)
     let dragScreenPoint = window.convertPoint(toScreen: CGPoint(x: -19, y: 200))
     sendResizeMouseEvent(.leftMouseDragged, atScreen: dragScreenPoint, to: window, number: 48)
@@ -3502,4 +3514,60 @@ private func settleResizeHost(_ view: NSView) async {
     view.layoutSubtreeIfNeeded()
     await Task.yield()
   }
+}
+
+@MainActor
+private func requireResizeBeginReadiness(
+  _ host: MenuPanelResizeHostView,
+  at locationInWindow: CGPoint,
+  in window: NSWindow
+) async throws -> Bool {
+  let deadline = ContinuousClock.now + .seconds(5)
+  try Task.checkCancellation()
+  var readiness = host.beginReadiness(at: locationInWindow, in: window)
+  guard ContinuousClock.now < deadline else {
+    Issue.record("Resize begin readiness expired before admission")
+    return false
+  }
+  while case .reconciling = readiness {
+    try Task.checkCancellation()
+    guard ContinuousClock.now < deadline else {
+      Issue.record("Resize begin readiness remained in reconciliation past its deadline")
+      return false
+    }
+    await withCheckedContinuation { continuation in
+      DispatchQueue.main.async {
+        continuation.resume()
+      }
+    }
+    try Task.checkCancellation()
+    guard ContinuousClock.now < deadline else {
+      Issue.record("Resize begin readiness expired while reconciling")
+      return false
+    }
+    readiness = host.beginReadiness(at: locationInWindow, in: window)
+    guard ContinuousClock.now < deadline else {
+      Issue.record("Resize begin readiness expired before admission")
+      return false
+    }
+  }
+  try Task.checkCancellation()
+  guard ContinuousClock.now < deadline else {
+    Issue.record("Resize begin readiness expired before admission")
+    return false
+  }
+  switch readiness {
+  case .ready:
+    try Task.checkCancellation()
+    guard ContinuousClock.now < deadline else {
+      Issue.record("Resize begin readiness expired before admission")
+      return false
+    }
+    return true
+  case .reconciling:
+    Issue.record("Resize begin readiness remained in reconciliation past its deadline")
+  case .blocked:
+    Issue.record("Resize begin preflight was blocked before mouse-down")
+  }
+  return false
 }

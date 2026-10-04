@@ -2026,11 +2026,14 @@
         titleVisibility: .visible
       ) {
         Button("Delete", role: .destructive) {
-          Task { @MainActor in await viewModel.confirmEntryDeletion() }
+          guard let request = viewModel.claimEntryDeletionConfirmation() else { return }
+          Task { @MainActor in await viewModel.confirmEntryDeletion(request) }
         }
+        .accessibilityIdentifier("settings-vocabulary-delete-confirmation")
         Button("Cancel", role: .cancel) {
           viewModel.cancelEntryDeletion()
         }
+        .accessibilityIdentifier("settings-vocabulary-delete-cancellation")
       } message: {
         Text("Fleck will stop applying this vocabulary entry.")
       }

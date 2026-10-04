@@ -199,6 +199,139 @@ func personalDictionaryRowDeletionRejectsAStaleDisplayedRevision() async throws 
 }
 
 @Test @MainActor
+func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async throws {
+  let root = temporarySettingsDictionaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = PersonalDictionaryStore(rootURL: root)
+  let deletedEntry = settingsEntry(87, "Delete after native confirmation")
+  let retainedEntry = settingsEntry(88, "Keep after native confirmation")
+  try await store.upsert(deletedEntry)
+  try await store.upsert(retainedEntry)
+  let gate = PersonalDictionaryEntryMutationGate(store: store)
+  let viewModel = PersonalDictionarySettingsViewModel(
+    store: store,
+    entryMutation: { revision, mutation in
+      try await gate.perform(expectedRevision: revision, mutation: mutation)
+    }
+  )
+  var mutationGateCleanupCompleted = false
+  defer {
+    if !mutationGateCleanupCompleted {
+      Task { @MainActor in
+        _ = await releaseAndWaitForPersonalDictionaryDeletion(gate, viewModel: viewModel)
+      }
+    }
+  }
+  await viewModel.load()
+  let displayedRevision = viewModel.revision
+
+  let (window, host) = await hostedPersonalDictionarySettingsSection(
+    viewModel: viewModel,
+    size: NSSize(width: 540, height: 500)
+  )
+  defer {
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+
+  let row = try #require(
+    personalDictionarySettingsView(
+      withAccessibilityIdentifier: "settings-vocabulary-entry-frame-\(deletedEntry.id.uuidString)",
+      in: host
+    )
+  )
+  let rowFrame = host.convert(row.bounds, from: row)
+  let deleteID = "settings-vocabulary-entry-delete-\(deletedEntry.id.uuidString)"
+  try movePersonalDictionaryPointer(
+    to: NSPoint(x: rowFrame.maxX - 13, y: rowFrame.midY),
+    in: host,
+    window: window
+  )
+  await settlePersonalDictionarySettingsHost(host)
+  try clickPersonalDictionaryControlAtPaddedEdge(deleteID, in: host, window: window)
+  await settlePersonalDictionarySettingsHost(host)
+  #expect(viewModel.pendingEntryDeletion?.id == deletedEntry.id)
+
+  let cancelID = "settings-vocabulary-delete-cancellation"
+  let (cancelWindow, cancelHost) = try #require(
+    personalDictionarySettingsWindow(containingAccessibilityIdentifier: cancelID)
+  )
+  let cancelFrame = try personalDictionarySettingsAccessibilityFrame(cancelID, in: cancelHost)
+  let cancelBounds = personalDictionaryHostFrame(fromScreenFrame: cancelFrame, in: cancelHost)
+  try sendPersonalDictionaryMouseClick(
+    at: NSPoint(x: cancelBounds.midX, y: cancelBounds.midY),
+    in: cancelHost,
+    window: cancelWindow
+  )
+
+  #expect(viewModel.pendingEntryDeletion == nil)
+  #expect(!viewModel.isEntryDeletionInFlight)
+  #expect(viewModel.entries.map(\.id) == [deletedEntry.id, retainedEntry.id])
+  #expect(viewModel.revision == displayedRevision)
+  #expect(await gate.requestCount == 0)
+  await settlePersonalDictionarySettingsHost(host)
+
+  try movePersonalDictionaryPointer(
+    to: NSPoint(x: rowFrame.maxX - 13, y: rowFrame.midY),
+    in: host,
+    window: window
+  )
+  await settlePersonalDictionarySettingsHost(host)
+  try clickPersonalDictionaryControlAtPaddedEdge(deleteID, in: host, window: window)
+  await settlePersonalDictionarySettingsHost(host)
+
+  let confirmID = "settings-vocabulary-delete-confirmation"
+  let (confirmWindow, confirmHost) = try #require(
+    personalDictionarySettingsWindow(containingAccessibilityIdentifier: confirmID)
+  )
+  let confirmFrame = try personalDictionarySettingsAccessibilityFrame(confirmID, in: confirmHost)
+  let confirmBounds = personalDictionaryHostFrame(fromScreenFrame: confirmFrame, in: confirmHost)
+  do {
+    try sendPersonalDictionaryMouseClick(
+      at: NSPoint(x: confirmBounds.midX, y: confirmBounds.midY),
+      in: confirmHost,
+      window: confirmWindow
+    )
+
+    let gateClock = ContinuousClock()
+    let gateDeadline = gateClock.now.advanced(by: .seconds(2))
+    while gateClock.now < gateDeadline {
+      if await gate.requestCount > 0 { break }
+      try await gateClock.sleep(
+        until: min(gateDeadline, gateClock.now.advanced(by: .milliseconds(10)))
+      )
+    }
+    let mutationRequestCount = await gate.requestCount
+    try #require(mutationRequestCount == 1)
+    #expect(viewModel.pendingEntryDeletion == nil)
+    #expect(viewModel.isEntryDeletionInFlight)
+    #expect(viewModel.entries.map(\.id) == [deletedEntry.id, retainedEntry.id])
+    #expect(viewModel.revision == displayedRevision)
+    #expect(viewModel.claimEntryDeletionConfirmation() == nil)
+    viewModel.requestEntryDeletion(retainedEntry, expectedRevision: displayedRevision)
+    viewModel.cancelEntryDeletion()
+    #expect(viewModel.pendingEntryDeletion == nil)
+    #expect(viewModel.isEntryDeletionInFlight)
+    #expect(await gate.requestCount == 1)
+
+    let completed = await releaseAndWaitForPersonalDictionaryDeletion(gate, viewModel: viewModel)
+    mutationGateCleanupCompleted = true
+    #expect(completed)
+  } catch {
+    let completed = await releaseAndWaitForPersonalDictionaryDeletion(gate, viewModel: viewModel)
+    mutationGateCleanupCompleted = true
+    #expect(completed)
+    throw error
+  }
+
+  #expect(await gate.requestCount == 1)
+  #expect(!viewModel.isEntryDeletionInFlight)
+  #expect(viewModel.entries.map(\.id) == [retainedEntry.id])
+  #expect(viewModel.revision == displayedRevision + 1)
+  #expect(viewModel.errorMessage == nil)
+}
+
+@Test @MainActor
 func personalDictionaryEntryEditorPreservesIdentityAndMetadataWhenSavingCorrections() async throws {
   let root = temporarySettingsDictionaryRoot()
   defer { try? FileManager.default.removeItem(at: root) }
@@ -1574,7 +1707,8 @@ func personalDictionaryUsesSharedHeaderAndResponsiveToolbarAndRetainsSuggestionR
   #expect(settingsSource.contains("focusedAction"))
   #expect(settingsSource.contains("onHover"))
   #expect(settingsSource.contains("Button(\"Delete\", role: .destructive)"))
-  #expect(settingsSource.contains("viewModel.confirmEntryDeletion()"))
+  #expect(settingsSource.contains("viewModel.claimEntryDeletionConfirmation()"))
+  #expect(settingsSource.contains("viewModel.confirmEntryDeletion(request)"))
   #expect(settingsSource.contains("accessibilityLabel: entry.isPriority\n"))
   #expect(settingsSource.contains(": \"Star \\(entry.preferredForm)\""))
   #expect(settingsSource.contains(".opacity(showsActions || entry.isPriority ? 1 : 0)"))
@@ -1882,7 +2016,8 @@ private actor PersonalDictionaryEntryMutationGate {
   let store: PersonalDictionaryStore
   private(set) var requestCount = 0
   private var startedWaiters: [CheckedContinuation<Void, Never>] = []
-  private var releaseContinuation: CheckedContinuation<Void, Never>?
+  private var releaseContinuations: [CheckedContinuation<Void, Never>] = []
+  private var isReleased = false
 
   init(store: PersonalDictionaryStore) {
     self.store = store
@@ -1895,7 +2030,9 @@ private actor PersonalDictionaryEntryMutationGate {
     requestCount += 1
     startedWaiters.forEach { $0.resume() }
     startedWaiters.removeAll()
-    await withCheckedContinuation { releaseContinuation = $0 }
+    if !isReleased {
+      await withCheckedContinuation { releaseContinuations.append($0) }
+    }
     return try await store.mutate(expectedRevision: expectedRevision, mutation)
   }
 
@@ -1905,9 +2042,26 @@ private actor PersonalDictionaryEntryMutationGate {
   }
 
   func release() {
-    releaseContinuation?.resume()
-    releaseContinuation = nil
+    isReleased = true
+    releaseContinuations.forEach { $0.resume() }
+    releaseContinuations.removeAll()
   }
+}
+
+@MainActor
+private func releaseAndWaitForPersonalDictionaryDeletion(
+  _ gate: PersonalDictionaryEntryMutationGate,
+  viewModel: PersonalDictionarySettingsViewModel
+) async -> Bool {
+  await Task { @MainActor in
+    await gate.release()
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(2))
+    while viewModel.isEntryDeletionInFlight, clock.now < deadline {
+      try? await clock.sleep(until: min(deadline, clock.now.advanced(by: .milliseconds(10))))
+    }
+    return !viewModel.isEntryDeletionInFlight
+  }.value
 }
 
 private func settingsUUID(_ number: UInt8) -> UUID {
@@ -1936,6 +2090,25 @@ private func personalDictionarySettingsView(
     }
   }
   return nil
+}
+
+@MainActor
+private func personalDictionarySettingsWindow(
+  containingAccessibilityIdentifier identifier: String
+) -> (NSWindow, NSView)? {
+  let matchingWindows = NSApplication.shared.windows.compactMap { window in
+    guard let contentView = window.contentView,
+      personalDictionarySettingsAccessibilityElement(
+        withAccessibilityIdentifier: identifier,
+        in: contentView
+      ) != nil
+    else {
+      return nil
+    }
+    return (window, contentView)
+  }
+  guard matchingWindows.count == 1 else { return nil }
+  return matchingWindows[0]
 }
 
 @MainActor
