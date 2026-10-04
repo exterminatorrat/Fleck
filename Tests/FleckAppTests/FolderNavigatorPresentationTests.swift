@@ -35,7 +35,7 @@ struct FolderNavigatorPresentationTests {
     #expect(occlusion.covers(nil))
   }
 
-  @Test func retainedComposerOwnershipAndNativeHitTestingRemainObservable() {
+  @Test func retainedComposerOwnershipAndNativeHitTestingRemainObservable() throws {
     let retainedField = NSTextField(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
     #expect(folderComposerIsInactive(retainedField, hasEditor: false, firstResponder: nil))
     #expect(!folderComposerIsInactive(retainedField, hasEditor: true, firstResponder: nil))
@@ -50,8 +50,42 @@ struct FolderNavigatorPresentationTests {
     let parent = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 120))
     let host = NSView(frame: NSRect(x: 30, y: 20, width: 240, height: 60))
     parent.addSubview(host)
+    let fixtureWindow = NSWindow(
+      contentRect: parent.bounds,
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false
+    )
+    fixtureWindow.contentView = parent
+    let retainedGhost = NSTextField(frame: NSRect(x: 20, y: 18, width: 180, height: 24))
+    retainedGhost.placeholderString = "New folder"
+    retainedGhost.setAccessibilityIdentifier("folder-new-name")
+    host.addSubview(retainedGhost)
     let rawField = NSTextField(frame: NSRect(x: 20, y: 18, width: 180, height: 24))
+    rawField.setAccessibilityIdentifier("folder-new-name")
     host.addSubview(rawField)
+    let liveCandidates = [retainedGhost, rawField].filter {
+      isLiveNativeFolderComposerCandidate($0, fixtureWindow: fixtureWindow, host: host)
+    }
+    #expect(liveCandidates.count == 1)
+    #expect(try uniqueNativeFolderComposerCandidate(liveCandidates) === rawField)
+    #expect(
+      nativeFolderComposerInteractionRegion(for: rawField, in: host)
+        == NSRect(x: 20, y: 18, width: 180, height: 24)
+    )
+    let foreignWindow = NSWindow(
+      contentRect: parent.bounds,
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false
+    )
+    #expect(
+      !isLiveNativeFolderComposerCandidate(rawField, fixtureWindow: foreignWindow, host: host)
+    )
+    let occluder = NSView(frame: rawField.frame)
+    host.addSubview(occluder)
+    #expect(!isLiveNativeFolderComposerCandidate(rawField, fixtureWindow: fixtureWindow, host: host))
+    occluder.removeFromSuperview()
     #expect(!formerFolderComposerRegionIsInert(rawField.frame, in: host, rawFields: [rawField]))
 
     let emptyHost = NSView(frame: host.frame)
@@ -60,7 +94,19 @@ struct FolderNavigatorPresentationTests {
 
     let descendant = NSView(frame: rawField.bounds)
     rawField.addSubview(descendant)
+    #expect(isLiveNativeFolderComposerCandidate(rawField, fixtureWindow: fixtureWindow, host: host))
     #expect(!formerFolderComposerRegionIsInert(rawField.frame, in: host, rawFields: [rawField]))
+
+    let secondLiveField = NSTextField(frame: NSRect(x: 205, y: 18, width: 30, height: 24))
+    secondLiveField.setAccessibilityIdentifier("folder-new-name")
+    host.addSubview(secondLiveField)
+    let ambiguousCandidates = [rawField, secondLiveField].filter {
+      isLiveNativeFolderComposerCandidate($0, fixtureWindow: fixtureWindow, host: host)
+    }
+    #expect(ambiguousCandidates.count == 2)
+    #expect(throws: (any Error).self) {
+      try uniqueNativeFolderComposerCandidate(ambiguousCandidates)
+    }
   }
 
   @Test func narrowMaskFullyHidesUnderlyingRowsWithoutOverrunningTheBand() {
@@ -447,7 +493,7 @@ struct FolderNavigatorPresentationTests {
     let reopenedComposerFocused = try await fixture.waitForNewFolderComposer(isPresent: true)
     try #require(reopenedComposerFocused)
     let reopenedField = try fixture.liveNewFolderField()
-    #expect(try fixture.element(identifier: "folder-new-name") === reopenedField)
+    #expect(try fixture.liveNewFolderField() === reopenedField)
     #expect(reopenedField.stringValue.isEmpty)
     #expect(reopenedField.currentEditor() === fixture.window.firstResponder)
     diagnostics.attachCurrentField()
@@ -736,6 +782,50 @@ private func formerFolderComposerRegionIsInert(
       hitView !== field && !hitView.isDescendant(of: field)
     }
   }
+}
+
+@MainActor
+private func nativeFolderComposerInteractionRegion(
+  for field: NSTextField,
+  in host: NSView
+) -> NSRect? {
+  let region = field.convert(field.bounds, to: host)
+  guard !region.isEmpty, host.bounds.contains(region) else { return nil }
+
+  let coordinates: [CGFloat] = [0.25, 0.5, 0.75]
+  let points = coordinates.flatMap { x in
+    coordinates.map { y in
+      NSPoint(x: region.minX + region.width * x, y: region.minY + region.height * y)
+    }
+  }
+  let editor: NSView? = field.currentEditor()
+  let hitsBelongToComposer = points.allSatisfy { point in
+    let pointInSuperview = host.convert(point, to: host.superview)
+    guard let hitView = host.hitTest(pointInSuperview) else { return false }
+    if hitView === field || hitView.isDescendant(of: field) { return true }
+    guard let editor else { return false }
+    return hitView === editor || hitView.isDescendant(of: editor)
+  }
+  return hitsBelongToComposer ? region : nil
+}
+
+@MainActor
+private func isLiveNativeFolderComposerCandidate(
+  _ field: NSTextField,
+  fixtureWindow: NSWindow,
+  host: NSView
+) -> Bool {
+  field.accessibilityIdentifier() == "folder-new-name"
+    && field.window === fixtureWindow
+    && nativeFolderComposerInteractionRegion(for: field, in: host) != nil
+}
+
+@MainActor
+private func uniqueNativeFolderComposerCandidate(
+  _ candidates: [NSTextField]
+) throws -> NSTextField? {
+  try #require(candidates.count <= 1)
+  return candidates.first
 }
 
 @MainActor
@@ -1342,26 +1432,15 @@ private final class FolderNavigatorFixture {
   }
 
   func liveNewFolderFieldIfPresent() throws -> NSTextField? {
-    let accessibilityFields = matchingElements(
-      host,
-      matching: "accessibilityIdentifier",
-      value: "folder-new-name"
-    )
-    try #require(accessibilityFields.count <= 1)
-    guard let accessibilityField = accessibilityFields.first else { return nil }
-    let field = try #require(accessibilityField as? NSTextField)
-    try #require(rawNewFolderFields().filter { $0 === field }.count == 1)
-    try #require(field.window === window)
-    return field
+    let candidates = textFields.filter {
+      isLiveNativeFolderComposerCandidate($0, fixtureWindow: window, host: host)
+    }
+    return try uniqueNativeFolderComposerCandidate(candidates)
   }
 
   func liveNewFolderComposerInteractionRegion() throws -> NSRect {
     let field = try liveNewFolderField()
-    let superview = try #require(field.superview)
-    let region = superview.convert(field.frame, to: host)
-    try #require(!region.isEmpty)
-    try #require(host.bounds.contains(region))
-    return region
+    return try #require(nativeFolderComposerInteractionRegion(for: field, in: host))
   }
 
   private func rawNewFolderComposersAreInactive() -> Bool {
