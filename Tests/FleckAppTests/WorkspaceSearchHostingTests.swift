@@ -930,6 +930,13 @@ func WorkspaceSearchHostingRestoresTheTargetTitleFieldAfterCrossNoteActivation()
   await settleWorkspaceSearchHost(host)
   searchController.setQuery("Goal", in: state.workspace.notes)
   await settleWorkspaceSearchHost(host)
+  try #require(
+    await waitForWorkspaceSearchHostState(host) {
+      searchController.resultsAreCurrent
+        && searchController.results.map(\.noteID) == [target.id]
+    },
+    "Timed out waiting for the target search result to publish"
+  )
   #expect(searchController.results.map(\.noteID) == [target.id])
 
   var activations: [UUID] = []
