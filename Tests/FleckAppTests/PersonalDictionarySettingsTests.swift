@@ -2096,7 +2096,8 @@ private func personalDictionarySettingsView(
 private func personalDictionarySettingsWindow(
   containingAccessibilityIdentifier identifier: String
 ) -> (NSWindow, NSView)? {
-  let matchingWindows = NSApplication.shared.windows.compactMap { window in
+  let matchingWindows: [(NSWindow, NSView)] = NSApplication.shared.windows.compactMap {
+    (window: NSWindow) -> (NSWindow, NSView)? in
     guard let contentView = window.contentView,
       personalDictionarySettingsAccessibilityElement(
         withAccessibilityIdentifier: identifier,
