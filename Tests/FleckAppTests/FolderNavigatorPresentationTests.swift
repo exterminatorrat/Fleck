@@ -369,7 +369,8 @@ struct FolderNavigatorPresentationTests {
     try fixture.click(newFolder)
     await fixture.settle()
 
-    _ = try #require(fixture.liveNewFolderFieldIfPresent())
+    let liveNewFolderField = try fixture.liveNewFolderFieldIfPresent()
+    _ = try #require(liveNewFolderField)
     let unfiledAfter = try fixture.frame(identifier: "folder-unfiled")
     let trashAfter = try fixture.frame(identifier: "folder-trash")
 
@@ -1527,16 +1528,21 @@ private final class FolderNavigatorFixture {
   }
 
   func liveNewFolderField() throws -> NSTextField {
-    try #require(liveNewFolderFieldIfPresent())
+    let field = try liveNewFolderFieldIfPresent()
+    return try #require(field)
   }
 
   func type(_ string: String) throws {
-    let editor = try #require(liveNewFolderField().currentEditor() as? NSTextView)
+    let field = try liveNewFolderField()
+    let currentEditor = field.currentEditor() as? NSTextView
+    let editor = try #require(currentEditor)
     editor.insertText(string, replacementRange: editor.selectedRange())
   }
 
   func replaceDraft(with string: String) throws {
-    let editor = try #require(liveNewFolderField().currentEditor() as? NSTextView)
+    let field = try liveNewFolderField()
+    let currentEditor = field.currentEditor() as? NSTextView
+    let editor = try #require(currentEditor)
     editor.setSelectedRange(NSRange(location: 0, length: editor.string.utf16.count))
     editor.insertText(string, replacementRange: editor.selectedRange())
   }
