@@ -104,7 +104,7 @@ struct FolderNavigatorPresentationTests {
       isLiveNativeFolderComposerCandidate($0, fixtureWindow: fixtureWindow, host: host)
     }
     #expect(ambiguousCandidates.count == 2)
-    #expect(throws: (any Error).self) {
+    #expect(throws: NativeFolderComposerLookupError.self) {
       try uniqueNativeFolderComposerCandidate(ambiguousCandidates)
     }
   }
@@ -824,8 +824,14 @@ private func isLiveNativeFolderComposerCandidate(
 private func uniqueNativeFolderComposerCandidate(
   _ candidates: [NSTextField]
 ) throws -> NSTextField? {
-  try #require(candidates.count <= 1)
+  guard candidates.count <= 1 else {
+    throw NativeFolderComposerLookupError.multipleInteractiveFields
+  }
   return candidates.first
+}
+
+private enum NativeFolderComposerLookupError: Error {
+  case multipleInteractiveFields
 }
 
 @MainActor
