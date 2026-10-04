@@ -190,11 +190,23 @@
       )
     }
 
+    @Test func visibleDictionaryHeadingRanksToItsSectionAndKeepsExistingAliases() throws {
+      for query in ["Dictionary", "Vocabulary", "Suggestions", "  vOCaBulary  "] {
+        let result = try #require(SettingsSearchIndex.results(for: query).first)
+
+        #expect(result.target == .section(.vocabulary))
+        #expect(result.destination == .vocabulary)
+        #expect(result.anchor == .section(.vocabulary))
+      }
+
+      #expect(SettingsSearchIndex.results(for: "Dictionary").first?.title == "Dictionary")
+    }
+
     @Test func labelsComeFromTheirAuthoritativeTypes() throws {
       for section in SettingsSection.allCases {
         let result = try #require(
           SettingsSearchIndex.catalog.first { $0.target == .section(section) })
-        #expect(result.title == section.title)
+        #expect(result.title == (section == .vocabulary ? "Dictionary" : section.title))
       }
       for action in Shortcut.Action.allCases {
         let result = try #require(

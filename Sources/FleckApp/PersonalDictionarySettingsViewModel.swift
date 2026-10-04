@@ -128,6 +128,7 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
   private let store: PersonalDictionaryStore
   private let entryMutation: EntryMutation
   private var mutationTail: Task<Void, Never>?
+  private var claimedEntryDeletion: PendingEntryDeletion?
 
   init(store: PersonalDictionaryStore, entryMutation: EntryMutation? = nil) {
     self.store = store
@@ -308,7 +309,7 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     _ entry: PersonalDictionaryEntry,
     expectedRevision: UInt64
   ) {
-    guard !isEntryDeletionInFlight else { return }
+    guard !isEntryDeletionInFlight, claimedEntryDeletion == nil else { return }
     state.pendingEntryDeletion = PendingEntryDeletion(
       id: entry.id,
       preferredForm: entry.preferredForm,
@@ -318,22 +319,42 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
   }
 
   func cancelEntryDeletion() {
-    guard !isEntryDeletionInFlight else { return }
+    guard !isEntryDeletionInFlight, claimedEntryDeletion == nil else { return }
     state.pendingEntryDeletion = nil
   }
 
-  func confirmEntryDeletion() async {
-    guard let request = state.pendingEntryDeletion, !isEntryDeletionInFlight else { return }
-    state.pendingEntryDeletion = nil
-    state.isEntryDeletionInFlight = true
+  func claimEntryDeletionConfirmation() -> PendingEntryDeletion? {
+    guard let request = state.pendingEntryDeletion,
+      !isEntryDeletionInFlight,
+      claimedEntryDeletion == nil
+    else {
+      return nil
+    }
+    claimedEntryDeletion = request
+    var updatedState = state
+    updatedState.pendingEntryDeletion = nil
+    updatedState.isEntryDeletionInFlight = true
+    state = updatedState
+    return request
+  }
+
+  func confirmEntryDeletion(_ request: PendingEntryDeletion) async {
+    guard isEntryDeletionInFlight, claimedEntryDeletion == request else { return }
+    claimedEntryDeletion = nil
     await enqueue {
-      await self.mutate(
+      await self.applyMutation(
         expectedRevision: request.expectedRevision,
         mutation: .delete(id: request.id),
-        action: .entry
+        action: .entry,
+        operation: self.entryMutation
       )
     }
     state.isEntryDeletionInFlight = false
+  }
+
+  func confirmEntryDeletion() async {
+    guard let request = claimEntryDeletionConfirmation() else { return }
+    await confirmEntryDeletion(request)
   }
 
   func beginAddingEntry() {

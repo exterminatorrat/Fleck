@@ -3,7 +3,7 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
-## [1.4.4-beta.1] - 2026-10-03
+## [1.4.5-beta.1] - 2026-10-04
 
 Private development candidate only; this correction is not an accepted build or public release.
 
@@ -11,6 +11,17 @@ Private development candidate only; this correction is not an accepted build or 
 
 - Preserve caret placement after empty list markers when indenting or outdenting, including
   numbered-list renumbering that changes marker widths.
+
+## [1.4.4-beta.1] - 2026-10-04
+
+Private development candidate only; this correction is not an accepted build or public release.
+
+### Fixed
+
+- Claim the displayed Dictionary deletion request before confirmation dismissal, preserving its
+  expected-revision check and single-flight protection.
+- Route Settings searches for the visible Dictionary page name to the Dictionary section while
+  retaining Vocabulary and Suggestions searches.
 
 ## [1.4.3-beta.1] - 2026-10-02
 
