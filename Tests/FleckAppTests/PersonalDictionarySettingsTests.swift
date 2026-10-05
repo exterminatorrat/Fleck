@@ -453,7 +453,10 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
 
   let cancelID = "settings-vocabulary-delete-cancellation"
   let (cancelWindow, cancelHost) = try #require(
-    personalDictionarySettingsWindow(containingAccessibilityIdentifier: cancelID)
+    personalDictionarySettingsSheet(
+      attachedTo: window,
+      containingAccessibilityIdentifier: cancelID
+    )
   )
   let cancelFrame = try personalDictionarySettingsAccessibilityFrame(cancelID, in: cancelHost)
   let cancelBounds = personalDictionaryHostFrame(fromScreenFrame: cancelFrame, in: cancelHost)
@@ -517,8 +520,16 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
 
   let confirmID = "settings-vocabulary-delete-confirmation"
   let (confirmWindow, confirmHost) = try #require(
-    personalDictionarySettingsWindow(containingAccessibilityIdentifier: confirmID)
+    personalDictionarySettingsSheet(
+      attachedTo: window,
+      containingAccessibilityIdentifier: confirmID
+    )
   )
+  #expect(window.attachedSheet === confirmWindow)
+  #expect(confirmWindow.sheetParent === window)
+  #expect(cancelWindow !== window.attachedSheet)
+  #expect(cancelWindow.sheetParent == nil)
+  #expect(cancelWindow.parent == nil)
   let confirmFrame = try personalDictionarySettingsAccessibilityFrame(confirmID, in: confirmHost)
   let confirmBounds = personalDictionaryHostFrame(fromScreenFrame: confirmFrame, in: confirmHost)
   do {
@@ -2328,23 +2339,21 @@ private func personalDictionarySettingsView(
 }
 
 @MainActor
-private func personalDictionarySettingsWindow(
+private func personalDictionarySettingsSheet(
+  attachedTo fixtureWindow: NSWindow,
   containingAccessibilityIdentifier identifier: String
 ) -> (NSWindow, NSView)? {
-  let matchingWindows: [(NSWindow, NSView)] = NSApplication.shared.windows.compactMap {
-    (window: NSWindow) -> (NSWindow, NSView)? in
-    guard let contentView = window.contentView,
-      personalDictionarySettingsAccessibilityElement(
-        withAccessibilityIdentifier: identifier,
-        in: contentView
-      ) != nil
-    else {
-      return nil
-    }
-    return (window, contentView)
+  guard let sheetWindow = fixtureWindow.attachedSheet,
+    sheetWindow.sheetParent === fixtureWindow,
+    let contentView = sheetWindow.contentView,
+    personalDictionarySettingsAccessibilityElement(
+      withAccessibilityIdentifier: identifier,
+      in: contentView
+    ) != nil
+  else {
+    return nil
   }
-  guard matchingWindows.count == 1 else { return nil }
-  return matchingWindows[0]
+  return (sheetWindow, contentView)
 }
 
 @MainActor

@@ -27,12 +27,20 @@ on:
         required: false
         type: boolean
         default: false
+      dictionary_opening_probe:
+        description: >-
+          Run only the exact manual personal dictionary deletion-opening boundary
+          diagnostic; skips the full graph and other supplemental jobs for this dispatch.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   macos:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.dictionary_opening_probe }}
     name: macOS build and tests
     runs-on: macos-26
     timeout-minutes: 90
@@ -109,6 +117,7 @@ jobs:
         run: Scripts/validate-macos.sh
 
   macos-enhanced:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.dictionary_opening_probe }}
     name: macOS Enhanced Local candidate gates
     runs-on: macos-26
     timeout-minutes: 60
@@ -157,7 +166,7 @@ jobs:
 
   own-window-capture-probe:
     name: Supplemental own-window capture probe
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.own_window_capture_probe }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.own_window_capture_probe && !inputs.dictionary_opening_probe }}
     runs-on: macos-26
     timeout-minutes: 15
     permissions:
@@ -210,7 +219,7 @@ jobs:
 
   folder-navigator-diagnostic:
     name: Supplemental folder navigator diagnostic (ordinary)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe && !inputs.dictionary_opening_probe }}
     runs-on: macos-26
     timeout-minutes: 60
     permissions:
@@ -242,7 +251,7 @@ jobs:
 
   folder-navigator-diagnostic-enhanced:
     name: Supplemental folder navigator diagnostic (Enhanced)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe && !inputs.dictionary_opening_probe }}
     runs-on: macos-26
     timeout-minutes: 60
     permissions:
@@ -273,3 +282,120 @@ jobs:
         run: |
           Scripts/run-nonempty-enhanced-tests.sh '^.*FolderNavigatorPresentationTests.*$'
           git diff --exit-code -- Package.resolved
+
+  dictionary-opening-boundary-probe:
+    name: Manual personal dictionary opening-boundary probe
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.dictionary_opening_probe == true }}
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Prepare diagnostic receipts
+        run: |
+          set -euo pipefail
+          output_dir="$RUNNER_TEMP/personal-dictionary-opening-boundary-probe"
+          umask 077
+          mkdir -p "$output_dir"
+          printf '%s\n' 'probe_started=false' > "$output_dir/probe-status.txt"
+          printf '%s\n' \
+            'expected_test=FleckAppTests.personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal()' \
+            > "$output_dir/expected-test.txt"
+      - name: Check out exact dispatched source (actions/checkout v6.0.2, without credentials)
+        id: checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify dispatched source pin and diagnostic source
+        id: source-pin
+        run: |
+          set -euo pipefail
+          output_dir="$RUNNER_TEMP/personal-dictionary-opening-boundary-probe"
+          base_commit='352c019c6d6ed92eee69cd99df2f708fd08e84d5'
+          expected_test_sha='5b9890178f221d909e2cb1dad9516985ed8106ef757a039b85d5cec6cd6f2ae2'
+          source_commit="$(git rev-parse --verify 'HEAD^{commit}')"
+          source_tree="$(git rev-parse --verify 'HEAD^{tree}')"
+          source_test_sha="$(shasum -a 256 Tests/FleckAppTests/PersonalDictionarySettingsTests.swift | awk '{print $1}')"
+          source_changes="$(git status --porcelain)"
+          {
+            printf 'event=%s\n' "$GITHUB_EVENT_NAME"
+            printf 'GITHUB_SHA=%s\n' "$GITHUB_SHA"
+            printf 'GITHUB_REF=%s\n' "$GITHUB_REF"
+            printf 'HEAD_COMMIT=%s\n' "$source_commit"
+            printf 'HEAD_TREE=%s\n' "$source_tree"
+            printf 'TEST_FILE_SHA256=%s\n' "$source_test_sha"
+            printf 'WORKTREE_CLEAN=%s\n' "$([[ -z "$source_changes" ]] && printf true || printf false)"
+          } | tee "$output_dir/source-pin.txt"
+          test "$source_commit" = "$GITHUB_SHA"
+          test -z "$source_changes"
+          test "$source_test_sha" = "$expected_test_sha"
+          git merge-base --is-ancestor "$base_commit" "$source_commit"
+          printf 'BASE_SOURCE_COMMIT=%s\nBASE_IS_ANCESTOR=true\n' "$base_commit" \
+            | tee -a "$output_dir/source-pin.txt"
+          printf 'commit=%s\ntree=%s\n' "$source_commit" "$source_tree" >> "$GITHUB_OUTPUT"
+          {
+            sw_vers
+            xcodebuild -version
+            swift --version
+          } 2>&1 | tee "$output_dir/runner-environment.txt"
+      - name: Run the exact ordinary diagnostic case
+        env:
+          FLECK_NATIVE_CAPTURE_QA: "0"
+        run: |
+          set -euo pipefail
+          output_dir="$RUNNER_TEMP/personal-dictionary-opening-boundary-probe"
+          selector='^FleckAppTests\.personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal\(\)$'
+          expected_test='FleckAppTests.personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal()'
+          raw_log="$output_dir/console.log"
+          : > "$raw_log"
+          printf '%s\n' 'probe_started=true' > "$output_dir/probe-status.txt"
+          unset FLECK_ENHANCED_CANDIDATE
+          set +e
+          Scripts/run-nonempty-swift-tests.sh "$selector" 2>&1 | tee "$raw_log"
+          pipeline_status=("${PIPESTATUS[@]}")
+          set -e
+          runner_status="${pipeline_status[0]:-127}"
+          tee_status="${pipeline_status[1]:-127}"
+          reported_count="$(sed -n 's/^matched test count: //p' "$raw_log" | tail -n 1)"
+          exact_test_lines="$(grep -Fxc -- "matched test: $expected_test" "$raw_log" || true)"
+          {
+            printf 'test_script_exit=%s\n' "$runner_status"
+            printf 'tee_exit=%s\n' "$tee_status"
+            printf 'expected_selector=%s\n' "$selector"
+            printf 'expected_test=%s\n' "$expected_test"
+            printf 'reported_match_count=%s\n' "$reported_count"
+            printf 'exact_test_receipt_lines=%s\n' "$exact_test_lines"
+          } > "$output_dir/nonempty-runner-receipt.txt"
+          printf 'test_script_exit=%s\ntee_exit=%s\n' "$runner_status" "$tee_status" \
+            >> "$output_dir/probe-status.txt"
+          test -s "$raw_log"
+          test "$tee_status" -eq 0
+          test "$reported_count" = 1
+          test "$exact_test_lines" = 1
+          test "$runner_status" -eq 0
+      - name: Verify source remained pinned and clean
+        if: ${{ always() && steps.checkout.outcome == 'success' && steps.source-pin.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          output_dir="$RUNNER_TEMP/personal-dictionary-opening-boundary-probe"
+          expected_commit='${{ steps.source-pin.outputs.commit }}'
+          expected_tree='${{ steps.source-pin.outputs.tree }}'
+          final_commit="$(git rev-parse --verify 'HEAD^{commit}')"
+          final_tree="$(git rev-parse --verify 'HEAD^{tree}')"
+          final_changes="$(git status --porcelain)"
+          {
+            printf 'POST_RUN_HEAD_COMMIT=%s\n' "$final_commit"
+            printf 'POST_RUN_HEAD_TREE=%s\n' "$final_tree"
+            printf 'POST_RUN_WORKTREE_CLEAN=%s\n' "$([[ -z "$final_changes" ]] && printf true || printf false)"
+          } | tee -a "$output_dir/source-pin.txt"
+          test "$final_commit" = "$GITHUB_SHA"
+          test "$final_commit" = "$expected_commit"
+          test "$final_tree" = "$expected_tree"
+          test -z "$final_changes"
+          printf '%s\n' 'post_run_source_pin_verified=true' >> "$output_dir/probe-status.txt"
+      - name: Upload opening-boundary diagnostics (actions/upload-artifact v7.0.1)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: personal-dictionary-opening-boundary-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/personal-dictionary-opening-boundary-probe/
+          if-no-files-found: error
