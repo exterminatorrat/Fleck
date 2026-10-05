@@ -435,6 +435,7 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
     deleteID,
     row: row,
     entryID: deletedEntry.id,
+    phase: "first",
     in: host,
     window: window,
     viewModel: viewModel
@@ -503,6 +504,7 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
     deleteID,
     row: row,
     entryID: deletedEntry.id,
+    phase: "afterCancel",
     in: host,
     window: window,
     viewModel: viewModel
@@ -2361,6 +2363,7 @@ private func requirePersonalDictionaryDeleteAccessibilityElement(
   _ identifier: String,
   row: NSView,
   entryID: UUID,
+  phase: String,
   in host: NSView,
   window: NSWindow,
   viewModel: PersonalDictionarySettingsViewModel
@@ -2408,7 +2411,8 @@ private func requirePersonalDictionaryDeleteAccessibilityElement(
         deleteIdentifier: identifier,
         in: host,
         window: window,
-        viewModel: viewModel
+        viewModel: viewModel,
+        phase: phase
       )
     )
     throw error
@@ -2644,7 +2648,8 @@ private func personalDictionaryDeleteAdmissionDiagnostic(
   deleteIdentifier: String,
   in host: NSView,
   window: NSWindow,
-  viewModel: PersonalDictionarySettingsViewModel
+  viewModel: PersonalDictionarySettingsViewModel,
+  phase: String? = nil
 ) -> String {
   let pointerState = personalDictionaryDeletePointerState(row: row, in: host, window: window)
   let expectedIdentifiers = [
@@ -2661,7 +2666,7 @@ private func personalDictionaryDeleteAdmissionDiagnostic(
       in: host
     ) != nil
   }
-  return """
+  let baseline = """
   [passive synthetic failure-only Dictionary Delete admission diagnostic]
   rowID=settings-vocabulary-entry-frame-\(entryID.uuidString)
   pointerScreen=\(pointerState.pointerOnScreen) pointerWindow=\(pointerState.pointerInWindow)
@@ -2682,6 +2687,45 @@ private func personalDictionaryDeleteAdmissionDiagnostic(
   appActive=\(NSApplication.shared.isActive) appKeyWindowMatches=\(NSApplication.shared.keyWindow === window)
   actualAXIdentifiers=\(actualIdentifiers)
   pendingRequest=\(String(describing: viewModel.pendingEntryDeletion))
+  """
+  guard let phase else { return baseline }
+  let rowAXElement = personalDictionarySettingsAccessibilityElement(
+    withAccessibilityIdentifier: "settings-vocabulary-entry-frame-\(entryID.uuidString)",
+    in: host
+  )
+  let deleteAXElement = personalDictionarySettingsAccessibilityElement(
+    withAccessibilityIdentifier: deleteIdentifier,
+    in: host
+  )
+  let deleteAXIdentifier = deleteAXElement.flatMap {
+    personalDictionaryAccessibilityString($0, attribute: "accessibilityIdentifier")
+  }
+  let deleteAXLabel = deleteAXElement.flatMap {
+    personalDictionaryAccessibilityString($0, attribute: "accessibilityLabel")
+  }
+  let deleteAXFrame = deleteAXElement.flatMap { element -> String? in
+    guard element.responds(to: NSSelectorFromString("accessibilityFrame")),
+      let frame = element.value(forKey: "accessibilityFrame") as? NSValue
+    else {
+      return nil
+    }
+    return NSStringFromRect(frame.rectValue)
+  }
+  let deleteAXEnabled = (deleteAXElement as? NSAccessibilityProtocol)?.isAccessibilityEnabled()
+  let deleteAXIdentity = deleteAXElement.map { String(describing: ObjectIdentifier($0)) }
+  return """
+  \(baseline)
+  inputAdmissionPhase=\(phase)
+  fixtureWindowOwnsHost=\(host.window === window)
+  fixtureWindowContentIsHost=\(window.contentView === host)
+  rowOwnedByFixtureHost=\(row === host || row.isDescendant(of: host))
+  rowAXExposedInFixtureHost=\(rowAXElement != nil)
+  deleteAXExposedInFixtureHost=\(deleteAXElement != nil)
+  deleteAXIdentity=\(deleteAXIdentity ?? "nil")
+  deleteAXIdentifier=\(deleteAXIdentifier ?? "nil")
+  deleteAXLabel=\(deleteAXLabel ?? "nil")
+  deleteAXFrame=\(deleteAXFrame ?? "nil")
+  deleteAXEnabled=\(deleteAXEnabled.map { String($0) } ?? "nil")
   """
 }
 

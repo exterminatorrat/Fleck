@@ -1301,22 +1301,64 @@ func WorkspaceSearchHostingActivatesNamedFolderResultThroughProductionScope()
     )
   )
   window.sendEvent(returnEvent)
-  try #require(
-    await waitForWorkspaceSearchHostState(host) {
-      guard state.workspace.selectedNoteID == target.id,
-        !searchController.isPresented,
-        let targetEditor = hostedWorkspaceSearchDescendants(
-          in: host,
-          as: ListAwareTextView.self
-        ).first(where: { $0.string == target.body })
-      else {
-        return false
-      }
-      return commands.textView === targetEditor
-        && window.firstResponder === targetEditor
-    },
-    "Timed out waiting for Return activation to restore the target editor"
-  )
+  do {
+    try #require(
+      await waitForWorkspaceSearchHostState(host) {
+        guard state.workspace.selectedNoteID == target.id,
+          !searchController.isPresented,
+          let targetEditor = hostedWorkspaceSearchDescendants(
+            in: host,
+            as: ListAwareTextView.self
+          ).first(where: { $0.string == target.body })
+        else {
+          return false
+        }
+        return commands.textView === targetEditor
+          && window.firstResponder === targetEditor
+      },
+      "Timed out waiting for Return activation to restore the target editor"
+    )
+  } catch {
+    let selectedNoteID = state.workspace.selectedNoteID
+    let resultNoteIDs = searchController.results.map(\.noteID)
+    let targetEditor = hostedWorkspaceSearchDescendants(
+      in: host,
+      as: ListAwareTextView.self
+    ).first(where: { $0.string == target.body })
+    let commandsTextView = commands.textView
+    let firstResponder = window.firstResponder
+    let identity: (AnyObject?) -> Any = { object in
+      guard let object else { return NSNull() }
+      return String(describing: ObjectIdentifier(object))
+    }
+    let snapshot: [String: Any] = [
+      "targetNoteID": target.id.uuidString,
+      "selectedNoteID": selectedNoteID.map { $0.uuidString as Any } ?? NSNull(),
+      "selectedTarget": selectedNoteID == target.id,
+      "searchDismissed": !searchController.isPresented,
+      "presentationID": searchController.presentationID,
+      "resultsAreCurrent": searchController.resultsAreCurrent,
+      "resultNoteIDs": resultNoteIDs.map(\.uuidString),
+      "targetInCurrentResults": searchController.resultsAreCurrent
+        && resultNoteIDs.contains(target.id),
+      "targetEditorFound": targetEditor != nil,
+      "targetEditorIdentity": identity(targetEditor),
+      "targetEditorOwnedByHost": targetEditor.map {
+        $0 === host || $0.isDescendant(of: host)
+      } ?? false,
+      "targetEditorWindowMatchesFixture": targetEditor.map { $0.window === window } ?? false,
+      "commandsOwnTargetEditor": targetEditor != nil && commandsTextView === targetEditor,
+      "commandsTextViewIdentity": identity(commandsTextView),
+      "firstResponderOwnsTargetEditor": targetEditor != nil && firstResponder === targetEditor,
+      "firstResponderIdentity": identity(firstResponder),
+    ]
+    if let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys]),
+      let line = String(data: data, encoding: .utf8)
+    {
+      print("FLECK_WORKSPACE_SEARCH_ACTIVATION_OBSERVATION \(line)")
+    }
+    throw error
+  }
 
   #expect(state.workspace.selectedNoteID == target.id)
   #expect(state.folderID(for: target.id) == work.id)

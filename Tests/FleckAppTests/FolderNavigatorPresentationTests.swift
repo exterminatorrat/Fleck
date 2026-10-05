@@ -288,7 +288,14 @@ struct FolderNavigatorPresentationTests {
         expectedName: "A newly created folder with a wider name"
       )
     }
-    try #require(createdComposerDismissed)
+    do {
+      try #require(createdComposerDismissed)
+    } catch {
+      fixture.printComposerDismissalFailureObservation(
+        formerInteractionRegion: formerInteractionRegion
+      )
+      throw error
+    }
     await fixture.settle()
     #expect(fixture.isVisible(label: "Reveal earlier folders"))
     #expect(fixture.state.workspace.folders.count == 3)
@@ -1555,6 +1562,136 @@ private final class FolderNavigatorFixture {
       let line = String(data: data, encoding: .utf8)
     else { return }
     print("FLECK_FOLDER_CREATION_FAILURE_DIAGNOSTIC \(line)")
+  }
+
+  func printComposerDismissalFailureObservation(formerInteractionRegion: NSRect) {
+    let rawFields = rawNewFolderFields()
+    let firstResponder = window.firstResponder
+    let identity: (AnyObject) -> String = {
+      String(describing: ObjectIdentifier($0))
+    }
+    let liveField: NSTextField?
+    let liveFieldLookupError: String?
+    do {
+      liveField = try liveNewFolderFieldIfPresent()
+      liveFieldLookupError = nil
+    } catch {
+      liveField = nil
+      liveFieldLookupError = String(describing: error)
+    }
+    let folderNewNameElements = matchingElements(
+      host,
+      matching: "accessibilityIdentifier",
+      value: "folder-new-name"
+    )
+    let createFolderElements = matchingElements(
+      host,
+      matching: "accessibilityLabel",
+      value: "Create folder"
+    )
+    let cancelNewFolderElements = matchingElements(
+      host,
+      matching: "accessibilityLabel",
+      value: "Cancel new folder"
+    )
+    let rawComposersAreInactive = rawFields.allSatisfy { field in
+      folderComposerIsInactive(
+        field,
+        hasEditor: field.currentEditor() != nil,
+        firstResponder: firstResponder
+      )
+    }
+    let formerRegionIsInBounds = host.bounds.contains(formerInteractionRegion)
+    let formerRegionIsInert = formerFolderComposerRegionIsInert(
+      formerInteractionRegion,
+      in: host,
+      rawFields: rawFields
+    )
+    let hitCoordinates: [CGFloat] = [0.25, 0.5, 0.75]
+    let formerRegionHitTests = hitCoordinates.flatMap { x in
+      hitCoordinates.map { y in
+        let point = NSPoint(
+          x: formerInteractionRegion.minX + formerInteractionRegion.width * x,
+          y: formerInteractionRegion.minY + formerInteractionRegion.height * y
+        )
+        let pointInSuperview = host.convert(point, to: host.superview)
+        let hitView = host.hitTest(pointInSuperview)
+        let fieldOwners = rawFields.filter { field in
+          guard let hitView else { return false }
+          return hitView === field || hitView.isDescendant(of: field)
+        }
+        let editorOwners = rawFields.compactMap { field -> String? in
+          guard let editor = field.currentEditor(),
+            let hitView,
+            hitView === editor || hitView.isDescendant(of: editor)
+          else {
+            return nil
+          }
+          return identity(field)
+        }
+        return [
+          "pointInHost": NSStringFromPoint(point),
+          "pointInSuperview": NSStringFromPoint(pointInSuperview),
+          "hitViewIdentity": hitView.map { identity($0) as Any } ?? NSNull(),
+          "hitViewWindowMatchesFixture": hitView?.window === window,
+          "rawFieldOwners": fieldOwners.map(identity),
+          "currentEditorOwnerFieldIdentities": editorOwners,
+        ] as [String: Any]
+      }
+    }
+    let rawFieldObservations = rawFields.map { field in
+      let editor = field.currentEditor()
+      let editorView = editor
+      let fieldFrameInHost = field.convert(field.bounds, to: host)
+      let currentInteractionRegion = nativeFolderComposerInteractionRegion(for: field, in: host)
+      let firstResponderView = firstResponder as? NSView
+      return [
+        "fieldIdentity": identity(field),
+        "fieldAccessibilityIdentifier": field.accessibilityIdentifier() as Any? ?? NSNull(),
+        "fieldWindowMatchesFixture": field.window === window,
+        "fieldIsOwnedByHost": field === host || field.isDescendant(of: host),
+        "fieldFrameInHost": NSStringFromRect(fieldFrameInHost),
+        "fieldCurrentInteractionRegion": currentInteractionRegion.map {
+          NSStringFromRect($0) as Any
+        } ?? NSNull(),
+        "currentEditorPresent": editor != nil,
+        "currentEditorIdentity": editor.map { identity($0) as Any } ?? NSNull(),
+        "currentEditorWindowMatchesFixture": editorView.map { $0.window === window } ?? false,
+        "currentEditorIsOwnedByHost": editorView.map {
+          $0 === host || $0.isDescendant(of: host)
+        } ?? false,
+        "firstResponderIsField": firstResponder === field,
+        "firstResponderIsCurrentEditor": editor != nil && firstResponder === editor,
+        "firstResponderIsDescendantOfField": firstResponderView.map {
+          $0.isDescendant(of: field) as Any
+        } ?? NSNull(),
+        "firstResponderIsDescendantOfCurrentEditor": editorView.map { editor in
+          (firstResponderView?.isDescendant(of: editor) ?? false) as Any
+        } ?? NSNull(),
+      ] as [String: Any]
+    }
+    let snapshot: [String: Any] = [
+      "hostBounds": NSStringFromRect(host.bounds),
+      "formerInteractionRegion": NSStringFromRect(formerInteractionRegion),
+      "formerInteractionRegionProvided": true,
+      "formerRegionIsEmpty": formerInteractionRegion.isEmpty,
+      "formerRegionIsInBounds": formerRegionIsInBounds,
+      "liveFieldLookupReturnedNil": liveField == nil && liveFieldLookupError == nil,
+      "liveFieldLookupError": liveFieldLookupError.map { $0 as Any } ?? NSNull(),
+      "liveFieldIdentity": liveField.map { identity($0) as Any } ?? NSNull(),
+      "folderNewNameAXAbsent": folderNewNameElements.isEmpty,
+      "createFolderAXAbsent": createFolderElements.isEmpty,
+      "cancelNewFolderAXAbsent": cancelNewFolderElements.isEmpty,
+      "rawComposersAreInactive": rawComposersAreInactive,
+      "formerRegionIsInert": formerRegionIsInert,
+      "firstResponderIdentity": firstResponder.map { identity($0) as Any } ?? NSNull(),
+      "rawFields": rawFieldObservations,
+      "formerRegionHitTests": formerRegionHitTests,
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys]),
+      let line = String(data: data, encoding: .utf8)
+    else { return }
+    print("FLECK_FOLDER_COMPOSER_DISMISSAL_OBSERVATION \(line)")
   }
 
   func waitForNewFolderComposer(
