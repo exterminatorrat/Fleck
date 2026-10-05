@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.5-beta.1] - 2026-10-05
+
+Private development candidate only; this fix is not an accepted build or public release.
+
+### Fixed
+
+- Retire the folder name field’s hit target when its representable is dismantled, so a closed
+  composer no longer consumes pointer input.
+
 ## [1.4.4-beta.1] - 2026-10-04
 
 Private development candidate only; this correction is not an accepted build or public release.
