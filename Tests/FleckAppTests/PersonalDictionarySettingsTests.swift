@@ -230,6 +230,7 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
     viewModel: viewModel,
     size: NSSize(width: 540, height: 500)
   )
+  let fixtureWindow = window
   defer {
     window.contentView = nil
     window.orderOut(nil)
@@ -452,15 +453,15 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
   #expect(viewModel.pendingEntryDeletion?.id == deletedEntry.id)
 
   let cancelID = "settings-vocabulary-delete-cancellation"
-  let (cancelWindow, cancelHost) = try #require(
+  let (firstCancelWindow, firstCancelHost) = try #require(
     personalDictionarySettingsWindow(containingAccessibilityIdentifier: cancelID)
   )
-  let cancelFrame = try personalDictionarySettingsAccessibilityFrame(cancelID, in: cancelHost)
-  let cancelBounds = personalDictionaryHostFrame(fromScreenFrame: cancelFrame, in: cancelHost)
+  let cancelFrame = try personalDictionarySettingsAccessibilityFrame(cancelID, in: firstCancelHost)
+  let cancelBounds = personalDictionaryHostFrame(fromScreenFrame: cancelFrame, in: firstCancelHost)
   try sendPersonalDictionaryMouseClick(
     at: NSPoint(x: cancelBounds.midX, y: cancelBounds.midY),
-    in: cancelHost,
-    window: cancelWindow
+    in: firstCancelHost,
+    window: firstCancelWindow
   )
 
   #expect(viewModel.pendingEntryDeletion == nil)
@@ -516,9 +517,24 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
   await settlePersonalDictionarySettingsHost(host)
 
   let confirmID = "settings-vocabulary-delete-confirmation"
-  let (confirmWindow, confirmHost) = try #require(
-    personalDictionarySettingsWindow(containingAccessibilityIdentifier: confirmID)
+  let boundaryInspection = inspectPersonalDictionaryDeleteOpeningWindows(
+    confirmationIdentifier: confirmID,
+    cancellationIdentifier: cancelID
   )
+  let confirmationWindowLookup = boundaryInspection.uniqueConfirmationMatch
+  if confirmationWindowLookup == nil {
+    print(
+      personalDictionaryDeleteOpeningBoundaryDiagnostic(
+        viewModel: viewModel,
+        inspection: boundaryInspection,
+        fixtureWindow: fixtureWindow,
+        retainedFirstCancelWindow: firstCancelWindow,
+        confirmationIdentifier: confirmID,
+        cancellationIdentifier: cancelID
+      )
+    )
+  }
+  let (confirmWindow, confirmHost) = try #require(confirmationWindowLookup)
   let confirmFrame = try personalDictionarySettingsAccessibilityFrame(confirmID, in: confirmHost)
   let confirmBounds = personalDictionaryHostFrame(fromScreenFrame: confirmFrame, in: confirmHost)
   do {
@@ -2345,6 +2361,81 @@ private func personalDictionarySettingsWindow(
   }
   guard matchingWindows.count == 1 else { return nil }
   return matchingWindows[0]
+}
+
+@MainActor
+private struct PersonalDictionaryDeleteOpeningWindowInspection {
+  let confirmationMatches: [(NSWindow, NSView)]
+  let cancellationMatchCount: Int
+
+  var uniqueConfirmationMatch: (NSWindow, NSView)? {
+    guard confirmationMatches.count == 1 else { return nil }
+    return confirmationMatches[0]
+  }
+}
+
+@MainActor
+private func inspectPersonalDictionaryDeleteOpeningWindows(
+  confirmationIdentifier: String,
+  cancellationIdentifier: String
+) -> PersonalDictionaryDeleteOpeningWindowInspection {
+  var confirmationMatches: [(NSWindow, NSView)] = []
+  var cancellationMatchCount = 0
+  for candidateWindow in NSApplication.shared.windows {
+    guard let contentView = candidateWindow.contentView else { continue }
+    if personalDictionarySettingsAccessibilityElement(
+      withAccessibilityIdentifier: confirmationIdentifier,
+      in: contentView
+    ) != nil {
+      confirmationMatches.append((candidateWindow, contentView))
+    }
+    if personalDictionarySettingsAccessibilityElement(
+      withAccessibilityIdentifier: cancellationIdentifier,
+      in: contentView
+    ) != nil {
+      cancellationMatchCount += 1
+    }
+  }
+  return PersonalDictionaryDeleteOpeningWindowInspection(
+    confirmationMatches: confirmationMatches,
+    cancellationMatchCount: cancellationMatchCount
+  )
+}
+
+@MainActor
+private func personalDictionaryDeleteOpeningBoundaryDiagnostic(
+  viewModel: PersonalDictionarySettingsViewModel,
+  inspection: PersonalDictionaryDeleteOpeningWindowInspection,
+  fixtureWindow: NSWindow,
+  retainedFirstCancelWindow: NSWindow,
+  confirmationIdentifier: String,
+  cancellationIdentifier: String
+) -> String {
+  let pendingDeletion = viewModel.pendingEntryDeletion
+  let fixtureWindowChildren = fixtureWindow.childWindows?.map(\.windowNumber).sorted() ?? []
+  let cancelWindowChildren = retainedFirstCancelWindow.childWindows?.map(\.windowNumber).sorted() ?? []
+  return """
+  [passive synthetic Delete-opening boundary diagnostic]
+  pendingEntryID=\(pendingDeletion?.id.uuidString ?? "nil")
+  pendingEntryExpectedRevision=\(String(describing: pendingDeletion?.expectedRevision))
+  viewModelRevision=\(viewModel.revision) entryDeletionInFlight=\(viewModel.isEntryDeletionInFlight)
+  confirmationIdentifier=\(confirmationIdentifier) matchingWindowCount=\(inspection.confirmationMatches.count)
+  cancellationIdentifier=\(cancellationIdentifier) matchingWindowCount=\(inspection.cancellationMatchCount)
+  fixtureWindowNumber=\(fixtureWindow.windowNumber) visible=\(fixtureWindow.isVisible)
+  fixtureSheetParent=\(String(describing: fixtureWindow.sheetParent?.windowNumber))
+  fixtureAttachedSheet=\(String(describing: fixtureWindow.attachedSheet?.windowNumber))
+  fixtureParent=\(String(describing: fixtureWindow.parent?.windowNumber))
+  fixtureChildren=\(fixtureWindowChildren)
+  retainedFirstCancelWindowNumber=\(retainedFirstCancelWindow.windowNumber) visible=\(retainedFirstCancelWindow.isVisible)
+  firstCancelSheetParent=\(String(describing: retainedFirstCancelWindow.sheetParent?.windowNumber))
+  firstCancelAttachedSheet=\(String(describing: retainedFirstCancelWindow.attachedSheet?.windowNumber))
+  firstCancelParent=\(String(describing: retainedFirstCancelWindow.parent?.windowNumber))
+  firstCancelChildren=\(cancelWindowChildren)
+  fixtureAttachedFirstCancel=\(fixtureWindow.attachedSheet === retainedFirstCancelWindow)
+  firstCancelSheetParentIsFixture=\(retainedFirstCancelWindow.sheetParent === fixtureWindow)
+  fixtureParentIsFirstCancel=\(fixtureWindow.parent === retainedFirstCancelWindow)
+  firstCancelParentIsFixture=\(retainedFirstCancelWindow.parent === fixtureWindow)
+  """
 }
 
 @MainActor
