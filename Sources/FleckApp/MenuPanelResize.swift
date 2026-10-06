@@ -437,12 +437,21 @@
     case deferred
   }
 
+  struct MenuPanelResizeEventPathTraceRecord: Codable {
+    let point: String
+    let eventNumber: Int?
+    let tracking: Bool?
+  }
+
+  typealias MenuPanelResizeEventPathTraceSink = @MainActor (MenuPanelResizeEventPathTraceRecord) -> Void
+
   @MainActor
   final class MenuPanelResizeController: ObservableObject {
     @Published private(set) var effectiveContentSize: CGSize?
     private var desiredEffectiveContentSize: CGSize?
     private(set) var completedPreferenceSize: CGSize?
     private(set) var isTracking = false
+    var eventPathTraceSink: MenuPanelResizeEventPathTraceSink?
     private var snapshot: MenuPanelResizeSnapshot?
     private var handle: MenuPanelResizeHandle?
     private var proposal: MenuPanelResizeProposal?
@@ -456,29 +465,64 @@
     var currentProposal: MenuPanelResizeProposal? { proposal }
     var currentHandle: MenuPanelResizeHandle? { handle }
 
+    private func traceEventPath(
+      _ point: StaticString,
+      tracking: Bool? = nil
+    ) {
+      guard let eventPathTraceSink else { return }
+      eventPathTraceSink(
+        MenuPanelResizeEventPathTraceRecord(
+          point: String(describing: point),
+          eventNumber: nil,
+          tracking: tracking
+        )
+      )
+    }
+
     @discardableResult
     func begin(
       snapshot: MenuPanelResizeSnapshot,
       handle: MenuPanelResizeHandle,
       ownerID: UUID? = nil
     ) -> Bool {
-      guard presentationOwnerID == ownerID, !isTracking,
-        !snapshot.initialFrame.isEmpty,
-        !snapshot.visibleFrame.isEmpty,
-        !snapshot.statusLabelFrame.isEmpty,
-        MenuPanelResizeGeometry.proposal(
-          snapshot: snapshot,
-          pointer: snapshot.initialPointer,
-          handle: handle,
-          currentSide: snapshot.fixedSide
-        ) != nil,
-        MenuPanelResizeGeometry.supportsStableMinimum(
-          side: snapshot.fixedSide,
-          frameInsets: snapshot.frameInsets,
-          visibleFrame: snapshot.visibleFrame,
-          statusLabelFrame: snapshot.statusLabelFrame
-        )
-      else { return false }
+      guard presentationOwnerID == ownerID else {
+        traceEventPath("controller.begin.presentationOwnerMismatch")
+        return false
+      }
+      guard !isTracking else {
+        traceEventPath("controller.begin.alreadyTracking")
+        return false
+      }
+      guard !snapshot.initialFrame.isEmpty else {
+        traceEventPath("controller.begin.emptyInitialFrame")
+        return false
+      }
+      guard !snapshot.visibleFrame.isEmpty else {
+        traceEventPath("controller.begin.emptyVisibleFrame")
+        return false
+      }
+      guard !snapshot.statusLabelFrame.isEmpty else {
+        traceEventPath("controller.begin.emptyStatusLabelFrame")
+        return false
+      }
+      guard MenuPanelResizeGeometry.proposal(
+        snapshot: snapshot,
+        pointer: snapshot.initialPointer,
+        handle: handle,
+        currentSide: snapshot.fixedSide
+      ) != nil else {
+        traceEventPath("controller.begin.initialProposalRejected")
+        return false
+      }
+      guard MenuPanelResizeGeometry.supportsStableMinimum(
+        side: snapshot.fixedSide,
+        frameInsets: snapshot.frameInsets,
+        visibleFrame: snapshot.visibleFrame,
+        statusLabelFrame: snapshot.statusLabelFrame
+      ) else {
+        traceEventPath("controller.begin.stableMinimumRejected")
+        return false
+      }
       self.snapshot = snapshot
       self.handle = handle
       proposal = nil
@@ -487,6 +531,7 @@
       completedPreferenceSize = nil
       setDesiredContentSize(snapshot.initialContentSize, publication: .immediate)
       isTracking = true
+      traceEventPath("controller.begin.trackingEnabled", tracking: true)
       return true
     }
 
@@ -498,17 +543,43 @@
       ownerID: UUID? = nil,
       canonicalize: (MenuPanelResizeProposal) -> MenuPanelResizeProposal? = { $0 }
     ) -> MenuPanelResizeProposal? {
-      guard presentationOwnerID == ownerID,
-        let snapshot, let handle, let currentFixedSide,
-        statusLabelFrame == snapshot.statusLabelFrame,
-        visibleFrame == snapshot.visibleFrame
-      else { return nil }
+      guard presentationOwnerID == ownerID else {
+        traceEventPath("controller.update.presentationOwnerMismatch")
+        return nil
+      }
+      guard let snapshot else {
+        traceEventPath("controller.update.missingSnapshot")
+        return nil
+      }
+      guard let handle else {
+        traceEventPath("controller.update.missingHandle")
+        return nil
+      }
+      guard let currentFixedSide else {
+        traceEventPath("controller.update.missingFixedSide")
+        return nil
+      }
+      guard statusLabelFrame == snapshot.statusLabelFrame else {
+        traceEventPath("controller.update.statusLabelFrameMismatch")
+        return nil
+      }
+      guard visibleFrame == snapshot.visibleFrame else {
+        traceEventPath("controller.update.visibleFrameMismatch")
+        return nil
+      }
       guard let proposed = MenuPanelResizeGeometry.proposal(
         snapshot: snapshot,
         pointer: pointer,
         handle: handle,
         currentSide: currentFixedSide
-      ), let proposal = canonicalize(proposed) else { return nil }
+      ) else {
+        traceEventPath("controller.update.geometryProposalRejected")
+        return nil
+      }
+      guard let proposal = canonicalize(proposed) else {
+        traceEventPath("controller.update.canonicalizeRejected")
+        return nil
+      }
       self.proposal = proposal
       lastPointer = pointer
       self.currentFixedSide = proposal.fixedSide
@@ -570,6 +641,7 @@
         ).flatMap(canonicalize)
       else { return nil }
       isTracking = false
+      traceEventPath("controller.finish.trackingCleared", tracking: false)
       self.handle = nil
       self.proposal = finalProposal
       self.currentFixedSide = finalProposal.fixedSide
@@ -586,11 +658,18 @@
     @discardableResult
     func cancelSnapshot(
       ownerID: UUID? = nil,
-      publication: MenuPanelResizePublicationTiming = .immediate
+      publication: MenuPanelResizePublicationTiming = .immediate,
+      tracePoint: StaticString? = nil
     ) -> MenuPanelResizeSnapshot? {
-      guard presentationOwnerID == ownerID, isTracking else { return nil }
+      if let tracePoint { traceEventPath(tracePoint) }
+      traceEventPath("controller.cancelSnapshot.entered")
+      guard presentationOwnerID == ownerID, isTracking else {
+        traceEventPath("controller.cancelSnapshot.rejected")
+        return nil
+      }
       let snapshot = snapshot
       isTracking = false
+      traceEventPath("controller.cancelSnapshot.trackingCleared", tracking: false)
       self.snapshot = nil
       handle = nil
       proposal = nil
@@ -622,6 +701,7 @@
       let previousRelinquish = relinquishPresentation
       relinquishPresentation = nil
       previousRelinquish?()
+      traceEventPath("controller.claimPresentation.clearInteractionState")
       clearInteractionState(publication: publication)
       presentationOwnerID = ownerID
       relinquishPresentation = onRelinquish
@@ -647,6 +727,7 @@
       let relinquish = relinquishPresentation
       relinquishPresentation = nil
       relinquish?()
+      traceEventPath("controller.releasePresentation.clearInteractionState")
       clearInteractionState(publication: publication)
       presentationOwnerID = nil
       return true
@@ -717,6 +798,7 @@
 
     private func clearInteractionState(publication: MenuPanelResizePublicationTiming) {
       isTracking = false
+      traceEventPath("controller.clearInteractionState.trackingCleared", tracking: false)
       snapshot = nil
       handle = nil
       proposal = nil
@@ -972,6 +1054,7 @@
     private var installationRevision = 0
     private var stateRevision = 0
     private var queuedRevision: Int?
+    var eventPathTraceSink: MenuPanelResizeEventPathTraceSink?
 
     var isInstalled: Bool { monitor != nil && installedWindow != nil }
     private var ownsTracking: Bool {
@@ -1179,7 +1262,8 @@
       return { [weak controller, weak window, weak geometryStore] in
         let snapshot = controller?.cancelSnapshot(
           ownerID: ownerID,
-          publication: .deferred
+          publication: .deferred,
+          tracePoint: "host.deferredRelinquish.cancelSnapshot"
         )
         if let snapshot, let window {
           Self.restore(
@@ -1311,72 +1395,183 @@
       cursor = nil
     }
 
+    private func traceEventPath(
+      _ point: StaticString,
+      eventNumber: Int? = nil
+    ) {
+      guard let eventPathTraceSink else { return }
+      eventPathTraceSink(
+        MenuPanelResizeEventPathTraceRecord(
+          point: String(describing: point),
+          eventNumber: eventNumber,
+          tracking: nil
+        )
+      )
+    }
+
     private func handle(_ event: NSEvent) -> NSEvent? {
-      guard let attachmentID, controller.isPresentationOwner(attachmentID),
-        let window = installedWindow, event.window === window
-      else { return event }
+      let traceEventNumber: Int?
+      if eventPathTraceSink == nil {
+        traceEventNumber = nil
+      } else {
+        switch event.type {
+        case .leftMouseDown, .leftMouseDragged:
+          traceEventNumber = event.eventNumber
+        default:
+          traceEventNumber = nil
+        }
+      }
+      traceEventPath("host.event.received", eventNumber: traceEventNumber)
+      guard let attachmentID else {
+        traceEventPath("host.event.noAttachment.forwarded", eventNumber: traceEventNumber)
+        return event
+      }
+      guard controller.isPresentationOwner(attachmentID) else {
+        traceEventPath("host.event.notPresentationOwner.forwarded", eventNumber: traceEventNumber)
+        return event
+      }
+      guard let window = installedWindow else {
+        traceEventPath("host.event.noInstalledWindow.forwarded", eventNumber: traceEventNumber)
+        return event
+      }
+      guard event.window === window else {
+        traceEventPath("host.event.otherWindow.forwarded", eventNumber: traceEventNumber)
+        return event
+      }
       guard window.isVisible else {
+        traceEventPath("host.event.hiddenWindow.forwarded", eventNumber: traceEventNumber)
         resetCursor()
         return event
       }
       switch event.type {
       case .leftMouseDown:
-        return begin(event, in: window) ? nil : event
+        let began = begin(event, in: window, traceEventNumber: traceEventNumber)
+        traceEventPath(
+          began ? "host.mouseDown.consumed" : "host.mouseDown.forwarded",
+          eventNumber: traceEventNumber
+        )
+        return began ? nil : event
       case .leftMouseDragged:
-        guard controller.isOwned(by: attachmentID) else { return event }
+        guard controller.isOwned(by: attachmentID) else {
+          traceEventPath("host.mouseDragged.forwardedWithoutTracking", eventNumber: traceEventNumber)
+          return event
+        }
         guard isLiveResizeEligible(in: window) else {
-          cancelAndRestore(in: window)
+          cancelAndRestore(
+            in: window,
+            tracePoint: "host.mouseDragged.ineligible",
+            traceEventNumber: traceEventNumber
+          )
+          traceEventPath("host.mouseDragged.consumedAfterIneligibility", eventNumber: traceEventNumber)
           return nil
         }
-        update(event, in: window)
+        traceEventPath("host.mouseDragged.eligible", eventNumber: traceEventNumber)
+        update(event, in: window, traceEventNumber: traceEventNumber)
+        traceEventPath("host.mouseDragged.consumed", eventNumber: traceEventNumber)
         return nil
       case .leftMouseUp:
-        guard controller.isOwned(by: attachmentID) else { return event }
+        guard controller.isOwned(by: attachmentID) else {
+          traceEventPath("host.mouseUp.forwardedWithoutTracking", eventNumber: traceEventNumber)
+          return event
+        }
         guard isLiveResizeEligible(in: window) else {
-          cancelAndRestore(in: window)
+          cancelAndRestore(
+            in: window,
+            tracePoint: "host.mouseUp.ineligible",
+            traceEventNumber: traceEventNumber
+          )
+          traceEventPath("host.mouseUp.consumedAfterIneligibility", eventNumber: traceEventNumber)
           return nil
         }
-        finish(event, in: window)
+        finish(event, in: window, traceEventNumber: traceEventNumber)
+        traceEventPath("host.mouseUp.consumed", eventNumber: traceEventNumber)
         return nil
       case .keyDown where event.keyCode == 53 && ownsTracking:
-        cancelAndRestore(in: window)
+        cancelAndRestore(
+          in: window,
+          tracePoint: "host.escapeKey",
+          traceEventNumber: traceEventNumber
+        )
+        traceEventPath("host.escapeKey.consumed", eventNumber: traceEventNumber)
         return nil
       case .mouseMoved, .cursorUpdate:
         updateCursor(for: event, in: window)
+        traceEventPath("host.cursorEvent.forwarded", eventNumber: traceEventNumber)
         return event
       case .mouseExited:
         resetCursor()
+        traceEventPath("host.mouseExited.forwarded", eventNumber: traceEventNumber)
         return event
       default:
+        traceEventPath("host.event.unhandledType.forwarded", eventNumber: traceEventNumber)
         return event
       }
     }
 
     func beginReadiness(
       at locationInWindow: CGPoint,
-      in window: NSWindow
+      in window: NSWindow,
+      traceEventNumber: Int? = nil
     ) -> MenuPanelResizeBeginReadiness {
-      guard isLiveResizeEligible(in: window) else { return .blocked }
-      guard queuedRevision == nil else { return .reconciling }
-      guard let attachmentID,
-        controller.isPresentationOwner(attachmentID),
-        let statusButton = geometryStore?.resolveStatusButton(),
-        let screen = window.screen,
-        statusButton.sourceIdentity == alignedStatusButtonSource,
-        statusButton.screenFrame == alignedStatusButtonFrame,
-        screen.visibleFrame == alignedVisibleFrame,
-        window.frame == alignedFrame,
-        let fixedSide = MenuPanelResizeGeometry.anchoredSide(
-          panelFrame: window.frame,
-          statusLabelFrame: statusButton.screenFrame
-        ),
-        fixedSide == alignedFixedSide,
-        let handle = MenuPanelResizeGeometry.handle(
-          at: convert(locationInWindow, from: nil),
-          in: bounds,
-          fixedSide: fixedSide
-        )
-      else { return .blocked }
+      guard isLiveResizeEligible(in: window) else {
+        traceEventPath("host.beginReadiness.ineligible", eventNumber: traceEventNumber)
+        return .blocked
+      }
+      guard queuedRevision == nil else {
+        traceEventPath("host.beginReadiness.reconciling", eventNumber: traceEventNumber)
+        return .reconciling
+      }
+      guard let attachmentID else {
+        traceEventPath("host.beginReadiness.noAttachment", eventNumber: traceEventNumber)
+        return .blocked
+      }
+      guard controller.isPresentationOwner(attachmentID) else {
+        traceEventPath("host.beginReadiness.notPresentationOwner", eventNumber: traceEventNumber)
+        return .blocked
+      }
+      guard let statusButton = geometryStore?.resolveStatusButton() else {
+        traceEventPath("host.beginReadiness.noStatusButton", eventNumber: traceEventNumber)
+        return .blocked
+      }
+      guard let screen = window.screen else {
+        traceEventPath("host.beginReadiness.noScreen", eventNumber: traceEventNumber)
+        return .blocked
+      }
+      guard statusButton.sourceIdentity == alignedStatusButtonSource else {
+        traceEventPath("host.beginReadiness.statusSourceMismatch", eventNumber: traceEventNumber)
+        return .blocked
+      }
+      guard statusButton.screenFrame == alignedStatusButtonFrame else {
+        traceEventPath("host.beginReadiness.statusFrameMismatch", eventNumber: traceEventNumber)
+        return .blocked
+      }
+      guard screen.visibleFrame == alignedVisibleFrame else {
+        traceEventPath("host.beginReadiness.visibleFrameMismatch", eventNumber: traceEventNumber)
+        return .blocked
+      }
+      guard window.frame == alignedFrame else {
+        traceEventPath("host.beginReadiness.windowFrameMismatch", eventNumber: traceEventNumber)
+        return .blocked
+      }
+      guard let fixedSide = MenuPanelResizeGeometry.anchoredSide(
+        panelFrame: window.frame,
+        statusLabelFrame: statusButton.screenFrame
+      ) else {
+        traceEventPath("host.beginReadiness.noFixedSide", eventNumber: traceEventNumber)
+        return .blocked
+      }
+      guard fixedSide == alignedFixedSide else {
+        traceEventPath("host.beginReadiness.fixedSideMismatch", eventNumber: traceEventNumber)
+        return .blocked
+      }
+      guard let handle = MenuPanelResizeGeometry.handle(
+        at: convert(locationInWindow, from: nil),
+        in: bounds,
+        fixedSide: fixedSide
+      ) else {
+        traceEventPath("host.beginReadiness.noHandle", eventNumber: traceEventNumber)
+        return .blocked
+      }
       let contentRect = window.contentRect(forFrameRect: window.frame)
       let insets = MenuPanelFrameInsets(
         top: window.frame.maxY - contentRect.maxY,
@@ -1401,42 +1596,90 @@
       )
     }
 
-    private func begin(_ event: NSEvent, in window: NSWindow) -> Bool {
-      guard case let .ready(snapshot, handle, ownerID, statusButtonSource) = beginReadiness(
+    private func begin(
+      _ event: NSEvent,
+      in window: NSWindow,
+      traceEventNumber: Int? = nil
+    ) -> Bool {
+      switch beginReadiness(
         at: event.locationInWindow,
-        in: window
-      ) else { return false }
-      guard controller.begin(snapshot: snapshot, handle: handle, ownerID: ownerID) else {
+        in: window,
+        traceEventNumber: traceEventNumber
+      ) {
+      case let .ready(snapshot, handle, ownerID, statusButtonSource):
+        traceEventPath("host.mouseDown.readinessReady", eventNumber: traceEventNumber)
+        guard controller.begin(snapshot: snapshot, handle: handle, ownerID: ownerID) else {
+          traceEventPath("host.mouseDown.controllerBeginRejected", eventNumber: traceEventNumber)
+          return false
+        }
+        invalidateQueuedWork()
+        activeStatusButtonSource = statusButtonSource
+        setCursor(cursor(for: handle, fixedSide: snapshot.fixedSide))
+        traceEventPath("host.mouseDown.controllerBeginAdmitted", eventNumber: traceEventNumber)
+        return true
+      case .reconciling:
+        traceEventPath("host.mouseDown.readinessReconciling", eventNumber: traceEventNumber)
+        return false
+      case .blocked:
+        traceEventPath("host.mouseDown.readinessBlocked", eventNumber: traceEventNumber)
         return false
       }
-      invalidateQueuedWork()
-      activeStatusButtonSource = statusButtonSource
-      setCursor(cursor(for: handle, fixedSide: snapshot.fixedSide))
-      return true
     }
 
-    private func update(_ event: NSEvent, in window: NSWindow) {
-      guard let attachmentID,
-        let statusLabelFrame = activeStatusButtonFrame(),
-        let screen = window.screen,
-        let proposal = controller.update(
+    private func update(
+      _ event: NSEvent,
+      in window: NSWindow,
+      traceEventNumber: Int? = nil
+    ) {
+      guard let attachmentID else {
+        cancelAndRestore(
+          in: window,
+          tracePoint: "host.mouseDragged.update.noAttachment",
+          traceEventNumber: traceEventNumber
+        )
+        return
+      }
+      guard let statusLabelFrame = activeStatusButtonFrame() else {
+        cancelAndRestore(
+          in: window,
+          tracePoint: "host.mouseDragged.update.noActiveStatusFrame",
+          traceEventNumber: traceEventNumber
+        )
+        return
+      }
+      guard let screen = window.screen else {
+        cancelAndRestore(
+          in: window,
+          tracePoint: "host.mouseDragged.update.noScreen",
+          traceEventNumber: traceEventNumber
+        )
+        return
+      }
+      guard let proposal = controller.update(
         pointer: window.convertPoint(toScreen: event.locationInWindow),
         statusLabelFrame: statusLabelFrame,
         visibleFrame: screen.visibleFrame,
         ownerID: attachmentID,
         canonicalize: {
-          self.backingAlignedProposal(
+          let aligned = self.backingAlignedProposal(
             $0,
             in: window,
             on: screen,
-            statusLabelFrame: statusLabelFrame
+            statusLabelFrame: statusLabelFrame,
+            traceEventNumber: traceEventNumber
           )
+          return aligned
         }
       ) else {
-        cancelAndRestore(in: window)
+        cancelAndRestore(
+          in: window,
+          tracePoint: "host.mouseDragged.update.controllerRejected",
+          traceEventNumber: traceEventNumber
+        )
         return
       }
       applyFrame(proposal.frame, to: window, displayImmediately: false)
+      traceEventPath("host.mouseDragged.update.appliedFrame", eventNumber: traceEventNumber)
       if let handle = controller.currentHandle,
         let fixedSide = controller.currentFixedSide
       {
@@ -1444,7 +1687,11 @@
       }
     }
 
-    private func finish(_ event: NSEvent, in window: NSWindow) {
+    private func finish(
+      _ event: NSEvent,
+      in window: NSWindow,
+      traceEventNumber: Int? = nil
+    ) {
       let endingStatusButton = geometryStore?.resolveStatusButton()
       guard let attachmentID,
         endingStatusButton?.sourceIdentity == activeStatusButtonSource,
@@ -1465,7 +1712,11 @@
           }
         )
       else {
-        cancelAndRestore(in: window)
+        cancelAndRestore(
+          in: window,
+          tracePoint: "host.mouseUp.finishUpdateRejected",
+          traceEventNumber: traceEventNumber
+        )
         return
       }
       applyFrame(transient.frame, to: window)
@@ -1483,7 +1734,11 @@
           )
         }
       ) else {
-        cancelAndRestore(in: window)
+        cancelAndRestore(
+          in: window,
+          tracePoint: "host.mouseUp.finishProposalRejected",
+          traceEventNumber: traceEventNumber
+        )
         return
       }
       let adoptedFrame = applyFrame(final.frame, to: window)
@@ -1520,9 +1775,19 @@
 
     private func cancelAndRestore(
       in window: NSWindow,
+      tracePoint: StaticString,
+      traceEventNumber: Int? = nil,
       publication: MenuPanelResizePublicationTiming = .immediate
     ) {
-      guard let attachmentID, controller.isPresentationOwner(attachmentID) else { return }
+      traceEventPath(tracePoint, eventNumber: traceEventNumber)
+      guard let attachmentID else {
+        traceEventPath("host.cancelAndRestore.noAttachment", eventNumber: traceEventNumber)
+        return
+      }
+      guard controller.isPresentationOwner(attachmentID) else {
+        traceEventPath("host.cancelAndRestore.notPresentationOwner", eventNumber: traceEventNumber)
+        return
+      }
       let snapshot = controller.cancelSnapshot(
         ownerID: attachmentID,
         publication: publication
@@ -1550,7 +1815,11 @@
       presentationTop = nil
       invalidateQueuedWork()
       if let installedWindow {
-        cancelAndRestore(in: installedWindow, publication: .deferred)
+        cancelAndRestore(
+          in: installedWindow,
+          tracePoint: "host.windowWillClose",
+          publication: .deferred
+        )
       }
       scheduleReconcile()
     }
@@ -1565,10 +1834,18 @@
         // A hidden window is a transient hide; the deferred visibility
         // reconcile cancels the drag only if the window stays hidden.
         if let window, window.isVisible {
-          cancelAndRestore(in: window, publication: .deferred)
+          cancelAndRestore(
+            in: window,
+            tracePoint: "host.windowResignedKey.visible",
+            publication: .deferred
+          )
         }
       } else if let window {
-        cancelAndRestore(in: window, publication: .deferred)
+        cancelAndRestore(
+          in: window,
+          tracePoint: "host.windowResignedKey.notTracking",
+          publication: .deferred
+        )
       }
       scheduleReconcile()
     }
@@ -1657,7 +1934,10 @@
     ) {
       guard let window = installedWindow, let attachmentID else {
         if pendingExternalPreference, controller.isUnownedTracking {
-          controller.cancelSnapshot(publication: publication)
+          controller.cancelSnapshot(
+            publication: publication,
+            tracePoint: "host.reconcile.unownedTracking"
+          )
         }
         pendingExternalPreference = false
         return
@@ -1665,7 +1945,11 @@
       guard controller.isPresentationOwner(attachmentID) else { return }
       if !isLiveResizeEligible(in: window) || !window.isVisible {
         if controller.isOwned(by: attachmentID) {
-          cancelAndRestore(in: window, publication: publication)
+          cancelAndRestore(
+            in: window,
+            tracePoint: "host.reconcile.ineligibleOrHidden",
+            publication: publication
+          )
         }
         if pendingExternalPreference {
           _ = controller.setPresentationContentSize(
@@ -1681,14 +1965,22 @@
         !isHiddenOrHasHiddenAncestor, !bounds.isEmpty, hasPreferredSize
       else {
         if ownsTracking && !preparesHiddenWindow {
-          cancelAndRestore(in: window, publication: publication)
+          cancelAndRestore(
+            in: window,
+            tracePoint: "host.reconcile.invalidViewState",
+            publication: publication
+          )
         }
         return
       }
       let isVisible = isPresented && window.isVisible
       if !isVisible && !preparesHiddenWindow {
         if ownsTracking {
-          cancelAndRestore(in: window, publication: publication)
+          cancelAndRestore(
+            in: window,
+            tracePoint: "host.reconcile.notVisible",
+            publication: publication
+          )
         }
         return
       }
@@ -1703,7 +1995,11 @@
           )
         else {
           if isVisible {
-            cancelAndRestore(in: window, publication: publication)
+            cancelAndRestore(
+              in: window,
+              tracePoint: "host.reconcile.geometryMismatch",
+              publication: publication
+            )
           }
           return
         }
@@ -1902,7 +2198,8 @@
       _ proposal: MenuPanelResizeProposal,
       in window: NSWindow,
       on screen: NSScreen,
-      statusLabelFrame: CGRect
+      statusLabelFrame: CGRect,
+      traceEventNumber: Int? = nil
     ) -> MenuPanelResizeProposal? {
       let frame = screen.backingAlignedRect(proposal.frame, options: .alignAllEdgesOutward)
       let contentSize = window.contentRect(forFrameRect: frame).size
@@ -1912,16 +2209,41 @@
       case .left: frame.minX == statusLabelFrame.minX
       case .right: frame.maxX == statusLabelFrame.maxX
       }
-      guard frame.maxY == proposal.frame.maxY,
-        hasFixedEdge,
-        MenuPanelResizeGeometry.containedFrame(
-          frame: frame,
-          visibleFrame: screen.visibleFrame
-        ) == frame,
-        contentSize.width.isFinite, contentSize.height.isFinite,
-        contentSize.width > 0, contentSize.height > 0,
-        !proposal.isLegalPreference || isLegalPreference
-      else { return nil }
+      guard frame.maxY == proposal.frame.maxY else {
+        traceEventPath("host.backingAlignment.maxYRejected", eventNumber: traceEventNumber)
+        return nil
+      }
+      guard hasFixedEdge else {
+        traceEventPath("host.backingAlignment.fixedEdgeRejected", eventNumber: traceEventNumber)
+        return nil
+      }
+      guard MenuPanelResizeGeometry.containedFrame(
+        frame: frame,
+        visibleFrame: screen.visibleFrame
+      ) == frame else {
+        traceEventPath("host.backingAlignment.containmentRejected", eventNumber: traceEventNumber)
+        return nil
+      }
+      guard contentSize.width.isFinite else {
+        traceEventPath("host.backingAlignment.contentWidthNotFinite", eventNumber: traceEventNumber)
+        return nil
+      }
+      guard contentSize.height.isFinite else {
+        traceEventPath("host.backingAlignment.contentHeightNotFinite", eventNumber: traceEventNumber)
+        return nil
+      }
+      guard contentSize.width > 0 else {
+        traceEventPath("host.backingAlignment.contentWidthNotPositive", eventNumber: traceEventNumber)
+        return nil
+      }
+      guard contentSize.height > 0 else {
+        traceEventPath("host.backingAlignment.contentHeightNotPositive", eventNumber: traceEventNumber)
+        return nil
+      }
+      guard !proposal.isLegalPreference || isLegalPreference else {
+        traceEventPath("host.backingAlignment.legalPreferenceRejected", eventNumber: traceEventNumber)
+        return nil
+      }
       return MenuPanelResizeProposal(
         contentSize: contentSize,
         frame: frame,

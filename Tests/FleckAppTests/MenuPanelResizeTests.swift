@@ -2421,8 +2421,15 @@ import Testing
   )
   let geometryStore = MenuPanelGeometryStore(windows: { [statusButton.window] })
   let controller = MenuPanelResizeController()
+  let traceBuffer = MenuPanelResizeEventPathTraceBuffer()
+  controller.eventPathTraceSink = { traceBuffer.append($0) }
   var commits: [CGSize] = []
   let host = MenuPanelResizeHostView(controller: controller)
+  defer {
+    traceBuffer.seal()
+    host.eventPathTraceSink = nil
+    controller.eventPathTraceSink = nil
+  }
   host.configure(
     geometryStore: geometryStore,
     preferredSize: initialFrame.size,
@@ -2435,9 +2442,18 @@ import Testing
   await settleResizeHost(host)
 
   let dragPoint = window.convertPoint(toScreen: CGPoint(x: -19, y: 200))
+  host.eventPathTraceSink = { traceBuffer.append($0) }
+  traceBuffer.start()
   sendResizeMouseEvent(.leftMouseDown, at: CGPoint(x: 1, y: 200), to: window, number: 69)
   sendResizeMouseEvent(.leftMouseDragged, atScreen: dragPoint, to: window, number: 70)
   #expect(controller.isTracking)
+  traceBuffer.seal()
+  let failedTrackingExpectation = !traceBuffer.observedFinalTracking
+  host.eventPathTraceSink = nil
+  controller.eventPathTraceSink = nil
+  if failedTrackingExpectation {
+    print("FLECK_RESIZE_EVENT_PATH_TRACE_V1 \(traceBuffer.encodedPayload())")
+  }
   host.configure(
     geometryStore: geometryStore,
     preferredSize: initialFrame.size,
@@ -3437,6 +3453,54 @@ private func waitForMenuPanelPreferenceSaves(
 @MainActor
 private final class WeakStatusButtonReference {
   weak var value: NSStatusBarButton?
+}
+
+@MainActor
+private final class MenuPanelResizeEventPathTraceBuffer {
+  private struct Payload: Encodable {
+    let complete: Bool
+    let overflowed: Bool
+    let events: [MenuPanelResizeEventPathTraceRecord]
+  }
+
+  private(set) var observedFinalTracking = false
+  private(set) var overflowed = false
+  private var isRecording = false
+  private var isSealed = false
+  private var events: [MenuPanelResizeEventPathTraceRecord] = []
+
+  func append(_ record: MenuPanelResizeEventPathTraceRecord) {
+    guard !isSealed else { return }
+    if let tracking = record.tracking { observedFinalTracking = tracking }
+    guard isRecording else { return }
+    if let eventNumber = record.eventNumber, eventNumber != 69, eventNumber != 70 { return }
+    guard events.count < 256 else {
+      overflowed = true
+      return
+    }
+    events.append(record)
+  }
+
+  func start() {
+    guard !isSealed else { return }
+    isRecording = true
+  }
+
+  func seal() {
+    isRecording = false
+    isSealed = true
+  }
+
+  func encodedPayload() -> String {
+    let payload = Payload(
+      complete: !overflowed,
+      overflowed: overflowed,
+      events: events
+    )
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    return String(decoding: try! encoder.encode(payload), as: UTF8.self)
+  }
 }
 
 @MainActor
