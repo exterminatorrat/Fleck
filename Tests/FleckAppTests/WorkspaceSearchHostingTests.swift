@@ -1548,7 +1548,100 @@ func WorkspaceSearchHostingDismissPreservesFocusScopeWorkspaceAndSaveGeneration(
   #expect(state.persistenceGeneration == expectedGeneration)
   #expect(state.folderScopeForSelectedNote() == expectedScope)
   #expect(titleField.stringValue == expectedTitle)
-  let restoredTitleEditor = try #require(window.firstResponder as? NSTextView)
+  let restoredTitleEditor: NSTextView
+  do {
+    restoredTitleEditor = try #require(window.firstResponder as? NSTextView)
+  } catch {
+    func identity(_ object: AnyObject?) -> String {
+      guard let object else { return "nil" }
+      return String(describing: ObjectIdentifier(object))
+    }
+
+    let rawTitleFields = hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .filter { $0.placeholderString == "Note title" }
+    let rawTitleFieldDetails = rawTitleFields.map { field in
+      "\(identity(field)):window=\(identity(field.window)):attached=\(field.window === window):host=\(field.isDescendant(of: host)):hidden=\(field.isHidden):hiddenByAncestor=\(field.isHiddenOrHasHiddenAncestor):visibleRectEmpty=\(field.visibleRect.isEmpty):enabled=\(field.isEnabled):editable=\(field.isEditable):selectable=\(field.isSelectable)"
+    }.joined(separator: ";")
+    let titleFocusSurfaceIsInteractive = window.isVisible
+      && window.isKeyWindow
+      && window.contentView === host
+      && host.window === window
+      && !host.isHiddenOrHasHiddenAncestor
+      && !host.visibleRect.isEmpty
+    let liveTitleFields = rawTitleFields.filter { field in
+      titleFocusSurfaceIsInteractive
+        && field.window === window
+        && field.isDescendant(of: host)
+        && !field.isHiddenOrHasHiddenAncestor
+        && !field.visibleRect.isEmpty
+        && field.isEnabled
+        && field.isEditable
+        && field.isSelectable
+    }
+    let liveTitleField = liveTitleFields.count == 1 ? liveTitleFields[0] : nil
+    let capturedCurrentEditor = titleField.currentEditor() as? NSTextView
+    let liveCurrentEditor = liveTitleField?.currentEditor() as? NSTextView
+    let actualResponder = window.firstResponder
+    let actualTextView = actualResponder as? NSTextView
+    let rawTitleFieldIDs = rawTitleFields.map { identity($0) }.joined(separator: ",")
+    let liveTitleFieldIDs = liveTitleFields.map { identity($0) }.joined(separator: ",")
+    let liveTitleFieldStatus: String
+    switch liveTitleFields.count {
+    case 0:
+      liveTitleFieldStatus = "none"
+    case 1:
+      liveTitleFieldStatus = "unique:\(liveTitleFieldIDs)"
+    default:
+      liveTitleFieldStatus = "ambiguous:\(liveTitleFields.count):\(liveTitleFieldIDs)"
+    }
+    let capturedEditorIsCurrent = capturedCurrentEditor.map { $0 === titleEditor } ?? false
+    let liveEditorBelongsToField: Bool
+    if let liveCurrentEditor, let liveTitleField {
+      liveEditorBelongsToField = liveCurrentEditor.delegate === liveTitleField
+    } else {
+      liveEditorBelongsToField = false
+    }
+    let actualIsCapturedEditor = actualResponder.map { $0 === titleEditor } ?? false
+    let actualIsCapturedFieldEditor: Bool
+    if let actualResponder, let capturedCurrentEditor {
+      actualIsCapturedFieldEditor = actualResponder === capturedCurrentEditor
+    } else {
+      actualIsCapturedFieldEditor = false
+    }
+    let actualIsLiveFieldEditor: Bool
+    if let actualResponder, let liveCurrentEditor {
+      actualIsLiveFieldEditor = actualResponder === liveCurrentEditor
+    } else {
+      actualIsLiveFieldEditor = false
+    }
+    let actualEditorDelegateIsCapturedField: Bool
+    if let actualTextView {
+      actualEditorDelegateIsCapturedField = actualTextView.delegate === titleField
+    } else {
+      actualEditorDelegateIsCapturedField = false
+    }
+    let actualEditorDelegateIsLiveField: Bool
+    if let actualTextView, let liveTitleField {
+      actualEditorDelegateIsLiveField = actualTextView.delegate === liveTitleField
+    } else {
+      actualEditorDelegateIsLiveField = false
+    }
+
+    print("""
+      [WorkspaceSearchHostingDismissPreservesFocusScopeWorkspaceAndSaveGeneration] post-failure observation; not atomic requirement state; title-focus require failed
+      window=\(identity(window)) windowVisible=\(window.isVisible) windowKey=\(window.isKeyWindow) hostWindow=\(identity(host.window)) hostAttached=\(host.window === window) hostIsWindowContentView=\(window.contentView === host) hostHiddenByAncestor=\(host.isHiddenOrHasHiddenAncestor) hostVisibleRectEmpty=\(host.visibleRect.isEmpty) titleFocusSurfaceIsInteractive=\(titleFocusSurfaceIsInteractive)
+      capturedTitleField=\(identity(titleField)) capturedFieldWindow=\(identity(titleField.window)) capturedFieldAttached=\(titleField.window === window) capturedFieldOwnHost=\(titleField.isDescendant(of: host)) capturedFieldHidden=\(titleField.isHidden) capturedFieldHiddenByAncestor=\(titleField.isHiddenOrHasHiddenAncestor) capturedFieldVisibleRectEmpty=\(titleField.visibleRect.isEmpty) capturedFieldEnabled=\(titleField.isEnabled) capturedFieldEditable=\(titleField.isEditable) capturedFieldSelectable=\(titleField.isSelectable)
+      capturedTitleEditor=\(identity(titleEditor)) capturedEditorWindow=\(identity(titleEditor.window)) capturedEditorAttached=\(titleEditor.window === window)
+      capturedCurrentEditor=\(identity(capturedCurrentEditor)) capturedEditorIsCurrent=\(capturedEditorIsCurrent) capturedEditorDelegateIsField=\(titleEditor.delegate === titleField)
+      rawTitleFieldCount=\(rawTitleFields.count) rawTitleFieldIDs=\(rawTitleFieldIDs) rawTitleFields=[\(rawTitleFieldDetails)]
+      liveTitleField=\(liveTitleFieldStatus) liveFieldAttached=\(liveTitleField.map { $0.window === window } ?? false) liveFieldOwnHost=\(liveTitleField.map { $0.isDescendant(of: host) } ?? false)
+      liveCurrentEditor=\(identity(liveCurrentEditor)) liveEditorWindow=\(identity(liveCurrentEditor?.window)) liveEditorDelegateIsField=\(liveEditorBelongsToField)
+      actualResponder=\(actualResponder.map { String(reflecting: type(of: $0)) } ?? "nil"):\(identity(actualResponder))
+      actualResponderIsWindow=\(actualResponder === window) actualIsCapturedEditor=\(actualIsCapturedEditor) actualIsCapturedFieldEditor=\(actualIsCapturedFieldEditor) actualIsLiveFieldEditor=\(actualIsLiveFieldEditor)
+      actualEditorDelegateIsCapturedField=\(actualEditorDelegateIsCapturedField) actualEditorDelegateIsLiveField=\(actualEditorDelegateIsLiveField)
+      """)
+    throw error
+  }
   #expect(restoredTitleEditor === titleEditor)
   #expect(restoredTitleEditor.selectedRange() == titleSelection)
 
