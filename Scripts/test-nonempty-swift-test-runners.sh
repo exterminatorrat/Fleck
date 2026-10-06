@@ -50,6 +50,15 @@ done
   "$fixture_root/Tests/Support" \
   "$fixture_state/platform/Developer/Library/Frameworks/Testing.framework" \
   "$fixture_state/sdk" "$fixture_state/app-resource-source"
+/bin/cat > "$fixture_state/sdk/SDKSettings.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>Version</key>
+  <string>26.5</string>
+</dict>
+</plist>
+PLIST
 /bin/cp "$ordinary_runner" "$enhanced_runner" "$appkit_runner" "$fixture_scripts/"
 /bin/cp "$appkit_host_source" "$fixture_root/Tests/Support/"
 for resource_name in "${candidate_resource_names[@]}"; do
@@ -692,6 +701,13 @@ cat > "$fixture_bin/swiftc" <<'SH'
 set -eu
 
 printf '%s\n' "$*" >> "$FAKE_STATE/swiftc-invocations"
+if [ "${1:-}" = -print-target-info ]; then
+  shift
+  [ "${1:-}" = -sdk ] && [ "${2:-}" = "$FAKE_STATE/sdk" ] || exit 96
+  [ "$#" -eq 2 ] || exit 96
+  printf '%s\n' '{"target":{"triple":"arm64-apple-macosx26.0"}}'
+  exit 0
+fi
 output=''
 while [ "$#" -gt 0 ]; do
   if [ "$1" = -o ]; then

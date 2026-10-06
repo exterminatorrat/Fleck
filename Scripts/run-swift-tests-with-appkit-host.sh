@@ -52,6 +52,29 @@ if (( sdk_status != 0 || platform_status != 0 || swiftc_status != 0 )) ||
   exit 1
 fi
 readonly sdk_path platform_path swiftc_path
+if ! sdk_version="$(/usr/bin/plutil -extract Version raw -o - "$sdk_path/SDKSettings.plist")" ||
+  [[ ! "$sdk_version" =~ ^[0-9]+([.][0-9]+)*$ ]]; then
+  printf 'error: failed to resolve the selected macOS SDK version from %s/SDKSettings.plist\n' \
+    "$sdk_path" >&2
+  exit 1
+fi
+if ! target_info="$("$swiftc_path" -print-target-info -sdk "$sdk_path")"; then
+  printf '%s\n' 'error: failed to resolve the selected Swift compiler target information' >&2
+  exit 1
+fi
+if ! target_triple="$(printf '%s\n' "$target_info" | \
+  /usr/bin/plutil -extract target.triple raw -o - -)"; then
+  printf '%s\n' 'error: failed to resolve the selected Swift compiler target triple' >&2
+  exit 1
+fi
+macos_target_pattern='^[^-]+-apple-macosx[0-9]+([.][0-9]+)+$'
+if [[ ! "$target_triple" =~ $macos_target_pattern ]]; then
+  printf 'error: selected Swift compiler reported an unsupported macOS target triple: %s\n' \
+    "$target_triple" >&2
+  exit 1
+fi
+deployment_target="${target_triple##*-apple-macosx}"
+readonly sdk_version deployment_target
 readonly framework_path="$platform_path/Developer/Library/Frameworks"
 [[ -d "$framework_path/Testing.framework" ]] || {
   printf 'error: selected macOS platform has no Testing framework: %s\n' \
@@ -546,6 +569,8 @@ fi
 set +e
 "$swiftc_path" -parse-as-library -sdk "$sdk_path" -F "$framework_path" \
   -framework AppKit -framework Testing \
+  -Xlinker -platform_version -Xlinker macos -Xlinker "$deployment_target" \
+  -Xlinker "$sdk_version" \
   -Xlinker -rpath -Xlinker "$framework_path" \
   "$host_source" -o "$expected_host_binary"
 host_build_status=$?

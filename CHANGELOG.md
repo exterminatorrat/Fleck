@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.6-beta.1] - 2026-10-06
+
+Private development candidate only; the original post-sign executable reuse comparison remains
+unverified. This is not an accepted build or public release.
+
+### Changed
+
+- Pass the selected macOS SDK version and compiler deployment target to the AppKit test-host linker.
+
 ## [1.4.5-beta.1] - 2026-10-05
 
 Private development candidate only; this fix is not an accepted build or public release.
