@@ -1499,62 +1499,70 @@ func WorkspaceSearchHostingDismissPreservesFocusScopeWorkspaceAndSaveGeneration(
   )
   window.contentView = host
   window.makeKeyAndOrderFront(nil)
-  await settleWorkspaceSearchHost(host)
+  var originalError: (any Error)? = nil
+  do {
+    await settleWorkspaceSearchHost(host)
 
-  let editor = try #require(
-    hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
-      .first { $0.string == note.body }
-  )
-  #expect(window.makeFirstResponder(editor))
-  let bodySelection = NSRange(location: 2, length: 4)
-  editor.setSelectedRange(bodySelection)
-  editor.typingAttributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
-  commands.refreshFormattingState()
-  let expectedTypingAttributes = NSDictionary(dictionary: editor.typingAttributes)
-  let expectedWorkspace = state.workspace
-  let expectedGeneration = state.persistenceGeneration
-  let expectedScope = state.folderScopeForSelectedNote()
+    let editor = try #require(
+      hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+        .first { $0.string == note.body }
+    )
+    #expect(window.makeFirstResponder(editor))
+    let bodySelection = NSRange(location: 2, length: 4)
+    editor.setSelectedRange(bodySelection)
+    editor.typingAttributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+    commands.refreshFormattingState()
+    let expectedTypingAttributes = NSDictionary(dictionary: editor.typingAttributes)
+    let expectedWorkspace = state.workspace
+    let expectedGeneration = state.persistenceGeneration
+    let expectedScope = state.folderScopeForSelectedNote()
 
-  searchController.present(for: note.id)
-  await settleWorkspaceSearchHost(host)
-  searchController.dismiss()
-  await settleWorkspaceSearchHost(host)
+    searchController.present(for: note.id)
+    await settleWorkspaceSearchHost(host)
+    searchController.dismiss()
+    await settleWorkspaceSearchHost(host)
 
-  #expect(state.workspace == expectedWorkspace)
-  #expect(state.persistenceGeneration == expectedGeneration)
-  #expect(state.folderScopeForSelectedNote() == expectedScope)
-  #expect(state.workspace.selectedNoteID == note.id)
-  #expect(commands.textView === editor)
-  #expect(editor.selectedRange() == bodySelection)
-  #expect(NSDictionary(dictionary: editor.typingAttributes).isEqual(to: expectedTypingAttributes))
-  #expect(window.firstResponder === editor)
+    #expect(state.workspace == expectedWorkspace)
+    #expect(state.persistenceGeneration == expectedGeneration)
+    #expect(state.folderScopeForSelectedNote() == expectedScope)
+    #expect(state.workspace.selectedNoteID == note.id)
+    #expect(commands.textView === editor)
+    #expect(editor.selectedRange() == bodySelection)
+    #expect(NSDictionary(dictionary: editor.typingAttributes).isEqual(to: expectedTypingAttributes))
+    #expect(window.firstResponder === editor)
 
-  let titleField = try #require(
-    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
-      .first { $0.stringValue == note.title && $0.frame.width > 200 }
-  )
-  #expect(window.makeFirstResponder(titleField))
-  let titleEditor = try #require(window.firstResponder as? NSTextView)
-  let titleSelection = NSRange(location: 1, length: 3)
-  titleEditor.setSelectedRange(titleSelection)
-  let expectedTitle = titleField.stringValue
+    let titleField = try #require(
+      hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+        .first { $0.stringValue == note.title && $0.frame.width > 200 }
+    )
+    #expect(window.makeFirstResponder(titleField))
+    let titleEditor = try #require(window.firstResponder as? NSTextView)
+    let titleSelection = NSRange(location: 1, length: 3)
+    titleEditor.setSelectedRange(titleSelection)
+    let expectedTitle = titleField.stringValue
 
-  searchController.present(for: note.id)
-  await settleWorkspaceSearchHost(host)
-  searchController.dismiss()
-  await settleWorkspaceSearchHost(host)
+    searchController.present(for: note.id)
+    await settleWorkspaceSearchHost(host)
+    searchController.dismiss()
+    await settleWorkspaceSearchHost(host)
 
-  #expect(state.workspace == expectedWorkspace)
-  #expect(state.persistenceGeneration == expectedGeneration)
-  #expect(state.folderScopeForSelectedNote() == expectedScope)
-  #expect(titleField.stringValue == expectedTitle)
-  let restoredTitleEditor = try #require(window.firstResponder as? NSTextView)
-  #expect(restoredTitleEditor === titleEditor)
-  #expect(restoredTitleEditor.selectedRange() == titleSelection)
+    #expect(state.workspace == expectedWorkspace)
+    #expect(state.persistenceGeneration == expectedGeneration)
+    #expect(state.folderScopeForSelectedNote() == expectedScope)
+    #expect(titleField.stringValue == expectedTitle)
+    let restoredTitleEditor = try #require(window.firstResponder as? NSTextView)
+    #expect(restoredTitleEditor === titleEditor)
+    #expect(restoredTitleEditor.selectedRange() == titleSelection)
 
+  } catch {
+    originalError = error
+  }
   window.contentView = nil
   window.orderOut(nil)
   await runtime.shutdown()
+  if let originalError {
+    throw originalError
+  }
 }
 
 }
