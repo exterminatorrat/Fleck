@@ -437,6 +437,266 @@
     case deferred
   }
 
+  enum MenuPanelResizeObservationInput: UInt8 {
+    case mouse = 1
+    case escape = 2
+  }
+
+  enum MenuPanelResizeObservationPhase: UInt8 {
+    case fixturePreflight = 1
+    case eventAdmission = 2
+  }
+
+  enum MenuPanelResizeObservationReadiness: UInt8 {
+    case ready = 1
+    case reconciling = 2
+    case blocked = 3
+  }
+
+  enum MenuPanelResizeObservationGate: UInt8 {
+    case owner = 1
+    case window = 2
+    case visibility = 3
+  }
+
+  enum MenuPanelResizeObservationOperation: UInt8 {
+    case begin = 1
+    case update = 2
+    case finish = 3
+    case cancel = 4
+    case backing = 5
+    case relinquish = 6
+  }
+
+  enum MenuPanelResizeObservationRejection: UInt8 {
+    case none = 0
+    case owner = 1
+    case alreadyTracking = 2
+    case incompleteGeometry = 3
+    case proposal = 4
+    case minimum = 5
+    case missingState = 6
+    case changedGeometry = 7
+    case canonicalization = 8
+    case changedFrame = 9
+    case notTracking = 10
+    case backingFrame = 11
+    case backingAnchor = 12
+    case backingContainment = 13
+    case backingContent = 14
+    case backingPreference = 15
+    case deferredOwner = 16
+    case emptyInitialFrame = 17
+    case emptyVisibleFrame = 18
+    case emptyStatusLabelFrame = 19
+    case missingSnapshot = 20
+    case missingHandle = 21
+    case missingFixedSide = 22
+    case changedStatusLabelFrame = 23
+    case changedVisibleFrame = 24
+    case missingProposal = 25
+    case missingPointer = 26
+    case backingContentWidthNonFinite = 27
+    case backingContentHeightNonFinite = 28
+    case backingContentWidthNonPositive = 29
+    case backingContentHeightNonPositive = 30
+    case liveResizeEligibility = 31
+    case queuedRevision = 32
+    case missingAttachment = 33
+    case statusButtonUnavailable = 34
+    case screenUnavailable = 35
+    case statusButtonSource = 36
+    case statusButtonFrame = 37
+    case visibleFrame = 38
+    case windowFrame = 39
+    case fixedSideUnavailable = 40
+    case fixedSideMismatch = 41
+    case handleUnavailable = 42
+  }
+
+  enum MenuPanelResizeObservationOrigin: UInt8 {
+    case directAPI = 1
+    case mouseDown = 2
+    case mouseDrag = 3
+    case mouseUp = 4
+    case escape = 5
+    case eligibilityLoss = 6
+    case rejectedFinalFrame = 7
+    case windowClose = 8
+    case windowKeyLoss = 9
+    case visibilityReconcile = 10
+    case geometryReconcile = 11
+    case ownerReplacement = 12
+    case ownerRelease = 13
+    case deferredOwnerRelease = 14
+  }
+
+  struct MenuPanelResizeObservationTicket: Equatable {
+    let sequence: UInt16
+    let input: MenuPanelResizeObservationInput
+    let inputNumber: Int
+  }
+
+  struct MenuPanelResizeObservationIdentity: Equatable {
+    let host: ObjectIdentifier
+    let window: ObjectIdentifier?
+    let controller: ObjectIdentifier
+    let attachmentID: UUID?
+    let installationRevision: Int
+  }
+
+  struct MenuPanelResizeObservationGesture {
+    let sequence: UInt16
+  }
+
+  struct MenuPanelResizeObservationPendingRelease: Equatable {
+    let sequence: UInt16
+    let identity: MenuPanelResizeObservationIdentity
+    let gestureSequence: UInt16?
+  }
+
+  enum MenuPanelResizeObservationInvocation: Equatable {
+    case claimReplacement
+    case normalRelease
+    case queuedPendingRelease(MenuPanelResizeObservationPendingRelease)
+
+    var origin: MenuPanelResizeObservationOrigin {
+      switch self {
+      case .claimReplacement:
+        .ownerReplacement
+      case .normalRelease:
+        .ownerRelease
+      case .queuedPendingRelease:
+        .deferredOwnerRelease
+      }
+    }
+
+    var code: UInt8 {
+      switch self {
+      case .claimReplacement:
+        1
+      case .normalRelease:
+        2
+      case .queuedPendingRelease:
+        3
+      }
+    }
+
+    var pendingSequence: UInt16? {
+      guard case let .queuedPendingRelease(token) = self else { return nil }
+      return token.sequence
+    }
+  }
+
+  enum MenuPanelResizeObservationRecord {
+    case binding(
+      host: ObjectIdentifier,
+      window: ObjectIdentifier?,
+      controller: ObjectIdentifier,
+      attachmentID: UUID?,
+      revision: Int,
+      bindingTime: Bool
+    )
+    case attachment(
+      host: ObjectIdentifier,
+      window: ObjectIdentifier?,
+      controller: ObjectIdentifier,
+      attachmentID: UUID?,
+      oldRevision: Int,
+      newRevision: Int,
+      installed: Bool
+    )
+    case ownerTransition(
+      controller: ObjectIdentifier,
+      previous: UUID?,
+      current: UUID?
+    )
+    case gate(
+      identity: MenuPanelResizeObservationIdentity,
+      controllerOwnerID: UUID?,
+      ticket: MenuPanelResizeObservationTicket?,
+      gate: MenuPanelResizeObservationGate,
+      passed: Bool
+    )
+    case outcome(
+      identity: MenuPanelResizeObservationIdentity,
+      controllerOwnerID: UUID?,
+      ticket: MenuPanelResizeObservationTicket?,
+      consumed: Bool
+    )
+    case readiness(
+      identity: MenuPanelResizeObservationIdentity,
+      controllerOwnerID: UUID?,
+      ticket: MenuPanelResizeObservationTicket?,
+      phase: MenuPanelResizeObservationPhase,
+      result: MenuPanelResizeObservationReadiness,
+      rejection: MenuPanelResizeObservationRejection
+    )
+    case decision(
+      identity: MenuPanelResizeObservationIdentity?,
+      controller: ObjectIdentifier,
+      controllerOwnerID: UUID?,
+      ticket: MenuPanelResizeObservationTicket?,
+      operation: MenuPanelResizeObservationOperation,
+      accepted: Bool,
+      rejection: MenuPanelResizeObservationRejection
+    )
+    case tracking(
+      identity: MenuPanelResizeObservationIdentity?,
+      controller: ObjectIdentifier,
+      controllerOwnerID: UUID?,
+      ticket: MenuPanelResizeObservationTicket?,
+      gesture: MenuPanelResizeObservationGesture,
+      active: Bool,
+      origin: MenuPanelResizeObservationOrigin,
+      invocation: MenuPanelResizeObservationInvocation?
+    )
+  }
+
+  @MainActor
+  protocol MenuPanelResizeObservationSink: AnyObject {
+    var isRecording: Bool { get }
+    func markIncomplete()
+    func issue(
+      _ input: MenuPanelResizeObservationInput,
+      inputNumber: Int,
+      type: NSEvent.EventType,
+      window: NSWindow
+    ) -> MenuPanelResizeObservationTicket?
+    func record(_ record: MenuPanelResizeObservationRecord)
+    func eventCreated(
+      _ ticket: MenuPanelResizeObservationTicket,
+      type: NSEvent.EventType,
+      event: ObjectIdentifier?,
+      eventNumber: Int?
+    )
+    func dispatch(
+      _ ticket: MenuPanelResizeObservationTicket,
+      event: ObjectIdentifier,
+      entering: Bool
+    )
+    func receive(
+      event: ObjectIdentifier,
+      host: ObjectIdentifier
+    ) -> MenuPanelResizeObservationTicket?
+    func beginTracking(
+      identity: MenuPanelResizeObservationIdentity?,
+      controller: ObjectIdentifier,
+      controllerOwnerID: UUID?,
+      ticket: MenuPanelResizeObservationTicket?,
+      origin: MenuPanelResizeObservationOrigin
+    ) -> MenuPanelResizeObservationGesture?
+    func markPendingRelease(
+      _ identity: MenuPanelResizeObservationIdentity
+    ) -> MenuPanelResizeObservationPendingRelease?
+    func finishPendingRelease(
+      _ token: MenuPanelResizeObservationPendingRelease,
+      completed: Bool
+    )
+    func scheduleReconcile(revision: Int, installationRevision: Int) -> UInt16?
+    func finishReconcile(_ token: UInt16, completed: Bool)
+  }
+
   @MainActor
   final class MenuPanelResizeController: ObservableObject {
     @Published private(set) var effectiveContentSize: CGSize?
@@ -450,6 +710,97 @@
     private var presentationOwnerID: UUID?
     private var relinquishPresentation: (@MainActor () -> Void)?
     private(set) var currentFixedSide: MenuPanelFixedSide?
+    weak var observationSink: (any MenuPanelResizeObservationSink)?
+    private var observationHostSinkFactory: (@MainActor () -> (any MenuPanelResizeObservationSink)?)?
+    private weak var trackingObservationSink: (any MenuPanelResizeObservationSink)?
+    private var observationGesture: MenuPanelResizeObservationGesture?
+    private var trackingObservationIdentity: MenuPanelResizeObservationIdentity?
+    private var trackingObservationControllerOwnerID: UUID?
+    private var activeObservationInvocation: MenuPanelResizeObservationInvocation?
+
+    func bindObservationSink(_ sink: (any MenuPanelResizeObservationSink)?) {
+      observationSink = sink
+      guard let sink else {
+        observationHostSinkFactory = nil
+        return
+      }
+      observationHostSinkFactory = { [weak sink] in sink }
+    }
+
+    func observationSinkForNewHost() -> (any MenuPanelResizeObservationSink)? {
+      observationHostSinkFactory?()
+    }
+
+    fileprivate func recordDecision(
+      _ operation: MenuPanelResizeObservationOperation,
+      ticket: MenuPanelResizeObservationTicket?,
+      accepted: Bool,
+      rejection: MenuPanelResizeObservationRejection,
+      fallbackSink: (any MenuPanelResizeObservationSink)? = nil,
+      observationIdentity: MenuPanelResizeObservationIdentity? = nil,
+      controllerOwnerID: UUID? = nil
+    ) {
+      guard let sink = fallbackSink ?? observationSink, sink.isRecording else { return }
+      if ticket != nil && observationIdentity == nil {
+        sink.markIncomplete()
+        return
+      }
+      sink.record(
+        .decision(
+          identity: observationIdentity,
+          controller: ObjectIdentifier(self),
+          controllerOwnerID: controllerOwnerID,
+          ticket: ticket,
+          operation: operation,
+          accepted: accepted,
+          rejection: rejection
+        )
+      )
+    }
+
+    private func recordTrackingClear(
+      ticket: MenuPanelResizeObservationTicket?,
+      origin: MenuPanelResizeObservationOrigin,
+      fallbackSink: (any MenuPanelResizeObservationSink)? = nil
+    ) {
+      guard let observationGesture,
+        let sink = trackingObservationSink ?? fallbackSink ?? observationSink
+      else { return }
+      if sink.isRecording || fallbackSink === sink {
+        if ticket != nil && trackingObservationIdentity == nil {
+          sink.markIncomplete()
+        } else {
+          let invocation = activeObservationInvocation
+          sink.record(
+            .tracking(
+              identity: trackingObservationIdentity,
+              controller: ObjectIdentifier(self),
+              controllerOwnerID: trackingObservationControllerOwnerID,
+              ticket: ticket,
+              gesture: observationGesture,
+              active: false,
+              origin: invocation?.origin ?? origin,
+              invocation: invocation
+            )
+          )
+        }
+      }
+      self.observationGesture = nil
+      trackingObservationSink = nil
+      trackingObservationIdentity = nil
+      trackingObservationControllerOwnerID = nil
+    }
+
+    private func pushObservationInvocation(
+      _ invocation: MenuPanelResizeObservationInvocation,
+      fallbackSink: (any MenuPanelResizeObservationSink)? = nil,
+      previous: inout MenuPanelResizeObservationInvocation?
+    ) -> Bool {
+      guard trackingObservationSink != nil || fallbackSink != nil else { return false }
+      previous = activeObservationInvocation
+      activeObservationInvocation = invocation
+      return true
+    }
 
     var initialFrame: CGRect? { snapshot?.initialFrame }
     var initialContentSize: CGSize? { snapshot?.initialContentSize }
@@ -460,25 +811,99 @@
     func begin(
       snapshot: MenuPanelResizeSnapshot,
       handle: MenuPanelResizeHandle,
-      ownerID: UUID? = nil
+      ownerID: UUID? = nil,
+      observationTicket: MenuPanelResizeObservationTicket? = nil,
+      observationOrigin: MenuPanelResizeObservationOrigin = .directAPI,
+      observationIdentity: MenuPanelResizeObservationIdentity? = nil
     ) -> Bool {
-      guard presentationOwnerID == ownerID, !isTracking,
-        !snapshot.initialFrame.isEmpty,
-        !snapshot.visibleFrame.isEmpty,
-        !snapshot.statusLabelFrame.isEmpty,
-        MenuPanelResizeGeometry.proposal(
-          snapshot: snapshot,
-          pointer: snapshot.initialPointer,
-          handle: handle,
-          currentSide: snapshot.fixedSide
-        ) != nil,
-        MenuPanelResizeGeometry.supportsStableMinimum(
-          side: snapshot.fixedSide,
-          frameInsets: snapshot.frameInsets,
-          visibleFrame: snapshot.visibleFrame,
-          statusLabelFrame: snapshot.statusLabelFrame
+      let currentOwnerID = presentationOwnerID
+      guard currentOwnerID == ownerID else {
+        recordDecision(
+          .begin,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .owner,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
         )
-      else { return false }
+        return false
+      }
+      guard !isTracking else {
+        recordDecision(
+          .begin,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .alreadyTracking,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return false
+      }
+      guard !snapshot.initialFrame.isEmpty else {
+        recordDecision(
+          .begin,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .emptyInitialFrame,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return false
+      }
+      guard !snapshot.visibleFrame.isEmpty else {
+        recordDecision(
+          .begin,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .emptyVisibleFrame,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return false
+      }
+      guard !snapshot.statusLabelFrame.isEmpty else {
+        recordDecision(
+          .begin,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .emptyStatusLabelFrame,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return false
+      }
+      guard MenuPanelResizeGeometry.proposal(
+        snapshot: snapshot,
+        pointer: snapshot.initialPointer,
+        handle: handle,
+        currentSide: snapshot.fixedSide
+      ) != nil else {
+        recordDecision(
+          .begin,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .proposal,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return false
+      }
+      guard MenuPanelResizeGeometry.supportsStableMinimum(
+        side: snapshot.fixedSide,
+        frameInsets: snapshot.frameInsets,
+        visibleFrame: snapshot.visibleFrame,
+        statusLabelFrame: snapshot.statusLabelFrame
+      ) else {
+        recordDecision(
+          .begin,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .minimum,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return false
+      }
       self.snapshot = snapshot
       self.handle = handle
       proposal = nil
@@ -487,6 +912,26 @@
       completedPreferenceSize = nil
       setDesiredContentSize(snapshot.initialContentSize, publication: .immediate)
       isTracking = true
+      if let observationSink, observationSink.isRecording {
+        trackingObservationSink = observationSink
+        trackingObservationIdentity = observationIdentity
+        trackingObservationControllerOwnerID = currentOwnerID
+        self.observationGesture = observationSink.beginTracking(
+          identity: observationIdentity,
+          controller: ObjectIdentifier(self),
+          controllerOwnerID: currentOwnerID,
+          ticket: observationTicket,
+          origin: observationOrigin
+        )
+      }
+      recordDecision(
+        .begin,
+        ticket: observationTicket,
+        accepted: true,
+        rejection: .none,
+        observationIdentity: observationIdentity,
+        controllerOwnerID: currentOwnerID
+      )
       return true
     }
 
@@ -496,23 +941,116 @@
       statusLabelFrame: CGRect?,
       visibleFrame: CGRect?,
       ownerID: UUID? = nil,
-      canonicalize: (MenuPanelResizeProposal) -> MenuPanelResizeProposal? = { $0 }
+      canonicalize: (MenuPanelResizeProposal) -> MenuPanelResizeProposal? = { $0 },
+      observationTicket: MenuPanelResizeObservationTicket? = nil,
+      observationIdentity: MenuPanelResizeObservationIdentity? = nil
     ) -> MenuPanelResizeProposal? {
-      guard presentationOwnerID == ownerID,
-        let snapshot, let handle, let currentFixedSide,
-        statusLabelFrame == snapshot.statusLabelFrame,
-        visibleFrame == snapshot.visibleFrame
-      else { return nil }
+      let currentOwnerID = presentationOwnerID
+      guard currentOwnerID == ownerID else {
+        recordDecision(
+          .update,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .owner,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
+      guard let snapshot else {
+        recordDecision(
+          .update,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .missingSnapshot,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
+      guard let handle else {
+        recordDecision(
+          .update,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .missingHandle,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
+      guard let currentFixedSide else {
+        recordDecision(
+          .update,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .missingFixedSide,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
+      guard statusLabelFrame == snapshot.statusLabelFrame else {
+        recordDecision(
+          .update,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .changedStatusLabelFrame,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
+      guard visibleFrame == snapshot.visibleFrame else {
+        recordDecision(
+          .update,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .changedVisibleFrame,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
       guard let proposed = MenuPanelResizeGeometry.proposal(
         snapshot: snapshot,
         pointer: pointer,
         handle: handle,
         currentSide: currentFixedSide
-      ), let proposal = canonicalize(proposed) else { return nil }
+      ) else {
+        recordDecision(
+          .update,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .proposal,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
+      guard let proposal = canonicalize(proposed) else {
+        recordDecision(
+          .update,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .canonicalization,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
       self.proposal = proposal
       lastPointer = pointer
       self.currentFixedSide = proposal.fixedSide
       setDesiredContentSize(proposal.contentSize, publication: .immediate)
+      recordDecision(
+        .update,
+        ticket: observationTicket,
+        accepted: true,
+        rejection: .none,
+        observationIdentity: observationIdentity,
+        controllerOwnerID: currentOwnerID
+      )
       return proposal
     }
 
@@ -554,27 +1092,167 @@
       visibleFrame: CGRect?,
       currentFrame: CGRect,
       ownerID: UUID? = nil,
-      canonicalize: (MenuPanelResizeProposal) -> MenuPanelResizeProposal? = { $0 }
+      canonicalize: (MenuPanelResizeProposal) -> MenuPanelResizeProposal? = { $0 },
+      observationTicket: MenuPanelResizeObservationTicket? = nil,
+      observationOrigin: MenuPanelResizeObservationOrigin = .directAPI,
+      observationIdentity: MenuPanelResizeObservationIdentity? = nil
     ) -> MenuPanelResizeProposal? {
-      guard presentationOwnerID == ownerID,
-        isTracking, let snapshot, let handle, let proposal, let lastPointer,
-        let currentFixedSide,
-        statusLabelFrame == snapshot.statusLabelFrame,
-        visibleFrame == snapshot.visibleFrame,
-        currentFrame == proposal.frame,
-        let finalProposal = MenuPanelResizeGeometry.releaseProposal(
-          snapshot: snapshot,
-          pointer: lastPointer,
-          handle: handle,
-          currentSide: currentFixedSide
-        ).flatMap(canonicalize)
-      else { return nil }
+      let currentOwnerID = presentationOwnerID
+      guard currentOwnerID == ownerID else {
+        recordDecision(
+          .finish,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .owner,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
+      guard isTracking else {
+        recordDecision(
+          .finish,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .notTracking,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
+      guard let snapshot else {
+        recordDecision(
+          .finish,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .missingSnapshot,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
+      guard let handle else {
+        recordDecision(
+          .finish,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .missingHandle,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
+      guard let proposal else {
+        recordDecision(
+          .finish,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .missingProposal,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
+      guard let lastPointer else {
+        recordDecision(
+          .finish,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .missingPointer,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
+      guard let currentFixedSide else {
+        recordDecision(
+          .finish,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .missingFixedSide,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
+      guard statusLabelFrame == snapshot.statusLabelFrame else {
+        recordDecision(
+          .finish,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .changedStatusLabelFrame,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
+      guard visibleFrame == snapshot.visibleFrame else {
+        recordDecision(
+          .finish,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .changedVisibleFrame,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
+      guard currentFrame == proposal.frame else {
+        recordDecision(
+          .finish,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .changedFrame,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
+      guard let proposed = MenuPanelResizeGeometry.releaseProposal(
+        snapshot: snapshot,
+        pointer: lastPointer,
+        handle: handle,
+        currentSide: currentFixedSide
+      ) else {
+        recordDecision(
+          .finish,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .proposal,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
+      guard let finalProposal = canonicalize(proposed) else {
+        recordDecision(
+          .finish,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .canonicalization,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
       isTracking = false
+      recordTrackingClear(
+        ticket: observationTicket,
+        origin: observationOrigin
+      )
       self.handle = nil
       self.proposal = finalProposal
       self.currentFixedSide = finalProposal.fixedSide
       completedPreferenceSize = finalProposal.contentSize
       setDesiredContentSize(finalProposal.contentSize, publication: .immediate)
+      recordDecision(
+        .finish,
+        ticket: observationTicket,
+        accepted: true,
+        rejection: .none,
+        observationIdentity: observationIdentity,
+        controllerOwnerID: currentOwnerID
+      )
       return finalProposal
     }
 
@@ -586,11 +1264,44 @@
     @discardableResult
     func cancelSnapshot(
       ownerID: UUID? = nil,
-      publication: MenuPanelResizePublicationTiming = .immediate
+      publication: MenuPanelResizePublicationTiming = .immediate,
+      observationTicket: MenuPanelResizeObservationTicket? = nil,
+      observationOrigin: MenuPanelResizeObservationOrigin = .directAPI,
+      fallbackObservationSink: (any MenuPanelResizeObservationSink)? = nil,
+      observationIdentity: MenuPanelResizeObservationIdentity? = nil
     ) -> MenuPanelResizeSnapshot? {
-      guard presentationOwnerID == ownerID, isTracking else { return nil }
+      let currentOwnerID = presentationOwnerID
+      guard currentOwnerID == ownerID else {
+        recordDecision(
+          .cancel,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .owner,
+          fallbackSink: fallbackObservationSink,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
+      guard isTracking else {
+        recordDecision(
+          .cancel,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .notTracking,
+          fallbackSink: fallbackObservationSink,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return nil
+      }
       let snapshot = snapshot
       isTracking = false
+      recordTrackingClear(
+        ticket: observationTicket,
+        origin: observationOrigin,
+        fallbackSink: fallbackObservationSink
+      )
       self.snapshot = nil
       handle = nil
       proposal = nil
@@ -598,6 +1309,15 @@
       currentFixedSide = nil
       completedPreferenceSize = nil
       setDesiredContentSize(nil, publication: publication)
+      recordDecision(
+        .cancel,
+        ticket: observationTicket,
+        accepted: true,
+        rejection: .none,
+        fallbackSink: fallbackObservationSink,
+        observationIdentity: observationIdentity,
+        controllerOwnerID: currentOwnerID
+      )
       return snapshot
     }
 
@@ -621,10 +1341,39 @@
       }
       let previousRelinquish = relinquishPresentation
       relinquishPresentation = nil
+      var previousObservationInvocation: MenuPanelResizeObservationInvocation?
+      let scopedInvocation = pushObservationInvocation(
+        .claimReplacement,
+        previous: &previousObservationInvocation
+      )
+      defer {
+        if scopedInvocation { activeObservationInvocation = previousObservationInvocation }
+      }
       previousRelinquish?()
-      clearInteractionState(publication: publication)
+      clearInteractionState(
+        publication: publication,
+        origin: .ownerReplacement
+      )
+      let observation = observationSink.flatMap { sink in
+        sink.isRecording ? sink : nil
+      }
+      let previousOwnerID: UUID?
+      if case .some = observation {
+        previousOwnerID = presentationOwnerID
+      } else {
+        previousOwnerID = nil
+      }
       presentationOwnerID = ownerID
       relinquishPresentation = onRelinquish
+      if let observation, observation.isRecording {
+        observation.record(
+          .ownerTransition(
+            controller: ObjectIdentifier(self),
+            previous: previousOwnerID,
+            current: ownerID
+          )
+        )
+      }
       return true
     }
 
@@ -641,19 +1390,65 @@
     @discardableResult
     func releasePresentation(
       ownerID: UUID,
-      publication: MenuPanelResizePublicationTiming = .immediate
+      publication: MenuPanelResizePublicationTiming = .immediate,
+      observationSink: (any MenuPanelResizeObservationSink)? = nil,
+      observationTicket: MenuPanelResizeObservationTicket? = nil,
+      observationOrigin: MenuPanelResizeObservationOrigin = .ownerRelease,
+      observationIdentity: MenuPanelResizeObservationIdentity? = nil,
+      observationInvocation: MenuPanelResizeObservationInvocation? = nil
     ) -> Bool {
-      guard presentationOwnerID == ownerID else { return false }
+      let currentOwnerID = presentationOwnerID
+      guard currentOwnerID == ownerID else {
+        recordDecision(
+          .relinquish,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .deferredOwner,
+          fallbackSink: observationSink,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: currentOwnerID
+        )
+        return false
+      }
       let relinquish = relinquishPresentation
       relinquishPresentation = nil
+      var previousObservationInvocation: MenuPanelResizeObservationInvocation?
+      let scopedInvocation = pushObservationInvocation(
+        observationInvocation ?? .normalRelease,
+        fallbackSink: observationSink,
+        previous: &previousObservationInvocation
+      )
+      defer {
+        if scopedInvocation { activeObservationInvocation = previousObservationInvocation }
+      }
       relinquish?()
-      clearInteractionState(publication: publication)
+      clearInteractionState(
+        publication: publication,
+        origin: observationOrigin,
+        ticket: observationTicket,
+        fallbackSink: observationSink
+      )
       presentationOwnerID = nil
+      let sink = observationSink ?? self.observationSink
+      if let sink, sink.isRecording {
+        sink.record(
+          .ownerTransition(
+            controller: ObjectIdentifier(self),
+            previous: ownerID,
+            current: nil
+          )
+        )
+      }
       return true
     }
 
     func isPresentationOwner(_ ownerID: UUID) -> Bool {
       presentationOwnerID == ownerID
+    }
+
+    func presentationOwnerEvaluation(for ownerID: UUID) -> (ownerID: UUID?, matches: Bool) {
+      let currentOwnerID = presentationOwnerID
+      return (currentOwnerID, currentOwnerID == ownerID)
     }
 
     func presentationContentSize(ownerID: UUID) -> CGSize? {
@@ -715,8 +1510,18 @@
       return true
     }
 
-    private func clearInteractionState(publication: MenuPanelResizePublicationTiming) {
+    private func clearInteractionState(
+      publication: MenuPanelResizePublicationTiming,
+      origin: MenuPanelResizeObservationOrigin,
+      ticket: MenuPanelResizeObservationTicket? = nil,
+      fallbackSink: (any MenuPanelResizeObservationSink)? = nil
+    ) {
       isTracking = false
+      recordTrackingClear(
+        ticket: ticket,
+        origin: origin,
+        fallbackSink: fallbackSink
+      )
       snapshot = nil
       handle = nil
       proposal = nil
@@ -972,6 +1777,7 @@
     private var installationRevision = 0
     private var stateRevision = 0
     private var queuedRevision: Int?
+    weak var observationSink: (any MenuPanelResizeObservationSink)?
 
     var isInstalled: Bool { monitor != nil && installedWindow != nil }
     private var ownsTracking: Bool {
@@ -986,6 +1792,7 @@
       fallbackVisibleFrameProvider: FallbackVisibleFrameProvider? = nil
     ) {
       self.controller = controller
+      observationSink = controller.observationSinkForNewHost()
       self.fallbackVisibleFrameProvider = fallbackVisibleFrameProvider ?? { window in
         Self.publicFallbackVisibleFrame(for: window)
       }
@@ -1043,7 +1850,24 @@
       installedWindow = window
       let attachmentID = UUID()
       self.attachmentID = attachmentID
+      let observation = observationSink.flatMap { sink in
+        sink.isRecording ? sink : nil
+      }
+      let previousRevision = observation.map { _ in installationRevision }
       installationRevision &+= 1
+      if let observation, let previousRevision {
+        observation.record(
+          .attachment(
+            host: ObjectIdentifier(self),
+            window: ObjectIdentifier(window),
+            controller: ObjectIdentifier(controller),
+            attachmentID: attachmentID,
+            oldRevision: previousRevision,
+            newRevision: installationRevision,
+            installed: true
+          )
+        )
+      }
       isPresented = window.isVisible
       invalidateQueuedWork()
       acquirePresentation(ownerID: attachmentID, window: window)
@@ -1053,6 +1877,18 @@
       let oldAttachmentID = attachmentID
       let oldWindow = installedWindow
       let controller = controller
+      let oldObservationIdentity: MenuPanelResizeObservationIdentity?
+      if let observationSink, observationSink.isRecording {
+        oldObservationIdentity = MenuPanelResizeObservationIdentity(
+          host: ObjectIdentifier(self),
+          window: oldWindow.map(ObjectIdentifier.init),
+          controller: ObjectIdentifier(controller),
+          attachmentID: oldAttachmentID,
+          installationRevision: installationRevision
+        )
+      } else {
+        oldObservationIdentity = nil
+      }
       let wasPresentationOwner = oldAttachmentID.map(controller.isPresentationOwner) ?? false
       if let oldAttachmentID, wasPresentationOwner {
         makeOwnedNativeCleanup(ownerID: oldAttachmentID, window: oldWindow)()
@@ -1062,7 +1898,9 @@
             ownerID: oldAttachmentID,
             window: oldWindow,
             geometryStore: geometryStore,
-            fallbackVisibleFrameProvider: fallbackVisibleFrameProvider
+            fallbackVisibleFrameProvider: fallbackVisibleFrameProvider,
+            observationSink: observationSink,
+            observationOrigin: .deferredOwnerRelease
           )
         )
       }
@@ -1075,19 +1913,95 @@
       presentationTop = nil
       isPresented = false
       guard let oldAttachmentID else { return }
+      if let observationSink, observationSink.isRecording {
+        if let oldObservationIdentity {
+          observationSink.record(
+            .attachment(
+              host: oldObservationIdentity.host,
+              window: oldObservationIdentity.window,
+              controller: oldObservationIdentity.controller,
+              attachmentID: oldObservationIdentity.attachmentID,
+              oldRevision: oldObservationIdentity.installationRevision,
+              newRevision: installationRevision,
+              installed: false
+            )
+          )
+        } else {
+          observationSink.markIncomplete()
+        }
+      }
       if wasPresentationOwner {
-        DispatchQueue.main.async { [self, controller] in
-          if controller.releasePresentation(
-            ownerID: oldAttachmentID,
-            publication: .deferred
-          ) {
-            _ = controller.publishPresentationContentSize()
+        let pendingContinuation: (
+          sink: any MenuPanelResizeObservationSink,
+          token: MenuPanelResizeObservationPendingRelease
+        )?
+        if let observationSink, observationSink.isRecording {
+          if let oldObservationIdentity,
+            let token = observationSink.markPendingRelease(oldObservationIdentity)
+          {
+            pendingContinuation = (sink: observationSink, token: token)
+          } else {
+            observationSink.markIncomplete()
+            pendingContinuation = nil
+          }
+        } else {
+          pendingContinuation = nil
+        }
+        DispatchQueue.main.async { [self, controller, pendingContinuation] in
+          if let pendingContinuation {
+            let completed = controller.releasePresentation(
+              ownerID: oldAttachmentID,
+              publication: .deferred,
+              observationSink: pendingContinuation.sink,
+              observationOrigin: .deferredOwnerRelease,
+              observationIdentity: pendingContinuation.token.identity,
+              observationInvocation: .queuedPendingRelease(pendingContinuation.token)
+            )
+            if completed {
+              _ = controller.publishPresentationContentSize()
+            }
+            pendingContinuation.sink.finishPendingRelease(
+              pendingContinuation.token,
+              completed: completed
+            )
+          } else {
+            if controller.releasePresentation(
+              ownerID: oldAttachmentID,
+              publication: .deferred,
+              observationIdentity: oldObservationIdentity
+            ) {
+              _ = controller.publishPresentationContentSize()
+            }
           }
           withExtendedLifetime(self) {}
         }
       } else {
         removeNativeHooksWithoutRestoringWindow(oldWindow)
       }
+    }
+
+    func bindObservationSink(
+      _ sink: (any MenuPanelResizeObservationSink)?,
+      window bindingWindow: NSWindow? = nil
+    ) {
+      observationSink = sink
+      controller.bindObservationSink(sink)
+      guard let sink, sink.isRecording else { return }
+      sink.record(
+        .binding(
+          host: ObjectIdentifier(self),
+          window: (installedWindow ?? bindingWindow).map(ObjectIdentifier.init),
+          controller: ObjectIdentifier(controller),
+          attachmentID: attachmentID,
+          revision: installationRevision,
+          bindingTime: installedWindow != nil && attachmentID != nil
+        )
+      )
+    }
+
+    func unbindObservationSink(_ sink: any MenuPanelResizeObservationSink) {
+      if observationSink === sink { observationSink = nil }
+      if controller.observationSink === sink { controller.bindObservationSink(nil) }
     }
 
     private func acquirePresentation(ownerID: UUID, window: NSWindow) {
@@ -1129,7 +2043,9 @@
         ownerID: ownerID,
         window: window,
         geometryStore: geometryStore,
-        fallbackVisibleFrameProvider: fallbackVisibleFrameProvider
+        fallbackVisibleFrameProvider: fallbackVisibleFrameProvider,
+        observationSink: observationSink,
+        observationOrigin: .ownerReplacement
       )
       return {
         cleanup()
@@ -1174,12 +2090,16 @@
       ownerID: UUID,
       window: NSWindow?,
       geometryStore: MenuPanelGeometryStore?,
-      fallbackVisibleFrameProvider: @escaping FallbackVisibleFrameProvider
+      fallbackVisibleFrameProvider: @escaping FallbackVisibleFrameProvider,
+      observationSink: (any MenuPanelResizeObservationSink)?,
+      observationOrigin: MenuPanelResizeObservationOrigin
     ) -> @MainActor () -> Void {
-      return { [weak controller, weak window, weak geometryStore] in
+      return { [weak controller, weak window, weak geometryStore, weak observationSink] in
         let snapshot = controller?.cancelSnapshot(
           ownerID: ownerID,
-          publication: .deferred
+          publication: .deferred,
+          observationOrigin: observationOrigin,
+          fallbackObservationSink: observationSink
         )
         if let snapshot, let window {
           Self.restore(
@@ -1311,43 +2231,347 @@
       cursor = nil
     }
 
+    private func recordGate(
+      _ gate: MenuPanelResizeObservationGate,
+      passed: Bool,
+      identity: MenuPanelResizeObservationIdentity?,
+      controllerOwnerID: UUID?,
+      ticket: MenuPanelResizeObservationTicket?,
+      sink: (any MenuPanelResizeObservationSink)?
+    ) {
+      guard let sink else { return }
+      guard let identity else {
+        sink.markIncomplete()
+        return
+      }
+      sink.record(.gate(identity: identity,
+        controllerOwnerID: controllerOwnerID,
+        ticket: ticket,
+        gate: gate,
+        passed: passed
+      ))
+    }
+
+    private func recordOutcome(
+      _ consumed: Bool,
+      identity: MenuPanelResizeObservationIdentity?,
+      controllerOwnerID: UUID?,
+      ticket: MenuPanelResizeObservationTicket?,
+      sink: (any MenuPanelResizeObservationSink)?
+    ) {
+      guard let sink else { return }
+      guard let identity else {
+        sink.markIncomplete()
+        return
+      }
+      sink.record(.outcome(identity: identity,
+        controllerOwnerID: controllerOwnerID,
+        ticket: ticket,
+        consumed: consumed
+      ))
+    }
+
     private func handle(_ event: NSEvent) -> NSEvent? {
-      guard let attachmentID, controller.isPresentationOwner(attachmentID),
-        let window = installedWindow, event.window === window
-      else { return event }
-      guard window.isVisible else {
+      let observation: (any MenuPanelResizeObservationSink)?
+      if let sink = observationSink, sink.isRecording {
+        observation = sink
+      } else {
+        observation = nil
+      }
+      let attachmentID = self.attachmentID
+      let ownerEvaluation = observation.flatMap { _ in
+        attachmentID.map { controller.presentationOwnerEvaluation(for: $0) }
+      }
+      let isPresentationOwner = attachmentID.map {
+        ownerEvaluation?.matches ?? controller.isPresentationOwner($0)
+      } ?? false
+      let controllerOwnerID = ownerEvaluation?.ownerID
+      let window: NSWindow?
+      if observation != nil || isPresentationOwner {
+        window = installedWindow
+      } else {
+        window = nil
+      }
+      let identity = observation.map { _ in
+        MenuPanelResizeObservationIdentity(
+          host: ObjectIdentifier(self),
+          window: window.map(ObjectIdentifier.init),
+          controller: ObjectIdentifier(controller),
+          attachmentID: attachmentID,
+          installationRevision: self.installationRevision
+        )
+      }
+      let eventIdentifier: ObjectIdentifier?
+      if case .some = observation {
+        eventIdentifier = ObjectIdentifier(event)
+      } else {
+        eventIdentifier = nil
+      }
+      let ticket: MenuPanelResizeObservationTicket?
+      if let observation, let eventIdentifier {
+        ticket = observation.receive(
+          event: eventIdentifier,
+          host: ObjectIdentifier(self)
+        )
+      } else {
+        ticket = nil
+      }
+
+      guard let attachmentID else {
+        recordGate(
+          .owner,
+          passed: false,
+          identity: identity,
+          controllerOwnerID: controllerOwnerID,
+          ticket: ticket,
+          sink: observation
+        )
+        recordOutcome(
+          false,
+          identity: identity,
+          controllerOwnerID: controllerOwnerID,
+          ticket: ticket,
+          sink: observation
+        )
+        return event
+      }
+      recordGate(
+        .owner,
+        passed: isPresentationOwner,
+        identity: identity,
+        controllerOwnerID: controllerOwnerID,
+        ticket: ticket,
+        sink: observation
+      )
+      guard isPresentationOwner else {
+        recordOutcome(
+          false,
+          identity: identity,
+          controllerOwnerID: controllerOwnerID,
+          ticket: ticket,
+          sink: observation
+        )
+        return event
+      }
+      guard let window else {
+        recordGate(
+          .window,
+          passed: false,
+          identity: identity,
+          controllerOwnerID: controllerOwnerID,
+          ticket: ticket,
+          sink: observation
+        )
+        recordOutcome(
+          false,
+          identity: identity,
+          controllerOwnerID: controllerOwnerID,
+          ticket: ticket,
+          sink: observation
+        )
+        return event
+      }
+      let isWindowEvent = event.window === window
+      recordGate(
+        .window,
+        passed: isWindowEvent,
+        identity: identity,
+        controllerOwnerID: controllerOwnerID,
+        ticket: ticket,
+        sink: observation
+      )
+      guard isWindowEvent else {
+        recordOutcome(
+          false,
+          identity: identity,
+          controllerOwnerID: controllerOwnerID,
+          ticket: ticket,
+          sink: observation
+        )
+        return event
+      }
+      let isVisible = window.isVisible
+      recordGate(
+        .visibility,
+        passed: isVisible,
+        identity: identity,
+        controllerOwnerID: controllerOwnerID,
+        ticket: ticket,
+        sink: observation
+      )
+      guard isVisible else {
         resetCursor()
+        recordOutcome(
+          false,
+          identity: identity,
+          controllerOwnerID: controllerOwnerID,
+          ticket: ticket,
+          sink: observation
+        )
         return event
       }
       switch event.type {
       case .leftMouseDown:
-        return begin(event, in: window) ? nil : event
+        let consumed = begin(
+          event,
+          in: window,
+          observationTicket: ticket,
+          observationIdentity: identity
+        )
+        recordOutcome(
+          consumed,
+          identity: identity,
+          controllerOwnerID: controllerOwnerID,
+          ticket: ticket,
+          sink: observation
+        )
+        return consumed ? nil : event
       case .leftMouseDragged:
-        guard controller.isOwned(by: attachmentID) else { return event }
+        guard controller.isOwned(by: attachmentID) else {
+          recordOutcome(
+            false,
+            identity: identity,
+            controllerOwnerID: controllerOwnerID,
+            ticket: ticket,
+            sink: observation
+          )
+          return event
+        }
         guard isLiveResizeEligible(in: window) else {
-          cancelAndRestore(in: window)
+          cancelAndRestore(
+            in: window,
+            observationTicket: ticket,
+            observationOrigin: .eligibilityLoss,
+            observationIdentity: identity
+          )
+          recordOutcome(
+            true,
+            identity: identity,
+            controllerOwnerID: controllerOwnerID,
+            ticket: ticket,
+            sink: observation
+          )
           return nil
         }
-        update(event, in: window)
+        update(
+          event,
+          in: window,
+          observationTicket: ticket,
+          observationIdentity: identity
+        )
+        recordOutcome(
+          true,
+          identity: identity,
+          controllerOwnerID: controllerOwnerID,
+          ticket: ticket,
+          sink: observation
+        )
         return nil
       case .leftMouseUp:
-        guard controller.isOwned(by: attachmentID) else { return event }
+        guard controller.isOwned(by: attachmentID) else {
+          recordOutcome(
+            false,
+            identity: identity,
+            controllerOwnerID: controllerOwnerID,
+            ticket: ticket,
+            sink: observation
+          )
+          return event
+        }
         guard isLiveResizeEligible(in: window) else {
-          cancelAndRestore(in: window)
+          cancelAndRestore(
+            in: window,
+            observationTicket: ticket,
+            observationOrigin: .eligibilityLoss,
+            observationIdentity: identity
+          )
+          recordOutcome(
+            true,
+            identity: identity,
+            controllerOwnerID: controllerOwnerID,
+            ticket: ticket,
+            sink: observation
+          )
           return nil
         }
-        finish(event, in: window)
+        finish(
+          event,
+          in: window,
+          observationTicket: ticket,
+          observationIdentity: identity
+        )
+        recordOutcome(
+          true,
+          identity: identity,
+          controllerOwnerID: controllerOwnerID,
+          ticket: ticket,
+          sink: observation
+        )
         return nil
-      case .keyDown where event.keyCode == 53 && ownsTracking:
-        cancelAndRestore(in: window)
+      case .keyDown:
+        let isEscape = event.keyCode == 53
+        guard isEscape else {
+          recordOutcome(
+            false,
+            identity: identity,
+            controllerOwnerID: controllerOwnerID,
+            ticket: ticket,
+            sink: observation
+          )
+          return event
+        }
+        guard ownsTracking else {
+          recordOutcome(
+            false,
+            identity: identity,
+            controllerOwnerID: controllerOwnerID,
+            ticket: ticket,
+            sink: observation
+          )
+          return event
+        }
+        cancelAndRestore(
+          in: window,
+          observationTicket: ticket,
+          observationOrigin: .escape,
+          observationIdentity: identity
+        )
+        recordOutcome(
+          true,
+          identity: identity,
+          controllerOwnerID: controllerOwnerID,
+          ticket: ticket,
+          sink: observation
+        )
         return nil
       case .mouseMoved, .cursorUpdate:
         updateCursor(for: event, in: window)
+        recordOutcome(
+          false,
+          identity: identity,
+          controllerOwnerID: controllerOwnerID,
+          ticket: ticket,
+          sink: observation
+        )
         return event
       case .mouseExited:
         resetCursor()
+        recordOutcome(
+          false,
+          identity: identity,
+          controllerOwnerID: controllerOwnerID,
+          ticket: ticket,
+          sink: observation
+        )
         return event
       default:
+        recordOutcome(
+          false,
+          identity: identity,
+          controllerOwnerID: controllerOwnerID,
+          ticket: ticket,
+          sink: observation
+        )
         return event
       }
     }
@@ -1356,27 +2580,204 @@
       at locationInWindow: CGPoint,
       in window: NSWindow
     ) -> MenuPanelResizeBeginReadiness {
-      guard isLiveResizeEligible(in: window) else { return .blocked }
-      guard queuedRevision == nil else { return .reconciling }
-      guard let attachmentID,
-        controller.isPresentationOwner(attachmentID),
-        let statusButton = geometryStore?.resolveStatusButton(),
-        let screen = window.screen,
-        statusButton.sourceIdentity == alignedStatusButtonSource,
-        statusButton.screenFrame == alignedStatusButtonFrame,
-        screen.visibleFrame == alignedVisibleFrame,
-        window.frame == alignedFrame,
-        let fixedSide = MenuPanelResizeGeometry.anchoredSide(
-          panelFrame: window.frame,
-          statusLabelFrame: statusButton.screenFrame
-        ),
-        fixedSide == alignedFixedSide,
-        let handle = MenuPanelResizeGeometry.handle(
-          at: convert(locationInWindow, from: nil),
-          in: bounds,
-          fixedSide: fixedSide
+      beginReadiness(
+        at: locationInWindow,
+        in: window,
+        phase: .fixturePreflight,
+        ticket: nil,
+        sourceIdentity: nil
+      )
+    }
+
+    private func beginReadiness(
+      at locationInWindow: CGPoint,
+      in window: NSWindow,
+      phase: MenuPanelResizeObservationPhase,
+      ticket: MenuPanelResizeObservationTicket?,
+      sourceIdentity: MenuPanelResizeObservationIdentity?
+    ) -> MenuPanelResizeBeginReadiness {
+      guard isLiveResizeEligible(in: window) else {
+        recordReadiness(
+          .blocked,
+          rejection: .liveResizeEligibility,
+          phase: phase,
+          ticket: ticket,
+          identity: sourceIdentity,
+          window: window,
+          attachmentID: nil,
+          controllerOwnerID: nil
         )
-      else { return .blocked }
+        return .blocked
+      }
+      guard queuedRevision == nil else {
+        recordReadiness(
+          .reconciling,
+          rejection: .queuedRevision,
+          phase: phase,
+          ticket: ticket,
+          identity: sourceIdentity,
+          window: window,
+          attachmentID: nil,
+          controllerOwnerID: nil
+        )
+        return .reconciling
+      }
+      guard let attachmentID else {
+        recordReadiness(
+          .blocked,
+          rejection: .missingAttachment,
+          phase: phase,
+          ticket: ticket,
+          identity: nil,
+          window: window,
+          attachmentID: nil,
+          controllerOwnerID: nil
+        )
+        return .blocked
+      }
+      let ownerEvaluation: (ownerID: UUID?, matches: Bool)?
+      if let observationSink, observationSink.isRecording {
+        ownerEvaluation = controller.presentationOwnerEvaluation(for: attachmentID)
+      } else {
+        ownerEvaluation = nil
+      }
+      guard ownerEvaluation?.matches ?? controller.isPresentationOwner(attachmentID) else {
+        recordReadiness(
+          .blocked,
+          rejection: .owner,
+          phase: phase,
+          ticket: ticket,
+          identity: nil,
+          window: window,
+          attachmentID: attachmentID,
+          controllerOwnerID: ownerEvaluation?.ownerID
+        )
+        return .blocked
+      }
+      guard let statusButton = geometryStore?.resolveStatusButton() else {
+        recordReadiness(
+          .blocked,
+          rejection: .statusButtonUnavailable,
+          phase: phase,
+          ticket: ticket,
+          identity: nil,
+          window: window,
+          attachmentID: attachmentID,
+          controllerOwnerID: ownerEvaluation?.ownerID
+        )
+        return .blocked
+      }
+      guard let screen = window.screen else {
+        recordReadiness(
+          .blocked,
+          rejection: .screenUnavailable,
+          phase: phase,
+          ticket: ticket,
+          identity: nil,
+          window: window,
+          attachmentID: attachmentID,
+          controllerOwnerID: ownerEvaluation?.ownerID
+        )
+        return .blocked
+      }
+      guard statusButton.sourceIdentity == alignedStatusButtonSource else {
+        recordReadiness(
+          .blocked,
+          rejection: .statusButtonSource,
+          phase: phase,
+          ticket: ticket,
+          identity: nil,
+          window: window,
+          attachmentID: attachmentID,
+          controllerOwnerID: ownerEvaluation?.ownerID
+        )
+        return .blocked
+      }
+      guard statusButton.screenFrame == alignedStatusButtonFrame else {
+        recordReadiness(
+          .blocked,
+          rejection: .statusButtonFrame,
+          phase: phase,
+          ticket: ticket,
+          identity: nil,
+          window: window,
+          attachmentID: attachmentID,
+          controllerOwnerID: ownerEvaluation?.ownerID
+        )
+        return .blocked
+      }
+      guard screen.visibleFrame == alignedVisibleFrame else {
+        recordReadiness(
+          .blocked,
+          rejection: .visibleFrame,
+          phase: phase,
+          ticket: ticket,
+          identity: nil,
+          window: window,
+          attachmentID: attachmentID,
+          controllerOwnerID: ownerEvaluation?.ownerID
+        )
+        return .blocked
+      }
+      guard window.frame == alignedFrame else {
+        recordReadiness(
+          .blocked,
+          rejection: .windowFrame,
+          phase: phase,
+          ticket: ticket,
+          identity: nil,
+          window: window,
+          attachmentID: attachmentID,
+          controllerOwnerID: ownerEvaluation?.ownerID
+        )
+        return .blocked
+      }
+      guard let fixedSide = MenuPanelResizeGeometry.anchoredSide(
+        panelFrame: window.frame,
+        statusLabelFrame: statusButton.screenFrame
+      ) else {
+        recordReadiness(
+          .blocked,
+          rejection: .fixedSideUnavailable,
+          phase: phase,
+          ticket: ticket,
+          identity: nil,
+          window: window,
+          attachmentID: attachmentID,
+          controllerOwnerID: ownerEvaluation?.ownerID
+        )
+        return .blocked
+      }
+      guard fixedSide == alignedFixedSide else {
+        recordReadiness(
+          .blocked,
+          rejection: .fixedSideMismatch,
+          phase: phase,
+          ticket: ticket,
+          identity: nil,
+          window: window,
+          attachmentID: attachmentID,
+          controllerOwnerID: ownerEvaluation?.ownerID
+        )
+        return .blocked
+      }
+      guard let handle = MenuPanelResizeGeometry.handle(
+        at: convert(locationInWindow, from: nil),
+        in: bounds,
+        fixedSide: fixedSide
+      ) else {
+        recordReadiness(
+          .blocked,
+          rejection: .handleUnavailable,
+          phase: phase,
+          ticket: ticket,
+          identity: nil,
+          window: window,
+          attachmentID: attachmentID,
+          controllerOwnerID: ownerEvaluation?.ownerID
+        )
+        return .blocked
+      }
       let contentRect = window.contentRect(forFrameRect: window.frame)
       let insets = MenuPanelFrameInsets(
         top: window.frame.maxY - contentRect.maxY,
@@ -1393,6 +2794,16 @@
         statusLabelFrame: statusButton.screenFrame,
         fixedSide: fixedSide
       )
+      recordReadiness(
+        .ready,
+        rejection: .none,
+        phase: phase,
+        ticket: ticket,
+        identity: nil,
+        window: window,
+        attachmentID: attachmentID,
+        controllerOwnerID: ownerEvaluation?.ownerID
+      )
       return .ready(
         snapshot: snapshot,
         handle: handle,
@@ -1401,12 +2812,54 @@
       )
     }
 
-    private func begin(_ event: NSEvent, in window: NSWindow) -> Bool {
+    private func recordReadiness(
+      _ result: MenuPanelResizeObservationReadiness,
+      rejection: MenuPanelResizeObservationRejection,
+      phase: MenuPanelResizeObservationPhase,
+      ticket: MenuPanelResizeObservationTicket?,
+      identity sourceIdentity: MenuPanelResizeObservationIdentity?,
+      window: NSWindow,
+      attachmentID: UUID?,
+      controllerOwnerID: UUID?
+    ) {
+      guard let observationSink, observationSink.isRecording else { return }
+      let identity = sourceIdentity ?? MenuPanelResizeObservationIdentity(
+        host: ObjectIdentifier(self),
+        window: ObjectIdentifier(window),
+        controller: ObjectIdentifier(controller),
+        attachmentID: attachmentID ?? self.attachmentID,
+        installationRevision: installationRevision
+      )
+      observationSink.record(.readiness(identity: identity,
+        controllerOwnerID: controllerOwnerID,
+        ticket: ticket,
+        phase: phase,
+        result: result,
+        rejection: rejection
+      ))
+    }
+
+    private func begin(
+      _ event: NSEvent,
+      in window: NSWindow,
+      observationTicket: MenuPanelResizeObservationTicket?,
+      observationIdentity: MenuPanelResizeObservationIdentity?
+    ) -> Bool {
       guard case let .ready(snapshot, handle, ownerID, statusButtonSource) = beginReadiness(
         at: event.locationInWindow,
-        in: window
+        in: window,
+        phase: .eventAdmission,
+        ticket: observationTicket,
+        sourceIdentity: observationIdentity
       ) else { return false }
-      guard controller.begin(snapshot: snapshot, handle: handle, ownerID: ownerID) else {
+      guard controller.begin(
+        snapshot: snapshot,
+        handle: handle,
+        ownerID: ownerID,
+        observationTicket: observationTicket,
+        observationOrigin: .mouseDown,
+        observationIdentity: observationIdentity
+      ) else {
         return false
       }
       invalidateQueuedWork()
@@ -1415,7 +2868,12 @@
       return true
     }
 
-    private func update(_ event: NSEvent, in window: NSWindow) {
+    private func update(
+      _ event: NSEvent,
+      in window: NSWindow,
+      observationTicket: MenuPanelResizeObservationTicket?,
+      observationIdentity: MenuPanelResizeObservationIdentity?
+    ) {
       guard let attachmentID,
         let statusLabelFrame = activeStatusButtonFrame(),
         let screen = window.screen,
@@ -1429,11 +2887,21 @@
             $0,
             in: window,
             on: screen,
-            statusLabelFrame: statusLabelFrame
+            statusLabelFrame: statusLabelFrame,
+            observationTicket: observationTicket,
+            observationIdentity: observationIdentity,
+            controllerOwnerID: attachmentID
           )
-        }
+        },
+        observationTicket: observationTicket,
+        observationIdentity: observationIdentity
       ) else {
-        cancelAndRestore(in: window)
+        cancelAndRestore(
+          in: window,
+          observationTicket: observationTicket,
+          observationOrigin: .mouseDrag,
+          observationIdentity: observationIdentity
+        )
         return
       }
       applyFrame(proposal.frame, to: window, displayImmediately: false)
@@ -1444,7 +2912,12 @@
       }
     }
 
-    private func finish(_ event: NSEvent, in window: NSWindow) {
+    private func finish(
+      _ event: NSEvent,
+      in window: NSWindow,
+      observationTicket: MenuPanelResizeObservationTicket?,
+      observationIdentity: MenuPanelResizeObservationIdentity?
+    ) {
       let endingStatusButton = geometryStore?.resolveStatusButton()
       guard let attachmentID,
         endingStatusButton?.sourceIdentity == activeStatusButtonSource,
@@ -1460,12 +2933,22 @@
               $0,
               in: window,
               on: screen,
-              statusLabelFrame: statusLabelFrame
+              statusLabelFrame: statusLabelFrame,
+              observationTicket: observationTicket,
+              observationIdentity: observationIdentity,
+              controllerOwnerID: attachmentID
             )
-          }
+          },
+          observationTicket: observationTicket,
+          observationIdentity: observationIdentity
         )
       else {
-        cancelAndRestore(in: window)
+        cancelAndRestore(
+          in: window,
+          observationTicket: observationTicket,
+          observationOrigin: .rejectedFinalFrame,
+          observationIdentity: observationIdentity
+        )
         return
       }
       applyFrame(transient.frame, to: window)
@@ -1479,11 +2962,22 @@
             $0,
             in: window,
             on: screen,
-            statusLabelFrame: statusLabelFrame
+            statusLabelFrame: statusLabelFrame,
+            observationTicket: observationTicket,
+            observationIdentity: observationIdentity,
+            controllerOwnerID: attachmentID
           )
-        }
+        },
+        observationTicket: observationTicket,
+        observationOrigin: .mouseUp,
+        observationIdentity: observationIdentity
       ) else {
-        cancelAndRestore(in: window)
+        cancelAndRestore(
+          in: window,
+          observationTicket: observationTicket,
+          observationOrigin: .rejectedFinalFrame,
+          observationIdentity: observationIdentity
+        )
         return
       }
       let adoptedFrame = applyFrame(final.frame, to: window)
@@ -1520,12 +3014,18 @@
 
     private func cancelAndRestore(
       in window: NSWindow,
-      publication: MenuPanelResizePublicationTiming = .immediate
+      publication: MenuPanelResizePublicationTiming = .immediate,
+      observationTicket: MenuPanelResizeObservationTicket? = nil,
+      observationOrigin: MenuPanelResizeObservationOrigin = .directAPI,
+      observationIdentity: MenuPanelResizeObservationIdentity? = nil
     ) {
       guard let attachmentID, controller.isPresentationOwner(attachmentID) else { return }
       let snapshot = controller.cancelSnapshot(
         ownerID: attachmentID,
-        publication: publication
+        publication: publication,
+        observationTicket: observationTicket,
+        observationOrigin: observationOrigin,
+        observationIdentity: observationIdentity
       )
       activeStatusButtonSource = nil
       if let snapshot {
@@ -1550,7 +3050,11 @@
       presentationTop = nil
       invalidateQueuedWork()
       if let installedWindow {
-        cancelAndRestore(in: installedWindow, publication: .deferred)
+        cancelAndRestore(
+          in: installedWindow,
+          publication: .deferred,
+          observationOrigin: .windowClose
+        )
       }
       scheduleReconcile()
     }
@@ -1565,10 +3069,18 @@
         // A hidden window is a transient hide; the deferred visibility
         // reconcile cancels the drag only if the window stays hidden.
         if let window, window.isVisible {
-          cancelAndRestore(in: window, publication: .deferred)
+          cancelAndRestore(
+            in: window,
+            publication: .deferred,
+            observationOrigin: .windowKeyLoss
+          )
         }
       } else if let window {
-        cancelAndRestore(in: window, publication: .deferred)
+        cancelAndRestore(
+          in: window,
+          publication: .deferred,
+          observationOrigin: .windowKeyLoss
+        )
       }
       scheduleReconcile()
     }
@@ -1636,17 +3148,40 @@
       guard queuedRevision != revision else { return }
       queuedRevision = revision
       let installation = installationRevision
-      DispatchQueue.main.async { [weak self] in
-        guard let self,
-          self.installationRevision == installation,
+      let observation: (any MenuPanelResizeObservationSink)?
+      if let sink = observationSink, sink.isRecording {
+        observation = sink
+      } else {
+        observation = nil
+      }
+      let reconcileToken = observation?.scheduleReconcile(
+        revision: revision,
+        installationRevision: installation
+      )
+      DispatchQueue.main.async { [weak self, weak observation] in
+        guard let self else {
+          if let observation, let reconcileToken {
+            observation.finishReconcile(reconcileToken, completed: false)
+          }
+          return
+        }
+        guard self.installationRevision == installation,
           self.queuedRevision == revision
-        else { return }
+        else {
+          if let observation, let reconcileToken {
+            observation.finishReconcile(reconcileToken, completed: false)
+          }
+          return
+        }
         self.queuedRevision = nil
         self.reconcilePresentation(publication: .deferred, preparesHiddenWindow: false)
         if let attachmentID = self.attachmentID {
           _ = self.controller.publishPresentationContentSize(ownerID: attachmentID)
         } else {
           _ = self.controller.publishPresentationContentSize()
+        }
+        if let observation, let reconcileToken {
+          observation.finishReconcile(reconcileToken, completed: true)
         }
       }
     }
@@ -1657,7 +3192,10 @@
     ) {
       guard let window = installedWindow, let attachmentID else {
         if pendingExternalPreference, controller.isUnownedTracking {
-          controller.cancelSnapshot(publication: publication)
+          controller.cancelSnapshot(
+            publication: publication,
+            observationOrigin: .visibilityReconcile
+          )
         }
         pendingExternalPreference = false
         return
@@ -1665,7 +3203,11 @@
       guard controller.isPresentationOwner(attachmentID) else { return }
       if !isLiveResizeEligible(in: window) || !window.isVisible {
         if controller.isOwned(by: attachmentID) {
-          cancelAndRestore(in: window, publication: publication)
+          cancelAndRestore(
+            in: window,
+            publication: publication,
+            observationOrigin: .visibilityReconcile
+          )
         }
         if pendingExternalPreference {
           _ = controller.setPresentationContentSize(
@@ -1681,14 +3223,22 @@
         !isHiddenOrHasHiddenAncestor, !bounds.isEmpty, hasPreferredSize
       else {
         if ownsTracking && !preparesHiddenWindow {
-          cancelAndRestore(in: window, publication: publication)
+          cancelAndRestore(
+            in: window,
+            publication: publication,
+            observationOrigin: .geometryReconcile
+          )
         }
         return
       }
       let isVisible = isPresented && window.isVisible
       if !isVisible && !preparesHiddenWindow {
         if ownsTracking {
-          cancelAndRestore(in: window, publication: publication)
+          cancelAndRestore(
+            in: window,
+            publication: publication,
+            observationOrigin: .visibilityReconcile
+          )
         }
         return
       }
@@ -1703,7 +3253,11 @@
           )
         else {
           if isVisible {
-            cancelAndRestore(in: window, publication: publication)
+            cancelAndRestore(
+              in: window,
+              publication: publication,
+              observationOrigin: .geometryReconcile
+            )
           }
           return
         }
@@ -1902,7 +3456,10 @@
       _ proposal: MenuPanelResizeProposal,
       in window: NSWindow,
       on screen: NSScreen,
-      statusLabelFrame: CGRect
+      statusLabelFrame: CGRect,
+      observationTicket: MenuPanelResizeObservationTicket?,
+      observationIdentity: MenuPanelResizeObservationIdentity?,
+      controllerOwnerID: UUID
     ) -> MenuPanelResizeProposal? {
       let frame = screen.backingAlignedRect(proposal.frame, options: .alignAllEdgesOutward)
       let contentSize = window.contentRect(forFrameRect: frame).size
@@ -1912,22 +3469,81 @@
       case .left: frame.minX == statusLabelFrame.minX
       case .right: frame.maxX == statusLabelFrame.maxX
       }
-      guard frame.maxY == proposal.frame.maxY,
-        hasFixedEdge,
-        MenuPanelResizeGeometry.containedFrame(
-          frame: frame,
-          visibleFrame: screen.visibleFrame
-        ) == frame,
-        contentSize.width.isFinite, contentSize.height.isFinite,
-        contentSize.width > 0, contentSize.height > 0,
-        !proposal.isLegalPreference || isLegalPreference
-      else { return nil }
-      return MenuPanelResizeProposal(
+      guard frame.maxY == proposal.frame.maxY else {
+        controller.recordDecision(
+          .backing,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .backingFrame,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: controllerOwnerID
+        )
+        return nil
+      }
+      guard hasFixedEdge else {
+        controller.recordDecision(
+          .backing,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .backingAnchor,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: controllerOwnerID
+        )
+        return nil
+      }
+      guard MenuPanelResizeGeometry.containedFrame(
+        frame: frame,
+        visibleFrame: screen.visibleFrame
+      ) == frame else {
+        controller.recordDecision(
+          .backing,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .backingContainment,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: controllerOwnerID
+        )
+        return nil
+      }
+      guard contentSize.width.isFinite, contentSize.height.isFinite,
+        contentSize.width > 0, contentSize.height > 0
+      else {
+        controller.recordDecision(
+          .backing,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .backingContent,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: controllerOwnerID
+        )
+        return nil
+      }
+      guard !proposal.isLegalPreference || isLegalPreference else {
+        controller.recordDecision(
+          .backing,
+          ticket: observationTicket,
+          accepted: false,
+          rejection: .backingPreference,
+          observationIdentity: observationIdentity,
+          controllerOwnerID: controllerOwnerID
+        )
+        return nil
+      }
+      let alignedProposal = MenuPanelResizeProposal(
         contentSize: contentSize,
         frame: frame,
         isLegalPreference: isLegalPreference,
         fixedSide: proposal.fixedSide
       )
+      controller.recordDecision(
+        .backing,
+        ticket: observationTicket,
+        accepted: true,
+        rejection: .none,
+        observationIdentity: observationIdentity,
+        controllerOwnerID: controllerOwnerID
+      )
+      return alignedProposal
     }
 
     @discardableResult
