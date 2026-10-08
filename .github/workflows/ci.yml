@@ -32,10 +32,14 @@ permissions:
   contents: read
 
 jobs:
-  macos:
-    name: macOS build and tests
+  macos-build:
+    name: macOS ordinary graph and package
     runs-on: macos-26
     timeout-minutes: 90
+    outputs:
+      source_commit: ${{ steps.source.outputs.commit }}
+      source_tree: ${{ steps.source.outputs.tree }}
+      product_version: ${{ steps.source.outputs.version }}
     env:
       FLECK_BUILD_IDENTITY_MODE: ci-unverified
       PYTHONDONTWRITEBYTECODE: "1"
@@ -44,6 +48,18 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
+          ref: ${{ github.sha }}
+      - name: Verify exact workflow source
+        id: source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          {
+            printf 'commit=%s\n' "$(git rev-parse HEAD)"
+            printf 'tree=%s\n' "$(git rev-parse HEAD^{tree})"
+            printf 'version=%s\n' "$(cat VERSION)"
+          } | tee -a "$GITHUB_OUTPUT"
       - name: Toolchain
         run: |
           xcodebuild -version
@@ -103,10 +119,120 @@ jobs:
         run: Scripts/check-release-size.sh "$FLECK_APP"
       - name: Test release model-asset exclusion
         run: Scripts/test-release-model-asset-exclusion.sh
+      - name: Verify ordinary source remained pinned
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^{tree})" = '${{ steps.source.outputs.tree }}'
+          test "$(cat VERSION)" = '${{ steps.source.outputs.version }}'
+          test -z "$(git status --porcelain)"
+
+  macos-validation:
+    name: macOS ordinary repeat and bundle validation
+    needs: macos-build
+    runs-on: macos-26
+    timeout-minutes: 90
+    outputs:
+      source_commit: ${{ steps.source.outputs.commit }}
+      source_tree: ${{ steps.source.outputs.tree }}
+      product_version: ${{ steps.source.outputs.version }}
+    env:
+      FLECK_BUILD_IDENTITY_MODE: ci-unverified
+      PYTHONDONTWRITEBYTECODE: "1"
+      FLECK_NATIVE_CAPTURE_QA: "0"
+    steps:
+      - name: Check out repository (actions/checkout v6.0.2)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - name: Verify exact workflow source
+        id: source
+        env:
+          INITIAL_COMMIT: ${{ needs.macos-build.outputs.source_commit }}
+          INITIAL_TREE: ${{ needs.macos-build.outputs.source_tree }}
+          INITIAL_VERSION: ${{ needs.macos-build.outputs.product_version }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$INITIAL_COMMIT"
+          test "$(git rev-parse HEAD^{tree})" = "$INITIAL_TREE"
+          test "$(cat VERSION)" = "$INITIAL_VERSION"
+          {
+            printf 'commit=%s\n' "$(git rev-parse HEAD)"
+            printf 'tree=%s\n' "$(git rev-parse HEAD^{tree})"
+            printf 'version=%s\n' "$(cat VERSION)"
+          } | tee -a "$GITHUB_OUTPUT"
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Install and verify ripgrep
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            brew install ripgrep
+          fi
+          rg --version
+      - name: Check product version and build identity policy
+        run: |
+          python3 -B -m unittest discover -s Tests/Scripts -p test_build_identity.py
+          python3 -B Scripts/fleck-build-identity.py check
       - name: Validate macOS no-launch contract
         run: bash Tests/Scripts/validate-macos-no-launch.test.sh
       - name: Validate non-launching bundle metadata, signature, and packaging
-        run: Scripts/validate-macos.sh
+        run: |
+          unset FLECK_ENHANCED_CANDIDATE FLECK_APP
+          Scripts/validate-macos.sh
+      - name: Verify validation source remained pinned
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^{tree})" = '${{ steps.source.outputs.tree }}'
+          test "$(cat VERSION)" = '${{ steps.source.outputs.version }}'
+          test -z "$(git status --porcelain)"
+      - name: Declare native capture boundary (ordinary validation graph)
+        if: always()
+        run: |
+          message='Strict native screenshot/pixel capture: NOT RUN in GitHub-hosted CI (FLECK_NATIVE_CAPTURE_QA=0).
+          Validation rebuilds its own ci-unverified app and result receipt; no package or cache is transferred from another job.
+          Passing CI does not prove the strict native case ran.'
+          printf '%s\n' "$message"
+          {
+            printf '## Native screenshot capture boundary\n\n'
+            printf '%s\n' "$message"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  macos:
+    name: macOS build and tests
+    if: ${{ always() }}
+    needs: [macos-build, macos-validation, macos-enhanced]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      INITIAL_RESULT: ${{ needs.macos-build.result }}
+      VALIDATION_RESULT: ${{ needs.macos-validation.result }}
+      ENHANCED_RESULT: ${{ needs.macos-enhanced.result }}
+      INITIAL_COMMIT: ${{ needs.macos-build.outputs.source_commit }}
+      INITIAL_TREE: ${{ needs.macos-build.outputs.source_tree }}
+      INITIAL_VERSION: ${{ needs.macos-build.outputs.product_version }}
+      VALIDATION_COMMIT: ${{ needs.macos-validation.outputs.source_commit }}
+      VALIDATION_TREE: ${{ needs.macos-validation.outputs.source_tree }}
+      VALIDATION_VERSION: ${{ needs.macos-validation.outputs.product_version }}
+    steps:
+      - name: Require all current-source coverage gates
+        run: |
+          set -euo pipefail
+          test "$INITIAL_RESULT" = success
+          test "$VALIDATION_RESULT" = success
+          test "$ENHANCED_RESULT" = success
+          test -n "$INITIAL_COMMIT"
+          test "$INITIAL_COMMIT" = "$GITHUB_SHA"
+          test "$VALIDATION_COMMIT" = "$INITIAL_COMMIT"
+          test -n "$INITIAL_TREE"
+          test "$VALIDATION_TREE" = "$INITIAL_TREE"
+          test -n "$INITIAL_VERSION"
+          test "$VALIDATION_VERSION" = "$INITIAL_VERSION"
 
   macos-enhanced:
     name: macOS Enhanced Local candidate gates

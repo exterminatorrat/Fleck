@@ -50,6 +50,15 @@ done
   "$fixture_root/Tests/Support" \
   "$fixture_state/platform/Developer/Library/Frameworks/Testing.framework" \
   "$fixture_state/sdk" "$fixture_state/app-resource-source"
+/bin/cat > "$fixture_state/sdk/SDKSettings.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>Version</key>
+  <string>26.5</string>
+</dict>
+</plist>
+PLIST
 /bin/cp "$ordinary_runner" "$enhanced_runner" "$appkit_runner" "$fixture_scripts/"
 /bin/cp "$appkit_host_source" "$fixture_root/Tests/Support/"
 for resource_name in "${candidate_resource_names[@]}"; do
@@ -692,6 +701,13 @@ cat > "$fixture_bin/swiftc" <<'SH'
 set -eu
 
 printf '%s\n' "$*" >> "$FAKE_STATE/swiftc-invocations"
+if [ "${1:-}" = -print-target-info ]; then
+  shift
+  [ "${1:-}" = -sdk ] && [ "${2:-}" = "$FAKE_STATE/sdk" ] || exit 96
+  [ "$#" -eq 2 ] || exit 96
+  printf '%s\n' '{"target":{"triple":"arm64-apple-macosx26.0"}}'
+  exit 0
+fi
 output=''
 while [ "$#" -gt 0 ]; do
   if [ "$1" = -o ]; then
@@ -2243,8 +2259,10 @@ done
 
 python3 - "$script_dir/.." <<'PY'
 import hashlib
+import itertools
 import pathlib
 import re
+import subprocess
 import sys
 
 root = pathlib.Path(sys.argv[1]).resolve()
@@ -2336,6 +2354,83 @@ for name, block, selector in (
     if 'FLECK_NATIVE_CAPTURE_QA: "0"' not in block or selector not in block:
         raise SystemExit(f"CI {name} did not explicitly disable only native capture QA")
 
+build = job_block(current_workflow, "macos-build")[2]
+validation = job_block(current_workflow, "macos-validation")[2]
+aggregate = job_block(current_workflow, "macos")[2]
+for job_id, block, required_values in (
+    (
+        "macos-build", build,
+        ("name: macOS ordinary graph and package", "runs-on: macos-26", "timeout-minutes: 90"),
+    ),
+    (
+        "macos-validation", validation,
+        (
+            "needs: macos-build", "runs-on: macos-26", "timeout-minutes: 90",
+            'FLECK_NATIVE_CAPTURE_QA: "0"', "unset FLECK_ENHANCED_CANDIDATE FLECK_APP",
+            "bash Tests/Scripts/validate-macos-no-launch.test.sh", "Scripts/validate-macos.sh",
+            "Strict native screenshot/pixel capture: NOT RUN",
+        ),
+    ),
+    (
+        "macos", aggregate,
+        (
+            "name: macOS build and tests", "if: ${{ always() }}",
+            "needs: [macos-build, macos-validation, macos-enhanced]",
+            "runs-on: ubuntu-latest",
+        ),
+    ),
+):
+    for required in required_values:
+        if required not in block:
+            raise SystemExit(f"CI split job {job_id} omitted: {required}")
+for block in (build, validation):
+    for required in (
+        "fetch-depth: 0", "ref: ${{ github.sha }}", "FLECK_BUILD_IDENTITY_MODE: ci-unverified",
+        'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
+        'test -z "$(git status --porcelain)"',
+        "source_commit: ${{ steps.source.outputs.commit }}",
+        "source_tree: ${{ steps.source.outputs.tree }}",
+        "product_version: ${{ steps.source.outputs.version }}",
+    ):
+        if required not in block:
+            raise SystemExit(f"CI split source identity omitted: {required}")
+if current_workflow.count("name: macOS build and tests\n") != 1:
+    raise SystemExit("CI required aggregate name must occur exactly once")
+for block in (build, validation, aggregate):
+    if re.search(r"uses: .*actions/(?:cache|upload-artifact|download-artifact)", block):
+        raise SystemExit("CI ordinary/validation split must not transfer caches or artifacts")
+gate = step_block(aggregate, "Require all current-source coverage gates")[2]
+run_body = re.search(r"^        run: \|\n(.*)", gate, re.M | re.S)
+if run_body is None:
+    raise SystemExit("CI aggregate shell body is missing")
+gate_script = "\n".join(line[10:] for line in run_body.group(1).splitlines() if line)
+gate_environment = {
+    "PATH": "/usr/bin:/bin", "GITHUB_SHA": "fixture-commit",
+    "INITIAL_COMMIT": "fixture-commit", "VALIDATION_COMMIT": "fixture-commit",
+    "INITIAL_TREE": "fixture-tree", "VALIDATION_TREE": "fixture-tree",
+    "INITIAL_VERSION": "1.0.0-beta.1", "VALIDATION_VERSION": "1.0.0-beta.1",
+}
+for results in itertools.product(("success", "failure", "cancelled", "skipped"), repeat=3):
+    environment = dict(
+        gate_environment, INITIAL_RESULT=results[0], VALIDATION_RESULT=results[1],
+        ENHANCED_RESULT=results[2],
+    )
+    result = subprocess.run(("/bin/bash", "-c", gate_script), env=environment, capture_output=True)
+    if (result.returncode == 0) != (results == ("success", "success", "success")):
+        raise SystemExit(f"CI aggregate did not fail closed for {results}")
+for key, value in (
+    ("VALIDATION_COMMIT", "wrong"), ("VALIDATION_TREE", "wrong"),
+    ("VALIDATION_VERSION", "wrong"), ("INITIAL_COMMIT", ""),
+    ("INITIAL_TREE", ""), ("INITIAL_VERSION", ""),
+):
+    environment = dict(
+        gate_environment, INITIAL_RESULT="success", VALIDATION_RESULT="success",
+        ENHANCED_RESULT="success",
+    )
+    environment[key] = value
+    if subprocess.run(("/bin/bash", "-c", gate_script), env=environment, capture_output=True).returncode == 0:
+        raise SystemExit(f"CI aggregate accepted source identity drift in {key}")
+
 boundary_names = (
     "Declare native capture boundary (ordinary graph)",
     "Declare native capture boundary (candidate graph)",
@@ -2372,9 +2467,9 @@ for name in (ordinary_name, candidate_name):
         + normalized_workflow[end:]
     )
 if hashlib.sha256(normalized_workflow.encode()).hexdigest() != (
-    "da0fb3074c3cb3dcf77223d43f4cf536f4cf36bbd9699d5027a89f9385a5aa0e"
+    "5672dd947b2b6ed09b838317b1d5113a77637ff05b452d2d0b7da8d550119227"
 ):
-    raise SystemExit("CI changed outside the declared native-capture boundary fixture")
+    raise SystemExit("CI changed outside the declared split and native-capture boundary fixture")
 
 test_name = "hostedGlassAndSolidMenuPanelsCaptureSyntheticChromeAndOpaqueEditor"
 test_path = root / "Tests/FleckAppTests/AppKitEditorTests.swift"

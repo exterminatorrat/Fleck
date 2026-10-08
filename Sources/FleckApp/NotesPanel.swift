@@ -2974,6 +2974,7 @@
         coordinator.isActive = false
         coordinator.focusGeneration &+= 1
         field.onOwnershipChange = nil
+        field.isHidden = true
       }
 
       @MainActor

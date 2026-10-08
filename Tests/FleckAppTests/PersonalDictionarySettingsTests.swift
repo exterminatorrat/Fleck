@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 import FleckCore
 import SwiftUI
@@ -243,16 +244,45 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
   )
   let deleteID = "settings-vocabulary-entry-delete-\(deletedEntry.id.uuidString)"
 
+  let screenCandidate = window.screen ?? NSScreen.screens.first
+  if screenCandidate == nil {
+    print(
+      personalDictionaryDeleteAdmissionDiagnostic(
+        row: row,
+        entryID: deletedEntry.id,
+        deleteIdentifier: deleteID,
+        in: host,
+        window: window,
+        viewModel: viewModel
+      )
+    )
+  }
+  let screen = try #require(screenCandidate)
+  boundPersonalDictionaryDeleteAdmissionViewport(
+    window: window,
+    host: host,
+    screen: screen,
+    contentSize: NSSize(width: 540, height: 620)
+  )
+  await settlePersonalDictionarySettingsHost(host)
+
   let application = NSApplication.shared
   application.activate(ignoringOtherApps: true)
   window.makeKeyAndOrderFront(nil)
   await settlePersonalDictionarySettingsHost(host)
   window.displayIfNeeded()
   host.displayIfNeeded()
+  let geometryBeforePointer = personalDictionaryDeletePointerState(
+    row: row,
+    in: host,
+    window: window
+  )
   let windowIsActiveAndKey =
     application.isActive && window.isKeyWindow && application.keyWindow === window
       && window.isVisible
-  if !windowIsActiveAndKey {
+  let initialGeometryIsVisible = geometryBeforePointer.windowWithinVisibleFrame
+    && geometryBeforePointer.rowFullyVisible
+  if !windowIsActiveAndKey || !initialGeometryIsVisible {
     print(
       personalDictionaryDeleteAdmissionDiagnostic(
         row: row,
@@ -264,14 +294,21 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
       )
     )
   }
-  try #require(windowIsActiveAndKey)
+  try #require(windowIsActiveAndKey && initialGeometryIsVisible)
 
-  let rowFrame = host.convert(row.bounds, from: row)
   let pointerOutsideRows = NSPoint(
-    x: host.bounds.minX + 8,
-    y: host.isFlipped ? host.bounds.minY + 8 : host.bounds.maxY - 8
+    x: host.visibleRect.minX + 8,
+    y: host.isFlipped ? host.visibleRect.minY + 8 : host.visibleRect.maxY - 8
   )
-  if rowFrame.contains(pointerOutsideRows) {
+  let outsideRowsScreenPoint = personalDictionaryScreenPoint(
+    fromHostPoint: pointerOutsideRows,
+    host: host,
+    window: window
+  )
+  let offRowPointIsVisible = host.visibleRect.contains(pointerOutsideRows)
+    && screen.visibleFrame.contains(outsideRowsScreenPoint)
+    && window.frame.contains(outsideRowsScreenPoint)
+  if !offRowPointIsVisible || geometryBeforePointer.rowFrame.contains(pointerOutsideRows) {
     print(
       personalDictionaryDeleteAdmissionDiagnostic(
         row: row,
@@ -283,45 +320,105 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
       )
     )
   }
-  try #require(!rowFrame.contains(pointerOutsideRows))
-  try movePersonalDictionaryPointer(to: pointerOutsideRows, in: host, window: window)
+  try #require(
+    offRowPointIsVisible && !geometryBeforePointer.rowFrame.contains(pointerOutsideRows)
+  )
+  try movePersonalDictionaryDeleteAdmissionPointer(
+    to: pointerOutsideRows,
+    in: host,
+    window: window,
+    screen: screen,
+    row: row,
+    entryID: deletedEntry.id,
+    deleteIdentifier: deleteID,
+    viewModel: viewModel
+  )
   await settlePersonalDictionarySettingsHost(host)
-  let pointerAfterExit = host.convert(
-    window.convertFromScreen(NSRect(origin: NSEvent.mouseLocation, size: .zero)).origin,
-    from: nil
-  )
-  if rowFrame.contains(pointerAfterExit) {
-    print(
-      personalDictionaryDeleteAdmissionDiagnostic(
-        row: row,
-        entryID: deletedEntry.id,
-        deleteIdentifier: deleteID,
-        in: host,
-        window: window,
-        viewModel: viewModel
-      )
-    )
-  }
-  try #require(!rowFrame.contains(pointerAfterExit))
-
-  try movePersonalDictionaryPointer(
-    to: NSPoint(x: rowFrame.midX, y: rowFrame.midY),
+  let geometryAfterExit = personalDictionaryDeletePointerState(
+    row: row,
     in: host,
     window: window
+  )
+  let pointerReachedOffRowPoint = personalDictionaryScreenPointsAreNear(
+    geometryAfterExit.pointerOnScreen,
+    outsideRowsScreenPoint
+  )
+  let pointerActuallyExitedRow = !geometryAfterExit.rowFrame.contains(geometryAfterExit.pointerInHost)
+    && geometryAfterExit.pointerWithinVisibleFrame
+    && geometryAfterExit.pointerInsideWindow
+    && geometryAfterExit.pointerInsideHost
+  if !pointerReachedOffRowPoint || !pointerActuallyExitedRow {
+    print(
+      personalDictionaryDeleteAdmissionDiagnostic(
+        row: row,
+        entryID: deletedEntry.id,
+        deleteIdentifier: deleteID,
+        in: host,
+        window: window,
+        viewModel: viewModel
+      )
+    )
+  }
+  try #require(pointerReachedOffRowPoint && pointerActuallyExitedRow)
+
+  let rowCenter = NSPoint(
+    x: geometryAfterExit.rowFrame.midX,
+    y: geometryAfterExit.rowFrame.midY
+  )
+  let rowCenterScreenPoint = personalDictionaryScreenPoint(
+    fromHostPoint: rowCenter,
+    host: host,
+    window: window
+  )
+  if !geometryAfterExit.rowFullyVisible || !screen.visibleFrame.contains(rowCenterScreenPoint) {
+    print(
+      personalDictionaryDeleteAdmissionDiagnostic(
+        row: row,
+        entryID: deletedEntry.id,
+        deleteIdentifier: deleteID,
+        in: host,
+        window: window,
+        viewModel: viewModel
+      )
+    )
+  }
+  try #require(
+    geometryAfterExit.rowFullyVisible && screen.visibleFrame.contains(rowCenterScreenPoint)
+  )
+  try movePersonalDictionaryDeleteAdmissionPointer(
+    to: rowCenter,
+    in: host,
+    window: window,
+    screen: screen,
+    row: row,
+    entryID: deletedEntry.id,
+    deleteIdentifier: deleteID,
+    viewModel: viewModel
   )
   await settlePersonalDictionarySettingsHost(host)
   window.displayIfNeeded()
   host.displayIfNeeded()
-  let rowFrameAfterEntry = host.convert(row.bounds, from: row)
-  let pointerAfterEntry = host.convert(
-    window.convertFromScreen(NSRect(origin: NSEvent.mouseLocation, size: .zero)).origin,
-    from: nil
+  let geometryAfterEntry = personalDictionaryDeletePointerState(
+    row: row,
+    in: host,
+    window: window
   )
-  let pointerEnteredRow = rowFrameAfterEntry.contains(pointerAfterEntry)
+  let pointerReachedRowCenter = personalDictionaryScreenPointsAreNear(
+    geometryAfterEntry.pointerOnScreen,
+    rowCenterScreenPoint
+  )
+  let pointerEnteredRow = geometryAfterEntry.rowFrame.contains(geometryAfterEntry.pointerInHost)
   let windowRemainsActiveAndKey =
     application.isActive && window.isKeyWindow && application.keyWindow === window
       && window.isVisible
-  if !pointerEnteredRow || !windowRemainsActiveAndKey {
+  let entryGeometryIsValid = pointerReachedRowCenter && pointerEnteredRow
+    && geometryAfterEntry.pointerHitsOwnedContentSubtree
+    && geometryAfterEntry.pointerWithinVisibleFrame
+    && geometryAfterEntry.pointerInsideWindow
+    && geometryAfterEntry.pointerInsideHost
+    && geometryAfterEntry.windowWithinVisibleFrame
+    && geometryAfterEntry.rowFullyVisible
+  if !entryGeometryIsValid || !windowRemainsActiveAndKey {
     print(
       personalDictionaryDeleteAdmissionDiagnostic(
         row: row,
@@ -333,11 +430,19 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
       )
     )
   }
-  try #require(pointerEnteredRow && windowRemainsActiveAndKey)
+  try #require(entryGeometryIsValid && windowRemainsActiveAndKey)
   try await requirePersonalDictionaryDeleteAccessibilityElement(
     deleteID,
     row: row,
     entryID: deletedEntry.id,
+    in: host,
+    window: window,
+    viewModel: viewModel
+  )
+  try requirePersonalDictionaryDeletePointerAdmission(
+    row: row,
+    entryID: deletedEntry.id,
+    deleteIdentifier: deleteID,
     in: host,
     window: window,
     viewModel: viewModel
@@ -348,7 +453,10 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
 
   let cancelID = "settings-vocabulary-delete-cancellation"
   let (cancelWindow, cancelHost) = try #require(
-    personalDictionarySettingsWindow(containingAccessibilityIdentifier: cancelID)
+    personalDictionarySettingsSheet(
+      attachedTo: window,
+      containingAccessibilityIdentifier: cancelID
+    )
   )
   let cancelFrame = try personalDictionarySettingsAccessibilityFrame(cancelID, in: cancelHost)
   let cancelBounds = personalDictionaryHostFrame(fromScreenFrame: cancelFrame, in: cancelHost)
@@ -365,12 +473,20 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
   #expect(await gate.requestCount == 0)
   await settlePersonalDictionarySettingsHost(host)
 
-  let rowFrameAfterCancellation = host.convert(row.bounds, from: row)
-  let pointerAfterCancellation = host.convert(
-    window.convertFromScreen(NSRect(origin: NSEvent.mouseLocation, size: .zero)).origin,
-    from: nil
+  let geometryAfterCancellation = personalDictionaryDeletePointerState(
+    row: row,
+    in: host,
+    window: window
   )
-  if !rowFrameAfterCancellation.contains(pointerAfterCancellation) {
+  let pointerRemainsOnVisibleRow = geometryAfterCancellation.rowFrame.contains(
+    geometryAfterCancellation.pointerInHost
+  ) && geometryAfterCancellation.pointerHitsOwnedContentSubtree
+    && geometryAfterCancellation.pointerWithinVisibleFrame
+    && geometryAfterCancellation.pointerInsideWindow
+    && geometryAfterCancellation.pointerInsideHost
+    && geometryAfterCancellation.windowWithinVisibleFrame
+    && geometryAfterCancellation.rowFullyVisible
+  if !pointerRemainsOnVisibleRow {
     print(
       personalDictionaryDeleteAdmissionDiagnostic(
         row: row,
@@ -382,11 +498,19 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
       )
     )
   }
-  try #require(rowFrameAfterCancellation.contains(pointerAfterCancellation))
+  try #require(pointerRemainsOnVisibleRow)
   try await requirePersonalDictionaryDeleteAccessibilityElement(
     deleteID,
     row: row,
     entryID: deletedEntry.id,
+    in: host,
+    window: window,
+    viewModel: viewModel
+  )
+  try requirePersonalDictionaryDeletePointerAdmission(
+    row: row,
+    entryID: deletedEntry.id,
+    deleteIdentifier: deleteID,
     in: host,
     window: window,
     viewModel: viewModel
@@ -396,8 +520,16 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
 
   let confirmID = "settings-vocabulary-delete-confirmation"
   let (confirmWindow, confirmHost) = try #require(
-    personalDictionarySettingsWindow(containingAccessibilityIdentifier: confirmID)
+    personalDictionarySettingsSheet(
+      attachedTo: window,
+      containingAccessibilityIdentifier: confirmID
+    )
   )
+  #expect(window.attachedSheet === confirmWindow)
+  #expect(confirmWindow.sheetParent === window)
+  #expect(cancelWindow !== window.attachedSheet)
+  #expect(cancelWindow.sheetParent == nil)
+  #expect(cancelWindow.parent == nil)
   let confirmFrame = try personalDictionarySettingsAccessibilityFrame(confirmID, in: confirmHost)
   let confirmBounds = personalDictionaryHostFrame(fromScreenFrame: confirmFrame, in: confirmHost)
   do {
@@ -2207,23 +2339,21 @@ private func personalDictionarySettingsView(
 }
 
 @MainActor
-private func personalDictionarySettingsWindow(
+private func personalDictionarySettingsSheet(
+  attachedTo fixtureWindow: NSWindow,
   containingAccessibilityIdentifier identifier: String
 ) -> (NSWindow, NSView)? {
-  let matchingWindows: [(NSWindow, NSView)] = NSApplication.shared.windows.compactMap {
-    (window: NSWindow) -> (NSWindow, NSView)? in
-    guard let contentView = window.contentView,
-      personalDictionarySettingsAccessibilityElement(
-        withAccessibilityIdentifier: identifier,
-        in: contentView
-      ) != nil
-    else {
-      return nil
-    }
-    return (window, contentView)
+  guard let sheetWindow = fixtureWindow.attachedSheet,
+    sheetWindow.sheetParent === fixtureWindow,
+    let contentView = sheetWindow.contentView,
+    personalDictionarySettingsAccessibilityElement(
+      withAccessibilityIdentifier: identifier,
+      in: contentView
+    ) != nil
+  else {
+    return nil
   }
-  guard matchingWindows.count == 1 else { return nil }
-  return matchingWindows[0]
+  return (sheetWindow, contentView)
 }
 
 @MainActor
@@ -2286,6 +2416,228 @@ private func requirePersonalDictionaryDeleteAccessibilityElement(
 }
 
 @MainActor
+private func requirePersonalDictionaryDeletePointerAdmission(
+  row: NSView,
+  entryID: UUID,
+  deleteIdentifier: String,
+  in host: NSView,
+  window: NSWindow,
+  viewModel: PersonalDictionarySettingsViewModel
+) throws {
+  let pointerState = personalDictionaryDeletePointerState(row: row, in: host, window: window)
+  let application = NSApplication.shared
+  let pointerRemainsAdmitted = pointerState.rowFrame.contains(pointerState.pointerInHost)
+    && pointerState.pointerHitsOwnedContentSubtree
+    && pointerState.pointerWithinVisibleFrame
+    && pointerState.pointerInsideWindow
+    && pointerState.pointerInsideHost
+    && pointerState.windowWithinVisibleFrame
+    && pointerState.rowFullyVisible
+    && application.isActive
+    && window.isKeyWindow
+    && application.keyWindow === window
+    && window.isVisible
+  if !pointerRemainsAdmitted {
+    print(
+      personalDictionaryDeleteAdmissionDiagnostic(
+        row: row,
+        entryID: entryID,
+        deleteIdentifier: deleteIdentifier,
+        in: host,
+        window: window,
+        viewModel: viewModel
+      )
+    )
+  }
+  try #require(pointerRemainsAdmitted)
+}
+
+@MainActor
+private struct PersonalDictionaryDeletePointerState {
+  let pointerOnScreen: NSPoint
+  let pointerInWindow: NSPoint
+  let pointerInHost: NSPoint
+  let rowFrame: NSRect
+  let rowVisibleFrame: NSRect
+  let rowFrameOnScreen: NSRect
+  let screenVisibleFrame: NSRect
+  let windowWithinVisibleFrame: Bool
+  let pointerWithinVisibleFrame: Bool
+  let pointerInsideWindow: Bool
+  let pointerInsideHost: Bool
+  let rowFullyVisible: Bool
+  let pointerHitsOwnedContentSubtree: Bool
+}
+
+@MainActor
+private func boundPersonalDictionaryDeleteAdmissionViewport(
+  window: NSWindow,
+  host: NSHostingView<AnyView>,
+  screen: NSScreen,
+  contentSize: NSSize
+) {
+  let availableFrame = screen.visibleFrame.insetBy(dx: 12, dy: 12)
+  host.sizingOptions = []
+  window.setContentSize(contentSize)
+  let windowInsets = NSSize(
+    width: max(window.frame.width - host.frame.width, 0),
+    height: max(window.frame.height - host.frame.height, 0)
+  )
+  let maximumContentSize = NSSize(
+    width: max(1, availableFrame.width - windowInsets.width),
+    height: max(1, availableFrame.height - windowInsets.height)
+  )
+  let viewportSize = NSSize(
+    width: min(contentSize.width, maximumContentSize.width),
+    height: min(contentSize.height, maximumContentSize.height)
+  )
+  window.setContentSize(viewportSize)
+  host.autoresizingMask = [.width, .height]
+  host.setFrameOrigin(.zero)
+  host.setFrameSize(viewportSize)
+  host.layoutSubtreeIfNeeded()
+  window.displayIfNeeded()
+  let frame = window.frame
+  window.setFrameOrigin(
+    NSPoint(
+      x: availableFrame.midX - frame.width / 2,
+      y: availableFrame.midY - frame.height / 2
+    )
+  )
+  window.displayIfNeeded()
+  host.layoutSubtreeIfNeeded()
+}
+
+@MainActor
+private func personalDictionaryScreenPoint(
+  fromHostPoint point: NSPoint,
+  host: NSView,
+  window: NSWindow
+) -> NSPoint {
+  window.convertToScreen(NSRect(origin: host.convert(point, to: nil), size: .zero)).origin
+}
+
+private func personalDictionaryScreenPointsAreNear(_ lhs: NSPoint, _ rhs: NSPoint) -> Bool {
+  abs(lhs.x - rhs.x) <= 1 && abs(lhs.y - rhs.y) <= 1
+}
+
+@MainActor
+private func personalDictionaryDeletePointerState(
+  row: NSView,
+  in host: NSView,
+  window: NSWindow
+) -> PersonalDictionaryDeletePointerState {
+  let pointerOnScreen = NSEvent.mouseLocation
+  let pointerInWindow = window.convertFromScreen(NSRect(origin: pointerOnScreen, size: .zero)).origin
+  let pointerInHost = host.convert(pointerInWindow, from: nil)
+  let rowFrame = host.convert(row.bounds, from: row)
+  let rowVisibleFrame = host.convert(row.visibleRect, from: row)
+  let rowFrameOnScreen = window.convertToScreen(host.convert(rowFrame, to: nil))
+  let visibleRowFrameOnScreen = window.convertToScreen(host.convert(rowVisibleFrame, to: nil))
+  let screenVisibleFrame = window.screen?.visibleFrame ?? .zero
+  var hitView: NSView?
+  if let contentView = window.contentView,
+    contentView === host,
+    let hitTestSuperview = contentView.superview
+  {
+    let pointInSuperview = hitTestSuperview.convert(pointerInWindow, from: nil)
+    hitView = contentView.hitTest(pointInSuperview)
+  }
+  var pointerHitsOwnedContentSubtree = false
+  while let view = hitView {
+    if view === host {
+      pointerHitsOwnedContentSubtree = true
+      break
+    }
+    hitView = view.superview
+  }
+  return PersonalDictionaryDeletePointerState(
+    pointerOnScreen: pointerOnScreen,
+    pointerInWindow: pointerInWindow,
+    pointerInHost: pointerInHost,
+    rowFrame: rowFrame,
+    rowVisibleFrame: rowVisibleFrame,
+    rowFrameOnScreen: rowFrameOnScreen,
+    screenVisibleFrame: screenVisibleFrame,
+    windowWithinVisibleFrame: screenVisibleFrame.contains(window.frame),
+    pointerWithinVisibleFrame: screenVisibleFrame.contains(pointerOnScreen),
+    pointerInsideWindow: window.frame.contains(pointerOnScreen),
+    pointerInsideHost: host.visibleRect.contains(pointerInHost),
+    rowFullyVisible: host.visibleRect.contains(rowFrame)
+      && rowVisibleFrame.contains(rowFrame)
+      && screenVisibleFrame.contains(rowFrameOnScreen)
+      && screenVisibleFrame.contains(visibleRowFrameOnScreen),
+    pointerHitsOwnedContentSubtree: pointerHitsOwnedContentSubtree
+  )
+}
+
+@MainActor
+private func movePersonalDictionaryDeleteAdmissionPointer(
+  to point: NSPoint,
+  in host: NSView,
+  window: NSWindow,
+  screen: NSScreen,
+  row: NSView,
+  entryID: UUID,
+  deleteIdentifier: String,
+  viewModel: PersonalDictionarySettingsViewModel
+) throws {
+  do {
+    let pointOnScreen = personalDictionaryScreenPoint(
+      fromHostPoint: point,
+      host: host,
+      window: window
+    )
+    let screenFrame = screen.frame
+    let displayNumber = try #require(
+      screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+    )
+    let displayID = CGDirectDisplayID(displayNumber.uint32Value)
+    let displayBounds = CGDisplayBounds(displayID)
+    try #require(screen.visibleFrame.contains(pointOnScreen))
+    try #require(
+      screenFrame.width > 0 && screenFrame.height > 0
+        && displayBounds.width > 0 && displayBounds.height > 0
+    )
+    let pointInDisplay = CGPoint(
+      x: (pointOnScreen.x - screenFrame.minX) * displayBounds.width / screenFrame.width,
+      y: (screenFrame.maxY - pointOnScreen.y) * displayBounds.height / screenFrame.height
+    )
+    try #require(CGDisplayMoveCursorToPoint(displayID, pointInDisplay) == .success)
+    let pointerOnScreen = NSEvent.mouseLocation
+    let pointerInWindow = window.convertFromScreen(
+      NSRect(origin: pointerOnScreen, size: .zero)
+    ).origin
+    let event = try #require(
+      NSEvent.mouseEvent(
+        with: .mouseMoved,
+        location: pointerInWindow,
+        modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: 1,
+        clickCount: 0,
+        pressure: 0
+      )
+    )
+    window.sendEvent(event)
+  } catch {
+    print(
+      personalDictionaryDeleteAdmissionDiagnostic(
+        row: row,
+        entryID: entryID,
+        deleteIdentifier: deleteIdentifier,
+        in: host,
+        window: window,
+        viewModel: viewModel
+      )
+    )
+    throw error
+  }
+}
+
+@MainActor
 private func personalDictionaryDeleteAdmissionDiagnostic(
   row: NSView,
   entryID: UUID,
@@ -2294,12 +2646,7 @@ private func personalDictionaryDeleteAdmissionDiagnostic(
   window: NSWindow,
   viewModel: PersonalDictionarySettingsViewModel
 ) -> String {
-  let pointerOnScreen = NSEvent.mouseLocation
-  let pointerInHost = host.convert(
-    window.convertFromScreen(NSRect(origin: pointerOnScreen, size: .zero)).origin,
-    from: nil
-  )
-  let rowFrame = host.convert(row.bounds, from: row)
+  let pointerState = personalDictionaryDeletePointerState(row: row, in: host, window: window)
   let expectedIdentifiers = [
     "settings-vocabulary-entry-frame-\(entryID.uuidString)",
     "settings-vocabulary-entry-\(entryID.uuidString)",
@@ -2317,9 +2664,19 @@ private func personalDictionaryDeleteAdmissionDiagnostic(
   return """
   [passive synthetic failure-only Dictionary Delete admission diagnostic]
   rowID=settings-vocabulary-entry-frame-\(entryID.uuidString)
-  pointerScreen=\(pointerOnScreen) pointerLocal=\(pointerInHost)
+  pointerScreen=\(pointerState.pointerOnScreen) pointerWindow=\(pointerState.pointerInWindow)
+  pointerLocal=\(pointerState.pointerInHost)
   hostBounds=\(host.bounds) hostVisibleRect=\(host.visibleRect)
-  rowBounds=\(row.bounds) rowFrame=\(rowFrame) rowVisibleRect=\(row.visibleRect)
+  rowBounds=\(row.bounds) rowFrame=\(pointerState.rowFrame)
+  rowVisibleRect=\(row.visibleRect) rowVisibleFrame=\(pointerState.rowVisibleFrame)
+  rowScreenFrame=\(pointerState.rowFrameOnScreen)
+  screenVisibleFrame=\(pointerState.screenVisibleFrame)
+  windowWithinVisibleFrame=\(pointerState.windowWithinVisibleFrame)
+  rowFullyVisible=\(pointerState.rowFullyVisible)
+  pointerWithinVisibleFrame=\(pointerState.pointerWithinVisibleFrame)
+  pointerInsideWindow=\(pointerState.pointerInsideWindow)
+  pointerInsideHost=\(pointerState.pointerInsideHost)
+  pointerHitsOwnedContentSubtree=\(pointerState.pointerHitsOwnedContentSubtree)
   rowHidden=\(row.isHiddenOrHasHiddenAncestor) rowAlpha=\(row.alphaValue)
   windowFrame=\(window.frame) windowVisible=\(window.isVisible) windowIsKey=\(window.isKeyWindow)
   appActive=\(NSApplication.shared.isActive) appKeyWindowMatches=\(NSApplication.shared.keyWindow === window)
