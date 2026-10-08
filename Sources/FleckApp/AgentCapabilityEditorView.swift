@@ -517,6 +517,7 @@
   struct AgentCapabilityEditorView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.fleckThemeSnapshot) private var theme
     let profile: AgentIntegrationProfile
     let capabilities: AgentProfileCapabilities
     @State private var allowedCapabilities: Set<AgentCapability>
@@ -612,7 +613,7 @@
         if let errorMessage {
           Text(errorMessage)
             .font(.caption)
-            .foregroundStyle(.orange)
+            .foregroundStyle(theme.color(.error))
         }
 
         HStack {

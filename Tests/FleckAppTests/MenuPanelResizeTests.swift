@@ -1328,7 +1328,7 @@ import Testing
   let screen = try #require(NSScreen.main)
   let initialFrame = CGRect(
     x: screen.visibleFrame.midX - 300,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: 600,
     height: 430
   )
@@ -1449,6 +1449,11 @@ import Testing
         window.orderOut(nil)
       }
       await settleResizeHost(host)
+      await withCheckedContinuation { continuation in
+        DispatchQueue.main.async {
+          continuation.resume()
+        }
+      }
       let startingFrame = window.frame
       let anchoredButtonFrame = try #require(geometryStore.cachedStatusButton?.screenFrame)
 
@@ -1481,8 +1486,22 @@ import Testing
       }
       if changesHeight { release.y -= heightDelta }
 
-      sendResizeMouseEvent(.leftMouseDown, at: mouseDown, to: window, number: eventNumber)
+      guard try await requireResizeBeginReadiness(
+        host,
+        at: mouseDown,
+        in: window
+      ) else { return }
+      try Task.checkCancellation()
+      let mouseDownEventNumber = eventNumber
+      await withCheckedContinuation { continuation in
+        DispatchQueue.main.async {
+          sendResizeMouseEvent(
+            .leftMouseDown, at: mouseDown, to: window, number: mouseDownEventNumber)
+          continuation.resume()
+        }
+      }
       eventNumber += 1
+      try #require(controller.isTracking)
       sendResizeMouseEvent(.leftMouseDragged, atScreen: release, to: window, number: eventNumber)
       eventNumber += 1
       sendResizeMouseEvent(.leftMouseUp, atScreen: release, to: window, number: eventNumber)
@@ -1615,7 +1634,7 @@ import Testing
   let screen = try #require(NSScreen.main)
   let initialFrame = CGRect(
     x: screen.visibleFrame.midX - 300,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: 600,
     height: 430
   )
@@ -1648,13 +1667,24 @@ import Testing
     window.orderFront(nil)
     host.installIfNeeded()
     await settleResizeHost(host)
+    await withCheckedContinuation { continuation in
+      DispatchQueue.main.async {
+        continuation.resume()
+      }
+    }
     defer {
       host.uninstall()
       window.contentView = nil
       window.orderOut(nil)
     }
 
-    sendResizeMouseEvent(.leftMouseDown, at: CGPoint(x: 1, y: 200), to: window, number: 40)
+    await withCheckedContinuation { continuation in
+      DispatchQueue.main.async {
+        sendResizeMouseEvent(.leftMouseDown, at: CGPoint(x: 1, y: 200), to: window, number: 40)
+        continuation.resume()
+      }
+    }
+    try #require(controller.isTracking)
     let dragScreenPoint = window.convertPoint(toScreen: CGPoint(x: -19, y: 200))
     sendResizeMouseEvent(.leftMouseDragged, atScreen: dragScreenPoint, to: window, number: 41)
     #expect(controller.isTracking)
@@ -1678,7 +1708,7 @@ import Testing
   let screen = try #require(NSScreen.main)
   let initialFrame = CGRect(
     x: screen.visibleFrame.midX - 300,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: 600,
     height: 430
   )
@@ -1735,7 +1765,7 @@ import Testing
   for mutation in ResizeEndStatusMutation.allCases {
     let initialFrame = CGRect(
       x: screen.visibleFrame.midX - 300,
-      y: screen.visibleFrame.midY - 215,
+      y: (screen.visibleFrame.midY - 215).rounded(),
       width: 600,
       height: 430
     )
@@ -1769,6 +1799,12 @@ import Testing
       window.orderOut(nil)
     }
 
+    guard try await requireResizeBeginReadiness(
+      host,
+      at: CGPoint(x: 1, y: 200),
+      in: window
+    ) else { return }
+    try Task.checkCancellation()
     sendResizeMouseEvent(.leftMouseDown, at: CGPoint(x: 1, y: 200), to: window, number: 47)
     let dragScreenPoint = window.convertPoint(toScreen: CGPoint(x: -19, y: 200))
     sendResizeMouseEvent(.leftMouseDragged, atScreen: dragScreenPoint, to: window, number: 48)
@@ -1815,7 +1851,7 @@ import Testing
       }
       let initialFrame = CGRect(
         x: screen.visibleFrame.midX - 300,
-        y: screen.visibleFrame.midY - 215,
+        y: (screen.visibleFrame.midY - 215).rounded(),
         width: 600,
         height: 430
       )
@@ -1899,7 +1935,7 @@ import Testing
   for side in [MenuPanelFixedSide.left, .right] {
     let initialFrame = CGRect(
       x: screen.visibleFrame.midX - 420,
-      y: screen.visibleFrame.midY - 215,
+      y: (screen.visibleFrame.midY - 215).rounded(),
       width: initialWidth,
       height: 430
     )
@@ -1997,7 +2033,7 @@ import Testing
   )
   let initialFrame = CGRect(
     x: buttonFrame.maxX - initialWidth + 60,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: initialWidth,
     height: 430
   )
@@ -2049,7 +2085,7 @@ import Testing
   )
   let initialFrame = CGRect(
     x: buttonFrame.maxX - 800,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: 800,
     height: 430
   )
@@ -2173,7 +2209,7 @@ import Testing
   )
   let initialFrame = CGRect(
     x: buttonFrame.maxX - 600,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: 600,
     height: 430
   )
@@ -2365,7 +2401,7 @@ import Testing
   let screen = try #require(NSScreen.main)
   let initialFrame = CGRect(
     x: screen.visibleFrame.midX - 300,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: 600,
     height: 430
   )
@@ -2993,7 +3029,7 @@ import Testing
   )
   let initialFrame = CGRect(
     x: buttonFrame.minX,
-    y: screen.visibleFrame.midY - 215,
+    y: (screen.visibleFrame.midY - 215).rounded(),
     width: initialWidth,
     height: 430
   )
@@ -3478,4 +3514,60 @@ private func settleResizeHost(_ view: NSView) async {
     view.layoutSubtreeIfNeeded()
     await Task.yield()
   }
+}
+
+@MainActor
+private func requireResizeBeginReadiness(
+  _ host: MenuPanelResizeHostView,
+  at locationInWindow: CGPoint,
+  in window: NSWindow
+) async throws -> Bool {
+  let deadline = ContinuousClock.now + .seconds(5)
+  try Task.checkCancellation()
+  var readiness = host.beginReadiness(at: locationInWindow, in: window)
+  guard ContinuousClock.now < deadline else {
+    Issue.record("Resize begin readiness expired before admission")
+    return false
+  }
+  while case .reconciling = readiness {
+    try Task.checkCancellation()
+    guard ContinuousClock.now < deadline else {
+      Issue.record("Resize begin readiness remained in reconciliation past its deadline")
+      return false
+    }
+    await withCheckedContinuation { continuation in
+      DispatchQueue.main.async {
+        continuation.resume()
+      }
+    }
+    try Task.checkCancellation()
+    guard ContinuousClock.now < deadline else {
+      Issue.record("Resize begin readiness expired while reconciling")
+      return false
+    }
+    readiness = host.beginReadiness(at: locationInWindow, in: window)
+    guard ContinuousClock.now < deadline else {
+      Issue.record("Resize begin readiness expired before admission")
+      return false
+    }
+  }
+  try Task.checkCancellation()
+  guard ContinuousClock.now < deadline else {
+    Issue.record("Resize begin readiness expired before admission")
+    return false
+  }
+  switch readiness {
+  case .ready:
+    try Task.checkCancellation()
+    guard ContinuousClock.now < deadline else {
+      Issue.record("Resize begin readiness expired before admission")
+      return false
+    }
+    return true
+  case .reconciling:
+    Issue.record("Resize begin readiness remained in reconciliation past its deadline")
+  case .blocked:
+    Issue.record("Resize begin preflight was blocked before mouse-down")
+  }
+  return false
 }

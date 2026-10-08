@@ -65,6 +65,10 @@
       return path
     }
 
+    static func checkmarkColor(for accentColor: NSColor) -> NSColor {
+      FleckColorContrast.accessibleForeground(.white, against: accentColor)
+    }
+
     static func drawCompleted(
       in rect: NSRect,
       accentColor: NSColor,
@@ -82,7 +86,7 @@
       context.setFillColor(accentColor.cgColor)
       context.fillEllipse(in: rect)
       context.addPath(checkmarkPath(in: rect, flipped: flipped))
-      context.setStrokeColor(NSColor.white.cgColor)
+      context.setStrokeColor(checkmarkColor(for: accentColor).cgColor)
       context.setLineWidth(max(1.35, rect.width * 0.11))
       context.setLineCap(.round)
       context.setLineJoin(.round)
@@ -93,11 +97,9 @@
 
   final class ChecklistCompletionOverlay: NSView {
     static let duration = AppMotion.quickDuration
-    private let accentColor: NSColor
     private let checkLayer = CAShapeLayer()
 
     init(frame: NSRect, accentColor: NSColor) {
-      self.accentColor = accentColor
       super.init(frame: frame)
       wantsLayer = true
       layer?.backgroundColor = accentColor.cgColor
@@ -108,7 +110,7 @@
       checkLayer.frame = bounds
       checkLayer.path = ChecklistMarkerDrawing.checkmarkPath(in: bounds, flipped: false)
       checkLayer.fillColor = NSColor.clear.cgColor
-      checkLayer.strokeColor = NSColor.white.cgColor
+      checkLayer.strokeColor = ChecklistMarkerDrawing.checkmarkColor(for: accentColor).cgColor
       checkLayer.lineWidth = max(1.35, bounds.width * 0.11)
       checkLayer.lineCap = .round
       checkLayer.lineJoin = .round

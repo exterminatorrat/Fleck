@@ -68,14 +68,41 @@ struct SettingsDisclosureGroupStyleTests {
     for (text, expectedCount) in [(settings, 1), (agents, 2), (about, 1)] {
       #expect(text.components(separatedBy: modifier).count - 1 == expectedCount)
     }
+    let agentGroupStart = try #require(
+      agents.range(
+        of: "        VStack(alignment: .leading, spacing: 4) {\n"
+          + "          DisclosureGroup(\"Activity\", isExpanded: $isActivityExpanded)"
+      )
+    )
+    let agentGroupEnd = try #require(
+      agents.range(
+        of: "\n        }\n      }\n      .onChange(of: searchRequest?.id",
+        range: agentGroupStart.upperBound..<agents.endIndex
+      )
+    )
+    let agentGroup = agents[agentGroupStart.lowerBound..<agentGroupEnd.lowerBound]
+    #expect(agentGroup.components(separatedBy: "DisclosureGroup(").count - 1 == 2)
+    #expect(agentGroup.components(separatedBy: modifier).count - 1 == 2)
+    #expect(agentGroup.contains(".settingsSearchAnchor(.agentsActivity, request: searchRequest)"))
+    #expect(agentGroup.contains(".settingsSearchAnchor(.agentsAccess, request: searchRequest)"))
+
     for (text, start, end) in [
       (
-        settings, "        DisclosureGroup(DictationSettingsGroup.privacy.rawValue)",
-        "\n    private var readiness:"
+        settings, "        DisclosureGroup(isExpanded: $isDictationPrivacyExpanded)",
+        "\n    private var dictationReadinessButton:"
       ),
-      (agents, "        DisclosureGroup(\"Activity\")", "        DisclosureGroup(\"Access\")"),
-      (agents, "        DisclosureGroup(\"Access\")", "\n    private var connectorStatus:"),
-      (about, "        DisclosureGroup(\"Full build metadata\")", "        HStack(spacing: 10)"),
+      (
+        agents, "          DisclosureGroup(\"Activity\", isExpanded: $isActivityExpanded)",
+        "          DisclosureGroup(\"Access\", isExpanded: $isAccessExpanded)"
+      ),
+      (
+        agents, "          DisclosureGroup(\"Access\", isExpanded: $isAccessExpanded)",
+        "\n    private var connectorStatus:"
+      ),
+      (
+        about, "        DisclosureGroup(\"Full build metadata\", isExpanded: $isMetadataExpanded)",
+        "        HStack(spacing: 10)"
+      ),
     ] {
       let startRange = try #require(text.range(of: start))
       let endRange = try #require(
@@ -84,7 +111,7 @@ struct SettingsDisclosureGroupStyleTests {
       let disclosure = text[startRange.lowerBound..<endRange.lowerBound]
       #expect(disclosure.components(separatedBy: modifier).count - 1 == 1)
     }
-    let transfer = try #require(settings.range(of: "DisclosureGroup(\"Transfer\")"))
+    let transfer = try #require(settings.range(of: "Text(\"Transfer\")"))
     #expect(!settings[transfer.lowerBound...].contains(modifier))
   }
 

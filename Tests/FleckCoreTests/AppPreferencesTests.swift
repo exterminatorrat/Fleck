@@ -14,11 +14,41 @@ import Testing
   #expect(value.dictationHistoryEnabled)
   #expect(value.dictationCapsuleEnabled)
   #expect(value.dictationMicrophoneUID == nil)
+  #expect(value.pinnedLocalModelKeys.isEmpty)
   let encoded = try JSONEncoder().encode(value)
   let json = try #require(
     JSONSerialization.jsonObject(with: encoded) as? [String: Any]
   )
   #expect(json["dictationShortcut"] != nil)
+}
+
+@Test func localModelPinsDefaultEmptyAndRoundTripByStableIdentity() throws {
+  let legacy = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: Data(#"{"fontFamily":"Menlo"}"#.utf8)
+  )
+  #expect(legacy.pinnedLocalModelKeys.isEmpty)
+
+  let unsortedPinKeys = [
+    "cleanup:mlx-community/gemma-3-1b-it-qat-4bit",
+    "asr:FluidInference/parakeet-tdt-0.6b-v2-coreml",
+    "asr:FluidInference/parakeet-tdt-0.6b-v2-coreml",
+  ]
+  let sortedPinKeys = [
+    "asr:FluidInference/parakeet-tdt-0.6b-v2-coreml",
+    "cleanup:mlx-community/gemma-3-1b-it-qat-4bit",
+  ]
+  let value = AppPreferences(pinnedLocalModelKeys: unsortedPinKeys)
+  #expect(value.pinnedLocalModelKeys == sortedPinKeys)
+
+  let encoded = try JSONEncoder().encode(value)
+  let json = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+  #expect(json["pinnedLocalModelKeys"] as? [String] == sortedPinKeys)
+  let decoded = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: encoded
+  )
+  #expect(decoded.pinnedLocalModelKeys == sortedPinKeys)
 }
 
 @Test func newPreferencesUseAvenirReadingDefaults() {
@@ -27,6 +57,68 @@ import Testing
   #expect(value.fontFamily == "Avenir Next")
   #expect(value.fontSize == 17)
   #expect(value.editorTypographyVersion == AppPreferences.currentEditorTypographyVersion)
+  #expect(value.accentHex == AppPreferences.defaultAccentHex)
+  #expect(value.colorTheme == .monochrome)
+  #expect(value.chromeAppearance == .solid)
+}
+
+@Test func chromeAppearancePersistsAndLegacyAccentBytesArePreserved() throws {
+  let legacy = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: Data(##"{"accentHex":"#7c6cf2","panelOpacity":0.67}"##.utf8)
+  )
+  #expect(legacy.accentHex == "#7c6cf2")
+  #expect(legacy.chromeAppearance == .solid)
+  #expect(legacy.panelOpacity == 0.67)
+
+  let legacyCustom = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: Data(##"{"accentHex":"#123456"}"##.utf8)
+  )
+  #expect(legacyCustom.accentHex == "#123456")
+
+  let custom = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: Data(##"{"accentHex":"#123456","panelOpacity":0.61,"chromeAppearance":"glass"}"##.utf8)
+  )
+  #expect(custom.accentHex == "#123456")
+  #expect(custom.panelOpacity == 0.61)
+  #expect(custom.chromeAppearance == .glass)
+
+  let explicitlyChosenLegacyColor = AppPreferences(
+    accentHex: "#7C6CF2",
+    chromeAppearance: .glass
+  )
+  let roundTrip = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: JSONEncoder().encode(explicitlyChosenLegacyColor)
+  )
+  #expect(roundTrip.accentHex == "#7C6CF2")
+  #expect(roundTrip.chromeAppearance == .glass)
+}
+
+@Test func colorThemeDefaultsMigratesAndPreservesDormantLegacyHexValues() throws {
+  let old = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: Data(
+      ##"{"accentHex":"#7c6cf2","editorTextHex":"#aBc123","editorBackgroundHex":"#010203"}"##.utf8
+    )
+  )
+  #expect(old.colorTheme == .monochrome)
+  #expect(old.accentHex == "#7c6cf2")
+  #expect(old.editorTextHex == "#aBc123")
+  #expect(old.editorBackgroundHex == "#010203")
+
+  var selected = old
+  selected.colorTheme = .notion
+  let roundTrip = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: JSONEncoder().encode(selected)
+  )
+  #expect(roundTrip.colorTheme == .notion)
+  #expect(roundTrip.accentHex == "#7c6cf2")
+  #expect(roundTrip.editorTextHex == "#aBc123")
+  #expect(roundTrip.editorBackgroundHex == "#010203")
 }
 
 @Test func presentationPreferencesHaveSafeDefaultsAndEncode() throws {

@@ -9,13 +9,9 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     PersonalDictionaryMutation
   ) async throws -> PersonalDictionaryPublishedSnapshot
 
-  enum Filter: String, CaseIterable, Identifiable {
-    case all = "All"
-    case enabled = "Enabled"
-    case disabled = "Disabled"
-    case suggestions = "Suggestions"
-
-    var id: Self { self }
+  enum Filter: Equatable {
+    case all
+    case suggestions
   }
 
   struct State: Equatable {
@@ -28,6 +24,8 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     var csvExportData: Data?
     var entryEdit: EntryEdit?
     var entryEditMutationSessionID: UUID?
+    var pendingEntryDeletion: PendingEntryDeletion?
+    var isEntryDeletionInFlight = false
     var suggestionEdit: SuggestionEdit?
     var importPreviewData: Data?
     var importPreview: PersonalDictionaryImportPreview?
@@ -90,6 +88,12 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     }
   }
 
+  struct PendingEntryDeletion: Equatable {
+    let id: UUID
+    let preferredForm: String
+    let expectedRevision: UInt64
+  }
+
   struct ImportPreviewRow: Identifiable, Equatable {
     enum Action: String, Equatable {
       case add = "Add"
@@ -124,6 +128,7 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
   private let store: PersonalDictionaryStore
   private let entryMutation: EntryMutation
   private var mutationTail: Task<Void, Never>?
+  private var claimedEntryDeletion: PendingEntryDeletion?
 
   init(store: PersonalDictionaryStore, entryMutation: EntryMutation? = nil) {
     self.store = store
@@ -138,6 +143,8 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
   var canonicalExportData: Data? { state.canonicalExportData }
   var csvExportData: Data? { state.csvExportData }
   var entryEdit: EntryEdit? { state.entryEdit }
+  var pendingEntryDeletion: PendingEntryDeletion? { state.pendingEntryDeletion }
+  var isEntryDeletionInFlight: Bool { state.isEntryDeletionInFlight }
   var suggestionEdit: SuggestionEdit? { state.suggestionEdit }
   var importPreviewData: Data? { state.importPreviewData }
   var importPreview: PersonalDictionaryImportPreview? { state.importPreview }
@@ -186,16 +193,16 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
     set { state.filter = newValue }
   }
 
+  var suggestionsHeaderActionTitle: String? {
+    if filter == .suggestions { return "Back to words" }
+    guard !suggestions.isEmpty else { return nil }
+    return "Review suggestions (\(suggestions.count))"
+  }
+
   var visibleEntries: [PersonalDictionaryEntry] {
-    guard filter != .suggestions else { return [] }
-    return entries.filter { entry in
-      let matchesFilter = switch filter {
-      case .all: true
-      case .enabled: entry.isEnabled
-      case .disabled: !entry.isEnabled
-      case .suggestions: false
-      }
-      return matchesFilter && matchesQuery([entry.preferredForm] + entry.aliases)
+    guard filter == .all else { return [] }
+    return entries.filter {
+      matchesQuery([$0.preferredForm] + $0.aliases)
     }
   }
 
@@ -286,6 +293,68 @@ final class PersonalDictionarySettingsViewModel: ObservableObject {
         action: .entry
       )
     }
+  }
+
+  func setPriority(_ priority: Bool, id: UUID, expectedRevision: UInt64) async {
+    await enqueue {
+      await self.mutate(
+        expectedRevision: expectedRevision,
+        mutation: .setPriority(priority, id: id),
+        action: .entry
+      )
+    }
+  }
+
+  func requestEntryDeletion(
+    _ entry: PersonalDictionaryEntry,
+    expectedRevision: UInt64
+  ) {
+    guard !isEntryDeletionInFlight, claimedEntryDeletion == nil else { return }
+    state.pendingEntryDeletion = PendingEntryDeletion(
+      id: entry.id,
+      preferredForm: entry.preferredForm,
+      expectedRevision: expectedRevision
+    )
+    clearMessages()
+  }
+
+  func cancelEntryDeletion() {
+    guard !isEntryDeletionInFlight, claimedEntryDeletion == nil else { return }
+    state.pendingEntryDeletion = nil
+  }
+
+  func claimEntryDeletionConfirmation() -> PendingEntryDeletion? {
+    guard let request = state.pendingEntryDeletion,
+      !isEntryDeletionInFlight,
+      claimedEntryDeletion == nil
+    else {
+      return nil
+    }
+    claimedEntryDeletion = request
+    var updatedState = state
+    updatedState.pendingEntryDeletion = nil
+    updatedState.isEntryDeletionInFlight = true
+    state = updatedState
+    return request
+  }
+
+  func confirmEntryDeletion(_ request: PendingEntryDeletion) async {
+    guard isEntryDeletionInFlight, claimedEntryDeletion == request else { return }
+    claimedEntryDeletion = nil
+    await enqueue {
+      await self.applyMutation(
+        expectedRevision: request.expectedRevision,
+        mutation: .delete(id: request.id),
+        action: .entry,
+        operation: self.entryMutation
+      )
+    }
+    state.isEntryDeletionInFlight = false
+  }
+
+  func confirmEntryDeletion() async {
+    guard let request = claimEntryDeletionConfirmation() else { return }
+    await confirmEntryDeletion(request)
   }
 
   func beginAddingEntry() {

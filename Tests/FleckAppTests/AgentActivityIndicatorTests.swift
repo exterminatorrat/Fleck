@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import FleckCore
 import SwiftUI
 import Testing
 
@@ -22,6 +23,32 @@ struct AgentActivityIndicatorTests {
         == "Agent request cancelled"
     )
     #expect(AgentActivityIndicatorState.idle.statusSymbol == nil)
+  }
+
+  @Test
+  func statusColorsUseTheSharedPaletteRoles() {
+    for family in FleckColorTheme.allCases {
+      for mode in AppTheme.allCases {
+        let theme = FleckThemeSnapshot.resolve(
+          colorTheme: family,
+          mode: mode,
+          systemAppearance: .dark,
+          reduceTransparency: false,
+          increasedContrast: false
+        )
+
+        #expect(AgentActivityIndicatorState.working.statusColor(in: theme) == theme.color(.accent))
+        #expect(
+          AgentActivityIndicatorState.recentlyUsed.statusColor(in: theme)
+            == theme.color(.success)
+        )
+        #expect(AgentActivityIndicatorState.failed.statusColor(in: theme) == theme.color(.error))
+        #expect(
+          AgentActivityIndicatorState.cancelled.statusColor(in: theme)
+            == theme.color(.textSecondary)
+        )
+      }
+    }
   }
 
   @Test
@@ -216,14 +243,10 @@ private func requiredIndicatorContentWidth() -> CGFloat {
       switch FleckMark.load(template: true) {
       case .image(let mark):
         Image(nsImage: mark)
-          .resizable()
           .frame(width: 18, height: 18)
       case .missingPackagedResource:
         Text("!")
       }
-      Text("MCP")
-        .font(.caption2.weight(.semibold))
-        .fixedSize(horizontal: true, vertical: false)
       Image(systemName: "checkmark.circle.fill")
         .font(.system(size: 7, weight: .semibold))
         .frame(width: 9, height: 9)

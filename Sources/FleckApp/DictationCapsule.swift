@@ -453,15 +453,6 @@
       )
     }
 
-    func mixed(with other: Self, amount: Double) -> Self {
-      let amount = min(max(amount, 0), 1)
-      return Self(
-        red: red + (other.red - red) * amount,
-        green: green + (other.green - green) * amount,
-        blue: blue + (other.blue - blue) * amount
-      )
-    }
-
     var luminance: Double {
       func linear(_ value: Double) -> Double {
         value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
@@ -471,49 +462,43 @@
   }
 
   struct FleckRailColors: Equatable {
-    static let defaultAccentHex = "#7C6CF2"
-    static let defaultLiveHex = "#A79DFF"
-    static let shellHex = "#17151C"
     static let shellOpacity = 0.96
-    static let primaryTextHex = "#F7F5FA"
-    static let secondaryTextHex = "#B6B1BF"
-    static let successHex = "#5DD68A"
-    static let warningHex = "#FFB24A"
-    static let failureHex = "#FF6B70"
 
     let accentHex: String
     let shell: FleckRailRGB
     let displayCore: FleckRailRGB
     let displayLive: FleckRailRGB
+    let primaryText: FleckRailRGB
+    let secondaryText: FleckRailRGB
+    let success: FleckRailRGB
+    let warning: FleckRailRGB
+    let failure: FleckRailRGB
+    let borderColor: Color
+    let reduceTransparency: Bool
+    let increasedContrast: Bool
 
-    init(accentHex: String = Self.defaultAccentHex) {
-      self.accentHex = accentHex
-      self.shell = FleckRailRGB(hex: Self.shellHex)!
-      let base = FleckRailRGB(hex: accentHex) ?? FleckRailRGB(hex: Self.defaultAccentHex)!
-      if accentHex.uppercased() == Self.defaultAccentHex {
-        self.displayCore = base
-        self.displayLive = FleckRailRGB(hex: Self.defaultLiveHex)!
-      } else {
-        let core = Self.contrastSafe(base, against: shell, minimum: 3)
-        self.displayCore = core
-        self.displayLive = Self.contrastSafe(
-          core.mixed(with: FleckRailRGB(red: 1, green: 1, blue: 1), amount: 0.22),
-          against: shell,
-          minimum: 3
-        )
-      }
+    var effectiveShellOpacity: Double {
+      reduceTransparency ? 1 : Self.shellOpacity
+    }
+
+    init(theme: FleckThemeSnapshot = .initial) {
+      let palette = theme.palette
+      accentHex = palette[.accent]
+      shell = FleckRailRGB(hex: palette[.capsuleSurface])!
+      displayCore = FleckRailRGB(hex: palette[.accent])!
+      displayLive = FleckRailRGB(hex: palette[.focusRing])!
+      primaryText = FleckRailRGB(hex: palette[.capsuleText])!
+      secondaryText = FleckRailRGB(hex: palette[.caption])!
+      success = FleckRailRGB(hex: palette[.success])!
+      warning = FleckRailRGB(hex: palette[.warning])!
+      failure = FleckRailRGB(hex: palette[.error])!
+      borderColor = theme.color(.capsuleBorder)
+      reduceTransparency = theme.reduceTransparency
+      increasedContrast = theme.increasedContrast
     }
 
     var displayCoreHex: String { displayCore.hex }
     var displayLiveHex: String { displayLive.hex }
-    var shellHex: String { Self.shellHex }
-    var shellOpacity: Double { Self.shellOpacity }
-    var primaryText: FleckRailRGB { FleckRailRGB(hex: Self.primaryTextHex)! }
-    var secondaryText: FleckRailRGB { FleckRailRGB(hex: Self.secondaryTextHex)! }
-    var success: FleckRailRGB { FleckRailRGB(hex: Self.successHex)! }
-    var warning: FleckRailRGB { FleckRailRGB(hex: Self.warningHex)! }
-    var failure: FleckRailRGB { FleckRailRGB(hex: Self.failureHex)! }
-
     var shellColor: Color { Color(red: shell.red, green: shell.green, blue: shell.blue) }
     var coreColor: Color {
       Color(red: displayCore.red, green: displayCore.green, blue: displayCore.blue)
@@ -532,26 +517,6 @@
       let lighter = max(foreground.luminance, background.luminance)
       let darker = min(foreground.luminance, background.luminance)
       return (lighter + 0.05) / (darker + 0.05)
-    }
-
-    private static func contrastSafe(
-      _ color: FleckRailRGB,
-      against background: FleckRailRGB,
-      minimum: Double
-    ) -> FleckRailRGB {
-      guard contrastRatio(color, against: background) < minimum else { return color }
-      var low = 0.0
-      var high = 1.0
-      for _ in 0..<24 {
-        let amount = (low + high) / 2
-        let candidate = color.mixed(with: FleckRailRGB(red: 1, green: 1, blue: 1), amount: amount)
-        if contrastRatio(candidate, against: background) >= minimum {
-          high = amount
-        } else {
-          low = amount
-        }
-      }
-      return color.mixed(with: FleckRailRGB(red: 1, green: 1, blue: 1), amount: high)
     }
   }
 
@@ -1298,8 +1263,8 @@
       self.dock = dock
     }
 
-    func updateAccentHex(_ accentHex: String) {
-      colors = FleckRailColors(accentHex: accentHex)
+    func updateTheme(_ theme: FleckThemeSnapshot) {
+      colors = FleckRailColors(theme: theme)
     }
 
     func updateIdleAccessibilityLabel(_ label: String) {
@@ -1504,7 +1469,7 @@
     init(
       panel: DictationCapsulePanel = DictationCapsulePanel(),
       waveformModel: DictationWaveformModel = DictationWaveformModel(),
-      accentHex: String = FleckRailColors.defaultAccentHex,
+      theme: FleckThemeSnapshot = .initial,
       markLoader: @escaping @MainActor () -> NSImage? = {
         guard case .image(let image) = FleckMark.load(template: true) else {
           return nil
@@ -1518,7 +1483,7 @@
       self.waveformModel = waveformModel
       let persistentPanel = panel
       self.presentationModel = DictationCapsulePresentationModel(
-        colors: FleckRailColors(accentHex: accentHex),
+        colors: FleckRailColors(theme: theme),
         announcementHandler: { [weak persistentPanel] message in
           guard let persistentPanel else { return }
           announcementPoster(persistentPanel, message)
@@ -1689,8 +1654,8 @@
       )
     }
 
-    func updateAccentHex(_ accentHex: String) {
-      presentationModel.updateAccentHex(accentHex)
+    func updateTheme(_ theme: FleckThemeSnapshot) {
+      presentationModel.updateTheme(theme)
     }
 
     func updateIdleAccessibilityLabel(_ label: String) {
@@ -2052,8 +2017,6 @@
 
   private struct DictationCapsuleView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     @ObservedObject var model: DictationCapsulePresentationModel
     @ObservedObject var waveformModel: DictationWaveformModel
@@ -2069,7 +2032,7 @@
     }
 
     private var increaseContrast: Bool {
-      FleckRailAccessibility.usesIncreasedContrast(colorSchemeContrast)
+      model.colors.increasedContrast
     }
 
     var body: some View {
@@ -2114,20 +2077,17 @@
             cornerRadius: presentation.visualMode == .idle || presentation.visualMode == .arming ? 10 : 12,
             style: .continuous
           )
-          .fill(model.colors.shellColor.opacity(reduceTransparency ? 1 : FleckRailColors.shellOpacity))
+          .fill(model.colors.shellColor.opacity(model.colors.effectiveShellOpacity))
           .overlay {
             RoundedRectangle(
               cornerRadius: presentation.visualMode == .idle || presentation.visualMode == .arming ? 10 : 12,
               style: .continuous
             )
-            .stroke(
-              Color.white.opacity(increaseContrast ? 0.35 : 0.0),
-              lineWidth: increaseContrast ? 1 : 0
-            )
+            .stroke(model.colors.borderColor, lineWidth: increaseContrast ? 1.5 : 0.8)
           }
           .overlay(alignment: .top) {
             Rectangle()
-              .fill(Color.white.opacity(0.10))
+              .fill(model.colors.borderColor.opacity(0.22))
               .frame(height: 1)
               .padding(.horizontal, 10)
           }

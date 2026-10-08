@@ -152,6 +152,7 @@
 
   struct OnboardingFlowView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.fleckThemeSnapshot) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @ObservedObject var coordinator: OnboardingCoordinator
@@ -229,7 +230,7 @@
       VStack(alignment: .leading, spacing: 24) {
         Image(systemName: "note.text")
           .font(.system(size: 36, weight: .medium))
-          .foregroundStyle(.blue)
+          .foregroundStyle(theme.color(.accent))
         Text(OnboardingWelcomePresentation.title)
           .font(.system(size: 34, weight: .semibold))
           .accessibilityHeading(.h1)
@@ -314,7 +315,7 @@
         if coordinator.dictationDemoSucceeded {
           Label("Dictation added to First Note", systemImage: "checkmark.circle.fill")
             .font(.callout.weight(.medium))
-            .foregroundStyle(.green)
+            .foregroundStyle(theme.color(.success))
         }
       }
       .padding(layout.contentPadding)
@@ -387,7 +388,9 @@
               row.title,
               systemImage: row.available ? "checkmark.circle.fill" : "info.circle"
             )
-            .foregroundStyle(row.available ? Color.green : Color.secondary)
+            .foregroundStyle(
+              row.available ? theme.color(.success) : theme.color(.textSecondary)
+            )
             Spacer()
             Text(row.detail)
               .foregroundStyle(.secondary)
@@ -416,7 +419,7 @@
       return VStack(alignment: .leading, spacing: 24) {
         Image(systemName: "checkmark.seal")
           .font(.system(size: 34))
-          .foregroundStyle(.blue)
+          .foregroundStyle(theme.color(.accent))
         Text("Get Fleck")
           .font(.system(size: 32, weight: .semibold))
           .accessibilityHeading(.h1)
@@ -479,6 +482,7 @@
   }
 
   private struct OnboardingRail: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     let presentation: OnboardingRailPresentation
     let layout: OnboardingLayoutPresentation
 
@@ -493,27 +497,39 @@
             VStack(spacing: 4) {
               ZStack {
                 Circle()
-                  .fill(item.state == .current ? Color.blue : Color.white.opacity(0.08))
+                  .fill(item.state == .current ? theme.color(.accent) : theme.color(.raised))
                   .frame(width: 26, height: 26)
                 if item.state == .completed {
                   Image(systemName: "checkmark")
                     .font(.caption.bold())
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(theme.color(.success))
                 } else {
                   Text("\(index + 1)")
                     .font(.caption.bold())
-                    .foregroundStyle(item.state == .current ? .white : .secondary)
+                    .foregroundStyle(
+                      item.state == .current
+                        ? theme.color(.accentText)
+                        : theme.color(.textSecondary)
+                    )
                 }
               }
               if index < presentation.items.count - 1 {
                 Rectangle()
-                  .fill(item.state == .completed ? Color.blue.opacity(0.7) : .white.opacity(0.08))
+                  .fill(
+                    item.state == .completed
+                      ? theme.color(.success).opacity(0.7)
+                      : theme.color(.border).opacity(0.32)
+                  )
                   .frame(width: 1, height: 34)
               }
             }
             Text(item.title)
               .font(.callout.weight(item.state == .current ? .semibold : .regular))
-              .foregroundStyle(item.state == .upcoming ? .secondary : .primary)
+              .foregroundStyle(
+                item.state == .upcoming
+                  ? theme.color(.textSecondary)
+                  : theme.color(.textPrimary)
+              )
               .padding(.top, 4)
             Spacer()
           }
@@ -528,11 +544,12 @@
       .padding(layout.tier == .regular ? 28 : 20)
       .frame(width: layout.railWidth)
       .frame(maxHeight: .infinity, alignment: .topLeading)
-      .background(.black.opacity(0.16))
+      .background(theme.color(.sidebar))
     }
   }
 
   private struct OnboardingFooter: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     @ObservedObject var coordinator: OnboardingCoordinator
     let layout: OnboardingLayoutPresentation
 
@@ -546,7 +563,11 @@
         HStack(spacing: 6) {
           ForEach(OnboardingStep.allCases, id: \.self) { step in
             Circle()
-              .fill(step == coordinator.visibleStep ? Color.blue : Color.secondary.opacity(0.3))
+              .fill(
+                step == coordinator.visibleStep
+                  ? theme.color(.accent)
+                  : theme.color(.textSecondary).opacity(0.3)
+              )
               .frame(width: 6, height: 6)
           }
         }

@@ -352,22 +352,27 @@ struct GemmaCleanupAppCompositionTests {
     let fixture = try await CleanupAvailabilityRuntimeFixture()
     defer { fixture.removeTemporaryFiles() }
 
-    #expect(!fixture.runtime.availability.cleanupAvailable)
-    #expect(fixture.runtime.availability.routing == .exactTitle)
+    do {
+      #expect(!fixture.runtime.availability.cleanupAvailable)
+      #expect(fixture.runtime.availability.routing == .exactTitle)
 
-    fixture.cleanupReady.value = true
-    fixture.installer.publish(phase: .installed)
-    await fixture.drainPresentationUpdates()
-    #expect(fixture.runtime.availability.cleanupAvailable)
-    #expect(fixture.runtime.availability.routing == .exactTitle)
+      fixture.cleanupReady.value = true
+      fixture.installer.publish(phase: .installed)
+      #expect(try await fixture.waitForRuntimeAvailability(cleanupAvailable: true))
+      #expect(fixture.runtime.availability.cleanupAvailable)
+      #expect(fixture.runtime.availability.routing == .exactTitle)
 
-    fixture.cleanupReady.value = false
-    fixture.installer.publish(phase: .repairRequired(message: "Verification failed"))
-    await fixture.drainPresentationUpdates()
-    #expect(!fixture.runtime.availability.cleanupAvailable)
-    #expect(fixture.runtime.availability.routing == .exactTitle)
+      fixture.cleanupReady.value = false
+      fixture.installer.publish(phase: .repairRequired(message: "Verification failed"))
+      #expect(try await fixture.waitForRuntimeAvailability(cleanupAvailable: false))
+      #expect(!fixture.runtime.availability.cleanupAvailable)
+      #expect(fixture.runtime.availability.routing == .exactTitle)
 
-    await fixture.runtime.shutdown()
+      await fixture.runtime.shutdown()
+    } catch {
+      await fixture.runtime.shutdown()
+      throw error
+    }
   }
 
   @Test
@@ -684,9 +689,23 @@ private final class CleanupAvailabilityRuntimeFixture {
     await runtime.awaitStartupAssessment()
   }
 
-  func drainPresentationUpdates() async {
-    for _ in 0..<100 {
-      await Task.yield()
+  func waitForRuntimeAvailability(cleanupAvailable expectedReady: Bool) async throws -> Bool {
+    let expectedPhase = installer.snapshot.phase
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(2))
+    let cleanupSettings = runtime.cleanupAdmittedModelSettingsViewModel
+    while true {
+      try Task.checkCancellation()
+      if cleanupSettings.presentation.phase == expectedPhase,
+         runtime.availability.cleanupAvailable == expectedReady {
+        return true
+      }
+      let now = clock.now
+      guard now < deadline else {
+        try Task.checkCancellation()
+        return false
+      }
+      try await clock.sleep(until: min(now.advanced(by: .milliseconds(10)), deadline))
     }
   }
 

@@ -92,6 +92,25 @@
   }
 
   @MainActor
+  private func canonicalFleckMarkImage() -> NSImage? {
+    let sourceRoot = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let markDirectory = sourceRoot.appendingPathComponent("Assets", isDirectory: true)
+    guard
+      case .image(let image) = FleckMark.load(
+        template: true,
+        resourceURL: markDirectory,
+        isPackagedApp: true
+      )
+    else {
+      return nil
+    }
+    return image
+  }
+
+  @MainActor
   private func visualDescendants(of view: NSView) -> [NSView] {
     view.subviews + view.subviews.flatMap(visualDescendants)
   }
@@ -185,8 +204,9 @@
   }
 
   @Test @MainActor func DictationCapsuleSingleRowActiveLayoutKeepsCenteredGeometry() throws {
+    let mark = try #require(canonicalFleckMarkImage())
     let panel = DictationCapsulePanel()
-    let controller = DictationCapsuleController(panel: panel)
+    let controller = DictationCapsuleController(panel: panel, markLoader: { mark })
     defer { controller.dismiss() }
     let listeningContext = DictationCapsuleContext(
       status: .listening,
@@ -557,8 +577,9 @@
         withIntermediateDirectories: true
       )
     }
+    let mark = try #require(canonicalFleckMarkImage())
     let panel = DictationCapsulePanel()
-    let controller = DictationCapsuleController(panel: panel)
+    let controller = DictationCapsuleController(panel: panel, markLoader: { mark })
     defer { controller.dismiss() }
     let initialScreen = try #require(panel.screen ?? NSScreen.main ?? NSScreen.screens.first)
     var observations: [[String: Any]] = []

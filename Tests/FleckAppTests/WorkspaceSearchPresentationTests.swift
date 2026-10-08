@@ -76,6 +76,15 @@ func WorkspaceSearchHighlightedTextMatchesTitleAndSnippetRuns() {
   #expect(String(title.characters) == titleSource)
   #expect(highlightedSearchSubstrings(title, accent: accent) == ["Café", "cafe", "CAFE"])
 
+  let selectedTitle = workspaceSearchHighlightedAttributedString(
+    titleSource,
+    query: "cafe",
+    accent: accent,
+    underlineMatches: true
+  )
+  #expect(String(selectedTitle.characters) == titleSource)
+  #expect(underlinedSearchSubstrings(selectedTitle) == ["Café", "cafe", "CAFE"])
+
   let snippetSource = "prefix cafe, Café, CAFE suffix"
   let snippet = workspaceSearchHighlightedAttributedString(
     snippetSource,
@@ -84,6 +93,15 @@ func WorkspaceSearchHighlightedTextMatchesTitleAndSnippetRuns() {
   )
   #expect(String(snippet.characters) == snippetSource)
   #expect(highlightedSearchSubstrings(snippet, accent: accent) == ["cafe", "Café", "CAFE"])
+
+  let selectedSnippet = workspaceSearchHighlightedAttributedString(
+    snippetSource,
+    query: "cafe",
+    accent: accent,
+    underlineMatches: true
+  )
+  #expect(String(selectedSnippet.characters) == snippetSource)
+  #expect(underlinedSearchSubstrings(selectedSnippet) == ["cafe", "Café", "CAFE"])
 
   let unicodeSource = "📝 Café cafe"
   let unicode = workspaceSearchHighlightedAttributedString(
@@ -346,6 +364,13 @@ private func highlightedSearchSubstrings(
 ) -> [String] {
   value.runs.compactMap { run in
     guard run.foregroundColor == accent else { return nil }
+    return String(value[run.range].characters)
+  }
+}
+
+private func underlinedSearchSubstrings(_ value: AttributedString) -> [String] {
+  value.runs.compactMap { run in
+    guard run.underlineStyle == .single else { return nil }
     return String(value[run.range].characters)
   }
 }

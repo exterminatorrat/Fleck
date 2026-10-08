@@ -5,6 +5,7 @@
   struct AgentNoteAccessEditorView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.fleckThemeSnapshot) private var theme
     let note: Note
     let onDismiss: (() -> Void)?
     @State private var accessByProfileID: [UUID: AgentNoteAccessLevel] = [:]
@@ -63,7 +64,7 @@
         if let errorMessage {
           Text(errorMessage)
             .font(.caption)
-            .foregroundStyle(.orange)
+            .foregroundStyle(theme.color(.error))
         }
 
         HStack {
