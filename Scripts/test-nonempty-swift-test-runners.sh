@@ -2360,12 +2360,17 @@ aggregate = job_block(current_workflow, "macos")[2]
 for job_id, block, required_values in (
     (
         "macos-build", build,
-        ("name: macOS ordinary graph and package", "runs-on: macos-26", "timeout-minutes: 90"),
+        (
+            "name: macOS ordinary graph and package", "needs: detect-changes",
+            "outputs.route == 'full'", "runs-on: macos-26", "timeout-minutes: 90",
+            "python3 -B -m unittest discover -s Tests/Scripts -p test_ci_docs_path.py",
+        ),
     ),
     (
         "macos-validation", validation,
         (
-            "needs: macos-build", "runs-on: macos-26", "timeout-minutes: 90",
+            "needs: [detect-changes, macos-build]", "outputs.route == 'full'",
+            "runs-on: macos-26", "timeout-minutes: 90",
             'FLECK_NATIVE_CAPTURE_QA: "0"', "unset FLECK_ENHANCED_CANDIDATE FLECK_APP",
             "bash Tests/Scripts/validate-macos-no-launch.test.sh", "Scripts/validate-macos.sh",
             "Strict native screenshot/pixel capture: NOT RUN",
@@ -2375,7 +2380,7 @@ for job_id, block, required_values in (
         "macos", aggregate,
         (
             "name: macOS build and tests", "if: ${{ always() }}",
-            "needs: [macos-build, macos-validation, macos-enhanced]",
+            "needs: [detect-changes, docs-validation, macos-build, macos-validation, macos-enhanced]",
             "runs-on: ubuntu-latest",
         ),
     ),
@@ -2399,13 +2404,18 @@ if current_workflow.count("name: macOS build and tests\n") != 1:
 for block in (build, validation, aggregate):
     if re.search(r"uses: .*actions/(?:cache|upload-artifact|download-artifact)", block):
         raise SystemExit("CI ordinary/validation split must not transfer caches or artifacts")
-gate = step_block(aggregate, "Require all current-source coverage gates")[2]
+gate = step_block(aggregate, "Require docs-only or full current-source coverage")[2]
 run_body = re.search(r"^        run: \|\n(.*)", gate, re.M | re.S)
 if run_body is None:
     raise SystemExit("CI aggregate shell body is missing")
 gate_script = "\n".join(line[10:] for line in run_body.group(1).splitlines() if line)
 gate_environment = {
     "PATH": "/usr/bin:/bin", "GITHUB_SHA": "fixture-commit",
+    "DETECTOR_RESULT": "success", "ROUTE": "full",
+    "DETECTED_COMMIT": "fixture-commit", "DETECTED_TREE": "fixture-tree",
+    "DETECTED_VERSION": "1.0.0-beta.1", "DETECTED_WORKFLOW_SHA256": "a" * 64,
+    "DOCS_RESULT": "skipped", "DOCS_COMMIT": "", "DOCS_TREE": "",
+    "DOCS_VERSION": "", "DOCS_WORKFLOW_SHA256": "",
     "INITIAL_COMMIT": "fixture-commit", "VALIDATION_COMMIT": "fixture-commit",
     "INITIAL_TREE": "fixture-tree", "VALIDATION_TREE": "fixture-tree",
     "INITIAL_VERSION": "1.0.0-beta.1", "VALIDATION_VERSION": "1.0.0-beta.1",
@@ -2467,7 +2477,7 @@ for name in (ordinary_name, candidate_name):
         + normalized_workflow[end:]
     )
 if hashlib.sha256(normalized_workflow.encode()).hexdigest() != (
-    "5672dd947b2b6ed09b838317b1d5113a77637ff05b452d2d0b7da8d550119227"
+    "c0526d0f47f739927ec144247dec9190bb1f67445ee6c78491f3bdcb4f8404ca"
 ):
     raise SystemExit("CI changed outside the declared split and native-capture boundary fixture")
 
