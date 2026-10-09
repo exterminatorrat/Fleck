@@ -449,6 +449,9 @@
     private var lastPointer: CGPoint?
     private var presentationOwnerID: UUID?
     private var relinquishPresentation: (@MainActor () -> Void)?
+    private weak var nativeMouseDownDispositionObserver: (
+      any MenuPanelNativeMouseDownDispositionObserver
+    )?
     private(set) var currentFixedSide: MenuPanelFixedSide?
 
     var initialFrame: CGRect? { snapshot?.initialFrame }
@@ -460,7 +463,13 @@
     func begin(
       snapshot: MenuPanelResizeSnapshot,
       handle: MenuPanelResizeHandle,
-      ownerID: UUID? = nil
+      ownerID: UUID? = nil,
+      nativeMouseDownDispositionObserver: (
+        any MenuPanelNativeMouseDownDispositionObserver
+      )? = nil,
+      nativeMouseDownTicket: MenuPanelNativeMouseDownTicket? = nil,
+      nativeMouseDownGeneration: Int? = nil,
+      nativeMouseDownQueuedRevision: Int? = nil
     ) -> Bool {
       guard presentationOwnerID == ownerID, !isTracking,
         !snapshot.initialFrame.isEmpty,
@@ -478,7 +487,14 @@
           visibleFrame: snapshot.visibleFrame,
           statusLabelFrame: snapshot.statusLabelFrame
         )
-      else { return false }
+      else {
+        if let nativeMouseDownDispositionObserver, let nativeMouseDownTicket {
+          nativeMouseDownDispositionObserver.record(
+            .rejected(ticket: nativeMouseDownTicket, caller: .controllerBegin)
+          )
+        }
+        return false
+      }
       self.snapshot = snapshot
       self.handle = handle
       proposal = nil
@@ -487,7 +503,46 @@
       completedPreferenceSize = nil
       setDesiredContentSize(snapshot.initialContentSize, publication: .immediate)
       isTracking = true
+      self.nativeMouseDownDispositionObserver = nil
+      if let nativeMouseDownDispositionObserver, let nativeMouseDownTicket {
+        guard let ownerID, let generation = nativeMouseDownGeneration,
+          nativeMouseDownQueuedRevision == nil
+        else {
+          nativeMouseDownDispositionObserver.record(.incomplete(ticket: nativeMouseDownTicket))
+          return true
+        }
+        self.nativeMouseDownDispositionObserver = nativeMouseDownDispositionObserver
+        nativeMouseDownDispositionObserver.record(
+          .admitted(
+            ticket: nativeMouseDownTicket,
+            ownerID: ownerID,
+            generation: generation,
+            gesture: handle,
+            queuedRevision: nativeMouseDownQueuedRevision
+          )
+        )
+      }
       return true
+    }
+
+    private func recordNativeMouseDownClear(
+      ownerID: UUID?,
+      generation: Int?,
+      queuedRevision: Int?,
+      caller: MenuPanelNativeMouseDownCaller
+    ) {
+      guard let observer = nativeMouseDownDispositionObserver else { return }
+      guard observer.record(
+        .cleared(
+          inputTicket: nil,
+          ownerID: ownerID,
+          generation: generation,
+          gesture: handle,
+          queuedRevision: queuedRevision,
+          caller: caller
+        )
+      ) else { return }
+      nativeMouseDownDispositionObserver = nil
     }
 
     @discardableResult
@@ -554,10 +609,13 @@
       visibleFrame: CGRect?,
       currentFrame: CGRect,
       ownerID: UUID? = nil,
-      canonicalize: (MenuPanelResizeProposal) -> MenuPanelResizeProposal? = { $0 }
+      canonicalize: (MenuPanelResizeProposal) -> MenuPanelResizeProposal? = { $0 },
+      nativeMouseDownClearGeneration: Int? = nil,
+      nativeMouseDownClearQueuedRevision: Int? = nil
     ) -> MenuPanelResizeProposal? {
-      guard presentationOwnerID == ownerID,
-        isTracking, let snapshot, let handle, let proposal, let lastPointer,
+      let currentOwnerID = presentationOwnerID
+      guard currentOwnerID == ownerID else { return nil }
+      guard isTracking, let snapshot, let handle, let proposal, let lastPointer,
         let currentFixedSide,
         statusLabelFrame == snapshot.statusLabelFrame,
         visibleFrame == snapshot.visibleFrame,
@@ -570,6 +628,12 @@
         ).flatMap(canonicalize)
       else { return nil }
       isTracking = false
+      recordNativeMouseDownClear(
+        ownerID: currentOwnerID,
+        generation: nativeMouseDownClearGeneration,
+        queuedRevision: nativeMouseDownClearQueuedRevision,
+        caller: .controllerFinish
+      )
       self.handle = nil
       self.proposal = finalProposal
       self.currentFixedSide = finalProposal.fixedSide
@@ -586,11 +650,20 @@
     @discardableResult
     func cancelSnapshot(
       ownerID: UUID? = nil,
-      publication: MenuPanelResizePublicationTiming = .immediate
+      publication: MenuPanelResizePublicationTiming = .immediate,
+      nativeMouseDownClearGeneration: Int? = nil,
+      nativeMouseDownClearQueuedRevision: Int? = nil
     ) -> MenuPanelResizeSnapshot? {
-      guard presentationOwnerID == ownerID, isTracking else { return nil }
+      let currentOwnerID = presentationOwnerID
+      guard currentOwnerID == ownerID, isTracking else { return nil }
       let snapshot = snapshot
       isTracking = false
+      recordNativeMouseDownClear(
+        ownerID: currentOwnerID,
+        generation: nativeMouseDownClearGeneration,
+        queuedRevision: nativeMouseDownClearQueuedRevision,
+        caller: .controllerCancel
+      )
       self.snapshot = nil
       handle = nil
       proposal = nil
@@ -613,16 +686,24 @@
     func claimPresentation(
       ownerID: UUID,
       onRelinquish: (@MainActor () -> Void)? = nil,
-      publication: MenuPanelResizePublicationTiming = .immediate
+      publication: MenuPanelResizePublicationTiming = .immediate,
+      nativeMouseDownClearGeneration: Int? = nil,
+      nativeMouseDownClearQueuedRevision: Int? = nil
     ) -> Bool {
-      if presentationOwnerID == ownerID {
+      let currentOwnerID = presentationOwnerID
+      if currentOwnerID == ownerID {
         if let onRelinquish { relinquishPresentation = onRelinquish }
         return true
       }
       let previousRelinquish = relinquishPresentation
       relinquishPresentation = nil
       previousRelinquish?()
-      clearInteractionState(publication: publication)
+      clearInteractionState(
+        publication: publication,
+        ownerID: currentOwnerID,
+        generation: nativeMouseDownClearGeneration,
+        queuedRevision: nativeMouseDownClearQueuedRevision
+      )
       presentationOwnerID = ownerID
       relinquishPresentation = onRelinquish
       return true
@@ -641,13 +722,21 @@
     @discardableResult
     func releasePresentation(
       ownerID: UUID,
-      publication: MenuPanelResizePublicationTiming = .immediate
+      publication: MenuPanelResizePublicationTiming = .immediate,
+      nativeMouseDownClearGeneration: Int? = nil,
+      nativeMouseDownClearQueuedRevision: Int? = nil
     ) -> Bool {
-      guard presentationOwnerID == ownerID else { return false }
+      let currentOwnerID = presentationOwnerID
+      guard currentOwnerID == ownerID else { return false }
       let relinquish = relinquishPresentation
       relinquishPresentation = nil
       relinquish?()
-      clearInteractionState(publication: publication)
+      clearInteractionState(
+        publication: publication,
+        ownerID: currentOwnerID,
+        generation: nativeMouseDownClearGeneration,
+        queuedRevision: nativeMouseDownClearQueuedRevision
+      )
       presentationOwnerID = nil
       return true
     }
@@ -715,8 +804,19 @@
       return true
     }
 
-    private func clearInteractionState(publication: MenuPanelResizePublicationTiming) {
+    private func clearInteractionState(
+      publication: MenuPanelResizePublicationTiming,
+      ownerID: UUID?,
+      generation: Int?,
+      queuedRevision: Int?
+    ) {
       isTracking = false
+      recordNativeMouseDownClear(
+        ownerID: ownerID,
+        generation: generation,
+        queuedRevision: queuedRevision,
+        caller: .interactionClear
+      )
       snapshot = nil
       handle = nil
       proposal = nil
@@ -930,10 +1030,64 @@
       snapshot: MenuPanelResizeSnapshot,
       handle: MenuPanelResizeHandle,
       ownerID: UUID,
-      statusButtonSource: MenuPanelStatusButtonSourceIdentity
+      statusButtonSource: MenuPanelStatusButtonSourceIdentity,
+      nativeMouseDownGeneration: Int?,
+      nativeMouseDownQueuedRevision: Int?
     )
     case reconciling
     case blocked
+  }
+
+  enum MenuPanelNativeMouseDownCaller: String {
+    case monitorOwnerWindow
+    case monitorVisibility
+    case readinessLiveResizeEligibility
+    case readinessQueuedRevision
+    case readinessGeometry
+    case controllerBegin
+    case controllerFinish
+    case controllerCancel
+    case interactionClear
+  }
+
+  struct MenuPanelNativeMouseDownTicket: Equatable {
+    let eventNumber: Int
+    let eventIdentity: ObjectIdentifier
+    let expectedHost: ObjectIdentifier
+  }
+
+  enum MenuPanelNativeMouseDownObservation {
+    case received(ticket: MenuPanelNativeMouseDownTicket)
+    case rejected(
+      ticket: MenuPanelNativeMouseDownTicket,
+      caller: MenuPanelNativeMouseDownCaller
+    )
+    case admitted(
+      ticket: MenuPanelNativeMouseDownTicket,
+      ownerID: UUID,
+      generation: Int,
+      gesture: MenuPanelResizeHandle,
+      queuedRevision: Int?
+    )
+    case cleared(
+      inputTicket: Int?,
+      ownerID: UUID?,
+      generation: Int?,
+      gesture: MenuPanelResizeHandle?,
+      queuedRevision: Int?,
+      caller: MenuPanelNativeMouseDownCaller
+    )
+    case incomplete(ticket: MenuPanelNativeMouseDownTicket)
+  }
+
+  @MainActor
+  protocol MenuPanelNativeMouseDownDispositionObserver: AnyObject {
+    func ticket(
+      for event: ObjectIdentifier,
+      host: ObjectIdentifier
+    ) -> MenuPanelNativeMouseDownTicket?
+    @discardableResult
+    func record(_ observation: MenuPanelNativeMouseDownObservation) -> Bool
   }
 
   @MainActor
@@ -942,6 +1096,9 @@
 
     private let controller: MenuPanelResizeController
     private let fallbackVisibleFrameProvider: FallbackVisibleFrameProvider
+    private weak var nativeMouseDownDispositionObserver: (
+      any MenuPanelNativeMouseDownDispositionObserver
+    )?
     private var attachmentID: UUID?
     private weak var geometryStore: MenuPanelGeometryStore?
     private weak var installedWindow: NSWindow?
@@ -1010,7 +1167,10 @@
       geometryStore: MenuPanelGeometryStore?,
       preferredSize: CGSize,
       canResize: Bool,
-      onCommit: @escaping (CGSize) -> Void
+      onCommit: @escaping (CGSize) -> Void,
+      nativeMouseDownDispositionObserver: (
+        any MenuPanelNativeMouseDownDispositionObserver
+      )? = nil
     ) {
       let geometryStoreChanged = self.geometryStore !== geometryStore
       let preferredSizeChanged = hasPreferredSize && self.preferredSize != preferredSize
@@ -1019,6 +1179,7 @@
       hasPreferredSize = true
       self.canResize = canResize
       self.onCommit = onCommit
+      self.nativeMouseDownDispositionObserver = nativeMouseDownDispositionObserver
       if preferredSizeChanged {
         pendingExternalPreference = true
       }
@@ -1077,9 +1238,14 @@
       guard let oldAttachmentID else { return }
       if wasPresentationOwner {
         DispatchQueue.main.async { [self, controller] in
+          let clearQualification = nativeMouseDownDispositionObserver.map { _ in
+            (generation: installationRevision, queuedRevision: queuedRevision)
+          }
           if controller.releasePresentation(
             ownerID: oldAttachmentID,
-            publication: .deferred
+            publication: .deferred,
+            nativeMouseDownClearGeneration: clearQualification?.generation,
+            nativeMouseDownClearQueuedRevision: clearQualification?.queuedRevision
           ) {
             _ = controller.publishPresentationContentSize()
           }
@@ -1176,10 +1342,19 @@
       geometryStore: MenuPanelGeometryStore?,
       fallbackVisibleFrameProvider: @escaping FallbackVisibleFrameProvider
     ) -> @MainActor () -> Void {
-      return { [weak controller, weak window, weak geometryStore] in
+      let metadataObserver = nativeMouseDownDispositionObserver
+      return { [weak self, weak controller, weak window, weak geometryStore, weak metadataObserver] in
+        let clearQualification: (generation: Int, queuedRevision: Int?)?
+        if metadataObserver != nil, let self {
+          clearQualification = (self.installationRevision, self.queuedRevision)
+        } else {
+          clearQualification = nil
+        }
         let snapshot = controller?.cancelSnapshot(
           ownerID: ownerID,
-          publication: .deferred
+          publication: .deferred,
+          nativeMouseDownClearGeneration: clearQualification?.generation,
+          nativeMouseDownClearQueuedRevision: clearQualification?.queuedRevision
         )
         if let snapshot, let window {
           Self.restore(
@@ -1311,17 +1486,52 @@
       cursor = nil
     }
 
+    private func rejectNativeMouseDownReadiness(
+      caller: MenuPanelNativeMouseDownCaller,
+      observer: (any MenuPanelNativeMouseDownDispositionObserver)?,
+      ticket: MenuPanelNativeMouseDownTicket?
+    ) -> MenuPanelResizeBeginReadiness {
+      if let observer, let ticket {
+        observer.record(.rejected(ticket: ticket, caller: caller))
+      }
+      return .blocked
+    }
+
+    private func recordNativeMouseDownRejection(
+      caller: MenuPanelNativeMouseDownCaller,
+      observer: (any MenuPanelNativeMouseDownDispositionObserver)?,
+      ticket: MenuPanelNativeMouseDownTicket?
+    ) {
+      guard let observer, let ticket else { return }
+      observer.record(.rejected(ticket: ticket, caller: caller))
+    }
+
     private func handle(_ event: NSEvent) -> NSEvent? {
+      let observer = nativeMouseDownDispositionObserver
+      let ticket = observer?.ticket(for: ObjectIdentifier(event), host: ObjectIdentifier(self))
+      if let observer, let ticket { observer.record(.received(ticket: ticket)) }
       guard let attachmentID, controller.isPresentationOwner(attachmentID),
         let window = installedWindow, event.window === window
-      else { return event }
+      else {
+        recordNativeMouseDownRejection(
+          caller: .monitorOwnerWindow,
+          observer: observer,
+          ticket: ticket
+        )
+        return event
+      }
       guard window.isVisible else {
+        recordNativeMouseDownRejection(
+          caller: .monitorVisibility,
+          observer: observer,
+          ticket: ticket
+        )
         resetCursor()
         return event
       }
       switch event.type {
       case .leftMouseDown:
-        return begin(event, in: window) ? nil : event
+        return begin(event, in: window, observer: observer, ticket: ticket) ? nil : event
       case .leftMouseDragged:
         guard controller.isOwned(by: attachmentID) else { return event }
         guard isLiveResizeEligible(in: window) else {
@@ -1356,8 +1566,36 @@
       at locationInWindow: CGPoint,
       in window: NSWindow
     ) -> MenuPanelResizeBeginReadiness {
-      guard isLiveResizeEligible(in: window) else { return .blocked }
-      guard queuedRevision == nil else { return .reconciling }
+      beginReadiness(
+        at: locationInWindow,
+        in: window,
+        observer: nil,
+        ticket: nil
+      )
+    }
+
+    private func beginReadiness(
+      at locationInWindow: CGPoint,
+      in window: NSWindow,
+      observer: (any MenuPanelNativeMouseDownDispositionObserver)?,
+      ticket: MenuPanelNativeMouseDownTicket?
+    ) -> MenuPanelResizeBeginReadiness {
+      guard isLiveResizeEligible(in: window) else {
+        return rejectNativeMouseDownReadiness(
+          caller: .readinessLiveResizeEligibility,
+          observer: observer,
+          ticket: ticket
+        )
+      }
+      let queuedRevision = self.queuedRevision
+      guard queuedRevision == nil else {
+        recordNativeMouseDownRejection(
+          caller: .readinessQueuedRevision,
+          observer: observer,
+          ticket: ticket
+        )
+        return .reconciling
+      }
       guard let attachmentID,
         controller.isPresentationOwner(attachmentID),
         let statusButton = geometryStore?.resolveStatusButton(),
@@ -1376,7 +1614,13 @@
           in: bounds,
           fixedSide: fixedSide
         )
-      else { return .blocked }
+      else {
+        return rejectNativeMouseDownReadiness(
+          caller: .readinessGeometry,
+          observer: observer,
+          ticket: ticket
+        )
+      }
       let contentRect = window.contentRect(forFrameRect: window.frame)
       let insets = MenuPanelFrameInsets(
         top: window.frame.maxY - contentRect.maxY,
@@ -1393,20 +1637,53 @@
         statusLabelFrame: statusButton.screenFrame,
         fixedSide: fixedSide
       )
+      let nativeMouseDownGeneration: Int?
+      let nativeMouseDownQueuedRevision: Int?
+      if observer != nil, ticket != nil {
+        nativeMouseDownGeneration = installationRevision
+        nativeMouseDownQueuedRevision = queuedRevision
+      } else {
+        nativeMouseDownGeneration = nil
+        nativeMouseDownQueuedRevision = nil
+      }
       return .ready(
         snapshot: snapshot,
         handle: handle,
         ownerID: attachmentID,
-        statusButtonSource: statusButton.sourceIdentity
+        statusButtonSource: statusButton.sourceIdentity,
+        nativeMouseDownGeneration: nativeMouseDownGeneration,
+        nativeMouseDownQueuedRevision: nativeMouseDownQueuedRevision
       )
     }
 
-    private func begin(_ event: NSEvent, in window: NSWindow) -> Bool {
-      guard case let .ready(snapshot, handle, ownerID, statusButtonSource) = beginReadiness(
+    private func begin(
+      _ event: NSEvent,
+      in window: NSWindow,
+      observer: (any MenuPanelNativeMouseDownDispositionObserver)?,
+      ticket: MenuPanelNativeMouseDownTicket?
+    ) -> Bool {
+      guard case let .ready(
+        snapshot,
+        handle,
+        ownerID,
+        statusButtonSource,
+        nativeMouseDownGeneration,
+        nativeMouseDownQueuedRevision
+      ) = beginReadiness(
         at: event.locationInWindow,
-        in: window
+        in: window,
+        observer: observer,
+        ticket: ticket
       ) else { return false }
-      guard controller.begin(snapshot: snapshot, handle: handle, ownerID: ownerID) else {
+      guard controller.begin(
+        snapshot: snapshot,
+        handle: handle,
+        ownerID: ownerID,
+        nativeMouseDownDispositionObserver: observer,
+        nativeMouseDownTicket: ticket,
+        nativeMouseDownGeneration: nativeMouseDownGeneration,
+        nativeMouseDownQueuedRevision: nativeMouseDownQueuedRevision
+      ) else {
         return false
       }
       invalidateQueuedWork()
@@ -1469,6 +1746,9 @@
         return
       }
       applyFrame(transient.frame, to: window)
+      let clearQualification = nativeMouseDownDispositionObserver.map { _ in
+        (generation: installationRevision, queuedRevision: queuedRevision)
+      }
       guard let final = controller.finish(
         statusLabelFrame: statusLabelFrame,
         visibleFrame: screen.visibleFrame,
@@ -1481,7 +1761,9 @@
             on: screen,
             statusLabelFrame: statusLabelFrame
           )
-        }
+        },
+        nativeMouseDownClearGeneration: clearQualification?.generation,
+        nativeMouseDownClearQueuedRevision: clearQualification?.queuedRevision
       ) else {
         cancelAndRestore(in: window)
         return
@@ -1523,9 +1805,14 @@
       publication: MenuPanelResizePublicationTiming = .immediate
     ) {
       guard let attachmentID, controller.isPresentationOwner(attachmentID) else { return }
+      let clearQualification = nativeMouseDownDispositionObserver.map { _ in
+        (generation: installationRevision, queuedRevision: queuedRevision)
+      }
       let snapshot = controller.cancelSnapshot(
         ownerID: attachmentID,
-        publication: publication
+        publication: publication,
+        nativeMouseDownClearGeneration: clearQualification?.generation,
+        nativeMouseDownClearQueuedRevision: clearQualification?.queuedRevision
       )
       activeStatusButtonSource = nil
       if let snapshot {

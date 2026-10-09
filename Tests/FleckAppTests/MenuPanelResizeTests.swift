@@ -1399,6 +1399,7 @@ import Testing
   let screen = try #require(NSScreen.main)
   var eventNumber = 100
   var completedCases = 0
+  let nativeMouseDownDispositionReceipt = MenuPanelNativeMouseDownDispositionReceipt()
   let sideMargin: CGFloat = 40
   let topMargin: CGFloat = 40
 
@@ -1438,7 +1439,8 @@ import Testing
         geometryStore: geometryStore,
         preferredSize: initialFrame.size,
         canResize: true,
-        onCommit: { commits.append(($0, window.frame)) }
+        onCommit: { commits.append(($0, window.frame)) },
+        nativeMouseDownDispositionObserver: nativeMouseDownDispositionReceipt
       )
       window.contentView = host
       window.orderFront(nil)
@@ -1496,12 +1498,36 @@ import Testing
       await withCheckedContinuation { continuation in
         DispatchQueue.main.async {
           sendResizeMouseEvent(
-            .leftMouseDown, at: mouseDown, to: window, number: mouseDownEventNumber)
+            .leftMouseDown,
+            at: mouseDown,
+            to: window,
+            number: mouseDownEventNumber,
+            nativeMouseDownDispositionReceipt: nativeMouseDownDispositionReceipt,
+            nativeMouseDownHost: host,
+            nativeMouseDownFixedSide: fixedSide,
+            nativeMouseDownHandle: handle
+          )
           continuation.resume()
         }
       }
       eventNumber += 1
-      try #require(controller.isTracking)
+      do {
+        try #require(controller.isTracking)
+      } catch {
+        nativeMouseDownDispositionReceipt.recordFinalTrackingAssertion(
+          eventNumber: mouseDownEventNumber,
+          fixedSide: fixedSide,
+          handle: handle,
+          trackingAssertionPassed: false
+        )
+        throw error
+      }
+      nativeMouseDownDispositionReceipt.recordFinalTrackingAssertion(
+        eventNumber: mouseDownEventNumber,
+        fixedSide: fixedSide,
+        handle: handle,
+        trackingAssertionPassed: true
+      )
       sendResizeMouseEvent(.leftMouseDragged, atScreen: release, to: window, number: eventNumber)
       eventNumber += 1
       sendResizeMouseEvent(.leftMouseUp, atScreen: release, to: window, number: eventNumber)
@@ -3444,7 +3470,11 @@ private func sendResizeMouseEvent(
   _ type: NSEvent.EventType,
   at location: CGPoint,
   to window: NSWindow,
-  number: Int
+  number: Int,
+  nativeMouseDownDispositionReceipt: MenuPanelNativeMouseDownDispositionReceipt? = nil,
+  nativeMouseDownHost: MenuPanelResizeHostView? = nil,
+  nativeMouseDownFixedSide: MenuPanelFixedSide? = nil,
+  nativeMouseDownHandle: MenuPanelResizeHandle? = nil
 ) {
   guard let event = NSEvent.mouseEvent(
     with: type,
@@ -3459,6 +3489,19 @@ private func sendResizeMouseEvent(
   ) else {
     Issue.record("Could not create \(type) event")
     return
+  }
+  if let nativeMouseDownDispositionReceipt,
+    let nativeMouseDownHost,
+    let nativeMouseDownFixedSide,
+    let nativeMouseDownHandle
+  {
+    nativeMouseDownDispositionReceipt.register(
+      event: event,
+      eventNumber: number,
+      fixedSide: nativeMouseDownFixedSide,
+      handle: nativeMouseDownHandle,
+      host: nativeMouseDownHost
+    )
   }
   NSApplication.shared.sendEvent(event)
 }
@@ -3570,4 +3613,260 @@ private func requireResizeBeginReadiness(
     Issue.record("Resize begin preflight was blocked before mouse-down")
   }
   return false
+}
+
+@MainActor
+private final class MenuPanelNativeMouseDownDispositionReceipt:
+  MenuPanelNativeMouseDownDispositionObserver
+{
+  private struct Entry {
+    let eventNumber: Int
+    let permutation: String
+    let ticket: MenuPanelNativeMouseDownTicket?
+    var nativeReceived = false
+    var incomplete = false
+    var firstGuard: MenuPanelNativeMouseDownCaller?
+    var ownerID: UUID?
+    var generation: Int?
+    var gesture: MenuPanelResizeHandle?
+    var queuedRevision: Int?
+    var clearOwnerID: UUID?
+    var clearGeneration: Int?
+    var clearGesture: MenuPanelResizeHandle?
+    var clearQueuedRevision: Int?
+    var clearInputTicket: Int?
+    var clearCaller: MenuPanelNativeMouseDownCaller?
+  }
+
+  private static let originalPermutations = [
+    "left/farSide",
+    "left/farBottomCorner",
+    "left/nearBottomCorner",
+    "right/farSide",
+    "right/farBottomCorner",
+    "right/nearBottomCorner",
+  ]
+  private var entries: [Entry?] = Array(
+    repeating: nil,
+    count: MenuPanelNativeMouseDownDispositionReceipt.originalPermutations.count
+  )
+  private var finalized = Array(
+    repeating: false,
+    count: MenuPanelNativeMouseDownDispositionReceipt.originalPermutations.count
+  )
+  private var activeAdmissionEventNumber: Int?
+
+  func register(
+    event: NSEvent,
+    eventNumber: Int,
+    fixedSide: MenuPanelFixedSide,
+    handle: MenuPanelResizeHandle,
+    host: MenuPanelResizeHostView
+  ) {
+    let permutation = Self.permutation(fixedSide, handle)
+    guard let ordinal = Self.ordinal(eventNumber),
+      !finalized[ordinal],
+      Self.originalPermutations[ordinal] == permutation,
+      entries[ordinal] == nil
+    else { return }
+    let eventIdentity = ObjectIdentifier(event)
+    let ticket = MenuPanelNativeMouseDownTicket(
+      eventNumber: eventNumber,
+      eventIdentity: eventIdentity,
+      expectedHost: ObjectIdentifier(host)
+    )
+    entries[ordinal] = Entry(
+      eventNumber: eventNumber,
+      permutation: permutation,
+      ticket: ticket
+    )
+  }
+
+  func ticket(
+    for event: ObjectIdentifier,
+    host: ObjectIdentifier
+  ) -> MenuPanelNativeMouseDownTicket? {
+    entries.compactMap { $0 }.first { entry in
+      !entry.nativeReceived
+        && entry.ticket?.eventIdentity == event
+        && entry.ticket?.expectedHost == host
+    }?.ticket
+  }
+
+  @discardableResult
+  func record(_ observation: MenuPanelNativeMouseDownObservation) -> Bool {
+    switch observation {
+    case let .received(ticket):
+      guard let index = index(for: ticket),
+        var entry = entries[index],
+        !entry.nativeReceived
+      else { return false }
+      entry.nativeReceived = true
+      entries[index] = entry
+      return true
+    case let .rejected(ticket, caller):
+      guard let index = index(for: ticket),
+        var entry = entries[index],
+        entry.nativeReceived,
+        !entry.incomplete,
+        entry.firstGuard == nil,
+        entry.ownerID == nil
+      else { return false }
+      entry.firstGuard = caller
+      entries[index] = entry
+      return true
+    case let .admitted(ticket, ownerID, generation, gesture, queuedRevision):
+      guard let index = index(for: ticket),
+        var entry = entries[index],
+        entry.nativeReceived,
+        !entry.incomplete,
+        entry.firstGuard == nil,
+        entry.ownerID == nil
+      else { return false }
+      entry.ownerID = ownerID
+      entry.generation = generation
+      entry.gesture = gesture
+      entry.queuedRevision = queuedRevision
+      guard queuedRevision == nil, activeAdmissionEventNumber == nil else {
+        entry.incomplete = true
+        entries[index] = entry
+        return false
+      }
+      entries[index] = entry
+      activeAdmissionEventNumber = ticket.eventNumber
+      return true
+    case let .cleared(inputTicket, ownerID, generation, gesture, queuedRevision, caller):
+      guard let eventNumber = activeAdmissionEventNumber,
+        let index = Self.ordinal(eventNumber),
+        var entry = entries[index],
+        entry.ownerID != nil,
+        inputTicket == nil,
+        ownerID == entry.ownerID,
+        caller == .controllerFinish || caller == .controllerCancel
+          || caller == .interactionClear
+      else { return false }
+      guard generation == entry.generation, gesture == entry.gesture else {
+        entry.incomplete = true
+        if entry.clearCaller == nil {
+          entry.clearOwnerID = ownerID
+          entry.clearGeneration = generation
+          entry.clearGesture = gesture
+          entry.clearQueuedRevision = queuedRevision
+          entry.clearInputTicket = inputTicket
+          entry.clearCaller = caller
+        }
+        entries[index] = entry
+        return false
+      }
+      if entry.clearCaller == nil {
+        entry.clearOwnerID = ownerID
+        entry.clearGeneration = generation
+        entry.clearGesture = gesture
+        entry.clearQueuedRevision = queuedRevision
+        entry.clearInputTicket = inputTicket
+        entry.clearCaller = caller
+      }
+      entries[index] = entry
+      activeAdmissionEventNumber = nil
+      return true
+    case let .incomplete(ticket):
+      guard let index = index(for: ticket),
+        var entry = entries[index],
+        entry.nativeReceived
+      else { return false }
+      entry.incomplete = true
+      entries[index] = entry
+      if activeAdmissionEventNumber == ticket.eventNumber {
+        activeAdmissionEventNumber = nil
+      }
+      return true
+    }
+  }
+
+  func recordFinalTrackingAssertion(
+    eventNumber: Int,
+    fixedSide: MenuPanelFixedSide,
+    handle: MenuPanelResizeHandle,
+    trackingAssertionPassed: Bool
+  ) {
+    guard let ordinal = Self.ordinal(eventNumber), !finalized[ordinal] else { return }
+    finalized[ordinal] = true
+    let permutation = Self.permutation(fixedSide, handle)
+    var entry = entries[ordinal] ?? Entry(
+      eventNumber: eventNumber,
+      permutation: permutation,
+      ticket: nil
+    )
+    if entry.permutation != permutation || Self.originalPermutations[ordinal] != permutation {
+      entry.incomplete = entry.ticket != nil
+    }
+    if activeAdmissionEventNumber == eventNumber {
+      activeAdmissionEventNumber = nil
+    }
+    emit(entry, trackingAssertionPassed: trackingAssertionPassed)
+    entries[ordinal] = nil
+  }
+
+  private func index(for ticket: MenuPanelNativeMouseDownTicket) -> Int? {
+    guard let index = Self.ordinal(ticket.eventNumber),
+      let entry = entries[index],
+      entry.ticket == ticket
+    else { return nil }
+    return index
+  }
+
+  private func emit(_ entry: Entry, trackingAssertionPassed: Bool) {
+    let disposition: String
+    if !entry.nativeReceived {
+      disposition = "UNOBSERVED"
+    } else if entry.incomplete {
+      disposition = "INCOMPLETE"
+    } else if entry.firstGuard != nil {
+      disposition = "received-rejected"
+    } else if entry.clearCaller != nil {
+      disposition = "admitted-then-first-owner-qualified-clear"
+    } else if entry.ownerID == nil || !trackingAssertionPassed {
+      disposition = "INCOMPLETE"
+    } else {
+      disposition = "admitted-still-active"
+    }
+    let assertion = trackingAssertionPassed ? "true" : "false"
+    let clearInputTicket = entry.clearCaller == nil
+      ? "UNOBSERVED"
+      : entry.clearInputTicket.map { String($0) } ?? "nil"
+    let line = [
+      "resize-mousedown event=\(entry.eventNumber) permutation=\(entry.permutation)",
+      "native=\(entry.nativeReceived ? "received" : "UNOBSERVED") disposition=\(disposition)",
+      "assertion=\(assertion) firstGuard=\(entry.firstGuard?.rawValue ?? "-")",
+      "owner=\(entry.ownerID?.uuidString ?? "-")",
+      "generation=\(entry.generation.map { String($0) } ?? "-")",
+      "gesture=\(entry.gesture.map { String(describing: $0) } ?? "-")",
+      "queuedRevision=\(entry.queuedRevision.map { String($0) } ?? "-")",
+      "clearOwner=\(entry.clearCaller == nil ? "UNOBSERVED" : entry.clearOwnerID?.uuidString ?? "nil")",
+      "clearGeneration=\(entry.clearCaller == nil ? "UNOBSERVED" : entry.clearGeneration.map { String($0) } ?? "nil")",
+      "clearGesture=\(entry.clearCaller == nil ? "UNOBSERVED" : entry.clearGesture.map { String(describing: $0) } ?? "nil")",
+      "clearQueuedRevision=\(entry.clearCaller == nil ? "UNOBSERVED" : entry.clearQueuedRevision.map { String($0) } ?? "nil")",
+      "clearInputTicket=\(clearInputTicket) clearCaller=\(entry.clearCaller?.rawValue ?? "-")",
+    ].joined(separator: " ") + "\n"
+    let data = Data(line.utf8)
+    let fallback = Data(
+      "resize-mousedown event=\(entry.eventNumber) disposition=INCOMPLETE assertion=\(assertion)\n".utf8
+    )
+    try? FileHandle.standardError.write(contentsOf: data.count <= 4096 ? data : fallback)
+  }
+
+  private static func permutation(
+    _ fixedSide: MenuPanelFixedSide,
+    _ handle: MenuPanelResizeHandle
+  ) -> String {
+    "\(String(describing: fixedSide))/\(String(describing: handle))"
+  }
+
+  private static func ordinal(_ eventNumber: Int) -> Int? {
+    guard (100...115).contains(eventNumber) else { return nil }
+    let offset = eventNumber - 100
+    guard offset.isMultiple(of: 3) else { return nil }
+    let ordinal = offset / 3
+    return ordinal < originalPermutations.count ? ordinal : nil
+  }
 }
