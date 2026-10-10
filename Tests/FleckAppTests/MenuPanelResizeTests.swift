@@ -1493,13 +1493,8 @@ import Testing
       ) else { return }
       try Task.checkCancellation()
       let mouseDownEventNumber = eventNumber
-      await withCheckedContinuation { continuation in
-        DispatchQueue.main.async {
-          sendResizeMouseEvent(
-            .leftMouseDown, at: mouseDown, to: window, number: mouseDownEventNumber)
-          continuation.resume()
-        }
-      }
+      sendResizeMouseEvent(
+        .leftMouseDown, at: mouseDown, to: window, number: mouseDownEventNumber)
       eventNumber += 1
       try #require(controller.isTracking)
       sendResizeMouseEvent(.leftMouseDragged, atScreen: release, to: window, number: eventNumber)
