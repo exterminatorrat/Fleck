@@ -3208,18 +3208,34 @@
 
     private func indentSelectedLines(removing: Bool) {
       let ns = string as NSString
-      let range = ns.lineRange(for: selectedRange())
+      let selection = selectedRange()
+      let range = ns.lineRange(for: selection)
       let original = ns.substring(with: range)
       let changed = EditorListEngine.indent(original, removing: removing)
       guard changed != original else { return }
+      let originalLine = original.trimmingCharacters(in: .newlines)
+      let collapsedEmptyListCaret =
+        selection.length == 0
+        && EditorListEngine.parse(originalLine)?.content.isEmpty == true
+        ? NSRange(
+          location: range.location + changed.trimmingCharacters(in: .newlines).utf16.count,
+          length: 0
+        )
+        : nil
       performUndoGroup {
-        replaceSelectedLines(range, original: original, with: changed)
+        replaceSelectedLines(
+          range,
+          original: original,
+          with: changed,
+          selectionOverride: collapsedEmptyListCaret
+        )
         synchronizeNumberStyleMetadata(
           in: NSRange(location: range.location, length: changed.utf16.count),
           useAutomaticDepth: true
         )
         renumberNumberedList(
-          around: NSRange(location: range.location, length: changed.utf16.count)
+          around: NSRange(location: range.location, length: changed.utf16.count),
+          preservingEmptyListCaretAt: collapsedEmptyListCaret?.location
         )
       }
     }
@@ -3717,7 +3733,8 @@
     private func replaceSelectedLines(
       _ range: NSRange,
       original: String,
-      with replacement: String
+      with replacement: String,
+      selectionOverride: NSRange? = nil
     ) {
       let clearsCompletedChecklist = original
         .split(separator: "\n", omittingEmptySubsequences: false)
@@ -3732,7 +3749,9 @@
         && (original == originalParagraph || original == originalParagraph + "\n")
         && EditorListEngine.parse(originalParagraph)?.content.isEmpty == true
       let selection: NSRange
-      if original.isEmpty || original == "\n" {
+      if let selectionOverride {
+        selection = selectionOverride
+      } else if original.isEmpty || original == "\n" {
         let offset = replacement.hasSuffix("\n")
           ? replacement.utf16.count - 1
           : replacement.utf16.count
@@ -4143,7 +4162,10 @@
       }
     }
 
-    private func renumberNumberedList(around affectedRange: NSRange) {
+    private func renumberNumberedList(
+      around affectedRange: NSRange,
+      preservingEmptyListCaretAt caretLocation: Int? = nil
+    ) {
       guard let blockRange = numberedBlockRange(around: affectedRange) else { return }
       let ns = string as NSString
       let original = ns.substring(with: blockRange)
@@ -4152,7 +4174,37 @@
         preferredNumberStyle: numberStyleMetadata(at: affectedRange.location)
       )
       guard original != renumbered else { return }
-      let selection = selectedRange()
+      let selection: NSRange
+      if let caretLocation,
+        caretLocation >= blockRange.location,
+        caretLocation <= NSMaxRange(blockRange)
+      {
+        let lineRange = ns.lineRange(
+          for: NSRange(location: caretLocation, length: 0)
+        )
+        let prefixRange = NSRange(
+          location: blockRange.location,
+          length: lineRange.location - blockRange.location
+        )
+        let lineIndex = ns.substring(with: prefixRange).filter { $0 == "\n" }.count
+        let renumberedLines = renumbered.components(separatedBy: "\n")
+        if renumberedLines.indices.contains(lineIndex),
+          EditorListEngine.parse(renumberedLines[lineIndex])?.content.isEmpty == true
+        {
+          let precedingLength = renumberedLines.prefix(lineIndex).reduce(0) {
+            $0 + $1.utf16.count + 1
+          }
+          selection = NSRange(
+            location: blockRange.location + precedingLength
+              + renumberedLines[lineIndex].utf16.count,
+            length: 0
+          )
+        } else {
+          selection = selectedRange()
+        }
+      } else {
+        selection = selectedRange()
+      }
       let attributed = attributedListReplacement(in: blockRange, with: renumbered)
       _ = replaceAttributedText(in: blockRange, with: attributed, selecting: selection)
     }
