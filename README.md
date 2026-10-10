@@ -363,6 +363,12 @@ The test runner does not launch the product `Fleck.app`, but its synthetic
 AppKit host may create fixture windows and change focus. Run native fixtures in
 a disposable macOS test account or session with synthetic content.
 
+Pull requests that only add or modify the root `README.md` use lightweight
+documentation validation. Changes to any other path, mixed changes, and README
+deletions or renames run the full CI pipeline. The required `macOS build and
+tests` check runs in both routes; a docs-only pass does not claim that Swift
+tests or packaging ran.
+
 Maintainer handoff packaging requires a clean committed source tree and the
 project's private accepted-build registry. It builds the development-signed app
 bundle without launching it:
