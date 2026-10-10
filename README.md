@@ -19,12 +19,26 @@
   <a href="#download-and-launch-fleck">Download &amp; launch</a> ·
   <a href="docs/release-notes/1.1.2-beta.2.md">Release notes &amp; onboarding</a> ·
   <a href="#what-is-here">Features</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#architecture">Architecture</a> ·
   <a href="#build-and-test">Build &amp; test</a> ·
-  <a href="ARCHITECTURE.md">Architecture</a> ·
   <a href="TESTING.md">Testing</a> ·
   <a href="#contributing">Contributing</a> ·
   <a href="SECURITY.md">Security</a>
 </p>
+
+---
+
+Fleck lives in your menu bar. Click it to jot a note, hold a shortcut to dictate, or let a local AI tool you have explicitly authorized read and edit the specific notes you chose. Notes are readable files on your Mac, speech recognition runs on-device, and the ordinary app needs no account, cloud service, model download, or browser runtime.
+
+| | |
+| --- | --- |
+| **Status** | Public Developer Preview: `1.1.2-beta.2` on [GitHub Releases](https://github.com/exterminatorrat/Fleck/releases), published as a **Pre-release** |
+| **Platform** | macOS 14 declared minimum; validated on Apple silicon (native Intel and a full macOS 14 pass are not yet verified) |
+| **Stack** | Swift 6, SwiftUI shell, AppKit `NSTextView` editor, Apple on-device speech, [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) for the agent bridge |
+| **Storage** | Readable Markdown notes, optional RTF sidecars, and JSON settings in Application Support; atomic writes plus a recovery snapshot |
+| **Network** | No account, cloud service, or model download for ordinary use. Agent access uses a private same-user Unix socket: no HTTP listener, cloud relay, or internet-facing port |
+| **License** | [MPL-2.0](LICENSE), with the boundaries in [NOTICE](NOTICE) and [Branding](BRANDING.md) |
 
 ## Download and launch Fleck
 
@@ -109,6 +123,192 @@ graph and is not approved for distribution.
 
 See [Implementation status](IMPLEMENTATION_STATUS.md) for the short current
 roadmap and [Architecture](ARCHITECTURE.md) for the system boundaries.
+
+## How it works
+
+Fleck has three everyday flows. Each one ends in the same place: a single state owner (`AppState`) that applies the change and saves it.
+
+1. **Write.** Click the menu-bar icon (or open the pinned window) and type. The editor is a real macOS text view, so selection, input methods, spelling, undo, and VoiceOver behave the way they do everywhere else on your Mac. Edits go to `AppState`, which hands them to `LocalStore` to save.
+2. **Dictate.** Hold the global shortcut and speak. Apple's on-device recognizer transcribes, your personal dictionary corrects known terms, and an optional cleanup pass tidies the text only if it stays faithful to what you said. The result is inserted where you are, or filed by Smart Capture. If Fleck is unsure where it belongs, it goes to your Inbox.
+3. **Connect an agent (optional, off by default).** Create a profile, grant it capabilities, and share specific notes or an explicitly confirmed folder. A local MCP client talks to the `fleck-agent` helper, which talks to the app over a private socket. Every write names the revision it expects, so it cannot silently overwrite newer work, and every change shows up in an activity list with Undo.
+
+## Architecture
+
+Fleck is one Swift package with a deliberate dependency direction: portable note state at the bottom, macOS presentation on top, and every optional integration behind an explicit boundary. Nothing optional can quietly widen what the app is allowed to do.
+
+### Package structure
+
+```mermaid
+flowchart TB
+  subgraph exes["Executables"]
+    App["Fleck<br/>FleckApp"]
+    Bridge["fleck-agent<br/>FleckAgentBridge"]
+    Eval["fleck-model-eval<br/>FleckModelEvaluator"]
+    Lab["fleck-capture-lab<br/>FleckCaptureLab"]
+  end
+
+  subgraph libs["Libraries"]
+    Protocol["FleckAgentProtocol<br/>versioned IPC types and framing"]
+    Evaluation["FleckModelEvaluation<br/>deterministic evaluation records"]
+    Core["FleckCore<br/>models, persistence, recovery,<br/>agent policy and mutation engines"]
+  end
+
+  MCP[("MCP Swift SDK<br/>pinned revision")]
+  Enhanced[("Enhanced candidate package<br/>debug-only, opt-in")]
+
+  App --> Core
+  App --> Protocol
+  Bridge --> Core
+  Bridge --> Protocol
+  Bridge --> MCP
+  Protocol --> Core
+  Evaluation --> Core
+  Eval --> Evaluation
+  Lab --> Core
+  App -. "FLECK_ENHANCED_CANDIDATE=1" .-> Enhanced
+```
+
+`FleckCore` has no UI dependency, and `FleckAgentProtocol` depends only on core value types. The app and the bridge never import each other: they meet across the protocol.
+
+| Target | Responsibility |
+| --- | --- |
+| `FleckCore` | Note and workspace models, mutations, Markdown operations, search and backlinks, preferences, persistence and recovery, import/export, personal dictionary, dictation history, and agent policy, mutation, undo, and activity engines. |
+| `FleckAgentProtocol` | Versioned request and response types, endpoint conventions, and framed local IPC. |
+| `FleckApp` | macOS lifecycle, menu-bar and pinned-window scenes, AppKit editor, onboarding, settings, dictation, and the in-app agent service. |
+| `FleckAgentBridge` | The separately packaged `fleck-agent` MCP/CLI process: Keychain credential lookup, argument validation, and the Unix-socket client. |
+| `FleckModelEvaluation` / `FleckModelEvaluator` | Deterministic evaluation records and a command-line evaluator (`fleck-model-eval`) for local-model candidates. |
+| `FleckCaptureLab` | Developer tooling (`fleck-capture-lab`) for controlled visual capture. Not part of the core note path. |
+
+### Runtime composition
+
+```mermaid
+flowchart TB
+  subgraph shell["Fleck app (FleckApp)"]
+    Scenes["MenuBarExtra, pinned window, Settings"]
+    State["AppState<br/>owns the live workspace"]
+    Editor["Native editor<br/>NSTextView"]
+    Dict["Dictation runtime"]
+    IPC["Agent IPC server<br/>capability authority"]
+  end
+
+  Store[("LocalStore<br/>Application Support")]
+  Speech["Apple on-device speech<br/>and optional cleanup"]
+  Client["Local MCP client or CLI"]
+  Bridge["fleck-agent"]
+
+  Scenes --> State
+  Editor <--> State
+  Dict --> State
+  IPC --> State
+  State --> Store
+  Dict --> Speech
+  Client --> Bridge
+  Bridge -- "private same-user Unix socket" --> IPC
+```
+
+`AppState` is the single owner of the live workspace. It coordinates saves, recovery, Trash, import/export, search, file references, and agent mutations, so every change, whether it came from you, from dictation, or from an agent, follows the same path and is visible the same way. SwiftUI presents the shell; the editor wraps a real `NSTextView` so the macOS text system keeps doing the hard parts.
+
+### Storage and recovery
+
+```mermaid
+flowchart LR
+  Change["Edit, dictation, or agent mutation"] --> State["AppState"]
+  State --> Store["LocalStore<br/>serialized access, debounced save"]
+  Store --> Atomic["Atomic replacement"]
+  Atomic --> Files[("Markdown bodies, RTF sidecars,<br/>JSON workspace and preferences")]
+  Store --> Snap[("Previous-generation snapshot")]
+```
+
+Fleck stores readable Markdown note bodies, optional RTF sidecars, and JSON workspace and preference data under your Application Support directory. `LocalStore` serializes access, debounces ordinary saves, writes with atomic replacement, and keeps a previous-generation snapshot for recovery. This makes the data inspectable and crash-tolerant. **It is not encryption**: software already running as your macOS user can operate within your user's authority. Agent Connector secrets belong in Keychain, never in note files or preferences.
+
+### Dictation pipeline
+
+```mermaid
+flowchart TB
+  Trigger["Global hold shortcut<br/>or focused editor"] --> Speech["Apple on-device speech recognition<br/>no cloud fallback"]
+  Speech --> Dictionary["Personal-dictionary resolution"]
+  Dictionary --> Cleanup{"Optional bounded cleanup"}
+  Cleanup -- "checked against captured text" --> Clean["Cleaned text"]
+  Cleanup -- "unavailable or rejected" --> Raw["Keep the safer original text"]
+  Clean --> Route{"Where does it go?"}
+  Raw --> Route
+  Route -- "focused editor" --> Insert["Insert at the cursor"]
+  Route -- "Smart Capture, clear destination" --> Dest["File to that destination"]
+  Route -- "unknown or ambiguous" --> Inbox["Save to Inbox"]
+  Insert --> Save["AppState save + local history"]
+  Dest --> Save
+  Inbox --> Save
+```
+
+- Standard speech requires Apple's on-device recognition and **has no cloud fallback**.
+- On macOS 26, the ordinary build can use the system Foundation Models for cleanup and routing when the system reports them available. Cleanup is checked against the captured text; unavailable or rejected cleanup keeps the safer text.
+- Audio buffers are transient. Dictation history stores text and outcome metadata, **not recorded audio**.
+- Test and diagnostic evidence must use synthetic content and be sanitized before it leaves the test machine.
+
+### Agent Connector
+
+The connector is **off until you create a profile and grant capabilities**. A profile can receive four capabilities, plus explicit note grants or an explicitly confirmed folder grant that may include future notes in that folder.
+
+```mermaid
+sequenceDiagram
+  participant Client as MCP client or CLI
+  participant Bridge as fleck-agent
+  participant App as Fleck app (capability authority)
+  participant Store as AppState and LocalStore
+
+  Client->>Bridge: Tool call, for example replace_lines
+  Bridge->>Bridge: Load Keychain credential, validate arguments
+  Bridge->>App: Framed request over private AF_UNIX socket
+  App->>App: Same-user peer check, profile capability and note grant check
+  alt Unknown, private, or not granted
+    App-->>Bridge: Same safe absence response for all three
+  else Granted
+    App->>Store: Apply only if the expected revision still matches
+    Store-->>App: New revision and visible activity record
+    App-->>Bridge: Result
+  end
+  Bridge-->>Client: Result
+```
+
+The bridge exposes a static registry of **13 MCP tools**. For every request, the list is filtered by the profile's current capabilities, so a client only ever sees tools it is allowed to use.
+
+| Capability | Tools |
+| --- | --- |
+| `notes.list` | `list_shared_notes` |
+| `notes.read` | `read_note`, `list_tasks`, `list_agent_activity` |
+| `notes.write` | `append_text`, `insert_text`, `replace_lines`, `delete_lines`, `add_task`, `rename_task`, `set_task_state`, `remove_task` |
+| `changes.undo` | `undo_agent_change` |
+
+Safety properties built into the protocol:
+
+- **No blind overwrites.** Every write carries the revision it expects and a caller-owned operation ID, so stale writes do not clobber newer work and a retried write does not duplicate. Line replacement and deletion also carry a SHA-256 of the lines the caller observed.
+- **Bounded input.** Text arguments are capped at 65,536 UTF-8 bytes, and tool schemas reject unknown properties.
+- **No enumeration.** Unknown, private, and unauthorized targets return the same safe absence response, so error messages cannot be used to discover which notes exist.
+- **Visible and reversible.** Activity returns through the same state owner as every other change, and eligible changes can be undone.
+- **Local only.** A private `AF_UNIX` socket with same-user peer checks; credentials live in Keychain.
+
+> **Trust boundary.** This is a cooperative local-client boundary. It limits accidental or over-broad access by clients you configured; it cannot defend against malicious software already running as your macOS user.
+
+### Optional Enhanced Local graph
+
+The experimental Enhanced Local paths (candidate Parakeet speech and Gemma cleanup/routing, model manifests, installation state, and resource residency) are isolated at compile time so they cannot silently enter an ordinary release.
+
+| | Ordinary build | With `FLECK_ENHANCED_CANDIDATE=1` |
+| --- | --- | --- |
+| Extra packages | None beyond the pinned MCP SDK | Adds the candidate dependency package and its reviewed pins |
+| Enhanced source files | `EnhancedModelManager.swift` and `EnhancedSpeechCapture.swift` are excluded from the app target | Included, and app resources are processed |
+| Compile flags | None | `CLEAN_DICTATION_ENHANCED_CANDIDATE_REQUESTED` always; `CLEAN_DICTATION_ENHANCED_CANDIDATE` in **debug configurations only** |
+| Distribution | Release graph | Not approved for distribution; has separate legal, model-integrity, performance, and distribution gates |
+
+### Design principles
+
+- **Native and simple.** AppKit, SwiftUI, Foundation, and the macOS text system before any dependency or replacement control.
+- **Local-first.** Ordinary notes and settings live in your Application Support directory; core note use has no server dependency.
+- **Truthful persistence.** Mutations become visible through one state owner and are saved with atomic replacement and recovery data.
+- **Bounded integration.** Dictation and agent access fail closed or fall back to a safe local result rather than broadening access.
+- **Accessible and efficient.** Keyboard use, VoiceOver, Reduce Motion, contrast, idle CPU, memory pressure, and thermal state are architectural inputs, not afterthoughts.
+
+Dependencies stay rare: a new one needs a concrete runtime or maintenance benefit, compatible licensing, a reviewed immutable resolution, and no unnecessary effect on the ordinary app's size, network behavior, or idle resources. The ordinary package pins the Model Context Protocol Swift SDK; its transitive packages are recorded in `Package.resolved`.
 
 ## Requirements
 
@@ -202,15 +402,29 @@ personal notes or recordings. The full commands and manual checks are in
 
 | Path | Responsibility |
 | --- | --- |
-| `Sources/FleckCore/` | Local models, mutations, persistence, and recovery. |
+| `Sources/FleckCore/` | Local models, mutations, persistence, recovery, search, backlinks, personal dictionary, and agent policy and mutation engines. |
 | `Sources/FleckAgentProtocol/` | Typed local IPC protocol and framing. |
-| `Sources/FleckApp/` | Native macOS UI, editor, dictation, and IPC service. |
-| `Sources/FleckAgentBridge/` | MCP/CLI helper and Unix-socket client. |
+| `Sources/FleckApp/` | Native macOS UI, editor, dictation, onboarding, settings, and the in-app IPC service. |
+| `Sources/FleckAgentBridge/` | MCP/CLI helper (`fleck-agent`), tool registry, and Unix-socket client. |
 | `Sources/FleckModelEvaluation/` | Deterministic local-model evaluation support. |
 | `Sources/FleckCaptureLab/` | Developer capture tooling. |
 | `Tests/` | Swift tests and privacy-safe fixtures. |
 | `Scripts/` | Build, validation, audit, and profiling entry points. |
 | `Packages/` | Enhanced candidate dependency package. |
+| `docs/` | Release policy and notes, build identity, design, evaluation, performance, testing, and theme documents. |
+
+## Documentation
+
+| Topic | Reference |
+| --- | --- |
+| What Fleck is for | [Product](PRODUCT.md) · [Product plan](PRODUCT_PLAN.md) |
+| System boundaries | [Architecture](ARCHITECTURE.md) |
+| Current roadmap | [Implementation status](IMPLEMENTATION_STATUS.md) |
+| Tests and evidence | [Testing](TESTING.md) |
+| Releases and distribution | [Release policy](docs/RELEASES.md) · [Build identity](docs/build-identity.md) · [Changelog](CHANGELOG.md) |
+| Security reporting | [Security](SECURITY.md) |
+| Contributing | [Contributing](CONTRIBUTING.md) · [Code of Conduct](CODE_OF_CONDUCT.md) |
+| Name, brand, and licenses | [Branding](BRANDING.md) · [Notice](NOTICE) · [Third-party notices](THIRD_PARTY_NOTICES.md) |
 
 ## Project principles
 
