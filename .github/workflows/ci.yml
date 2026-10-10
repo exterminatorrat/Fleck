@@ -32,8 +32,44 @@ permissions:
   contents: read
 
 jobs:
+  detect-changes:
+    name: Detect documentation-only changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      route: ${{ steps.detect.outputs.route }}
+      source_commit: ${{ steps.detect.outputs.source_commit }}
+      source_tree: ${{ steps.detect.outputs.source_tree }}
+      product_version: ${{ steps.detect.outputs.product_version }}
+      workflow_sha256: ${{ steps.detect.outputs.workflow_sha256 }}
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Check out repository (actions/checkout v6.0.2, without credentials)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Classify exact pull request changes
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: >-
+          python3 -B Scripts/ci-docs-path.py classify
+          --repository .
+          --event-name "$EVENT_NAME"
+          --event-file "$GITHUB_EVENT_PATH"
+          --source-commit "$SOURCE_COMMIT"
+          --output "$GITHUB_OUTPUT"
+
   macos-build:
     name: macOS ordinary graph and package
+    needs: detect-changes
+    if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
     runs-on: macos-26
     timeout-minutes: 90
     outputs:
@@ -73,6 +109,7 @@ jobs:
       - name: Check product version and build identity policy
         run: |
           python3 -B -m unittest discover -s Tests/Scripts -p test_build_identity.py
+          python3 -B -m unittest discover -s Tests/Scripts -p test_ci_docs_path.py
           python3 -B Scripts/fleck-build-identity.py check
       - name: Test ordinary graph
         env:
@@ -129,7 +166,8 @@ jobs:
 
   macos-validation:
     name: macOS ordinary repeat and bundle validation
-    needs: macos-build
+    needs: [detect-changes, macos-build]
+    if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
     runs-on: macos-26
     timeout-minutes: 90
     outputs:
@@ -203,13 +241,64 @@ jobs:
             printf '%s\n' "$message"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  docs-validation:
+    name: Validate README-only change
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.route == 'docs' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      source_commit: ${{ steps.validate.outputs.source_commit }}
+      source_tree: ${{ steps.validate.outputs.source_tree }}
+      product_version: ${{ steps.validate.outputs.product_version }}
+      workflow_sha256: ${{ steps.validate.outputs.workflow_sha256 }}
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Check out repository (actions/checkout v6.0.2, without credentials)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Validate exact source and README documentation
+        id: validate
+        env:
+          DETECTED_COMMIT: ${{ needs.detect-changes.outputs.source_commit }}
+          DETECTED_TREE: ${{ needs.detect-changes.outputs.source_tree }}
+          DETECTED_VERSION: ${{ needs.detect-changes.outputs.product_version }}
+          DETECTED_WORKFLOW_SHA256: ${{ needs.detect-changes.outputs.workflow_sha256 }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: >-
+          python3 -B Scripts/ci-docs-path.py validate
+          --repository .
+          --source-commit "$SOURCE_COMMIT"
+          --expected-commit "$DETECTED_COMMIT"
+          --expected-tree "$DETECTED_TREE"
+          --expected-version "$DETECTED_VERSION"
+          --expected-workflow-sha256 "$DETECTED_WORKFLOW_SHA256"
+          --output "$GITHUB_OUTPUT"
+
   macos:
     name: macOS build and tests
     if: ${{ always() }}
-    needs: [macos-build, macos-validation, macos-enhanced]
+    needs: [detect-changes, docs-validation, macos-build, macos-validation, macos-enhanced]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
+      DETECTOR_RESULT: ${{ needs.detect-changes.result }}
+      ROUTE: ${{ needs.detect-changes.outputs.route }}
+      DETECTED_COMMIT: ${{ needs.detect-changes.outputs.source_commit }}
+      DETECTED_TREE: ${{ needs.detect-changes.outputs.source_tree }}
+      DETECTED_VERSION: ${{ needs.detect-changes.outputs.product_version }}
+      DETECTED_WORKFLOW_SHA256: ${{ needs.detect-changes.outputs.workflow_sha256 }}
+      DOCS_RESULT: ${{ needs.docs-validation.result }}
+      DOCS_COMMIT: ${{ needs.docs-validation.outputs.source_commit }}
+      DOCS_TREE: ${{ needs.docs-validation.outputs.source_tree }}
+      DOCS_VERSION: ${{ needs.docs-validation.outputs.product_version }}
+      DOCS_WORKFLOW_SHA256: ${{ needs.docs-validation.outputs.workflow_sha256 }}
       INITIAL_RESULT: ${{ needs.macos-build.result }}
       VALIDATION_RESULT: ${{ needs.macos-validation.result }}
       ENHANCED_RESULT: ${{ needs.macos-enhanced.result }}
@@ -220,22 +309,53 @@ jobs:
       VALIDATION_TREE: ${{ needs.macos-validation.outputs.source_tree }}
       VALIDATION_VERSION: ${{ needs.macos-validation.outputs.product_version }}
     steps:
-      - name: Require all current-source coverage gates
+      - name: Require docs-only or full current-source coverage
         run: |
           set -euo pipefail
-          test "$INITIAL_RESULT" = success
-          test "$VALIDATION_RESULT" = success
-          test "$ENHANCED_RESULT" = success
-          test -n "$INITIAL_COMMIT"
-          test "$INITIAL_COMMIT" = "$GITHUB_SHA"
-          test "$VALIDATION_COMMIT" = "$INITIAL_COMMIT"
-          test -n "$INITIAL_TREE"
-          test "$VALIDATION_TREE" = "$INITIAL_TREE"
-          test -n "$INITIAL_VERSION"
-          test "$VALIDATION_VERSION" = "$INITIAL_VERSION"
+          test "$DETECTOR_RESULT" = success
+          test "$DETECTED_COMMIT" = "$GITHUB_SHA"
+          test -n "$DETECTED_TREE"
+          test -n "$DETECTED_VERSION"
+          case "$DETECTED_WORKFLOW_SHA256" in
+            ""|*[!0-9a-f]*) exit 1 ;;
+          esac
+          test "${#DETECTED_WORKFLOW_SHA256}" -eq 64
+          case "$ROUTE" in
+            docs)
+              test "$DOCS_RESULT" = success
+              test "$INITIAL_RESULT" = skipped
+              test "$VALIDATION_RESULT" = skipped
+              test "$ENHANCED_RESULT" = skipped
+              test "$DOCS_COMMIT" = "$DETECTED_COMMIT"
+              test "$DOCS_TREE" = "$DETECTED_TREE"
+              test "$DOCS_VERSION" = "$DETECTED_VERSION"
+              test "$DOCS_WORKFLOW_SHA256" = "$DETECTED_WORKFLOW_SHA256"
+              ;;
+            full)
+              test "$DOCS_RESULT" = skipped
+              test "$INITIAL_RESULT" = success
+              test "$VALIDATION_RESULT" = success
+              test "$ENHANCED_RESULT" = success
+              test -n "$INITIAL_COMMIT"
+              test "$INITIAL_COMMIT" = "$DETECTED_COMMIT"
+              test "$INITIAL_COMMIT" = "$GITHUB_SHA"
+              test "$VALIDATION_COMMIT" = "$INITIAL_COMMIT"
+              test -n "$INITIAL_TREE"
+              test "$INITIAL_TREE" = "$DETECTED_TREE"
+              test "$VALIDATION_TREE" = "$INITIAL_TREE"
+              test -n "$INITIAL_VERSION"
+              test "$INITIAL_VERSION" = "$DETECTED_VERSION"
+              test "$VALIDATION_VERSION" = "$INITIAL_VERSION"
+              ;;
+            *)
+              exit 1
+              ;;
+          esac
 
   macos-enhanced:
     name: macOS Enhanced Local candidate gates
+    needs: detect-changes
+    if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
     runs-on: macos-26
     timeout-minutes: 60
     steps:
