@@ -1044,12 +1044,10 @@
         .accessibilityHidden(isBlockingOverlayPresented)
       }
       .frame(
-        width: storedPanelSize?.width,
-        height: storedPanelSize?.height
-      )
-      .frame(
-        maxWidth: sizing == .container ? .infinity : nil,
-        maxHeight: sizing == .container ? .infinity : nil
+        minWidth: storedPanelSize?.width,
+        maxWidth: sizing == .container ? .infinity : storedPanelSize?.width,
+        minHeight: storedPanelSize?.height,
+        maxHeight: sizing == .container ? .infinity : storedPanelSize?.height
       )
       .background {
         if !isPinned, sizing == .storedPreferences {

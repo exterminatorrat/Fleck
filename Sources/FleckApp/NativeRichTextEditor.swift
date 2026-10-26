@@ -1008,16 +1008,18 @@
         width: max(0, width - 32 + leadingCompensation),
         height: titleHeight
       )
-      titleField.frame = titleFrame
+      if titleField.frame != titleFrame { titleField.frame = titleFrame }
 
       let bodyY = titleFrame.maxY
-      textView.frame = NSRect(x: 0, y: bodyY, width: width, height: 1)
-      textView.textContainer?.containerSize = NSSize(
-        width: width,
+      let measurementFrame = NSRect(x: 0, y: bodyY, width: width, height: textView.frame.height)
+      if textView.frame != measurementFrame { textView.frame = measurementFrame }
+      let containerSize = NSSize(
+        width: max(0, width - textView.textContainerInset.width * 2),
         height: .greatestFiniteMagnitude
       )
-      textView.sizeToFit()
-      textView.setFrameSize(NSSize(width: width, height: textView.frame.height))
+      if textView.textContainer?.containerSize != containerSize {
+        textView.textContainer?.containerSize = containerSize
+      }
       if let textContainer = textView.textContainer,
         let layoutManager = textView.layoutManager
       {
@@ -1030,14 +1032,15 @@
       let contentHeight = max(1, usedHeight + textInsets)
       let minimumBodyHeight = max(0, minimumHeight - bodyY - 10)
       let bodyHeight = max(contentHeight, minimumBodyHeight)
-      textView.setFrameSize(NSSize(width: width, height: bodyHeight))
+      let bodySize = NSSize(width: width, height: bodyHeight)
+      if textView.frame.size != bodySize { textView.setFrameSize(bodySize) }
 
       var documentFrame = frame
       documentFrame.size = NSSize(
         width: width,
         height: max(minimumHeight, bodyY + bodyHeight + 10)
       )
-      frame = documentFrame
+      if frame != documentFrame { frame = documentFrame }
     }
   }
 
@@ -1117,8 +1120,8 @@
       )
       contentView.scroll(to: contentOrigin)
       reflectScrolledClipView(contentView)
-      scrollerStyle = .overlay
-      verticalScroller?.controlSize = .mini
+      if scrollerStyle != .overlay { scrollerStyle = .overlay }
+      if verticalScroller?.controlSize != .mini { verticalScroller?.controlSize = .mini }
       updateScrollEdgeEffect()
     }
 

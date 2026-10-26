@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.10-beta.1] - 2026-10-26
+
+### Fixed
+
+- Avoid redundant native text-view frame updates during editor layout and use stable flexible
+  sizing for the notes panel root.
+
+Source-only port; CPU behavior, native resize/rendering, compilation and tests remain unverified.
+
 ## [1.4.9-beta.1] - 2026-10-26
 
 ### Fixed

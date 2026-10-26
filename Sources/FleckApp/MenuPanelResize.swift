@@ -1,6 +1,7 @@
 #if os(macOS)
   import AppKit
   import Combine
+  import CoreGraphics
   import SwiftUI
 
   enum MenuPanelFixedSide: Equatable {
@@ -435,6 +436,17 @@
   enum MenuPanelResizePublicationTiming: Equatable {
     case immediate
     case deferred
+  }
+
+  enum MenuPanelResizePointerInput {
+    static func canonicalPoint(from representation: CGEvent?) -> CGPoint? {
+      validated(representation?.unflippedLocation)
+    }
+
+    static func validated(_ point: CGPoint?) -> CGPoint? {
+      guard let point, point.x.isFinite, point.y.isFinite else { return nil }
+      return point
+    }
   }
 
   @MainActor
@@ -1319,31 +1331,47 @@
         resetCursor()
         return event
       }
+      let canonicalPointer: CGPoint?
       switch event.type {
       case .leftMouseDown:
-        return begin(event, in: window) ? nil : event
-      case .leftMouseDragged:
+        guard isLiveResizeEligible(in: window) else { return event }
+        canonicalPointer = MenuPanelResizePointerInput.canonicalPoint(from: event.cgEvent)
+      case .leftMouseDragged, .leftMouseUp:
         guard controller.isOwned(by: attachmentID) else { return event }
         guard isLiveResizeEligible(in: window) else {
           cancelAndRestore(in: window)
           return nil
         }
-        update(event, in: window)
+        canonicalPointer = MenuPanelResizePointerInput.canonicalPoint(from: event.cgEvent)
+      default:
+        canonicalPointer = nil
+      }
+      switch event.type {
+      case .leftMouseDown:
+        guard let canonicalPointer else { return event }
+        return begin(pointer: canonicalPointer, in: window) ? nil : event
+      case .leftMouseDragged:
+        guard let canonicalPointer else {
+          cancelAndRestore(in: window)
+          return nil
+        }
+        update(pointer: canonicalPointer, in: window)
         return nil
       case .leftMouseUp:
-        guard controller.isOwned(by: attachmentID) else { return event }
-        guard isLiveResizeEligible(in: window) else {
+        guard let canonicalPointer else {
           cancelAndRestore(in: window)
           return nil
         }
-        finish(event, in: window)
+        finish(pointer: canonicalPointer, in: window)
         return nil
       case .keyDown where event.keyCode == 53 && ownsTracking:
         cancelAndRestore(in: window)
         return nil
-      case .mouseMoved, .cursorUpdate:
+      case .mouseMoved:
         updateCursor(for: event, in: window)
         return event
+      case .cursorUpdate:
+        return updateCursor(for: event, in: window) ? nil : event
       case .mouseExited:
         resetCursor()
         return event
@@ -1357,7 +1385,7 @@
       in window: NSWindow
     ) -> MenuPanelResizeBeginReadiness {
       guard isLiveResizeEligible(in: window) else { return .blocked }
-      guard queuedRevision == nil else { return .reconciling }
+      if queuedRevision != nil, alignedFrame != window.frame { return .reconciling }
       guard let attachmentID,
         controller.isPresentationOwner(attachmentID),
         let statusButton = geometryStore?.resolveStatusButton(),
@@ -1371,11 +1399,7 @@
           statusLabelFrame: statusButton.screenFrame
         ),
         fixedSide == alignedFixedSide,
-        let handle = MenuPanelResizeGeometry.handle(
-          at: convert(locationInWindow, from: nil),
-          in: bounds,
-          fixedSide: fixedSide
-        )
+        let handle = usableHandle(at: locationInWindow, in: window, fixedSide: fixedSide)
       else { return .blocked }
       let contentRect = window.contentRect(forFrameRect: window.frame)
       let insets = MenuPanelFrameInsets(
@@ -1401,11 +1425,13 @@
       )
     }
 
-    private func begin(_ event: NSEvent, in window: NSWindow) -> Bool {
-      guard case let .ready(snapshot, handle, ownerID, statusButtonSource) = beginReadiness(
-        at: event.locationInWindow,
+    private func begin(pointer: CGPoint, in window: NSWindow) -> Bool {
+      guard case let .ready(initialSnapshot, handle, ownerID, statusButtonSource) = beginReadiness(
+        at: window.convertPoint(fromScreen: pointer),
         in: window
       ) else { return false }
+      var snapshot = initialSnapshot
+      snapshot.initialPointer = pointer
       guard controller.begin(snapshot: snapshot, handle: handle, ownerID: ownerID) else {
         return false
       }
@@ -1415,12 +1441,12 @@
       return true
     }
 
-    private func update(_ event: NSEvent, in window: NSWindow) {
+    private func update(pointer: CGPoint, in window: NSWindow) {
       guard let attachmentID,
         let statusLabelFrame = activeStatusButtonFrame(),
         let screen = window.screen,
         let proposal = controller.update(
-        pointer: window.convertPoint(toScreen: event.locationInWindow),
+        pointer: pointer,
         statusLabelFrame: statusLabelFrame,
         visibleFrame: screen.visibleFrame,
         ownerID: attachmentID,
@@ -1444,14 +1470,14 @@
       }
     }
 
-    private func finish(_ event: NSEvent, in window: NSWindow) {
+    private func finish(pointer: CGPoint, in window: NSWindow) {
       let endingStatusButton = geometryStore?.resolveStatusButton()
       guard let attachmentID,
         endingStatusButton?.sourceIdentity == activeStatusButtonSource,
         let statusLabelFrame = endingStatusButton?.screenFrame,
         let screen = window.screen,
         let transient = controller.update(
-          pointer: window.convertPoint(toScreen: event.locationInWindow),
+          pointer: pointer,
           statusLabelFrame: statusLabelFrame,
           visibleFrame: screen.visibleFrame,
           ownerID: attachmentID,
@@ -1515,7 +1541,7 @@
       _ = controller.clearCompletion(preferredSize: preferredSize, ownerID: attachmentID)
       invalidateQueuedWork()
       scheduleReconcile()
-      updateCursorForCurrentPointer(in: window)
+      updateCursor(at: window.convertPoint(fromScreen: pointer), in: window)
     }
 
     private func cancelAndRestore(
@@ -1587,13 +1613,19 @@
       reconcileNativePresentation()
     }
 
-    private func updateCursor(for event: NSEvent, in window: NSWindow) {
+    @discardableResult
+    private func updateCursor(for event: NSEvent, in window: NSWindow) -> Bool {
+      updateCursor(at: event.locationInWindow, in: window)
+    }
+
+    @discardableResult
+    private func updateCursor(at locationInWindow: CGPoint, in window: NSWindow) -> Bool {
       if let attachmentID, controller.isOwned(by: attachmentID),
         let handle = controller.currentHandle,
         let fixedSide = controller.currentFixedSide
       {
         setCursor(cursor(for: handle, fixedSide: fixedSide))
-        return
+        return true
       }
       guard isLiveResizeEligible(in: window),
         let statusLabelFrame = geometryStore?.cachedStatusButton?.screenFrame,
@@ -1601,16 +1633,48 @@
           panelFrame: window.frame,
           statusLabelFrame: statusLabelFrame
         ),
-        let handle = MenuPanelResizeGeometry.handle(
-          at: convert(event.locationInWindow, from: nil),
-          in: bounds,
-          fixedSide: fixedSide
-        )
+        let handle = usableHandle(at: locationInWindow, in: window, fixedSide: fixedSide)
       else {
         resetCursor()
-        return
+        return false
       }
       setCursor(cursor(for: handle, fixedSide: fixedSide))
+      return true
+    }
+
+    private func usableHandle(
+      at locationInWindow: CGPoint,
+      in window: NSWindow,
+      fixedSide: MenuPanelFixedSide
+    ) -> MenuPanelResizeHandle? {
+      guard let handle = MenuPanelResizeGeometry.handle(
+        at: convert(locationInWindow, from: nil), in: bounds, fixedSide: fixedSide
+      ) else { return nil }
+      if let contentView = window.contentView {
+        var hit = contentView.hitTest(contentView.convert(locationInWindow, from: nil))
+        while let view = hit {
+          if let control = view as? NSControl, control.isEnabled { return nil }
+          if let textView = view as? NSTextView,
+            let manager = textView.layoutManager, let container = textView.textContainer
+          {
+            let point = textView.convert(locationInWindow, from: nil)
+            let textPoint = CGPoint(
+              x: point.x - textView.textContainerOrigin.x,
+              y: point.y - textView.textContainerOrigin.y
+            )
+            if textPoint.x >= 0, point.x < textView.bounds.maxX - textView.textContainerOrigin.x {
+              let glyph = manager.glyphIndex(for: textPoint, in: container)
+              if glyph < manager.numberOfGlyphs,
+                manager.boundingRect(
+                  forGlyphRange: NSRange(location: glyph, length: 1), in: container
+                ).contains(textPoint)
+              { return nil }
+            }
+          }
+          hit = view.superview
+        }
+      }
+      return handle
     }
 
     private func activeStatusButtonFrame() -> CGRect? {
@@ -1714,7 +1778,7 @@
       }
       guard !controller.isTracking else { return }
       guard let screen = window.screen,
-        let statusButton = geometryStore?.resolveStatusButton()
+        let statusButton = geometryStore?.cachedStatusButton ?? geometryStore?.resolveStatusButton()
       else {
         applyOwnedContainedFallback(
           frame: window.frame,
@@ -1951,14 +2015,6 @@
       alignedFrame = nil
     }
 
-    private func updateCursorForCurrentPointer(in window: NSWindow) {
-      guard let event = NSApp.currentEvent else {
-        resetCursor()
-        return
-      }
-      updateCursor(for: event, in: window)
-    }
-
     func cursor(
       for handle: MenuPanelResizeHandle,
       fixedSide: MenuPanelFixedSide
@@ -1985,9 +2041,8 @@
     }
 
     private func setCursor(_ cursor: NSCursor) {
-      guard self.cursor !== cursor else { return }
       self.cursor = cursor
-      cursor.set()
+      if NSCursor.current !== cursor { cursor.set() }
     }
 
     private func resetCursor() {
