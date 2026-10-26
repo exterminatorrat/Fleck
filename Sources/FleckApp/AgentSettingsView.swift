@@ -1,5 +1,6 @@
 #if os(macOS)
   import AppKit
+  import FleckCore
   import SwiftUI
 
   enum AgentProfilesPresentation {
