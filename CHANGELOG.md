@@ -3,6 +3,16 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.9-beta.1] - 2026-10-26
+
+### Fixed
+
+- Insert native tabs in empty plain paragraphs and populated bullet content while preserving
+  list nesting, paragraph tab policies, selection undo and prefix-safe caret movement.
+
+Source checkpoint only; Swift tests, builds, native rendering and AppKit caret blinking remain
+unverified.
+
 ## [1.4.8-beta.1] - 2026-10-26
 
 ### Changed

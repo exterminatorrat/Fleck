@@ -2460,6 +2460,37 @@
       let paragraphRange = ns.paragraphRange(
         for: NSRange(location: selection.location, length: 0)
       )
+      if isEditable,
+        ns.character(at: selection.location - 1) == 0x09,
+        let item = bulletListItem(at: selection.location, string: ns),
+        selection.location > item.contentRange.location
+      {
+        breakUndoCoalescing()
+        performUndoGroup {
+          registerSelectionUndo(selection)
+          super.deleteBackward(sender)
+          registerSelectionUndo(selectedRange())
+        }
+        breakUndoCoalescing()
+        return
+      }
+      if let item = parsedListItem(in: paragraphRange, string: ns),
+        case .bullet = item.parsed.style,
+        item.contentRange.length == 0,
+        selection.location == item.contentRange.location
+      {
+        performUndoGroup {
+          _ = replaceText(
+            in: NSRange(
+              location: paragraphRange.location,
+              length: item.contentRange.location - paragraphRange.location
+            ),
+            with: "",
+            selecting: NSRange(location: paragraphRange.location, length: 0)
+          )
+        }
+        return
+      }
       guard let item = checklistItem(in: paragraphRange, string: ns),
         item.contentRange.length == 0,
         selection.location == item.contentRange.location
@@ -2478,6 +2509,28 @@
           selecting: NSRange(location: item.markerRange.location, length: 0)
         )
       }
+    }
+
+    override func moveLeft(_ sender: Any?) {
+      let selection = selectedRange()
+      let ns = string as NSString
+      guard selection.length == 0,
+        let item = bulletListItem(at: selection.location, string: ns),
+        selection.location == item.contentRange.location,
+        item.paragraphRange.location > 0
+      else {
+        super.moveLeft(sender)
+        return
+      }
+
+      let previousParagraph = ns.paragraphRange(
+        for: NSRange(location: item.paragraphRange.location - 1, length: 0)
+      )
+      let previousText = ns.substring(with: previousParagraph)
+      let previousContentLength = previousText.trimmingCharacters(in: .newlines).utf16.count
+      setSelectedRange(
+        NSRange(location: previousParagraph.location + previousContentLength, length: 0)
+      )
     }
 
     override func resetCursorRects() {
@@ -2592,7 +2645,98 @@
       }
     }
 
-    override func insertTab(_ sender: Any?) { indentSelectedLines(removing: false) }
+    override func insertTab(_ sender: Any?) {
+      guard isEditable else { return }
+      if hasMarkedText() {
+        super.insertTab(sender)
+        return
+      }
+      clearInlineImageTypingAttributes()
+      let selection = selectedRange()
+      let ns = string as NSString
+      if selection.length == 0,
+        selection.location != NSNotFound,
+        selection.location >= 0,
+        selection.location <= ns.length,
+        ns.substring(with: ns.paragraphRange(for: selection))
+          .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      {
+        breakUndoCoalescing()
+        performUndoGroup {
+          registerSelectionUndo(selection)
+          super.insertText("\t", replacementRange: selection)
+          registerSelectionUndo(selectedRange())
+        }
+        breakUndoCoalescing()
+        return
+      }
+      if selection.length == 0,
+        selection.location != NSNotFound,
+        selection.location >= 0,
+        selection.location <= ns.length,
+        let item = bulletListItem(at: selection.location, string: ns),
+        !item.parsed.content.isEmpty,
+        selection.location >= item.contentRange.location,
+        selection.location <= NSMaxRange(item.contentRange)
+      {
+        guard let storage = textStorage else { return }
+        let paragraphRange = item.paragraphRange
+        let fontLocation = min(selection.location, storage.length - 1)
+        let font = (typingAttributes[.font] as? NSFont)
+          ?? (storage.attribute(.font, at: fontLocation, effectiveRange: nil) as? NSFont)
+          ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let baselineParagraphStyle = EditorTypography.defaultParagraphStyle(
+          fontSize: font.pointSize
+        )
+        let existingParagraphStyle =
+          storage.attribute(.paragraphStyle, at: paragraphRange.location, effectiveRange: nil)
+          as? NSParagraphStyle
+        let paragraphStyle =
+          (existingParagraphStyle ?? baselineParagraphStyle).mutableCopy()
+          as! NSMutableParagraphStyle
+        let matchesDefaultTabLayout =
+          paragraphStyle.defaultTabInterval == baselineParagraphStyle.defaultTabInterval
+          && paragraphStyle.tabStops.count == baselineParagraphStyle.tabStops.count
+          && zip(paragraphStyle.tabStops, baselineParagraphStyle.tabStops).allSatisfy { tabs in
+            tabs.0.isEqual(tabs.1)
+          }
+        if matchesDefaultTabLayout,
+          !ns.substring(with: paragraphRange).contains("\t")
+        {
+          paragraphStyle.tabStops = []
+          paragraphStyle.defaultTabInterval =
+            item.parsed.depth == 0
+            ? 36
+            : 3 * (" " as NSString).size(withAttributes: [.font: font]).width
+        }
+
+        let attributedParagraph = NSMutableAttributedString(
+          attributedString: storage.attributedSubstring(from: paragraphRange)
+        )
+        attributedParagraph.addAttribute(
+          .paragraphStyle,
+          value: paragraphStyle,
+          range: NSRange(location: 0, length: attributedParagraph.length)
+        )
+        var tabAttributes = typingAttributes
+        tabAttributes[.paragraphStyle] = paragraphStyle
+        attributedParagraph.insert(
+          NSAttributedString(string: "\t", attributes: tabAttributes),
+          at: selection.location - paragraphRange.location
+        )
+        performUndoGroup {
+          registerSelectionUndo(selection)
+          guard replaceAttributedText(
+            in: paragraphRange,
+            with: attributedParagraph,
+            selecting: NSRange(location: selection.location + 1, length: 0)
+          ) else { return }
+          registerSelectionUndo(selectedRange())
+        }
+        return
+      }
+      indentSelectedLines(removing: false)
+    }
     override func insertBacktab(_ sender: Any?) { indentSelectedLines(removing: true) }
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
@@ -3223,6 +3367,7 @@
         )
         : nil
       performUndoGroup {
+        registerSelectionUndo(selection)
         replaceSelectedLines(
           range,
           original: original,
@@ -3237,6 +3382,7 @@
           around: NSRange(location: range.location, length: changed.utf16.count),
           preservingEmptyListCaretAt: collapsedEmptyListCaret?.location
         )
+        registerSelectionUndo(selectedRange())
       }
     }
 
@@ -3472,10 +3618,22 @@
     }
 
     override func setSelectedRange(_ range: NSRange) {
-      let changed = range != selectedRange()
-      super.setSelectedRange(range)
+      let normalizedRange = normalizedBulletCaretRange(range)
+      let changed = normalizedRange != selectedRange()
+      super.setSelectedRange(normalizedRange)
       clearInlineImageTypingAttributes()
       if changed, !isApplyingPasteOption { cancelPasteOptions() }
+    }
+
+    override func selectionRange(
+      forProposedRange proposedCharRange: NSRange,
+      granularity: NSSelectionGranularity
+    ) -> NSRange {
+      let proposed = super.selectionRange(
+        forProposedRange: proposedCharRange,
+        granularity: granularity
+      )
+      return normalizedBulletCaretRange(proposed)
     }
 
     override func setSelectedRanges(
@@ -3484,7 +3642,10 @@
       stillSelecting flag: Bool
     ) {
       let previousRanges = selectedRanges
-      super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: flag)
+      let adjustedRanges = ranges.map {
+        NSValue(range: normalizedBulletCaretRange($0.rangeValue))
+      }
+      super.setSelectedRanges(adjustedRanges, affinity: affinity, stillSelecting: flag)
       clearInlineImageTypingAttributes()
       guard !isApplyingPasteOption else { return }
       let currentRanges = selectedRanges
@@ -4048,6 +4209,49 @@
       )
     }
 
+    private func bulletListItem(at location: Int, string ns: NSString) -> (
+      paragraphRange: NSRange,
+      markerRange: NSRange,
+      contentRange: NSRange,
+      parsed: ParsedEditorListLine
+    )? {
+      guard location != NSNotFound, location >= 0, location <= ns.length else { return nil }
+      let probe = location == ns.length && location > 0 ? location - 1 : location
+      let paragraphRange = ns.paragraphRange(
+        for: NSRange(location: probe, length: 0)
+      )
+      guard let item = parsedListItem(in: paragraphRange, string: ns),
+        case .bullet = item.parsed.style
+      else {
+        return nil
+      }
+      return (
+        paragraphRange: paragraphRange,
+        markerRange: item.markerRange,
+        contentRange: item.contentRange,
+        parsed: item.parsed
+      )
+    }
+
+    private func normalizedBulletCaretRange(_ range: NSRange) -> NSRange {
+      let ns = string as NSString
+      guard range.location != NSNotFound,
+        range.location >= 0,
+        range.location <= ns.length,
+        range.length <= ns.length - range.location
+      else {
+        return range
+      }
+
+      guard range.length == 0,
+        let item = bulletListItem(at: range.location, string: ns),
+        range.location < item.contentRange.location
+      else {
+        return range
+      }
+      return NSRange(location: item.contentRange.location, length: 0)
+    }
+
     private func rangesExcluding(
       _ range: NSRange,
       ranges excludedRanges: [NSRange]
@@ -4301,6 +4505,13 @@
         let format = paragraphStyle.textLists.last?.markerFormat
       else { return nil }
       return EditorNumberStyle(markerFormat: format)
+    }
+
+    private func registerSelectionUndo(_ selection: NSRange) {
+      undoManager?.registerUndo(withTarget: self) { textView in
+        textView.registerSelectionUndo(textView.selectedRange())
+        textView.setSelectedRange(selection)
+      }
     }
 
     private func performUndoGroup(_ action: () -> Void) {
