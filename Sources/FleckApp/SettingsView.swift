@@ -418,6 +418,7 @@
 
   struct SettingsPageHeader: View {
     @Environment(\.fleckThemeSnapshot) private var theme
+    @Environment(\.fleckUIFont) private var uiFont
     @ScaledMetric(relativeTo: .title2) private var generalTitleSize = 20
     let section: SettingsSection
     let searchRequest: SettingsSearchRequest?
@@ -442,13 +443,13 @@
           Text(title ?? section.title)
             .font(
               section == .editing
-                ? .system(size: generalTitleSize, weight: .semibold)
-                : .title2.weight(.semibold)
+                ? uiFont.font(size: generalTitleSize, weight: .semibold)
+                : uiFont.font(.title2, weight: .semibold)
             )
             .background(SettingsPageHeaderProbe())
           if section != .editing {
             Text(section.description)
-              .font(.callout)
+              .fleckUIFont(.callout)
               .foregroundStyle(theme.color(.textSecondary))
               .fixedSize(horizontal: false, vertical: true)
           }
@@ -474,7 +475,7 @@
     var body: some View {
       VStack(alignment: .leading, spacing: 8) {
         Text(title)
-          .font(.headline)
+          .fleckUIFont(.headline)
 
         VStack(alignment: .leading, spacing: 12) {
           content
@@ -511,9 +512,9 @@
       HStack(alignment: .top, spacing: 16) {
         VStack(alignment: .leading, spacing: 3) {
           Text(title)
-            .font(.body.weight(.semibold))
+            .fleckUIFont(.body, weight: .semibold)
           Text(detail)
-            .font(.caption)
+            .fleckUIFont(.caption)
             .foregroundStyle(theme.color(.caption))
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -541,6 +542,7 @@
 
   private struct SettingsToggleRow: View {
     @Environment(\.fleckThemeSnapshot) private var theme
+    @Environment(\.fleckUIFont) private var uiFont
     @ScaledMetric(relativeTo: .body) private var generalTitleSize = 13
     @ScaledMetric(relativeTo: .callout) private var generalDetailSize = 12
     let title: String
@@ -569,12 +571,12 @@
       HStack(alignment: .top, spacing: 16) {
         VStack(alignment: .leading, spacing: 3) {
           Text(title)
-            .font(.system(size: generalTitleSize, weight: .regular))
+            .font(uiFont.font(size: generalTitleSize))
             .background(
               SettingsTypographyProbe(identifier: "settings-general-title-\(title)")
             )
           Text(detail)
-            .font(.system(size: generalDetailSize, weight: .regular))
+            .font(uiFont.font(size: generalDetailSize))
             .foregroundStyle(theme.color(.textSecondary))
             .fixedSize(horizontal: false, vertical: true)
             .background(
@@ -609,6 +611,7 @@
 
   private struct GeneralSettingsGroup<Content: View>: View {
     @Environment(\.fleckThemeSnapshot) private var theme
+    @Environment(\.fleckUIFont) private var uiFont
     @ScaledMetric(relativeTo: .callout) private var titleSize = 12
     let title: String
     let content: Content
@@ -621,7 +624,7 @@
     var body: some View {
       VStack(alignment: .leading, spacing: 8) {
         Text(title)
-          .font(.system(size: titleSize, weight: .medium))
+          .font(uiFont.font(size: titleSize, weight: .medium))
           .background(
             SettingsTypographyProbe(identifier: "settings-general-section-\(title)")
           )
@@ -884,6 +887,7 @@
   struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.fleckThemeSnapshot) private var theme
+    @Environment(\.fleckUIFont) private var uiFont
     @ObservedObject var runtime: DictationRuntime
     @ObservedObject private var personalDictionarySettingsViewModel:
       PersonalDictionarySettingsViewModel
@@ -902,6 +906,7 @@
     @State private var searchRequest: SettingsSearchRequest?
     @State private var vocabularyPageScrollRequestID: UUID?
     @State private var isDictationPrivacyExpanded = false
+    @State private var isUIFontPickerPresented = false
 
     init(runtime: DictationRuntime, buildIdentity: BuildIdentity = .current()) {
       self.runtime = runtime
@@ -1180,10 +1185,15 @@
       selectedSection = .models
     }
 
+    private var uiFontDisplayName: String {
+      guard let family = appState.preferences.uiFontFamily else { return "System" }
+      return uiFont.fontName == nil ? "\(family) (unavailable — using System)" : family
+    }
+
     private var appearance: some View {
       VStack(alignment: .leading, spacing: 12) {
         Text("Interface")
-          .font(.headline)
+          .fleckUIFont(.headline)
         SettingsPreferenceRow(
           "Appearance",
           detail: "Follow macOS, or keep Fleck in Light or Dark mode."
@@ -1208,6 +1218,31 @@
         }
         .settingsSearchAnchor(.appearanceColorTheme, request: searchRequest)
         SettingsPreferenceRow(
+          "Interface font",
+          detail: "Use an installed font for Fleck’s interface. Note text and saved formatting stay unchanged."
+        ) {
+          Button(uiFontDisplayName) {
+            isUIFontPickerPresented = true
+          }
+          .lineLimit(1)
+          .accessibilityLabel("Interface font")
+          .accessibilityValue(uiFontDisplayName)
+          .accessibilityHint("Choose an installed interface font or return to System.")
+          .popover(isPresented: $isUIFontPickerPresented, arrowEdge: .bottom) {
+            FontFamilyPicker(
+              currentFamily: appState.preferences.uiFontFamily ?? ".AppleSystemUIFont",
+              isMixed: false,
+              targetLabel: "Fleck interface",
+              onCommit: { family in
+                appState.updatePreferences { $0.uiFontFamily = family }
+                isUIFontPickerPresented = false
+              },
+              onCancel: { isUIFontPickerPresented = false }
+            )
+            .frame(width: 280, height: 320)
+          }
+        }
+        SettingsPreferenceRow(
           "Window appearance",
           detail: "Use solid chrome or subtle glass while keeping the editor canvas opaque."
         ) {
@@ -1230,7 +1265,7 @@
         .settingsSearchAnchor(.appearanceGlassOpacity, request: searchRequest)
 
         Text("Menu size")
-          .font(.headline)
+          .fleckUIFont(.headline)
           .padding(.top, 12)
         SettingsPreferenceRow(
           "Width",

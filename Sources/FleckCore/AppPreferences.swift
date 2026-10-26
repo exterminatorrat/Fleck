@@ -15,6 +15,9 @@ public struct AppPreferences: Codable, Equatable, Sendable {
 
   public var fontFamily: String
   public var fontSize: Double
+  public var uiFontFamily: String? {
+    didSet { uiFontFamily = Self.normalizedUIFontFamily(uiFontFamily) }
+  }
   public var editorTypographyVersion: Int
   public var accentHex: String
   public var editorTextHex: String?
@@ -53,6 +56,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
 
   public init(
     fontFamily: String = "Avenir Next", fontSize: Double = 17,
+    uiFontFamily: String? = nil,
     editorTypographyVersion: Int = AppPreferences.currentEditorTypographyVersion,
     accentHex: String = AppPreferences.defaultAccentHex, editorTextHex: String? = nil,
     editorBackgroundHex: String? = nil, panelOpacity: Double = 0.82,
@@ -80,6 +84,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   ) {
     self.fontFamily = fontFamily
     self.fontSize = fontSize
+    self.uiFontFamily = Self.normalizedUIFontFamily(uiFontFamily)
     self.editorTypographyVersion = editorTypographyVersion
     self.accentHex = accentHex
     self.editorTextHex = editorTextHex
@@ -116,7 +121,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   }
 
   private enum CodingKeys: String, CodingKey {
-    case fontFamily, fontSize, editorTypographyVersion, accentHex, editorTextHex,
+    case fontFamily, fontSize, uiFontFamily, editorTypographyVersion, accentHex, editorTextHex,
       editorBackgroundHex, panelOpacity, theme, colorTheme, chromeAppearance, panelWidth, panelHeight, panelSizingVersion,
       pinnedPanelWidth, pinnedPanelHeight, showFormattingBar, showAgentUpdateBanners,
       isUnfiledCompact, confirmBeforeMovingNotesToTrash, automaticLists,
@@ -203,6 +208,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     self.init(
       fontFamily: migratesUntouchedTypography ? "Avenir Next" : decodedFamily,
       fontSize: migratesUntouchedTypography ? 17 : decodedSize,
+      uiFontFamily: try? c.decodeIfPresent(String.self, forKey: .uiFontFamily),
       editorTypographyVersion:
         decodedTypographyVersion ?? Self.currentEditorTypographyVersion,
       accentHex: decodedAccentHex ?? Self.defaultAccentHex,
@@ -261,6 +267,15 @@ public struct AppPreferences: Codable, Equatable, Sendable {
         OnboardingProgress.self,
         forKey: .onboardingProgress
       ))
+  }
+
+  private static func normalizedUIFontFamily(_ value: String?) -> String? {
+    guard let family = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !family.isEmpty, !family.hasPrefix("."),
+      !family.contains("/"), !family.contains("\\"),
+      family.rangeOfCharacter(from: .controlCharacters) == nil
+    else { return nil }
+    return family
   }
 
   private static func clampedPanelDimension(

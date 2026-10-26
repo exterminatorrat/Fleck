@@ -1033,7 +1033,7 @@
               if bannerDismissalState.isPresented(occurrence) {
                 HStack(spacing: 8) {
                   Label(failure.message, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
+                    .fleckUIFont(.caption)
                   Spacer()
                   ForEach(failure.actions, id: \.pane) { action in
                     Button(action.title) {
@@ -1690,6 +1690,7 @@
               .foregroundStyle(note.id == appState.workspace.selectedNoteID
                 ? selectedTabLabelInk(for: note)
                 : theme.color(.textPrimary))
+              .fleckUIFont(.body)
               .padding(.horizontal, 10)
               .padding(.vertical, 6)
               .contentShape(Capsule())
@@ -5324,7 +5325,7 @@
             .transition(.opacity)
         }
       }
-      .font(.caption)
+      .fleckUIFont(.caption)
       .frame(width: 62, height: 22, alignment: .trailing)
       .animation(motion.quick, value: status)
       .accessibilityElement(children: .combine)

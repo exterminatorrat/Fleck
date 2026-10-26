@@ -191,6 +191,7 @@
 
     func fleckTheme(_ appState: AppState) -> some View {
       environment(\.fleckThemeSnapshot, appState.themeSnapshot)
+        .fleckUIFontFamily(appState.preferences.uiFontFamily)
         .environment(\.colorScheme, appState.themeSnapshot.colorScheme)
         .tint(appState.themeSnapshot.color(.accent))
         .animation(nil, value: appState.themeSnapshot.revision)
