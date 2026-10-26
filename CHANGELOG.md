@@ -3,6 +3,16 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.11-beta.1] - 2026-10-26
+
+### Fixed
+
+- Port theme-matched agent-update and capture-failure banner surfaces, plus an inline opt-out
+  wired to the existing agent-banner preference.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests, visual/accessibility inspection and native behavior remain unverified.
+
 ## [1.4.10-beta.1] - 2026-10-26
 
 ### Fixed
