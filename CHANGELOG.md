@@ -3,6 +3,16 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.8-beta.1] - 2026-10-26
+
+### Changed
+
+- Adds an explicit Cursor MCP setup flow with a documented local install prompt,
+  scope-preserving profile selection, cancellation and manual JSON fallback.
+- Keeps prepared profiles distinct from client acceptance and verified connection.
+
+Source checkpoint only; compilation, native UI and live client verification remain pending.
+
 ## [1.4.7-beta.1] - 2026-10-08
 
 Private development candidate only; this correction is not an accepted build or public release.
