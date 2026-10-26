@@ -735,6 +735,57 @@
     }
   }
 
+  enum TabTitlePresentation {
+    static let maximumWidth: CGFloat = 160
+    static let fadeWidth: CGFloat = 12
+  }
+
+  struct NoteTabTitleFadeMask: View {
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    private var gradientStartPoint: UnitPoint {
+      layoutDirection == .leftToRight ? UnitPoint(x: 0, y: 0.5) : UnitPoint(x: 1, y: 0.5)
+    }
+
+    private var gradientEndPoint: UnitPoint {
+      layoutDirection == .leftToRight ? UnitPoint(x: 1, y: 0.5) : UnitPoint(x: 0, y: 0.5)
+    }
+
+    var body: some View {
+      HStack(spacing: 0) {
+        Color.white
+        LinearGradient(
+          colors: [.white, .clear],
+          startPoint: gradientStartPoint,
+          endPoint: gradientEndPoint
+        )
+        .frame(width: TabTitlePresentation.fadeWidth)
+      }
+      .frame(width: TabTitlePresentation.maximumWidth, alignment: .leading)
+    }
+  }
+
+  private struct NoteTabTitleLabel: View {
+    let title: String
+
+    var body: some View {
+      ViewThatFits(in: .horizontal) {
+        Text(title)
+          .lineLimit(1)
+          .fixedSize(horizontal: true, vertical: false)
+        Text(title)
+          .lineLimit(1)
+          .fixedSize(horizontal: true, vertical: false)
+          .frame(width: TabTitlePresentation.maximumWidth, alignment: .leading)
+          .clipped()
+          .mask { NoteTabTitleFadeMask() }
+      }
+      .frame(maxWidth: TabTitlePresentation.maximumWidth, alignment: .leading)
+      .fixedSize(horizontal: true, vertical: false)
+      .accessibilityLabel(title)
+    }
+  }
+
   enum FontSizeSubmission {
     static func requestedSize(
       for text: String,
@@ -1629,7 +1680,7 @@
                   Image(systemName: "pin.fill")
                     .font(.caption2)
                 }
-                Text(note.displayTitle).lineLimit(1)
+                NoteTabTitleLabel(title: note.displayTitle)
                 if appState.isSharedWithAnyActiveProfile(note.id) {
                   Image(systemName: "point.3.connected.trianglepath.dotted")
                     .font(.caption2)

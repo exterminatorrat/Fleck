@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.12-beta.1] - 2026-10-26
+
+### Fixed
+
+- Cap note-tab title labels with a semantic trailing fade while preserving full accessible titles.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests, visual/accessibility inspection and native behavior remain unverified.
+
 ## [1.4.11-beta.1] - 2026-10-26
 
 ### Fixed
