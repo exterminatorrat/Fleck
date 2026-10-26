@@ -1369,8 +1369,18 @@ func DictationAccessibilityKeepsProcessingLabelSlotFencedUntilTheDelay() async {
   await gate.waitUntilWaiting()
   #expect(!model.showsProcessingLabel)
   #expect(DictationCapsuleMotion.processingLabelDelay == .milliseconds(450))
+  let (labels, continuation) = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingNewest(1))
+  let subscription = model.$showsProcessingLabel.sink { value in
+    continuation.yield(value)
+  }
+  defer {
+    subscription.cancel()
+    continuation.finish()
+  }
   await gate.resume()
-  #expect(await model.$showsProcessingLabel.values.first(where: { $0 }) == true)
+  for await shown in labels {
+    if shown { break }
+  }
   #expect(model.showsProcessingLabel)
 }
 
