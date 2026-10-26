@@ -142,7 +142,7 @@ struct AgentClientSetupTests {
   @Test func cursorInstallLinkPercentEncodesBase64ReservedCharacters() throws {
     let repeatedQuestionMarks = String(repeating: "?", count: 12)
     let repeatedTildes = String(repeating: "~", count: 12)
-    let rawQueries = (0..<3).compactMap { padding in
+    let rawQueries = (0..<3).compactMap { padding -> String? in
       let suffix = String(repeating: "x", count: padding)
       let helper = URL(
         fileURLWithPath: "/tmp/\(repeatedQuestionMarks)\(repeatedTildes)\(suffix)/fleck"
