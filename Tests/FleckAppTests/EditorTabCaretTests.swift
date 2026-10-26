@@ -98,7 +98,9 @@ private func threeSpaceTabInterval(for font: NSFont) -> CGFloat {
   let (view, window) = tabCaretEditor("• item")
   defer { window.contentView = nil }
   view.setSelectedRange(NSRange(location: 2, length: 0))
-  view.undoManager?.removeAllActions()
+  let undo = try #require(view.undoManager)
+  undo.groupsByEvent = false
+  undo.removeAllActions()
 
   view.insertTab(nil)
   view.insertTab(nil)
@@ -116,7 +118,6 @@ private func threeSpaceTabInterval(for font: NSFont) -> CGFloat {
   #expect(view.string == "• item")
   #expect(view.selectedRange() == NSRange(location: 2, length: 0))
 
-  let undo = try #require(view.undoManager)
   undo.undo()
   #expect(view.string == "• \titem")
   #expect(view.selectedRange() == NSRange(location: 3, length: 0))
@@ -176,7 +177,7 @@ private func threeSpaceTabInterval(for font: NSFont) -> CGFloat {
     persisted.textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
   )
   #expect(abs(persistedStyle.defaultTabInterval - threeSpaceTabInterval(for: font)) < 0.01)
-  #expect(persistedStyle.tabStops.isEmpty)
+  #expect(persistedStyle.isEqual(persistedThreeSpaces))
 
   let custom = NSMutableParagraphStyle()
   custom.defaultTabInterval = 24
