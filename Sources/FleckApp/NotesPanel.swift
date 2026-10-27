@@ -1077,14 +1077,14 @@
               .layoutPriority(1)
             if let error = appState.saveError {
               Text("Could not save: \(error)")
-                .font(.caption)
+                .fleckUIFont(.caption)
                 .foregroundStyle(theme.color(.error))
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let error = appState.noteFileReferenceError {
               Text(error)
-                .font(.caption)
+                .fleckUIFont(.caption)
                 .foregroundStyle(theme.color(.error))
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1412,13 +1412,13 @@
           .font(.system(size: 28))
           .foregroundStyle(theme.color(.error))
         Text("Fleck needs your help")
-          .font(.headline)
+          .fleckUIFont(.headline)
         Text(
           "Fleck found both legacy and current note data. Nothing was changed. "
             + "Close Fleck and resolve the two Application Support folders "
             + "before reopening it."
         )
-        .font(.callout)
+        .fleckUIFont(.callout)
         .multilineTextAlignment(.center)
         .foregroundStyle(theme.color(.textSecondary))
         Text(String(describing: error))
@@ -2679,6 +2679,7 @@
     @EnvironmentObject private var appState: AppState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.fleckThemeSnapshot) private var theme
+    @Environment(\.fleckUIFont) private var uiFont
     @FocusState private var focusedRow: FocusedRow?
     @FocusState private var isUnfiledDisclosureFocused: Bool
     @Binding private var draggedSource: NoteDropSource?
@@ -3332,7 +3333,7 @@
       func makeBody(configuration: Configuration) -> some View {
         let isSave = role == .save
         return configuration.label
-          .font(.caption.weight(isSave ? .semibold : .medium))
+          .fleckUIFont(.caption, weight: isSave ? .semibold : .medium)
           .foregroundStyle(isSave ? accent : theme.color(.textSecondary))
           .frame(height: 22)
           .padding(.horizontal, 8)
@@ -3423,7 +3424,7 @@
           Spacer(minLength: 4)
         }
         Text(count, format: .number)
-          .font(.caption.monospacedDigit())
+          .font(uiFont.font(.caption).monospacedDigit())
           .foregroundStyle(theme.color(.caption))
       }
       .padding(.horizontal, 8)
@@ -3912,9 +3913,9 @@
         VStack(alignment: .leading, spacing: 16) {
           VStack(alignment: .leading, spacing: 6) {
             Text("Delete \(folder.name)?")
-              .font(.headline)
+              .fleckUIFont(.headline)
             Text("Notes in this folder move to Unfiled. No notes are deleted.")
-              .font(.callout)
+              .fleckUIFont(.callout)
               .foregroundStyle(theme.color(.textSecondary))
           }
 
@@ -3951,9 +3952,9 @@
         VStack(alignment: .leading, spacing: 16) {
           VStack(alignment: .leading, spacing: 6) {
             Text("Move “\(note.displayTitle)” to Trash?")
-              .font(.headline)
+              .fleckUIFont(.headline)
             Text("This note can be restored from Trash for 30 days.")
-              .font(.callout)
+              .fleckUIFont(.callout)
               .foregroundStyle(theme.color(.textSecondary))
           }
 
@@ -4010,11 +4011,11 @@
           .foregroundStyle(.secondary)
         VStack(alignment: .leading, spacing: 1) {
           Text(presentation.statusCopy)
-            .font(.caption)
+            .fleckUIFont(.caption)
             .foregroundStyle(theme.color(.caption))
           if let detail = presentation.detailCopy {
             Text(detail)
-              .font(.caption2)
+              .fleckUIFont(.caption2)
               .foregroundStyle(theme.color(.caption))
           }
           if mode != .recovery {
@@ -4030,17 +4031,17 @@
               .popover(isPresented: $showsSmartCaptureHelp, arrowEdge: .bottom) {
                 VStack(alignment: .leading, spacing: 6) {
                   Text("Smart Capture")
-                    .font(.headline)
+                    .fleckUIFont(.headline)
                   Text(Self.smartCaptureHelp)
                   Text("Example: “Travel plans.”")
                     .foregroundStyle(theme.color(.textSecondary))
                 }
-                .font(.callout)
+                .fleckUIFont(.callout)
                 .frame(width: 280, alignment: .leading)
                 .padding(12)
               }
             }
-            .font(.caption2)
+            .fleckUIFont(.caption2)
             .foregroundStyle(theme.color(.caption))
           }
         }
