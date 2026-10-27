@@ -13,6 +13,8 @@ public release log. Packaging unchanged source does not add a changelog entry.
   backgrounds, and copy whole list items and managed-image references without changing selections.
 - Preserve relative paragraph tail indents through editor loading and saving, dictated
   appends and agent rich-text mutations without changing their existing fallback or error behavior.
+- Commit font-size changes only after editing, with a centered field, hover/focus underline
+  and a native Mixed placeholder that leaves the numeric edit string empty.
 
 This checkpoint is part of the retained-feature 1.7.0-beta.1 development cohort, not a
 separate release. Local compilation, tests and native visual/accessibility behavior remain

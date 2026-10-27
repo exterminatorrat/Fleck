@@ -4102,6 +4102,8 @@
     let onDelete: () -> Void
     @State private var fontPickerTarget: FontPickerTarget?
     @State private var fontSizeText = ""
+    @State private var hasUncommittedFontSizeEdit = false
+    @State private var isFontSizeHovered = false
     @FocusState private var isFontSizeFocused: Bool
     @State private var fontSizePickerNoteID: UUID?
     @State private var webLinkTarget: EditorWebLinkTarget?
@@ -4998,16 +5000,35 @@
     }
 
     private func fontSizeField(targetNoteID: UUID? = nil) -> some View {
-      TextField("Font size", text: $fontSizeText)
+      TextField(
+        "Size",
+        text: Binding(
+          get: { fontSizeText },
+          set: { value in
+            guard value != fontSizeText else { return }
+            fontSizeText = value
+            hasUncommittedFontSizeEdit = true
+          }
+        ),
+        prompt: Text(commands.isFontSizeMixed ? "Mixed" : "Size")
+      )
         .textFieldStyle(.plain)
         .focusEffectDisabled()
+        .multilineTextAlignment(.center)
+        .monospacedDigit()
         .frame(width: 48)
         .focused($isFontSizeFocused)
-        .fleckNeutralControlOutline(
-          isFocused: isFontSizeFocused,
-          cornerRadius: 6,
-          idleOpacity: 0.22
-        )
+        .overlay(alignment: .bottom) {
+          Rectangle()
+            .fill(
+              isFontSizeFocused
+                ? theme.color(.accent)
+                : isFontSizeHovered ? Color.primary.opacity(0.22) : .clear
+            )
+            .frame(height: isFontSizeFocused ? 1.5 : 1)
+            .padding(.horizontal, 4)
+        }
+        .onHover { isFontSizeHovered = $0 }
         .onChange(of: isFontSizeFocused) { wasFocused, isFocused in
           if wasFocused && !isFocused { applyFontSizeText(targetNoteID: targetNoteID) }
         }
@@ -5067,12 +5088,15 @@
       guard isEditorVisible,
         targetNoteID == nil || targetNoteID == appState.selectedNote?.id
       else { return }
-      if let size = FontSizeSubmission.requestedSize(
-        for: fontSizeText,
-        currentSize: commands.currentFontSize,
-        isMixed: commands.isFontSizeMixed
-      ) {
-        _ = commands.applyFontSize(size)
+      if hasUncommittedFontSizeEdit {
+        hasUncommittedFontSizeEdit = false
+        if let size = FontSizeSubmission.requestedSize(
+          for: fontSizeText,
+          currentSize: commands.currentFontSize,
+          isMixed: commands.isFontSizeMixed
+        ) {
+          _ = commands.applyFontSize(size)
+        }
       }
       fontSizeText = fontSizeDisplay
     }
