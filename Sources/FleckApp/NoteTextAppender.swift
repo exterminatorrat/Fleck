@@ -199,10 +199,7 @@
       } else {
         appended.append(NSAttributedString(string: text, attributes: defaults.attributes))
       }
-      let rtf = try! appended.data(
-        from: NSRange(location: 0, length: appended.length),
-        documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
-      )
+      let rtf = try! NoteRichTextCodec.encode(appended)
       return NoteTextAppendResult(
         body: note.body + suffix,
         richTextRTF: rtf,
@@ -215,11 +212,7 @@
       defaults: NoteTextAppendDefaults
     ) -> NSAttributedString {
       guard let rtf = note.richTextRTF,
-        let attributed = try? NSAttributedString(
-          data: rtf,
-          options: [.documentType: NSAttributedString.DocumentType.rtf],
-          documentAttributes: nil
-      )
+        let attributed = try? NoteRichTextCodec.decode(rtf)
       else {
         return NSAttributedString(string: note.body, attributes: defaults.attributes)
       }

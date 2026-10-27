@@ -334,6 +334,137 @@ import Testing
   }
 }
 
+@Test @MainActor func agentAppendPreservesRelativeTailIndentAndUTF16AttributedText() throws {
+  let body = "👩🏽‍💻 Cafe\u{301} inline"
+  let source = NSMutableAttributedString(string: body)
+  let style = NSMutableParagraphStyle()
+  style.tailIndent = -24
+  source.addAttribute(
+    .paragraphStyle,
+    value: style,
+    range: NSRange(location: 0, length: source.length)
+  )
+  let inlineRange = (body as NSString).range(of: "inline")
+  source.addAttribute(
+    .underlineStyle,
+    value: NSUnderlineStyle.single.rawValue,
+    range: inlineRange
+  )
+  let note = Note(body: body, richTextRTF: try NoteRichTextCodec.encode(source), revision: 4)
+  let appendedText = "Added 👨‍🚀"
+  let draft = try AgentNoteMutationEngine.append(text: appendedText, to: body)
+
+  let result = try AgentRichTextMutator.applying(
+    draft,
+    operation: .appendText,
+    to: note,
+    preferences: .init()
+  )
+  let decoded = try NoteRichTextCodec.decode(try #require(result.richTextRTF))
+  let expectedBody = body + "\n\n" + appendedText
+  let paragraph = try #require(
+    decoded.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+  )
+
+  #expect(result.body.utf16.elementsEqual(expectedBody.utf16))
+  #expect(decoded.string.utf16.elementsEqual(expectedBody.utf16))
+  #expect(paragraph.tailIndent == -24)
+  #expect(
+    decoded.attribute(.underlineStyle, at: inlineRange.location, effectiveRange: nil) as? Int
+      == NSUnderlineStyle.single.rawValue
+  )
+}
+
+@Test @MainActor func agentReplacementPreservesRelativeTailIndentAfterUTF16OffsetShift() throws {
+  let first = "👩🏽‍💻 Cafe\u{301} inline"
+  let last = "Untouched 🪴"
+  let body = first + "\nTarget\n" + last
+  let source = NSMutableAttributedString(string: body)
+  let style = NSMutableParagraphStyle()
+  style.tailIndent = -24
+  source.addAttribute(
+    .paragraphStyle,
+    value: style,
+    range: NSRange(location: 0, length: first.utf16.count + 1)
+  )
+  let lastLocation = first.utf16.count + 1 + "Target\n".utf16.count
+  source.addAttribute(
+    .paragraphStyle,
+    value: style,
+    range: NSRange(location: lastLocation, length: last.utf16.count)
+  )
+  let inlineRange = (body as NSString).range(of: "inline")
+  source.addAttribute(
+    .underlineStyle,
+    value: NSUnderlineStyle.single.rawValue,
+    range: inlineRange
+  )
+  let note = Note(body: body, richTextRTF: try NoteRichTextCodec.encode(source))
+  let replacement = "Changed e\u{301} 🧑🏼‍🚀"
+  let draft = try AgentNoteMutationEngine.replaceLines(
+    in: body,
+    startLine: 2,
+    endLine: 2,
+    expectedTextSHA256:
+      "978354db0c00fc78c3a5524f462a73bc425df3fb2767e51a5f46352ae26ae6f9",
+    replacement: replacement
+  )
+
+  let result = try AgentRichTextMutator.applying(
+    draft,
+    operation: .replaceLines,
+    to: note,
+    preferences: .init()
+  )
+  let decoded = try NoteRichTextCodec.decode(try #require(result.richTextRTF))
+  let expectedBody = first + "\n" + replacement + "\n" + last
+  let firstParagraph = try #require(
+    decoded.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+  )
+  let shiftedLastLocation = first.utf16.count + 1 + replacement.utf16.count + 1
+  let lastParagraph = try #require(
+    decoded.attribute(.paragraphStyle, at: shiftedLastLocation, effectiveRange: nil)
+      as? NSParagraphStyle
+  )
+
+  #expect(result.body.utf16.elementsEqual(expectedBody.utf16))
+  #expect(decoded.string.utf16.elementsEqual(expectedBody.utf16))
+  #expect(firstParagraph.tailIndent == -24)
+  #expect(lastParagraph.tailIndent == -24)
+  #expect(
+    decoded.attribute(.underlineStyle, at: inlineRange.location, effectiveRange: nil) as? Int
+      == NSUnderlineStyle.single.rawValue
+  )
+}
+
+@Test @MainActor func agentMutatorRejectsMalformedRTFForAppendAndInsertion() throws {
+  let body = "malformed RTF"
+  let note = Note(body: body, richTextRTF: Data(body.utf8))
+  let appendDraft = try AgentNoteMutationEngine.append(text: "Added", to: body)
+  let insertDraft = try AgentNoteMutationEngine.insert(
+    text: "Added",
+    beforeLine: 1,
+    in: body
+  )
+
+  #expect(throws: AgentWorkspaceError(code: .fleckUnavailable)) {
+    try AgentRichTextMutator.applying(
+      appendDraft,
+      operation: .appendText,
+      to: note,
+      preferences: .init()
+    )
+  }
+  #expect(throws: AgentWorkspaceError(code: .fleckUnavailable)) {
+    try AgentRichTextMutator.applying(
+      insertDraft,
+      operation: .insertText,
+      to: note,
+      preferences: .init()
+    )
+  }
+}
+
 @MainActor
 private func rtf(_ value: NSAttributedString) throws -> Data {
   try value.data(

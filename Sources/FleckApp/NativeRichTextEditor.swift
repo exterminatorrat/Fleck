@@ -1511,11 +1511,7 @@
       let source: NSAttributedString
       let loadedRichText: Bool
       if let richTextRTF,
-        let attributed = try? NSAttributedString(
-          data: richTextRTF,
-          options: [.documentType: NSAttributedString.DocumentType.rtf],
-          documentAttributes: nil
-        ),
+        let attributed = try? NoteRichTextCodec.decode(richTextRTF),
         let canonicalAttributed = canonicalAttributedText(attributed)
       {
         source = canonicalAttributed
@@ -1763,10 +1759,7 @@
           return
         }
         let snapshot = InlineNoteImageProjection.expanded(displaySnapshot)
-        let updatedRTF = try? snapshot.data(
-          from: NSRange(location: 0, length: snapshot.length),
-          documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
-        )
+        let updatedRTF = try? NoteRichTextCodec.encode(snapshot)
         text = snapshot.string
         richTextRTF = updatedRTF
         if let linkTextView = textView as? ListAwareTextView {

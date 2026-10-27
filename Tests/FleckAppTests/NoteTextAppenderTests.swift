@@ -163,6 +163,43 @@ import Testing
   #expect(style.tailIndent == baselineStyle.tailIndent)
 }
 
+@Test @MainActor func noteTextAppenderPreservesRelativeTailIndentsInExistingParagraphs() throws {
+  let body = "First paragraph\nSecond paragraph"
+  let style = NSMutableParagraphStyle()
+  style.tailIndent = -24
+  let source = NSAttributedString(
+    string: body,
+    attributes: [.font: NSFont.systemFont(ofSize: 17), .paragraphStyle: style]
+  )
+  let note = Note(body: body, richTextRTF: try NoteRichTextCodec.encode(source))
+
+  let result = NoteTextAppender.appending("Dictated", to: note)
+  let appended = try NoteRichTextCodec.decode(result.richTextRTF)
+
+  #expect(
+    result.body.utf16.elementsEqual(
+      "First paragraph\nSecond paragraph\n\nDictated".utf16
+    )
+  )
+  for location in [0, "First paragraph\n".utf16.count] {
+    let paragraph = try #require(
+      appended.attribute(.paragraphStyle, at: location, effectiveRange: nil) as? NSParagraphStyle
+    )
+    #expect(paragraph.tailIndent == -24)
+  }
+}
+
+@Test @MainActor func noteTextAppenderFallsBackToPlainBodyForMalformedRTF() throws {
+  let result = NoteTextAppender.appending(
+    "Added",
+    to: Note(body: "Synthetic fallback", richTextRTF: Data("malformed RTF".utf8))
+  )
+
+  #expect(
+    try attributedString(from: result.richTextRTF).string == "Synthetic fallback\n\nAdded"
+  )
+}
+
 @MainActor
 private func attributedString(from rtf: Data) throws -> NSAttributedString {
   try NSAttributedString(
