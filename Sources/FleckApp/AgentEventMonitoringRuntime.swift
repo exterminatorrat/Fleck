@@ -25,6 +25,7 @@
     let expiresAt: Date
     let lastReceiptAt: Date?
     let allowsAutomaticRenewal: Bool
+    let consentGenerationID: UUID?
   }
 
   final class AgentEventResponseLease: @unchecked Sendable {
@@ -754,10 +755,16 @@
       subscriptionID: String,
       enabled: Bool,
       allowsAutomaticRenewal: Bool,
-      workspaceProvider: AgentEventWorkspaceProvider?
+      workspaceProvider: AgentEventWorkspaceProvider?,
+      expectedConsentGenerationID: UUID? = nil
     ) async throws {
       guard let current = try await subscriptionStore.currentSubscription(id: subscriptionID) else {
         throw AgentWorkspaceError(code: .invalidOperation)
+      }
+      if let expectedConsentGenerationID,
+        current.deliveryControl?.generationID != expectedConsentGenerationID
+      {
+        throw AgentWorkspaceError(code: .revisionConflict)
       }
       try Task.checkCancellation()
       let binding = Self.binding(for: current)
@@ -1059,7 +1066,8 @@
             state: state,
             expiresAt: subscription.expiresAt,
             lastReceiptAt: lastReceiptAt,
-            allowsAutomaticRenewal: subscription.deliveryControl?.allowsAutomaticRenewal == true
+            allowsAutomaticRenewal: subscription.deliveryControl?.allowsAutomaticRenewal == true,
+            consentGenerationID: subscription.deliveryControl?.generationID
           )
         )
       }

@@ -706,7 +706,8 @@
     func setAgentEventMonitoring(
       subscriptionID: String,
       enabled: Bool,
-      allowsAutomaticRenewal: Bool
+      allowsAutomaticRenewal: Bool,
+      expectedConsentGenerationID: UUID? = nil
     ) async {
       guard let agentEventMonitoringRuntime else {
         agentEventMonitoringError = Self.agentEventMonitoringFailureMessage
@@ -714,11 +715,15 @@
       }
       var operationError: String?
       do {
+        guard !enabled || expectedConsentGenerationID != nil else {
+          throw AgentWorkspaceError(code: .revisionConflict)
+        }
         try await agentEventMonitoringRuntime.setOwnerDeliveryConsent(
           subscriptionID: subscriptionID,
           enabled: enabled,
           allowsAutomaticRenewal: enabled && allowsAutomaticRenewal,
-          workspaceProvider: enabled ? agentEventWorkspaceProvider() : nil
+          workspaceProvider: enabled ? agentEventWorkspaceProvider() : nil,
+          expectedConsentGenerationID: expectedConsentGenerationID
         )
         agentEventMonitoringError = nil
       } catch {

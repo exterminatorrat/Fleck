@@ -25,6 +25,11 @@ public release log. Packaging unchanged source does not add a changelog entry.
 - Fail closed on interrupted privacy-policy generations and pending-subscription lookups
   behind the persisted trusted-clock watermark.
 
+### Fixed - 2026-10-28
+
+- Bind renewal choices and owner approvals to the current subscription control generation,
+  so an expired or recreated subscription cannot reuse an earlier checked renewal choice.
+
 This is one constituent of the shared 1.7.0-beta.1 retained-feature development cohort, not a
 separate release. Local compilation, tests and native behavior remain unrun; hosted checks are
 pending. Existing 1.6.x candidates and all earlier development history remain preserved.

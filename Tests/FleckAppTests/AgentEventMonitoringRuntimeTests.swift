@@ -10,6 +10,63 @@
 
   @Suite(.serialized)
   struct AgentEventMonitoringRuntimeTests {
+    @Test @MainActor func staleOwnerSummaryCannotApproveUnseenRecreatedSubscription() async throws {
+      try await withAgentEventMonitoringRuntimeFixture { fixture in
+        let workspace = Workspace(notes: [fixture.note], selectedNoteID: fixture.note.id)
+        let first = try await fixture.subscriptionService.createPending(
+          profileID: fixture.profileID,
+          event: .noteUpdated,
+          scope: .note(noteID: fixture.note.id),
+          callbackURL: fixture.callbackURL,
+          signingSecret: fixture.signingSecret,
+          requestedTTLSeconds: 60,
+          workspaceProvider: { workspace },
+          now: fixture.clock.now()
+        )
+        let summaries = try await fixture.runtime.ownerSummaries(workspace: workspace)
+        let original = try #require(summaries.first { $0.id == first.subscriptionID })
+        let originalGeneration = try #require(original.consentGenerationID)
+        fixture.clock.advance(by: 60)
+        let expired = try await fixture.subscriptionStore.pruneExpired(now: fixture.clock.now())
+        #expect(expired.map(\.subscriptionID) == [first.subscriptionID])
+        let second = try await fixture.subscriptionService.createPending(
+          profileID: fixture.profileID,
+          event: .noteUpdated,
+          scope: .note(noteID: fixture.note.id),
+          callbackURL: fixture.callbackURL,
+          signingSecret: fixture.signingSecret,
+          requestedTTLSeconds: 60,
+          workspaceProvider: { workspace },
+          now: fixture.clock.now()
+        )
+        let recreated = try #require(
+          await fixture.subscriptionStore.currentSubscription(id: second.subscriptionID)
+        )
+        #expect(second.subscriptionID == first.subscriptionID)
+        #expect(second.revision == first.revision)
+        #expect(recreated.deliveryControl?.generationID != originalGeneration)
+
+        await #expect(throws: AgentWorkspaceError(code: .revisionConflict)) {
+          try await fixture.runtime.setOwnerDeliveryConsent(
+            subscriptionID: original.id,
+            enabled: true,
+            allowsAutomaticRenewal: true,
+            workspaceProvider: { workspace },
+            expectedConsentGenerationID: originalGeneration
+          )
+        }
+
+        #expect(
+          try await fixture.subscriptionStore.currentSubscription(id: second.subscriptionID)
+            == recreated
+        )
+        #expect(recreated.deliveryControl?.enabled == false)
+        #expect(recreated.deliveryControl?.allowsAutomaticRenewal == false)
+        #expect(await fixture.callbackExchange.requestCount() == 0)
+        #expect(await fixture.applicationExchange.requestCount() == 0)
+      }
+    }
+
     @Test @MainActor func appCommandWaitsForOwnerApprovalAndReturnsVerifiedReceipt() async throws {
       try await withAgentEventMonitoringRuntimeFixture { fixture in
         let appState = fixture.makeAppState()
@@ -90,7 +147,8 @@
         await appState.setAgentEventMonitoring(
           subscriptionID: subscriptionID,
           enabled: true,
-          allowsAutomaticRenewal: true
+          allowsAutomaticRenewal: true,
+          expectedConsentGenerationID: pendingSubscription.deliveryControl?.generationID
         )
         commandStage = "returning the owner-approved verified receipt"
         let response: AgentWorkspaceResponse
@@ -344,7 +402,8 @@
         await appState.setAgentEventMonitoring(
           subscriptionID: subscriptionID,
           enabled: true,
-          allowsAutomaticRenewal: true
+          allowsAutomaticRenewal: true,
+          expectedConsentGenerationID: pending.deliveryControl?.generationID
         )
         let subscribeData = try #require(await subscribeTask.value)
         let subscribeResponse = try #require(

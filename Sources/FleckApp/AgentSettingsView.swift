@@ -169,20 +169,21 @@
   }
 
   struct AgentEventOwnerConsentSelection {
-    private var optedInSubscriptionIDs: Set<String> = []
+    private var optedInGenerations: [String: UUID] = [:]
 
     func allowsAutomaticRenewal(for subscription: AgentEventOwnerSummary) -> Bool {
-      optedInSubscriptionIDs.contains(subscription.id)
+      guard let generationID = subscription.consentGenerationID else { return false }
+      return optedInGenerations[subscription.id] == generationID
     }
 
     mutating func setAutomaticRenewal(
       _ enabled: Bool,
       for subscription: AgentEventOwnerSummary
     ) {
-      if enabled {
-        optedInSubscriptionIDs.insert(subscription.id)
+      if enabled, let generationID = subscription.consentGenerationID {
+        optedInGenerations[subscription.id] = generationID
       } else {
-        optedInSubscriptionIDs.remove(subscription.id)
+        optedInGenerations.removeValue(forKey: subscription.id)
       }
     }
 
@@ -655,7 +656,8 @@
                 await appState.setAgentEventMonitoring(
                   subscriptionID: subscription.id,
                   enabled: options.enabled,
-                  allowsAutomaticRenewal: options.allowsAutomaticRenewal
+                  allowsAutomaticRenewal: options.allowsAutomaticRenewal,
+                  expectedConsentGenerationID: subscription.consentGenerationID
                 )
               }
             }

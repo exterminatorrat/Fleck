@@ -257,6 +257,47 @@ struct AgentEventOwnerPresentationTests {
     #expect(!selection.approvalOptions(for: subscription).allowsAutomaticRenewal)
   }
 
+  @Test func recreatedSubscriptionRequiresFreshOptInWithoutClearingOtherRows() {
+    let original = makeSubscriptionSummary(id: "recreated", state: .awaitingApproval)
+    let other = makeSubscriptionSummary(id: "other", state: .paused)
+    let recreated = AgentEventOwnerSummary(
+      id: original.id,
+      profileID: original.profileID,
+      event: original.event,
+      scope: original.scope,
+      callbackHost: original.callbackHost,
+      state: original.state,
+      expiresAt: original.expiresAt,
+      lastReceiptAt: original.lastReceiptAt,
+      allowsAutomaticRenewal: original.allowsAutomaticRenewal,
+      consentGenerationID: UUID()
+    )
+    var selection = AgentEventOwnerConsentSelection()
+    selection.setAutomaticRenewal(true, for: original)
+    selection.setAutomaticRenewal(true, for: other)
+
+    #expect(selection.allowsAutomaticRenewal(for: original))
+    #expect(!selection.allowsAutomaticRenewal(for: recreated))
+    #expect(!selection.consumeApprovalOptions(for: recreated).allowsAutomaticRenewal)
+    #expect(selection.allowsAutomaticRenewal(for: other))
+
+    selection.setAutomaticRenewal(true, for: recreated)
+
+    #expect(selection.allowsAutomaticRenewal(for: recreated))
+    #expect(selection.allowsAutomaticRenewal(for: other))
+  }
+
+  @Test func missingConsentGenerationCannotRetainARenewalChoice() {
+    let subscription = makeSubscriptionSummary(
+      id: "unbound", state: .paused, consentGenerationID: nil
+    )
+    var selection = AgentEventOwnerConsentSelection()
+    selection.setAutomaticRenewal(true, for: subscription)
+
+    #expect(!selection.allowsAutomaticRenewal(for: subscription))
+    #expect(!selection.approvalOptions(for: subscription).allowsAutomaticRenewal)
+  }
+
   @Test func approvePauseAndResumeRequireFreshRenewalSelection() {
     let subscription = makeSubscriptionSummary(id: "approval-cycle", state: .paused)
     let other = makeSubscriptionSummary(id: "other", state: .paused)
@@ -356,7 +397,8 @@ struct AgentEventOwnerPresentationTests {
   private func makeSubscriptionSummary(
     id: String,
     state: AgentEventOwnerState,
-    allowsAutomaticRenewal: Bool = false
+    allowsAutomaticRenewal: Bool = false,
+    consentGenerationID: UUID? = UUID()
   ) -> AgentEventOwnerSummary {
     AgentEventOwnerSummary(
       id: id,
@@ -367,7 +409,8 @@ struct AgentEventOwnerPresentationTests {
       state: state,
       expiresAt: Date(timeIntervalSince1970: 0),
       lastReceiptAt: nil,
-      allowsAutomaticRenewal: allowsAutomaticRenewal
+      allowsAutomaticRenewal: allowsAutomaticRenewal,
+      consentGenerationID: consentGenerationID
     )
   }
 }
