@@ -3,6 +3,19 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.0-beta.1] - 2026-10-27
+
+### Fixed
+
+- Use the native inline folder-name field for renaming, with Return/Escape, validated
+  focus-loss commits and deletion-safe editor ownership. Preserve the existing icon-based
+  new-folder controls and compact Unfiled layout while keeping keyboard navigation in its
+  owning host.
+
+This focused change is part of the shared 1.7.0-beta.1 retained-feature release cohort,
+not a separate release. Source-only checkpoint: local compilation, tests and native
+keyboard, focus, IME, visual and accessibility behavior remain unverified.
+
 ## [1.5.9-beta.1] - 2026-10-27
 
 ### Fixed

@@ -3741,27 +3741,20 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
 
 @Test func folderCreationPolishUsesSmoothMotionAndFleckPills() throws {
   let source = try notesPanelSource()
-  let navigator = try #require(
-    source.components(separatedBy: "private struct FolderNavigator").last
-  )
+  let navigatorStart = try #require(source.range(of: "private struct FolderNavigator: View"))
+  let navigator = String(source[navigatorStart.lowerBound...])
   let bodyStart = try #require(navigator.range(of: "var body: some View"))
   let rootDefinition = try #require(navigator.range(of: "private var rootRow"))
   let body = String(navigator[bodyStart.upperBound..<rootDefinition.lowerBound])
-  let editor = navigator
-    .components(separatedBy: "@ViewBuilder\n    private func folderEditor")
-    .dropFirst()
-    .first ?? ""
-  let styleTail = navigator
-    .components(separatedBy: "private struct FolderActionButtonStyle: ButtonStyle")
-    .dropFirst()
-    .first ?? ""
-  let style = styleTail
-    .components(separatedBy: "@ViewBuilder\n    private func folderEditor")
-    .first ?? styleTail
+  let composerStart = try #require(navigator.range(of: "private var folderComposer: some View"))
+  let fieldStart = try #require(navigator.range(of: "private struct NativeFolderNameField"))
+  let trashStart = try #require(navigator.range(of: "private var trashRow: some View"))
+  let editorStart = try #require(navigator.range(of: "private func folderEditor("))
+  let rowLabelStart = try #require(navigator.range(of: "private func rowLabel("))
+  let composer = String(navigator[composerStart.lowerBound..<fieldStart.lowerBound])
+  let field = String(navigator[fieldStart.lowerBound..<trashStart.lowerBound])
+  let editor = String(navigator[editorStart.lowerBound..<rowLabelStart.lowerBound])
   let normalizedNavigator = navigator
-    .split(whereSeparator: \.isWhitespace)
-    .joined(separator: " ")
-  let normalizedEditor = editor
     .split(whereSeparator: \.isWhitespace)
     .joined(separator: " ")
 
@@ -3777,53 +3770,50 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   #expect(navigator.contains("if reduceMotion { return .opacity.animation(motion.state) }"))
   #expect(!body.contains(".animation(motion.spatial, value: isCreatingFolder)"))
 
-  #expect(editor.contains("let accent = theme.color(.accent)"))
-  #expect(
-    normalizedEditor.contains(
-      ".buttonStyle(FolderActionButtonStyle(role: .save, accent: accent, motion: motion))"
-    )
-  )
-  #expect(
-    normalizedEditor.contains(
-      ".buttonStyle(FolderActionButtonStyle(role: .cancel, accent: accent, motion: motion))"
-    )
-  )
-  #expect(editor.contains("Button(\"Save\")"))
-  #expect(editor.contains("Button(\"Cancel\", role: .cancel)"))
-  #expect(editor.contains("Save folder name"))
-  #expect(editor.contains("Cancel folder name"))
+  #expect(composer.contains("beginNewFolder(source: currentInteractionSource)"))
+  #expect(composer.contains("NativeFolderNameField("))
+  #expect(composer.contains("isEditing: $isNewFolderTextEditing"))
+  #expect(composer.contains("onSubmit: { commitFolderEditing(source: .keyboard) }"))
+  #expect(composer.contains("onCancel: { cancelFolderEditing(source: .keyboard) }"))
+  #expect(composer.contains("commitFolderEditing(source: currentInteractionSource)"))
+  #expect(composer.contains("cancelFolderEditing(source: currentInteractionSource)"))
+  #expect(composer.contains("Image(systemName: \"checkmark\")"))
+  #expect(composer.contains("Image(systemName: \"xmark\")"))
+  #expect(composer.contains(".frame(width: 24, height: 24)"))
+  #expect(composer.contains(".buttonStyle(.plain)"))
+  #expect(composer.contains(".disabled(trimmedFolderName.isEmpty)"))
+  #expect(composer.contains(".accessibilityLabel(\"Create folder\")"))
+  #expect(composer.contains(".accessibilityLabel(\"Cancel new folder\")"))
 
-  #expect(style.contains("enum Role: Equatable"))
-  #expect(style.contains("let role: Role"))
-  #expect(style.contains("let accent: Color"))
-  #expect(style.contains("let motion: AppMotion"))
-  #expect(style.contains("@Environment(\\.isEnabled) private var isEnabled"))
-  #expect(style.contains(".fleckUIFont(.caption, weight: isSave ? .semibold : .medium)"))
-  #expect(style.contains(".padding(.horizontal, 8)"))
-  #expect(style.contains(".frame(height: 22)"))
-  #expect(
-    style.contains("RoundedRectangle(cornerRadius: 6, style: .continuous)")
-  )
-  #expect(style.contains("accent.opacity(configuration.isPressed ? 0.24 : 0.16)"))
-  #expect(
-    style.contains(
-      "Color.primary.opacity(configuration.isPressed ? 0.10 : 0.06)"
-    )
-  )
-  #expect(
-    style.contains(
-      ".scaleEffect(isEnabled && configuration.isPressed ? motion.pressScale : 1)"
-    )
-  )
-  #expect(style.contains(".opacity(isEnabled ? 1 : 0.48)"))
-  #expect(style.contains(".animation(motion.quick, value: configuration.isPressed)"))
-  #expect(editor.contains("folderNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty"))
-  #expect(!style.contains("Image(systemName:"))
-  #expect(!style.lowercased().contains("material"))
-  #expect(!style.lowercased().contains("gradient"))
-  #expect(!style.lowercased().contains("shadow"))
-  #expect(!style.lowercased().contains("outline"))
-  #expect(!style.lowercased().contains("stroke"))
+  #expect(editor.contains("NativeFolderNameField("))
+  #expect(editor.contains("isEditing: $isRenamingFolderTextEditing"))
+  #expect(editor.contains("placeholder: label"))
+  #expect(editor.contains("accessibilityIdentifier: accessibilityIdentifier"))
+  #expect(editor.contains("focusRequest: renameFocusRequest"))
+  #expect(editor.contains("onSubmit: { commitFolderEditing() }"))
+  #expect(editor.contains("onCancel: { cancelFolderEditing() }"))
+  #expect(editor.contains(".fixedSize(horizontal: true, vertical: false)"))
+
+  #expect(field.contains("field.isBezeled = false"))
+  #expect(field.contains("field.drawsBackground = false"))
+  #expect(field.contains("field.focusRingType = .none"))
+  #expect(field.contains("field.setAccessibilityIdentifier(accessibilityIdentifier)"))
+  #expect(field.contains("field.delegate = context.coordinator"))
+  #expect(field.contains("case #selector(NSResponder.insertNewline(_:))"))
+  #expect(field.contains("case #selector(NSResponder.cancelOperation(_:))"))
+  #expect(field.components(separatedBy: "guard !textView.hasMarkedText() else { return false }").count == 3)
+  #expect(field.contains("onSubmit()"))
+  #expect(field.contains("onCancel()"))
+  #expect(field.contains("guard !hasFocused else { return }"))
+  #expect(field.contains("self.isActive, self.focusGeneration == generation, field.window != nil"))
+  #expect(field.contains("self.hasFocused = field.window?.makeFirstResponder(field) == true"))
+  #expect(field.contains("window?.firstResponder === editor"))
+  #expect(field.contains("coordinator.focusGeneration &+= 1"))
+  #expect(field.contains("field.onOwnershipChange = nil"))
+  #expect(field.contains("cell.font = font"))
+  #expect(field.contains("let caretRoom: CGFloat = 2"))
+  #expect(navigator.contains("@Environment(\\.fleckUIFont) private var uiFont"))
+  #expect(navigator.contains(".font(uiFont.font(.caption).monospacedDigit())"))
 }
 
 @Test func folderNoteDropTargetsDoNotNavigateOrSpringOpen() throws {
@@ -3949,10 +3939,14 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
     navigator.components(separatedBy: "private var rootRow").last?
       .components(separatedBy: "@ViewBuilder\n    private func folderRow").first
   )
-  let folderRow = try #require(
-    navigator.components(separatedBy: "private func folderRow").last?
-      .components(separatedBy: "private struct FolderActionButtonStyle").first
+  let folderRowStart = try #require(navigator.range(of: "private func folderRow("))
+  let folderEditorStart = try #require(
+    navigator.range(
+      of: "private func folderEditor(",
+      range: folderRowStart.upperBound..<navigator.endIndex
+    )
   )
+  let folderRow = String(navigator[folderRowStart.lowerBound..<folderEditorStart.lowerBound])
   let rowLabel = try #require(
     navigator.components(separatedBy: "private func rowLabel").last?
       .components(separatedBy: "private func noteDropDelegate").first
@@ -5248,10 +5242,14 @@ private func withHostedTitleEditors(
     navigator.components(separatedBy: "private var rootRow").last?
       .components(separatedBy: "@ViewBuilder\n    private func folderRow").first
   )
-  let folderRow = try #require(
-    navigator.components(separatedBy: "private func folderRow").last?
-      .components(separatedBy: "private struct FolderActionButtonStyle").first
+  let folderRowStart = try #require(navigator.range(of: "private func folderRow("))
+  let folderEditorStart = try #require(
+    navigator.range(
+      of: "private func folderEditor(",
+      range: folderRowStart.upperBound..<navigator.endIndex
+    )
   )
+  let folderRow = String(navigator[folderRowStart.lowerBound..<folderEditorStart.lowerBound])
   #expect(rowLabelBody.contains("RoundedRectangle(cornerRadius: 6)"))
   #expect(rowLabelBody.contains("isSelected ? theme.color(.selectionFill) : .clear"))
   #expect(rootRow.contains("isFocused: focusedRow == .unfiled"))

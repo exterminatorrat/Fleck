@@ -170,18 +170,233 @@ struct FolderNavigatorPresentationTests {
     let source = try folderNavigatorSource()
     let editor = try #require(
       source.components(separatedBy: "private func folderEditor(").last?
-        .components(separatedBy: "private struct FolderRowFocusPublisher").first
+        .components(separatedBy: "private func rowLabel(").first
     )
 
-    #expect(editor.contains(".textFieldStyle(.plain)"))
-    #expect(editor.contains(".focusEffectDisabled()"))
-    #expect(editor.contains(".focused($focusedRow, equals: focus)"))
-    #expect(editor.contains(".fleckNeutralControlOutline("))
-    #expect(editor.contains("isFocused: focusedRow == focus"))
-    #expect(editor.contains("idleOpacity: 0.22"))
+    #expect(editor.contains("NativeFolderNameField("))
+    #expect(editor.contains("isEditing: $isRenamingFolderTextEditing"))
+    #expect(editor.contains("accessibilityIdentifier: accessibilityIdentifier"))
+    #expect(source.contains("field.isBezeled = false"))
+    #expect(source.contains("field.focusRingType = .none"))
+    #expect(source.contains("field.window?.makeFirstResponder(field)"))
+    #expect(!editor.contains(".fleckNeutralControlOutline("))
+    #expect(!editor.contains("Button(\"Save\")"))
+    #expect(!editor.contains("Button(\"Cancel\""))
     #expect(!editor.contains(".textFieldStyle(.roundedBorder)"))
-    #expect(editor.contains(".onSubmit { commitFolderEditing() }"))
-    #expect(editor.contains(".onExitCommand { cancelFolderEditing() }"))
+    #expect(editor.contains("onSubmit: { commitFolderEditing() }"))
+    #expect(editor.contains("onCancel: { cancelFolderEditing() }"))
+    #expect(source.contains(".onChange(of: isRenamingFolderTextEditing)"))
+    #expect(source.contains("guard let editingFolderID, wasEditing, !isEditing,"))
+    #expect(source.contains("appState.workspace.folders.contains(where: { $0.id == editingFolderID })"))
+    #expect(editor.contains("focusRequest: renameFocusRequest"))
+    #expect(source.contains("renameFocusRequest &+= 1"))
+    #expect(source.contains("commitFolderEditing(source: currentInteractionSource, preservingFocus: true)"))
+    #expect(source.contains("try appState.renameFolder(id: editingFolderID, name: folderNameDraft)"))
+  }
+
+  @Test
+  func folderKeyboardMovementActivationAndRenameStayInOwningHost() async throws {
+    let fixture = try await FolderNavigatorFixture(width: 640, names: ["Work", "Personal"])
+    defer { fixture.close() }
+    let folders = fixture.state.workspace.folders
+    try #require(folders.count == 2)
+    let unfiledNote = try #require(fixture.state.workspace.notes.first { $0.folderID == nil })
+    let down = String(UnicodeScalar(UInt32(NSDownArrowFunctionKey))!)
+    let up = String(UnicodeScalar(UInt32(NSUpArrowFunctionKey))!)
+    let f2 = String(UnicodeScalar(UInt32(NSF2FunctionKey))!)
+
+    for (index, activation, keyCode) in [(0, "\r", UInt16(36)), (1, " ", UInt16(49))] {
+      try fixture.click(fixture.element(identifier: "folder-unfiled"))
+      await fixture.settle()
+      try #require(fixture.state.workspace.selectedNoteID == unfiledNote.id)
+
+      try fixture.sendKey(characters: down, keyCode: 125)
+      await fixture.settle()
+      try fixture.sendKey(characters: down, keyCode: 125)
+      await fixture.settle()
+      if index == 0 {
+        try fixture.sendKey(characters: up, keyCode: 126)
+        await fixture.settle()
+      }
+      // Moving keyboard focus must not activate a different folder.
+      #expect(fixture.state.workspace.selectedNoteID == unfiledNote.id)
+      try fixture.sendKey(characters: activation, keyCode: keyCode)
+      await fixture.settle()
+      let folder = folders[index]
+      let note = try #require(fixture.state.workspace.notes.first { $0.folderID == folder.id })
+      try #require(fixture.state.workspace.selectedNoteID == note.id)
+
+      // No mouse click or focus assignment between activation and F2.
+      try fixture.sendKey(characters: f2, keyCode: 0x78)
+      try #require(await fixture.waitForRenameEditor(folderID: folder.id))
+      await fixture.settle()
+      let renameIdentifier = "folder-rename-\(folder.id.uuidString)"
+      let field = try #require(
+        fixture.textFields.first { $0.accessibilityIdentifier() == renameIdentifier }
+      )
+      let editor = try #require(field.currentEditor() as? NSTextView)
+      try #require(editor === fixture.window.firstResponder)
+      #expect(field.stringValue == folder.name)
+      #expect(!fixture.isRenameFieldVisible(identifier: "folder-rename-\(folders[1 - index].id.uuidString)"))
+      try fixture.replaceFocusedTextFieldDraft(with: "Discard keyboard draft")
+      try fixture.sendKey(characters: "\u{1B}", keyCode: 53)
+      await fixture.settle()
+      #expect(!fixture.isRenameFieldVisible(identifier: renameIdentifier))
+      #expect(fixture.state.workspace.folders.map(\.name) == ["Work", "Personal"])
+      #expect(fixture.state.workspace.selectedNoteID == note.id)
+      #expect(fixture.state.saveError == nil)
+    }
+    await fixture.closeAndWait()
+  }
+
+  @Test
+  func deletingRenamedFolderReleasesNativeEditingOwnership() async throws {
+    let fixture = try await FolderNavigatorFixture(width: 640, names: ["Work", "Personal"])
+    defer { fixture.close() }
+    let folders = fixture.state.workspace.folders
+    try #require(folders.count == 2)
+    let removed = folders[0]
+    let remaining = folders[1]
+    let removedIdentifier = "folder-rename-\(removed.id.uuidString)"
+    try await fixture.beginRename(folderID: removed.id)
+    try fixture.replaceFocusedTextFieldDraft(with: "Unsaved removed draft")
+
+    // External model removal while the owned native editor is active.
+    try fixture.state.deleteFolder(id: removed.id, activeFolderID: removed.id)
+    await fixture.settle()
+    #expect(!fixture.isRenameFieldVisible(identifier: removedIdentifier))
+    #expect(!fixture.state.workspace.folders.contains { $0.id == removed.id })
+    #expect(fixture.state.saveError == nil)
+
+    try fixture.click(fixture.element(identifier: "folder-unfiled"))
+    await fixture.settle()
+    let unfiledNote = try #require(fixture.state.workspace.notes.first { $0.folderID == nil })
+    try #require(fixture.state.workspace.selectedNoteID == unfiledNote.id)
+    try fixture.sendKey(characters: String(UnicodeScalar(UInt32(NSDownArrowFunctionKey))!), keyCode: 125)
+    await fixture.settle()
+    #expect(fixture.state.workspace.selectedNoteID == unfiledNote.id)
+    try fixture.sendKey(characters: "\r", keyCode: 36)
+    await fixture.settle()
+    let remainingNote = try #require(fixture.state.workspace.notes.first { $0.folderID == remaining.id })
+    try #require(fixture.state.workspace.selectedNoteID == remainingNote.id)
+
+    // No pointer focus assignment between keyboard activation and F2.
+    try fixture.sendKey(characters: String(UnicodeScalar(UInt32(NSF2FunctionKey))!), keyCode: 0x78)
+    try #require(await fixture.waitForRenameEditor(folderID: remaining.id))
+    try fixture.replaceFocusedTextFieldDraft(with: "Discard remaining draft")
+    try fixture.sendKey(characters: "\u{1B}", keyCode: 53)
+    await fixture.settle()
+    #expect(!fixture.isRenameFieldVisible(identifier: "folder-rename-\(remaining.id.uuidString)"))
+    #expect(fixture.state.workspace.folders.map(\.name) == ["Personal"])
+    #expect(fixture.state.saveError == nil)
+    await fixture.closeAndWait()
+  }
+
+  @Test
+  func folderRenameKeepsValidationAndSupportsEnterAndEscape() async throws {
+    let fixture = try await FolderNavigatorFixture(width: 520, names: ["Work"])
+    defer { fixture.close() }
+    let folder = try #require(fixture.state.workspace.folders.first)
+    let renameIdentifier = "folder-rename-\(folder.id.uuidString)"
+
+    try await fixture.beginRename(folderID: folder.id)
+    await fixture.settle()
+    #expect(fixture.isRenameFieldVisible(identifier: renameIdentifier))
+    #expect(!fixture.isVisible(label: "Save folder name"))
+    #expect(!fixture.isVisible(label: "Cancel folder name"))
+
+    try fixture.replaceFocusedTextFieldDraft(with: "")
+    try fixture.sendKey(characters: "\r", keyCode: 36)
+    await fixture.settle()
+    #expect(fixture.state.workspace.folders.first?.name == "Work")
+    #expect(fixture.isRenameFieldVisible(identifier: renameIdentifier))
+
+    try fixture.replaceFocusedTextFieldDraft(with: "Projects")
+    try fixture.sendKey(characters: "\r", keyCode: 36)
+    await fixture.settle()
+    #expect(fixture.state.workspace.folders.first?.id == folder.id)
+    #expect(fixture.state.workspace.folders.first?.name == "Projects")
+    #expect(!fixture.isRenameFieldVisible(identifier: renameIdentifier))
+    #expect(fixture.state.saveError == nil)
+
+    try await fixture.beginRename(folderID: folder.id)
+    await fixture.settle()
+    try fixture.replaceFocusedTextFieldDraft(with: "Discarded")
+    try fixture.sendKey(characters: "\u{1B}", keyCode: 53)
+    await fixture.settle()
+    #expect(fixture.state.workspace.folders.first?.id == folder.id)
+    #expect(fixture.state.workspace.folders.first?.name == "Projects")
+    #expect(!fixture.isRenameFieldVisible(identifier: renameIdentifier))
+    await fixture.closeAndWait()
+  }
+
+  @Test
+  func folderRenameCommitsWhenFocusMovesToAnotherRow() async throws {
+    let fixture = try await FolderNavigatorFixture(
+      width: 520,
+      names: ["Work"],
+      persistsWorkspace: true
+    )
+    defer { fixture.close() }
+    let folder = try #require(fixture.state.workspace.folders.first)
+    let renameIdentifier = "folder-rename-\(folder.id.uuidString)"
+
+    try await fixture.beginRename(folderID: folder.id)
+    await fixture.settle()
+    try fixture.replaceFocusedTextFieldDraft(with: "Committed on blur")
+    try fixture.click(fixture.element(identifier: "folder-unfiled"))
+    await fixture.settle()
+
+    #expect(fixture.state.workspace.folders.first?.id == folder.id)
+    #expect(fixture.state.workspace.folders.first?.name == "Committed on blur")
+    #expect(!fixture.isRenameFieldVisible(identifier: renameIdentifier))
+    #expect(fixture.isVisible(identifier: "folder-\(folder.id.uuidString)"))
+    #expect(fixture.state.saveError == nil)
+
+    try await fixture.state.flushPendingPersistenceForAgent()
+    let persistedWorkspace = try await LocalStore(rootURL: fixture.root).loadWorkspace()
+    #expect(persistedWorkspace.folders.first?.id == folder.id)
+    #expect(persistedWorkspace.folders.first?.name == "Committed on blur")
+    await fixture.closeAndWait()
+  }
+
+  @Test
+  func folderRenameInvalidBlurKeepsDraftAndReportsDuplicateName() async throws {
+    let fixture = try await FolderNavigatorFixture(width: 520, names: ["Work", "Personal"])
+    defer { fixture.close() }
+    let folder = try #require(fixture.state.workspace.folders.first)
+    let renameIdentifier = "folder-rename-\(folder.id.uuidString)"
+
+    try await fixture.beginRename(folderID: folder.id)
+    await fixture.settle()
+    #expect(fixture.isRenameFieldVisible(identifier: renameIdentifier))
+    let renameField = try #require(
+      fixture.textFields.first { $0.accessibilityIdentifier() == renameIdentifier }
+    )
+    try fixture.replaceFocusedTextFieldDraft(with: "")
+    try fixture.click(fixture.element(identifier: "folder-unfiled"))
+    await fixture.settle()
+
+    #expect(fixture.state.workspace.folders.first?.name == "Work")
+    #expect(fixture.isRenameFieldVisible(identifier: renameIdentifier))
+    #expect(renameField.stringValue.isEmpty)
+    #expect(renameField.currentEditor() === fixture.window.firstResponder)
+    #expect(fixture.state.saveError == nil)
+
+    try fixture.click(renameField)
+    await fixture.settle()
+    #expect(renameField.currentEditor() === fixture.window.firstResponder)
+    try fixture.replaceFocusedTextFieldDraft(with: "Personal")
+    try fixture.click(fixture.element(identifier: "folder-unfiled"))
+    await fixture.settle()
+
+    #expect(fixture.state.workspace.folders.first?.name == "Work")
+    #expect(fixture.isRenameFieldVisible(identifier: renameIdentifier))
+    let duplicateEditor = try #require(renameField.currentEditor() as? NSTextView)
+    #expect(duplicateEditor === fixture.window.firstResponder)
+    #expect(duplicateEditor.string == "Personal")
+    #expect(fixture.state.saveError?.hasPrefix("Could not update folder:") == true)
+    await fixture.closeAndWait()
   }
 
   @Test(arguments: [
@@ -1258,6 +1473,7 @@ private final class FolderNavigatorNativeDiagnostics: NSObject, NSTextFieldDeleg
 @MainActor
 private final class FolderNavigatorFixture {
   private static var nextMouseEventNumber = 1
+  private var closeTask: Task<Void, Never>?
 
   let root: URL
   let state: AppState
@@ -1265,17 +1481,26 @@ private final class FolderNavigatorFixture {
   let window: NSWindow
   let host: NSHostingView<AnyView>
 
-  init(width: CGFloat, names: [String] = ["Work", "Personal"]) async throws {
+  init(
+    width: CGFloat,
+    names: [String] = ["Work", "Personal"],
+    persistsWorkspace: Bool = false
+  ) async throws {
     NSApplication.shared.accessibilitySetValue(
       true,
       forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
     )
     root = FileManager.default.temporaryDirectory
       .appendingPathComponent("folder-navigator-" + UUID().uuidString, isDirectory: true)
-    state = AppState(
-      store: LocalStore(rootURL: root),
-      saveOperation: { _, _, _, _ in .committed }
-    )
+    let store = LocalStore(rootURL: root)
+    if persistsWorkspace {
+      state = AppState(store: store)
+    } else {
+      state = AppState(
+        store: store,
+        saveOperation: { _, _, _, _ in .committed }
+      )
+    }
     await state.waitUntilInitialLoad()
     let folders = try names.map { try Folder(name: $0) }
     let filedNotes = folders.map { Note(title: "Note in \($0.name)", folderID: $0.id) }
@@ -1309,11 +1534,27 @@ private final class FolderNavigatorFixture {
   }
 
   func close() {
+    guard closeTask == nil else { return }
     window.contentView = nil
     window.orderOut(nil)
     window.close()
-    Task { await runtime.shutdown() }
-    try? FileManager.default.removeItem(at: root)
+    let runtime = self.runtime
+    let root = self.root
+    closeTask = Task {
+      await runtime.shutdown()
+      do {
+        if FileManager.default.fileExists(atPath: root.path) {
+          try FileManager.default.removeItem(at: root)
+        }
+      } catch {
+        Issue.record("Folder navigator fixture cleanup failed: \(error)")
+      }
+    }
+  }
+
+  func closeAndWait() async {
+    close()
+    await closeTask?.value
   }
 
   func settle() async {
@@ -1356,6 +1597,97 @@ private final class FolderNavigatorFixture {
 
   func isVisible(identifier: String) -> Bool {
     elementIfPresent(identifier: identifier) != nil
+  }
+
+  func isRenameFieldVisible(identifier: String) -> Bool {
+    let axPresent = elementIfPresent(identifier: identifier) != nil
+    let fields = textFields.filter { $0.accessibilityIdentifier() == identifier }
+    let field = fields.first
+    let editor = field?.currentEditor() as? NSTextView
+    let fieldRectInHost = field.map { $0.convert($0.visibleRect, to: host) } ?? .zero
+    let fieldWindowMatches = field.map { $0.window === window } ?? false
+    let fieldIsDescendant = field.map { $0.isDescendant(of: host) } ?? false
+    let fieldHasHiddenAncestor = field?.isHiddenOrHasHiddenAncestor ?? true
+    let fieldFrame = field.map { NSStringFromRect($0.frame) } ?? "none"
+    let fieldBounds = field.map { NSStringFromRect($0.bounds) } ?? "none"
+    let fieldVisibleRect = field.map { NSStringFromRect($0.visibleRect) } ?? "none"
+    let editorFrame = editor.map { NSStringFromRect($0.frame) } ?? "none"
+    let editorVisibleRect = editor.map { NSStringFromRect($0.visibleRect) } ?? "none"
+    let editorIsDescendant = editor.map { $0.isDescendant(of: host) } ?? false
+    let editorWindowMatches = editor.map { $0.window === window } ?? false
+    let editorIsFirstResponder = editor === window.firstResponder
+    let fixtureWindowNumber = window.windowNumber
+    let fixtureProcessID = ProcessInfo.processInfo.processIdentifier
+
+    let editorTextIsVisible: Bool = {
+      guard let editor else { return true }
+      guard let field, let contentView = window.contentView else { return false }
+      let clippedRect = [
+        editor.convert(field.bounds, from: field),
+        editor.convert(field.visibleRect, from: field),
+        editor.convert(host.visibleRect, from: host),
+        editor.convert(contentView.visibleRect, from: contentView),
+      ].reduce(editor.visibleRect) { $0.intersection($1) }
+      let pixel = 1 / max(window.backingScaleFactor, 1)
+      if editor.string.isEmpty {
+        let font = field.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let placeholderWidth = ((field.placeholderString ?? "") as NSString)
+          .size(withAttributes: [.font: font]).width
+        return clippedRect.height > 0 && clippedRect.width + pixel >= placeholderWidth
+      }
+      guard ["Work", "Personal"].contains(editor.string) else { return true }
+      guard let layoutManager = editor.layoutManager,
+        let textContainer = editor.textContainer
+      else { return false }
+      layoutManager.ensureLayout(for: textContainer)
+      let characterRange = NSRange(location: 0, length: (editor.string as NSString).length)
+      let glyphRange = layoutManager.glyphRange(
+        forCharacterRange: characterRange,
+        actualCharacterRange: nil
+      )
+      guard glyphRange.length > 0 else { return false }
+      let glyphBounds = layoutManager.boundingRect(
+        forGlyphRange: glyphRange,
+        in: textContainer
+      ).offsetBy(dx: editor.textContainerOrigin.x, dy: editor.textContainerOrigin.y)
+      guard glyphBounds.width > 0 && glyphBounds.height > 0 else { return false }
+      return clippedRect.insetBy(dx: -pixel, dy: -pixel).contains(glyphBounds)
+    }()
+
+    let nativeGeometryIsVisible: Bool
+    if let field {
+      nativeGeometryIsVisible =
+        fields.count == 1 &&
+        fieldWindowMatches &&
+        host.window === window &&
+        fieldIsDescendant &&
+        !fieldHasHiddenAncestor &&
+        field.bounds.width > 0 &&
+        field.bounds.height > 0 &&
+        field.visibleRect.width > 0 &&
+        field.visibleRect.height > 0 &&
+        host.visibleRect.width > 0 &&
+        host.visibleRect.height > 0 &&
+        fieldRectInHost.intersects(host.visibleRect)
+    } else {
+      nativeGeometryIsVisible = false
+    }
+    let editorGeometryIsVisible =
+      field?.currentEditor() == nil ||
+      (editor.map { $0.visibleRect.width > 0 && $0.visibleRect.height > 0 } ?? false)
+
+    print(
+      "FolderRenameGeometry id=\(identifier) axPresent=\(axPresent) candidateCount=\(fields.count) " +
+        "fixtureWindowNumber=\(fixtureWindowNumber) fixtureProcessID=\(fixtureProcessID) " +
+        "fieldWindowMatches=\(fieldWindowMatches) hostWindowMatches=\(host.window === window) " +
+        "fieldIsDescendantOfHost=\(fieldIsDescendant) fieldHasHiddenAncestor=\(fieldHasHiddenAncestor) " +
+        "fieldFrame=\(fieldFrame) fieldBounds=\(fieldBounds) fieldVisibleRect=\(fieldVisibleRect) " +
+        "hostVisibleRect=\(NSStringFromRect(host.visibleRect)) fieldVisibleRectInHost=\(NSStringFromRect(fieldRectInHost)) " +
+        "editorFrame=\(editorFrame) editorVisibleRect=\(editorVisibleRect) " +
+        "editorIsDescendantOfHost=\(editorIsDescendant) editorWindowMatches=\(editorWindowMatches) " +
+        "editorIsFirstResponder=\(editorIsFirstResponder)"
+    )
+    return nativeGeometryIsVisible && editorGeometryIsVisible && editorTextIsVisible
   }
 
   func performAccessibilityPress(identifier: String) throws {
@@ -1628,6 +1960,43 @@ private final class FolderNavigatorFixture {
     let field = try liveNewFolderField()
     let currentEditor = field.currentEditor() as? NSTextView
     let editor = try #require(currentEditor)
+    editor.setSelectedRange(NSRange(location: 0, length: editor.string.utf16.count))
+    editor.insertText(string, replacementRange: editor.selectedRange())
+  }
+
+  func beginRename(folderID: UUID) async throws {
+    try click(element(identifier: "folder-\(folderID.uuidString)"))
+    await settle()
+    try sendKey(characters: String(UnicodeScalar(UInt32(NSF2FunctionKey))!), keyCode: 0x78)
+    try #require(await waitForRenameEditor(folderID: folderID))
+  }
+
+  func waitForRenameEditor(folderID: UUID) async throws -> Bool {
+    let identifier = "folder-rename-\(folderID.uuidString)"
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(2))
+    while clock.now < deadline {
+      try Task.checkCancellation()
+      host.layoutSubtreeIfNeeded()
+      let fields = textFields.filter { $0.accessibilityIdentifier() == identifier }
+      if fields.count == 1, let field = fields.first,
+        field.window === window, !field.isHiddenOrHasHiddenAncestor,
+        let editor = field.currentEditor() as? NSTextView,
+        editor === window.firstResponder,
+        NSApp.keyWindow === window, window.isKeyWindow, NSApp.isActive
+      {
+        return true
+      }
+      let remaining = clock.now.duration(to: deadline)
+      guard remaining > .zero else { break }
+      try await Task.sleep(for: min(.milliseconds(25), remaining))
+    }
+    try Task.checkCancellation()
+    return false
+  }
+
+  func replaceFocusedTextFieldDraft(with string: String) throws {
+    let editor = try #require(window.firstResponder as? NSTextView)
     editor.setSelectedRange(NSRange(location: 0, length: editor.string.utf16.count))
     editor.insertText(string, replacementRange: editor.selectedRange())
   }

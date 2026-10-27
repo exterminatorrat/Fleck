@@ -2698,6 +2698,8 @@
     @State private var rowFrames: [NoteDropTarget: CGRect] = [:]
     @State private var folderCreationSource: AppInteractionSource = .keyboard
     @State private var isNewFolderTextEditing = false
+    @State private var isRenamingFolderTextEditing = false
+    @State private var renameFocusRequest: UInt64 = 0
     @State private var focusedRowBeforeComposition: FocusedRow?
     @State private var wasUnfiledDisclosureFocusedBeforeComposition = false
     private let folderNavigatorMaxHeight: CGFloat = 32
@@ -2801,6 +2803,12 @@
       .onChange(of: isUnfiledCompact) { _, _ in
         if isCreatingFolder { frozenUnfiledDisclosure = nil }
       }
+      .onChange(of: isRenamingFolderTextEditing) { wasEditing, isEditing in
+        guard let editingFolderID, wasEditing, !isEditing,
+          appState.workspace.folders.contains(where: { $0.id == editingFolderID })
+        else { return }
+        commitFolderEditing(source: currentInteractionSource, preservingFocus: true)
+      }
       .animation(
         motion.allowsSpatialMotion(for: unfiledInteractionSource) ? folderMorphAnimation : nil,
         value: isUnfiledCompact
@@ -2826,6 +2834,9 @@
       }
       .onChange(of: appState.workspace.folders.map(\.id)) { _, ids in
         if let folderReorder, folderReorder.originalIDs != ids { self.folderReorder = nil }
+        if let editingFolderID, !ids.contains(editingFolderID) {
+          cancelFolderEditing()
+        }
       }
       .onDisappear { folderReorder = nil }
       .onExitCommand {
@@ -2988,6 +2999,9 @@
     private struct NativeFolderNameField: NSViewRepresentable {
       @Binding var text: String
       @Binding var isEditing: Bool
+      var placeholder = "New folder"
+      var accessibilityIdentifier = "folder-new-name"
+      var focusRequest: UInt64 = 0
       let onSubmit: () -> Void
       let onCancel: () -> Void
 
@@ -3000,13 +3014,42 @@
         )
       }
 
+      func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView field: OwnershipReportingTextField,
+        context: Context
+      ) -> CGSize? {
+        let font = field.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let currentText = (field.currentEditor() as? NSTextView)?.string ?? text
+        let textCell = NSTextFieldCell(textCell: currentText)
+        let placeholderCell = NSTextFieldCell(textCell: placeholder)
+        for cell in [textCell, placeholderCell] {
+          cell.font = font
+          cell.isBezeled = field.isBezeled
+          cell.isBordered = field.isBordered
+          cell.drawsBackground = field.drawsBackground
+          cell.controlSize = field.cell?.controlSize ?? .regular
+        }
+        let textWidth = (currentText as NSString).size(withAttributes: [.font: font]).width
+        let placeholderTextWidth = (placeholder as NSString)
+          .size(withAttributes: [.font: font]).width
+        let caretRoom: CGFloat = 2
+        let idealWidth = max(
+          max(textWidth, textCell.cellSize.width),
+          max(placeholderTextWidth, placeholderCell.cellSize.width)
+        ) + caretRoom
+        let idealHeight = max(textCell.cellSize.height, placeholderCell.cellSize.height)
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? idealWidth
+        return CGSize(width: width, height: idealHeight)
+      }
+
       func makeNSView(context: Context) -> OwnershipReportingTextField {
         let field = OwnershipReportingTextField(string: text)
-        field.placeholderString = "New folder"
+        field.placeholderString = placeholder
         field.isBezeled = false
         field.drawsBackground = false
         field.focusRingType = .none
-        field.setAccessibilityIdentifier("folder-new-name")
+        field.setAccessibilityIdentifier(accessibilityIdentifier)
         field.delegate = context.coordinator
         field.onOwnershipChange = { [weak coordinator = context.coordinator] ownsEditor in
           coordinator?.setEditingOwnership(ownsEditor)
@@ -3020,6 +3063,10 @@
         context.coordinator.isEditing = $isEditing
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onCancel = onCancel
+        if context.coordinator.focusRequest != focusRequest {
+          context.coordinator.focusRequest = focusRequest
+          context.coordinator.hasFocused = false
+        }
         if (field.currentEditor() as? NSTextView)?.hasMarkedText() != true,
           field.stringValue != text
         {
@@ -3071,6 +3118,7 @@
         var onCancel: () -> Void
         var isActive = true
         var hasFocused = false
+        var focusRequest: UInt64 = 0
         var focusGeneration: UInt64 = 0
 
         init(
@@ -3164,6 +3212,7 @@
       let unfiledNotes = appState.visibleNotes(in: nil)
       return HStack(spacing: 0) {
         Button {
+          focusedRow = .unfiled
           onSelect(nil)
         } label: {
           rowLabel(
@@ -3179,11 +3228,6 @@
           )
         }
         .buttonStyle(.plain)
-        .modifier(
-          FolderRowFocusPublisher(onFocusChange: { isFocused in
-            updateFocusedRow(.unfiled, isFocused: isFocused)
-          })
-        )
         .focusable()
         .focused($focusedRow, equals: .unfiled)
         .focusEffectDisabled()
@@ -3243,9 +3287,13 @@
     @ViewBuilder
     private func folderRow(_ folder: Folder) -> some View {
       if editingFolderID == folder.id {
-        folderEditor(label: "Folder name", focus: .folder(folder.id))
+        folderEditor(
+          label: "Folder name",
+          accessibilityIdentifier: "folder-rename-\(folder.id.uuidString)"
+        )
       } else {
         Button {
+          focusedRow = .folder(folder.id)
           onSelect(folder.id)
         } label: {
           rowLabel(
@@ -3259,14 +3307,6 @@
           )
         }
         .buttonStyle(.plain)
-        .modifier(
-          FolderRowFocusPublisher(onFocusChange: { isFocused in
-            updateFocusedRow(.folder(folder.id), isFocused: isFocused)
-          })
-        )
-        .focusable()
-        .focused($focusedRow, equals: .folder(folder.id))
-        .focusEffectDisabled()
         .background(nativeNoteDropAnchor(.folder(folder.id)))
         .modifier(ReorderDropTarget(
           destinationID: folder.id, type: FolderDragPayload.folderType,
@@ -3293,6 +3333,9 @@
             folderReorder = nil
           })
         }))
+        .focusable()
+        .focused($focusedRow, equals: .folder(folder.id))
+        .focusEffectDisabled()
         .contextMenu {
           Button("Move Left", systemImage: "arrow.left") { moveFolder(folder.id, offset: -1) }
           Button("Move Right", systemImage: "arrow.right") { moveFolder(folder.id, offset: 1) }
@@ -3318,78 +3361,21 @@
       }
     }
 
-    private struct FolderActionButtonStyle: ButtonStyle {
-      enum Role: Equatable {
-        case save
-        case cancel
-      }
-
-      let role: Role
-      let accent: Color
-      let motion: AppMotion
-      @Environment(\.fleckThemeSnapshot) private var theme
-      @Environment(\.isEnabled) private var isEnabled
-
-      func makeBody(configuration: Configuration) -> some View {
-        let isSave = role == .save
-        return configuration.label
-          .fleckUIFont(.caption, weight: isSave ? .semibold : .medium)
-          .foregroundStyle(isSave ? accent : theme.color(.textSecondary))
-          .frame(height: 22)
-          .padding(.horizontal, 8)
-          .background(
-            isSave
-              ? accent.opacity(configuration.isPressed ? 0.24 : 0.16)
-              : Color.primary.opacity(configuration.isPressed ? 0.10 : 0.06),
-            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-          )
-          .scaleEffect(isEnabled && configuration.isPressed ? motion.pressScale : 1)
-          .opacity(isEnabled ? 1 : 0.48)
-          .animation(motion.quick, value: configuration.isPressed)
-      }
-    }
-
     @ViewBuilder
-    private func folderEditor(label: String, focus: FocusedRow) -> some View {
-      let accent = theme.color(.accent)
-      HStack(spacing: 5) {
-        TextField(label, text: $folderNameDraft)
-          .textFieldStyle(.plain)
-          .focusEffectDisabled()
-          .focused($focusedRow, equals: focus)
-          .fleckNeutralControlOutline(
-            isFocused: focusedRow == focus,
-            cornerRadius: 6,
-            idleOpacity: 0.22
-          )
-          .onSubmit { commitFolderEditing() }
-          .onExitCommand { cancelFolderEditing() }
-        Button("Save") { commitFolderEditing() }
-          .buttonStyle(FolderActionButtonStyle(role: .save, accent: accent, motion: motion))
-          .disabled(
-            folderNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-          )
-          .accessibilityLabel("Save folder name")
-        Button("Cancel", role: .cancel) { cancelFolderEditing() }
-          .buttonStyle(FolderActionButtonStyle(role: .cancel, accent: accent, motion: motion))
-          .accessibilityLabel("Cancel folder name")
-      }
-      .accessibilityElement(children: .contain)
-    }
-
-    private struct FolderRowFocusPublisher: ViewModifier {
-      @Environment(\.isFocused) private var isNativeFocused
-      let onFocusChange: (Bool) -> Void
-
-      init(onFocusChange: @escaping (Bool) -> Void) {
-        self.onFocusChange = onFocusChange
-      }
-
-      func body(content: Content) -> some View {
-        content.onChange(of: isNativeFocused) { _, isFocused in
-          onFocusChange(isFocused)
-        }
-      }
+    private func folderEditor(
+      label: String,
+      accessibilityIdentifier: String
+    ) -> some View {
+      NativeFolderNameField(
+        text: $folderNameDraft,
+        isEditing: $isRenamingFolderTextEditing,
+        placeholder: label,
+        accessibilityIdentifier: accessibilityIdentifier,
+        focusRequest: renameFocusRequest,
+        onSubmit: { commitFolderEditing() },
+        onCancel: { cancelFolderEditing() }
+      )
+      .fixedSize(horizontal: true, vertical: false)
     }
 
     @ViewBuilder
@@ -3582,8 +3568,8 @@
 
     private var isFolderTextInputActive: Bool {
       if isCreatingFolder { return isNewFolderTextEditing }
-      guard let editingFolderID else { return false }
-      return focusedRow == .folder(editingFolderID)
+      guard editingFolderID != nil else { return false }
+      return isRenamingFolderTextEditing
     }
 
     private var currentInteractionSource: AppInteractionSource {
@@ -3617,6 +3603,7 @@
     private func beginNewFolder(source: AppInteractionSource) {
       guard !isCreatingFolder else { return }
       editingFolderID = nil
+      isRenamingFolderTextEditing = false
       folderNameDraft = ""
       folderCreationSource = source
       frozenOverflow = overflowPresentation.overflows
@@ -3650,28 +3637,46 @@
       frozenUnfiledDisclosure = nil
       focusedRowBeforeComposition = nil
       wasUnfiledDisclosureFocusedBeforeComposition = false
+      isRenamingFolderTextEditing = false
       editingFolderID = id
       folderNameDraft = folder.name
-      focusedRow = .folder(id)
       return true
     }
 
-    private func commitFolderEditing(source: AppInteractionSource = .keyboard) {
-      guard !trimmedFolderName.isEmpty else { return }
+    private func commitFolderEditing(
+      source: AppInteractionSource = .keyboard,
+      preservingFocus: Bool = false
+    ) {
+      guard !trimmedFolderName.isEmpty else {
+        if preservingFocus, editingFolderID != nil {
+          renameFocusRequest &+= 1
+        }
+        return
+      }
       do {
         if isCreatingFolder {
           _ = try appState.createFolder(named: folderNameDraft)
         } else if let editingFolderID {
           try appState.renameFolder(id: editingFolderID, name: folderNameDraft)
         }
-        cancelFolderEditing(source: source)
+        if preservingFocus {
+          editingFolderID = nil
+          isRenamingFolderTextEditing = false
+          folderNameDraft = ""
+        } else {
+          cancelFolderEditing(source: source)
+        }
       } catch {
         appState.saveError = "Could not update folder: \(String(describing: error))"
+        if preservingFocus, editingFolderID != nil {
+          renameFocusRequest &+= 1
+        }
       }
     }
 
     private func cancelFolderEditing(source: AppInteractionSource = .keyboard) {
       editingFolderID = nil
+      isRenamingFolderTextEditing = false
       guard isCreatingFolder else {
         folderNameDraft = ""
         focusedRow = nil
@@ -3709,14 +3714,6 @@
       guard isCreatingFolder else { return false }
       return FolderNavigatorOcclusionPresentation(composerLeadingX: composerLeadingX)
         .covers(rowFrames[target])
-    }
-
-    private func updateFocusedRow(_ row: FocusedRow, isFocused: Bool) {
-      if isFocused {
-        focusedRow = row
-      } else if focusedRow == row {
-        focusedRow = nil
-      }
     }
 
     private func activateFocusedRow() {
