@@ -11,6 +11,8 @@ public release log. Packaging unchanged source does not add a changelog entry.
   focus-loss commits and deletion-safe editor ownership. Preserve the existing icon-based
   new-folder controls and compact Unfiled layout while keeping keyboard navigation in its
   owning host.
+- Show the tab navigation rail only when intrinsic tab content overflows, restore the
+  full viewport when it fits and return to the semantic leading edge as overflow ends.
 
 This focused change is part of the shared 1.7.0-beta.1 retained-feature release cohort,
 not a separate release. Source-only checkpoint: local compilation, tests and native
