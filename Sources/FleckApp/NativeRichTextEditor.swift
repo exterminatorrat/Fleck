@@ -2924,7 +2924,30 @@
           text, replacing: effectiveRange, clearingInheritedContinuation: true
         )
         if !completedText.isEqual(to: text) {
-          super.insertText(completedText, replacementRange: replacementRange)
+          let insertionRange = replacementRange.location == NSNotFound && hasMarkedText()
+            ? markedRange() : effectiveRange
+          let originalLength = (string as NSString).length
+          let changeGeneration = textChangeGeneration
+          performUndoGroup {
+            super.insertText(completedText, replacementRange: replacementRange)
+            guard textChangeGeneration > changeGeneration, let storage = textStorage else { return }
+            let insertedLength = storage.length - originalLength + insertionRange.length
+            guard insertionRange.location >= 0,
+              insertionRange.location <= storage.length,
+              insertedLength > 0,
+              insertedLength <= storage.length - insertionRange.location
+            else { return }
+            let insertedRange = NSRange(location: insertionRange.location, length: insertedLength)
+            let nativeText = storage.attributedSubstring(from: insertedRange)
+            let normalizedText = completedChecklistInsertion(
+              nativeText, replacing: insertedRange, clearingInheritedContinuation: true
+            )
+            if !normalizedText.isEqual(to: nativeText) {
+              _ = replaceAttributedText(
+                in: insertedRange, with: normalizedText, selecting: selectedRange()
+              )
+            }
+          }
           return
         }
       } else if let text = insertString as? NSAttributedString {
