@@ -25,13 +25,30 @@
     @Published private(set) var energy: CGFloat = 0
     private(set) var listeningStartedAt: Date?
     private(set) var lastAcceptedLevelAt: Date?
+    private var listeningStartedTime: TimeInterval?
+    private var lastSampledLevelTime: TimeInterval?
+    private var lastAcceptedLevelTime: TimeInterval?
+    private var usesMonotonicTime = false
 
     static func refreshInterval(reduceMotion: Bool) -> TimeInterval {
       reduceMotion ? 1 / 15 : 1 / 30
     }
 
     func beginListening(at date: Date = Date()) {
+      beginListening(at: date.timeIntervalSinceReferenceDate, usesMonotonicTime: false)
       listeningStartedAt = date
+    }
+
+    func beginListening(monotonicNow: TimeInterval) {
+      beginListening(at: monotonicNow, usesMonotonicTime: true)
+    }
+
+    private func beginListening(at time: TimeInterval, usesMonotonicTime: Bool) {
+      self.usesMonotonicTime = usesMonotonicTime
+      listeningStartedTime = time
+      lastSampledLevelTime = nil
+      lastAcceptedLevelTime = nil
+      listeningStartedAt = nil
       lastAcceptedLevelAt = nil
       energy = 0
     }
@@ -41,15 +58,44 @@
       now: Date = Date(),
       reduceMotion: Bool = false
     ) {
-      if let lastAcceptedLevelAt,
-        now.timeIntervalSince(lastAcceptedLevelAt) < Self.refreshInterval(reduceMotion: reduceMotion)
+      if receive(
+        level: level,
+        at: now.timeIntervalSinceReferenceDate,
+        usesMonotonicTime: false,
+        reduceMotion: reduceMotion
+      ) { lastAcceptedLevelAt = now }
+    }
+
+    func receive(
+      level: Float,
+      monotonicNow: TimeInterval,
+      reduceMotion: Bool = false
+    ) {
+      receive(
+        level: level,
+        at: monotonicNow,
+        usesMonotonicTime: true,
+        reduceMotion: reduceMotion
+      )
+    }
+
+    @discardableResult
+    private func receive(
+      level: Float,
+      at time: TimeInterval,
+      usesMonotonicTime: Bool,
+      reduceMotion: Bool
+    ) -> Bool {
+      guard self.usesMonotonicTime == usesMonotonicTime else { return false }
+      if let lastSampledLevelTime,
+        time - lastSampledLevelTime < Self.refreshInterval(reduceMotion: reduceMotion)
       {
-        return
+        return false
       }
-      if lastAcceptedLevelAt != nil {
-        energy = displayedEnergy(at: now)
-      }
-      lastAcceptedLevelAt = now
+      lastSampledLevelTime = time
+      let previousEnergy = lastAcceptedLevelTime == nil
+        ? energy
+        : displayedEnergy(at: time, usesMonotonicTime: usesMonotonicTime)
       let rawLevel = CGFloat(level)
       let finiteLevel = rawLevel.isFinite ? max(rawLevel, 0) : 0
       let decibels = finiteLevel > 0 ? 20 * log10(finiteLevel) : Self.noiseFloorDecibels
@@ -61,19 +107,29 @@
         ),
         1
       )
-      let smoothing = normalized > energy ? Self.attackSmoothing : Self.releaseSmoothing
-      energy = min(max(energy + (normalized - energy) * smoothing, 0), 1)
+      if normalized > 0 { lastAcceptedLevelTime = time }
+      let smoothing = normalized > previousEnergy ? Self.attackSmoothing : Self.releaseSmoothing
+      let nextEnergy = min(max(previousEnergy + (normalized - previousEnergy) * smoothing, 0), 1)
+      if nextEnergy != energy { energy = nextEnergy }
+      return normalized > 0
     }
 
     func reset() {
       listeningStartedAt = nil
       lastAcceptedLevelAt = nil
+      listeningStartedTime = nil
+      lastSampledLevelTime = nil
+      lastAcceptedLevelTime = nil
+      usesMonotonicTime = false
       energy = 0
     }
 
-    private func staleScale(at date: Date) -> CGFloat {
-      guard let lastAcceptedLevelAt else { return 0 }
-      let elapsed = date.timeIntervalSince(lastAcceptedLevelAt)
+    private func staleScale(at time: TimeInterval, usesMonotonicTime: Bool) -> CGFloat {
+      guard
+        self.usesMonotonicTime == usesMonotonicTime,
+        let lastAcceptedLevelTime
+      else { return 0 }
+      let elapsed = time - lastAcceptedLevelTime
       let staleInterval = max(elapsed - Self.staleGracePeriod, 0)
       return max(
         1 - CGFloat(staleInterval / Self.staleDecayDuration),
@@ -81,12 +137,32 @@
       )
     }
 
-    private func displayedEnergy(at date: Date) -> CGFloat {
-      min(max(energy * staleScale(at: date), 0), 1)
+    private func displayedEnergy(at time: TimeInterval, usesMonotonicTime: Bool) -> CGFloat {
+      min(max(energy * staleScale(at: time, usesMonotonicTime: usesMonotonicTime), 0), 1)
+    }
+
+    func displayedEnergy(monotonicNow: TimeInterval) -> CGFloat {
+      displayedEnergy(at: monotonicNow, usesMonotonicTime: true)
     }
 
     func barLevels(at date: Date, reduceMotion: Bool) -> [CGFloat] {
-      let displayedEnergy = displayedEnergy(at: date)
+      barLevels(
+        at: date.timeIntervalSinceReferenceDate,
+        usesMonotonicTime: false,
+        reduceMotion: reduceMotion
+      )
+    }
+
+    func barLevels(monotonicNow: TimeInterval, reduceMotion: Bool) -> [CGFloat] {
+      barLevels(at: monotonicNow, usesMonotonicTime: true, reduceMotion: reduceMotion)
+    }
+
+    private func barLevels(
+      at time: TimeInterval,
+      usesMonotonicTime: Bool,
+      reduceMotion: Bool
+    ) -> [CGFloat] {
+      let displayedEnergy = displayedEnergy(at: time, usesMonotonicTime: usesMonotonicTime)
       let amplitude = reduceMotion
         ? displayedEnergy * Self.reducedAmplitudeScale
         : displayedEnergy
@@ -96,15 +172,43 @@
     }
 
     func barHeights(at date: Date, reduceMotion: Bool) -> [CGFloat] {
+      barHeights(
+        at: date.timeIntervalSinceReferenceDate,
+        usesMonotonicTime: false,
+        reduceMotion: reduceMotion
+      )
+    }
+
+    func barHeights(monotonicNow: TimeInterval, reduceMotion: Bool) -> [CGFloat] {
+      barHeights(at: monotonicNow, usesMonotonicTime: true, reduceMotion: reduceMotion)
+    }
+
+    private func barHeights(
+      at time: TimeInterval,
+      usesMonotonicTime: Bool,
+      reduceMotion: Bool
+    ) -> [CGFloat] {
       let maximum = reduceMotion ? Self.reducedMaximumHeight : Self.maximumHeight
       let range = maximum - Self.minimumHeight
-      return barLevels(at: date, reduceMotion: reduceMotion).map {
+      return barLevels(at: time, usesMonotonicTime: usesMonotonicTime, reduceMotion: reduceMotion).map {
         Self.minimumHeight + ($0 * range)
       }
     }
 
     func elapsedText(at date: Date) -> String {
-      let seconds = max(Int(date.timeIntervalSince(listeningStartedAt ?? date)), 0)
+      elapsedText(at: date.timeIntervalSinceReferenceDate, usesMonotonicTime: false)
+    }
+
+    func elapsedText(monotonicNow: TimeInterval) -> String {
+      elapsedText(at: monotonicNow, usesMonotonicTime: true)
+    }
+
+    private func elapsedText(at time: TimeInterval, usesMonotonicTime: Bool) -> String {
+      guard
+        self.usesMonotonicTime == usesMonotonicTime,
+        let listeningStartedTime
+      else { return "0:00" }
+      let seconds = max(Int(time - listeningStartedTime), 0)
       return "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
     }
   }

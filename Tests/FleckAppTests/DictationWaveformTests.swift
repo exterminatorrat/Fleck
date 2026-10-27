@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Testing
 
 @testable import FleckApp
@@ -155,6 +156,81 @@ import Testing
   #expect(active.max()! > DictationWaveformModel.minimumHeight)
   #expect(stale.allSatisfy { $0 == DictationWaveformModel.minimumHeight })
   #expect(reducedStale == stale)
+}
+
+@Test @MainActor func waveformFloorSamplesDoNotRefreshLivenessAndSettleToExactRest() {
+  let model = DictationWaveformModel()
+  var energyPublications = 0
+  let observation = model.$energy.dropFirst().sink { _ in energyPublications += 1 }
+  let start = Date(timeIntervalSince1970: 45)
+  let voiceStartedAt = start.addingTimeInterval(0.04)
+  model.beginListening(at: start)
+  model.receive(level: 0.20, now: voiceStartedAt)
+  let voiceEnergy = model.energy
+
+  for index in 1...4 {
+    model.receive(
+      level: 0.002,
+      now: voiceStartedAt.addingTimeInterval(Double(index) * 0.04)
+    )
+  }
+
+  #expect(model.lastAcceptedLevelAt == voiceStartedAt)
+  #expect(model.energy > 0)
+  #expect(model.energy < voiceEnergy)
+
+  for index in 5...12 {
+    model.receive(
+      level: 0.002,
+      now: voiceStartedAt.addingTimeInterval(Double(index) * 0.04)
+    )
+  }
+
+  #expect(model.lastAcceptedLevelAt == voiceStartedAt)
+  #expect(model.energy == 0)
+  #expect(model.barLevels(
+    at: voiceStartedAt.addingTimeInterval(0.48),
+    reduceMotion: false
+  ).allSatisfy { $0 == 0 })
+
+  let settledPublications = energyPublications
+  let settledAt = voiceStartedAt.addingTimeInterval(0.48)
+  for index in 1...120 {
+    model.receive(
+      level: 0.002,
+      now: settledAt.addingTimeInterval(Double(index) / 60)
+    )
+  }
+
+  #expect(energyPublications == settledPublications)
+  #expect(model.lastAcceptedLevelAt == voiceStartedAt)
+
+  let freshVoiceAt = settledAt.addingTimeInterval(2.04)
+  model.receive(level: 0.05, now: freshVoiceAt)
+  #expect(model.lastAcceptedLevelAt == freshVoiceAt)
+  #expect(model.energy > 0)
+  withExtendedLifetime(observation) {}
+}
+
+@Test @MainActor func waveformSamplingCadenceIsIndependentOfVoiceLiveness() {
+  let model = DictationWaveformModel()
+  let start = Date(timeIntervalSince1970: 47)
+  let firstVoiceAt = start.addingTimeInterval(0.04)
+  model.beginListening(at: start)
+  model.receive(level: 0.20, now: firstVoiceAt)
+
+  let floorAt = start.addingTimeInterval(0.08)
+  model.receive(level: 0.002, now: floorAt)
+  let energyAfterFloorSample = model.energy
+  model.receive(level: 0.20, now: start.addingTimeInterval(0.09))
+
+  #expect(model.energy == energyAfterFloorSample)
+  #expect(model.lastAcceptedLevelAt == firstVoiceAt)
+
+  let freshVoiceAt = start.addingTimeInterval(0.12)
+  model.receive(level: 0.20, now: freshVoiceAt)
+  #expect(model.energy > energyAfterFloorSample)
+  #expect(model.lastAcceptedLevelAt == freshVoiceAt)
 }
 
 @Test @MainActor func waveformResumesFromDisplayedRestInsteadOfStaleLoudEnergy() {

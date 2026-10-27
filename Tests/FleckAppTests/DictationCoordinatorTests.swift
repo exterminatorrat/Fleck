@@ -2768,6 +2768,12 @@ func focusedAndSmartSaveFailuresCarryTypedRecoveryProvenance() async throws {
   await insertion.coordinator.finish()
 
   #expect(insertionEvents.last?.context?.failureProvenance == .insertion)
+  let insertionCapsule = DictationRuntime.capsuleContext(
+    for: try #require(insertionEvents.last)
+  )
+  #expect(insertionCapsule.failureProvenance == .insertion)
+  #expect(insertionCapsule.failureKind == .save)
+  #expect(FleckErrorKind.resolve(context: insertionCapsule, action: .copy) == .insertion)
   #expect(insertion.coordinator.recoveryAction == .copy)
   #expect(insertion.coordinator.copyableTranscript == "Recover this insertion")
 
@@ -2780,6 +2786,18 @@ func focusedAndSmartSaveFailuresCarryTypedRecoveryProvenance() async throws {
   await persistence.coordinator.finish()
 
   #expect(persistenceEvents.last?.context?.failureProvenance == .persistence)
+  let persistenceCapsule = DictationRuntime.capsuleContext(
+    for: try #require(persistenceEvents.last)
+  )
+  #expect(persistenceCapsule.failureProvenance == .persistence)
+  #expect(persistenceCapsule.failureKind == .save)
+  #expect(FleckErrorKind.resolve(context: persistenceCapsule, action: .copy) == .attention)
+  #expect(
+    DictationCapsulePresentation(
+      status: persistenceCapsule.status,
+      context: persistenceCapsule
+    ).visibleText == "Couldn't save"
+  )
   #expect(persistence.coordinator.recoveryAction == .copy)
   #expect(persistence.coordinator.copyableTranscript == "Recover this save")
 
@@ -2792,6 +2810,18 @@ func focusedAndSmartSaveFailuresCarryTypedRecoveryProvenance() async throws {
   await smartSave.coordinator.finish()
 
   #expect(smartSaveEvents.last?.context?.failureProvenance == .persistence)
+  let smartSaveCapsule = DictationRuntime.capsuleContext(
+    for: try #require(smartSaveEvents.last)
+  )
+  #expect(smartSaveCapsule.failureProvenance == .persistence)
+  #expect(smartSaveCapsule.failureKind == .save)
+  #expect(FleckErrorKind.resolve(context: smartSaveCapsule, action: .copy) == .attention)
+  #expect(
+    DictationCapsulePresentation(
+      status: smartSaveCapsule.status,
+      context: smartSaveCapsule
+    ).visibleText == "Couldn't save"
+  )
   #expect(smartSave.coordinator.recoveryAction == .copy)
   #expect(smartSave.coordinator.copyableTranscript == "Recover this smart save")
 }

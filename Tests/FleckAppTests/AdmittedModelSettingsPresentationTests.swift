@@ -512,6 +512,7 @@ private enum AdmittedModelSettingsTestDescriptors {
 @MainActor
 private final class InstallerActionProbe: AdmittedModelInstalling {
   private let holdsOperations: Bool
+  private let repairFinalPhase: AdmittedModelInstallPhase?
   private let continuation: AsyncStream<AdmittedModelInstallationSnapshot>.Continuation
   private var counts: [AdmittedModelSettingsAction: Int] = [:]
   private var startedActions = Set<AdmittedModelSettingsAction>()
@@ -528,10 +529,12 @@ private final class InstallerActionProbe: AdmittedModelInstalling {
 
   init(
     holdsOperations: Bool = false,
-    refreshPhase: AdmittedModelInstallPhase? = nil
+    refreshPhase: AdmittedModelInstallPhase? = nil,
+    repairFinalPhase: AdmittedModelInstallPhase? = nil
   ) {
     self.holdsOperations = holdsOperations
     self.refreshPhase = refreshPhase
+    self.repairFinalPhase = repairFinalPhase
     var continuation: AsyncStream<AdmittedModelInstallationSnapshot>.Continuation!
     updates = AsyncStream { continuation = $0 }
     self.continuation = continuation
@@ -587,14 +590,24 @@ private final class InstallerActionProbe: AdmittedModelInstalling {
   }
 
   func publishSequence(_ phases: [AdmittedModelInstallPhase]) {
-    phases.forEach(publish)
+    phases.forEach { publish($0) }
+  }
+
+  func publishSnapshot(
+    _ phase: AdmittedModelInstallPhase,
+    activeOperation: AdmittedModelInstallationOperation?
+  ) {
+    publish(phase, activeOperation: activeOperation)
   }
 
   func install() async {
     record(.install)
     started(.install)
     if holdsOperations {
-      publish(.downloading(receivedBytes: 0, totalBytes: 100))
+      publish(
+        .downloading(receivedBytes: 0, totalBytes: 100),
+        activeOperation: .install
+      )
       await withCheckedContinuation { cancellationContinuation = $0 }
     } else {
       publish(.ready)
@@ -616,7 +629,21 @@ private final class InstallerActionProbe: AdmittedModelInstalling {
   func repair() async {
     record(.repair)
     started(.repair)
-    publish(.repairRequired(message: "repair"))
+    if holdsOperations {
+      publish(
+        .downloading(receivedBytes: 0, totalBytes: 100),
+        activeOperation: .repair
+      )
+      await withCheckedContinuation { cancellationContinuation = $0 }
+    } else {
+      let finalPhase = repairFinalPhase ?? .repairRequired(message: "repair")
+      publish(finalPhase, activeOperation: .repair)
+      publish(finalPhase)
+    }
+    operationFinished = true
+    let waiters = operationFinishedWaiters
+    operationFinishedWaiters.removeAll()
+    waiters.forEach { $0.resume() }
   }
 
   func update() async {
@@ -642,7 +669,10 @@ private final class InstallerActionProbe: AdmittedModelInstalling {
     waiters.forEach { $0.1.resume() }
   }
 
-  private func publish(_ phase: AdmittedModelInstallPhase) {
+  private func publish(
+    _ phase: AdmittedModelInstallPhase,
+    activeOperation: AdmittedModelInstallationOperation? = nil
+  ) {
     let lastError: String?
     switch phase {
     case .repairRequired(let message), .failed(let message):
@@ -653,7 +683,8 @@ private final class InstallerActionProbe: AdmittedModelInstalling {
     snapshot = .init(
       recommendation: .recommended(AdmittedModelSettingsTestDescriptors.tinyAdmittedASR),
       phase: phase,
-      lastError: lastError
+      lastError: lastError,
+      activeOperation: activeOperation
     )
     continuation.yield(snapshot)
     let waiters = phaseWaiters.filter { $0.0 == phase }
@@ -687,6 +718,46 @@ private func waitForPresentation(
     return phaseObserved
   }
   #expect(phaseObserved)
+}
+
+@MainActor
+private func waitForRepairActivity(
+  _ viewModel: AdmittedModelSettingsViewModel,
+  isActive: Bool
+) async {
+  for _ in 0..<200 {
+    if viewModel.isRepairOperationActive == isActive { return }
+    try? await Task.sleep(for: .milliseconds(10))
+  }
+  #expect(viewModel.isRepairOperationActive == isActive)
+}
+
+private actor InstallerActivityGate {
+  private var isOpen = false
+  private var hasEntered = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+  private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+
+  func pause() async {
+    guard !isOpen else { return }
+    hasEntered = true
+    let observers = entryWaiters
+    entryWaiters = []
+    observers.forEach { $0.resume() }
+    await withCheckedContinuation { waiters.append($0) }
+  }
+
+  func waitUntilEntered() async {
+    guard !hasEntered else { return }
+    await withCheckedContinuation { entryWaiters.append($0) }
+  }
+
+  func open() {
+    isOpen = true
+    let pending = waiters
+    waiters = []
+    pending.forEach { $0.resume() }
+  }
 }
 
 @Test @MainActor
@@ -823,7 +894,186 @@ func currentAppConstructionDefaultsToBuiltInInstaller() {
   let installer = makeAdmittedModelInstaller()
   #expect(installer.snapshot.recommendation == .builtIn)
   #expect(installer.snapshot.phase == .builtIn)
+  #expect(installer.snapshot.activeOperation == nil)
 }
+
+@Test @MainActor
+func repairActivityTracksOnlyTheActiveInstallerOperationSnapshot() async {
+  let activeProbe = InstallerActionProbe(holdsOperations: true)
+  let activeViewModel = AdmittedModelSettingsViewModel(installer: activeProbe)
+  activeViewModel.perform(.repair)
+  await activeProbe.waitUntilStarted(.repair)
+
+  #expect(activeProbe.snapshot.activeOperation == .repair)
+  await waitForRepairActivity(activeViewModel, isActive: true)
+  #expect(activeViewModel.isRepairOperationActive)
+  activeViewModel.perform(.cancel)
+  await activeProbe.waitUntilOperationFinished()
+  await waitForRepairActivity(activeViewModel, isActive: false)
+  #expect(!activeViewModel.isRepairOperationActive)
+
+  let completedProbe = InstallerActionProbe(repairFinalPhase: .installed)
+  let completedViewModel = AdmittedModelSettingsViewModel(installer: completedProbe)
+  completedViewModel.perform(.repair)
+  await completedProbe.waitUntilPhase(.installed)
+  await waitForRepairActivity(completedViewModel, isActive: false)
+  await waitForPresentation(completedViewModel, phase: .installed)
+  #expect(completedProbe.snapshot.activeOperation == nil)
+  #expect(!completedViewModel.isRepairOperationActive)
+
+  let failedProbe = InstallerActionProbe(
+    repairFinalPhase: .failed(message: "repair failed")
+  )
+  let failedViewModel = AdmittedModelSettingsViewModel(installer: failedProbe)
+  failedViewModel.perform(.repair)
+  await failedProbe.waitUntilPhase(.failed(message: "repair failed"))
+  await waitForRepairActivity(failedViewModel, isActive: false)
+  await waitForPresentation(failedViewModel, phase: .failed(message: "repair failed"))
+  #expect(failedProbe.snapshot.activeOperation == nil)
+  #expect(!failedViewModel.isRepairOperationActive)
+
+  let nonRepairProbe = InstallerActionProbe()
+  let nonRepairViewModel = AdmittedModelSettingsViewModel(installer: nonRepairProbe)
+  nonRepairProbe.publishSnapshot(
+    .downloading(receivedBytes: 4, totalBytes: 8),
+    activeOperation: .update
+  )
+  await waitForPresentation(
+    nonRepairViewModel,
+    phase: .downloading(receivedBytes: 4, totalBytes: 8)
+  )
+  #expect(!nonRepairViewModel.isRepairOperationActive)
+
+  let requiredProbe = InstallerActionProbe(
+    refreshPhase: .repairRequired(message: "repair required")
+  )
+  let requiredViewModel = AdmittedModelSettingsViewModel(installer: requiredProbe)
+  await requiredViewModel.refresh()
+  await waitForPresentation(requiredViewModel, phase: .repairRequired(message: "repair required"))
+
+  #expect(!requiredViewModel.isRepairOperationActive)
+}
+
+#if CLEAN_DICTATION_ENHANCED_CANDIDATE
+@Test @MainActor
+func actualRepairSnapshotsStayActiveThroughStartupAndCalibration() async {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let transport = ModelDownloadingProbe(
+    bytes: TestFixtures.tinyBytes,
+    pausesAfterFirstProgress: true
+  )
+  let fixture = try! TestManagers.manager(
+    descriptor: descriptor,
+    artifactIdentity: TestArtifacts.identity(matching: descriptor),
+    manifest: TestManifests.tiny,
+    transport: transport,
+    refreshFixture: .repairRequired
+  )
+  defer { fixture.cleanup() }
+  let startupGate = InstallerActivityGate()
+  let calibrationGate = InstallerActivityGate()
+  let installer = try! EnhancedModelManagerInstaller(
+    manager: fixture.manager,
+    descriptor: descriptor,
+    startup: { await startupGate.pause() },
+    calibrate: { await calibrationGate.pause() }
+  )
+  await installer.refresh()
+  let viewModel = AdmittedModelSettingsViewModel(installer: installer)
+
+  guard case .repairRequired = installer.snapshot.phase else {
+    Issue.record("Expected the manager's persisted integrity failure to require repair")
+    return
+  }
+  #expect(installer.snapshot.activeOperation == nil)
+  #expect(!viewModel.isRepairOperationActive)
+
+  viewModel.perform(.repair)
+  await transport.waitUntilFirstProgress()
+  #expect(installer.snapshot.activeOperation == .repair)
+  await waitForRepairActivity(viewModel, isActive: true)
+  transport.releaseProgress()
+
+  await startupGate.waitUntilEntered()
+  await waitForPresentation(viewModel, phase: .starting)
+  #expect(viewModel.isRepairOperationActive)
+  await startupGate.open()
+
+  await calibrationGate.waitUntilEntered()
+  await waitForPresentation(viewModel, phase: .calibrating)
+  #expect(viewModel.isRepairOperationActive)
+  await calibrationGate.open()
+
+  await waitForPresentation(viewModel, phase: .installed)
+  await waitForRepairActivity(viewModel, isActive: false)
+  #expect(installer.snapshot.phase == .installed)
+  #expect(installer.snapshot.activeOperation == nil)
+}
+
+@Test @MainActor
+func actualRepairCancellationClearsItsOperationSnapshot() async {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let transport = ModelDownloadingProbe(
+    bytes: TestFixtures.tinyBytes,
+    pausesUntilCancelled: true
+  )
+  let fixture = try! TestManagers.manager(
+    descriptor: descriptor,
+    artifactIdentity: TestArtifacts.identity(matching: descriptor),
+    manifest: TestManifests.tiny,
+    transport: transport,
+    refreshFixture: .repairRequired
+  )
+  defer { fixture.cleanup() }
+  let installer = try! EnhancedModelManagerInstaller(
+    manager: fixture.manager,
+    descriptor: descriptor,
+    startup: { },
+    calibrate: { }
+  )
+  await installer.refresh()
+  let viewModel = AdmittedModelSettingsViewModel(installer: installer)
+  viewModel.perform(.repair)
+  await transport.waitUntilStarted()
+  #expect(installer.snapshot.activeOperation == .repair)
+  await waitForRepairActivity(viewModel, isActive: true)
+
+  viewModel.perform(.cancel)
+  await waitForPresentation(viewModel, phase: .cancelled)
+  await waitForRepairActivity(viewModel, isActive: false)
+
+  #expect(installer.snapshot.phase == .cancelled)
+  #expect(installer.snapshot.activeOperation == nil)
+  #expect(!viewModel.isRepairOperationActive)
+}
+
+@Test @MainActor
+func failedActualRepairClearsItsOperationSnapshot() async {
+  let descriptor = TestDescriptors.tinyAdmittedASR
+  let fixture = try! TestManagers.manager(
+    descriptor: descriptor,
+    artifactIdentity: TestArtifacts.identity(matching: descriptor),
+    manifest: TestManifests.tiny,
+    transport: ModelDownloadingProbe(bytes: TestFixtures.tinyBytes),
+    refreshFixture: .repairRequired
+  )
+  defer { fixture.cleanup() }
+  let installer = try! EnhancedModelManagerInstaller(
+    manager: fixture.manager,
+    descriptor: descriptor,
+    startup: { throw EnhancedTestFailure.failed },
+    calibrate: { Issue.record("Calibration must not run after repair startup fails") }
+  )
+  await installer.refresh()
+  await installer.repair()
+
+  guard case .failed = installer.snapshot.phase else {
+    Issue.record("Expected the repair startup failure to remain visible")
+    return
+  }
+  #expect(installer.snapshot.activeOperation == nil)
+}
+#endif
 
 #if CLEAN_DICTATION_ENHANCED_CANDIDATE
 func supportedHardware(

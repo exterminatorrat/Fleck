@@ -11,6 +11,10 @@ public release log. Packaging unchanged source does not add a changelog entry.
   unavailability, deadlines and cancellation while preserving dictionary-protected forms.
 - Carry insertion-versus-persistence failure provenance through dictation contexts
   without changing receipt-backed recovery or successful-save standby.
+- Present session-bound dictation error recovery with guarded retry, copy and Settings
+  actions, and actual model-repair activity that does not interrupt an active capture.
+- Preserve bottom-only live-pill placement, direct saved-result standby, accessibility,
+  reduced motion and monotonic waveform behavior with retained synthetic regressions.
 
 Part of the shared retained-feature 1.7.0 cohort, not a separate release.
 Source-only preparation. Local compilation, tests, native/visual/accessibility behavior

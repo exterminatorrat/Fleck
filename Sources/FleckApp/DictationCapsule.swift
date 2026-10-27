@@ -87,7 +87,9 @@
     let isHandsFree: Bool
     let pipelineStage: DictationPipelineStage?
     let cleanupOutcome: DictationCleanupOutcome?
+    let cleanupFallbackProvenance: DictationCleanupFallbackProvenance?
     let failureStage: DictationPipelineStage?
+    let failureProvenance: DictationFailureProvenance?
     let failureKind: DictationCapsuleFailureKind?
 
     init(
@@ -100,7 +102,9 @@
       isHandsFree: Bool = false,
       pipelineStage: DictationPipelineStage? = nil,
       cleanupOutcome: DictationCleanupOutcome? = nil,
+      cleanupFallbackProvenance: DictationCleanupFallbackProvenance? = nil,
       failureStage: DictationPipelineStage? = nil,
+      failureProvenance: DictationFailureProvenance? = nil,
       failureKind: DictationCapsuleFailureKind? = nil
     ) {
       self.status = status
@@ -112,19 +116,50 @@
       self.isHandsFree = isHandsFree
       self.pipelineStage = pipelineStage
       self.cleanupOutcome = cleanupOutcome
+      self.cleanupFallbackProvenance = cleanupFallbackProvenance
       self.failureStage = failureStage
+      self.failureProvenance = failureProvenance
       self.failureKind = failureKind
     }
 
-    func presentationContext() -> Self {
-      guard status.isSavedResult else { return self }
-      return Self(status: .idle, sessionID: sessionID)
+    func displayableChooser(_ chooser: DictationCapsuleChooser?) -> DictationCapsuleChooser? {
+      guard
+        let chooser,
+        chooser.displaysMenu,
+        sessionID == chooser.captureID
+      else { return nil }
+      switch status {
+      case .routingFailure:
+        return chooser
+      default:
+        return nil
+      }
     }
 
+    func presentationContext(with chooser: DictationCapsuleChooser? = nil) -> Self {
+      if status.isSavedResult {
+        return Self(status: .idle, sessionID: sessionID)
+      }
+      guard chooser != nil, displayableChooser(chooser) == nil else { return self }
+      return Self(
+        status: status,
+        sessionID: sessionID,
+        trigger: trigger,
+        mode: mode,
+        isHandsFree: isHandsFree,
+        pipelineStage: pipelineStage,
+        cleanupOutcome: cleanupOutcome,
+        cleanupFallbackProvenance: cleanupFallbackProvenance,
+        failureStage: failureStage,
+        failureProvenance: failureProvenance,
+        failureKind: failureKind
+      )
+    }
   }
 
   enum DictationCapsuleFailureKind: Equatable {
     case microphoneAccess
+    case speechRecognitionAccess
     case save
     case modelRepair
     case generic
@@ -142,6 +177,445 @@
         return .microphoneAccess
       }
       return nil
+    }
+  }
+
+  enum FleckErrorKind: CaseIterable, Equatable {
+    case microphone
+    case speechRecognition
+    case dictation
+    case insertion
+    case noSpeech
+    case usedOriginal
+    case repairing
+    case attention
+
+    var message: String {
+      switch self {
+      case .microphone: "Microphone access needed"
+      case .speechRecognition: "Speech access needed"
+      case .dictation: "Dictation failed"
+      case .insertion: "Couldn’t insert text"
+      case .noSpeech: "No speech heard"
+      case .usedOriginal: "Used original text"
+      case .repairing: "Repairing model"
+      case .attention: "Dictation failed"
+      }
+    }
+
+    var actionTitle: String? {
+      switch self {
+      case .microphone, .speechRecognition: "Settings"
+      case .dictation: "Try again"
+      case .insertion: "Copy text"
+      case .noSpeech: "Try again"
+      case .usedOriginal, .repairing, .attention: nil
+      }
+    }
+
+    var accessibilityHint: String {
+      switch self {
+      case .microphone:
+        "Permission is needed before recording can begin. Settings opens Dictation settings."
+      case .speechRecognition:
+        "Speech Recognition permission is needed before recording can begin. Settings opens Dictation settings."
+      case .dictation:
+        "No usable transcription is available. Try again starts a new recording."
+      case .insertion:
+        "Text exists, but insertion failed. Copying recovers the text; it does not retry insertion."
+      case .noSpeech:
+        "No usable transcription is available. Try again starts a new recording."
+      case .usedOriginal, .repairing, .attention:
+        ""
+      }
+    }
+
+    static func resolve(
+      context: DictationCapsuleContext,
+      action: DictationCapsuleAction?,
+      chooser: DictationCapsuleChooser? = nil
+    ) -> Self? {
+      let displayableChooser = context.displayableChooser(chooser)
+      switch context.status {
+      case .noSpeech:
+        return .noSpeech
+      case .repairingModel:
+        return .repairing
+      case .savedWithoutCleanup:
+        guard displayableChooser == nil else { return nil }
+        return context.cleanupOutcome == .usedRaw
+            && context.cleanupFallbackProvenance == .serviceFallback
+          ? .usedOriginal
+          : nil
+      case .routingFailure:
+        guard displayableChooser == nil else { return nil }
+        return .attention
+      case .failed:
+        if context.failureStage == .save,
+          context.failureKind == .save,
+          context.failureProvenance == .insertion,
+          action == .copy
+        {
+          return .insertion
+        }
+        if action == nil, context.failureKind == .microphoneAccess { return .microphone }
+        if action == nil, context.failureKind == .speechRecognitionAccess {
+          return .speechRecognition
+        }
+        if action == nil, context.failureStage == .capture,
+          context.failureKind == nil || context.failureKind == .generic
+        {
+          return .dictation
+        }
+        return .attention
+      default:
+        return nil
+      }
+    }
+  }
+
+  struct FleckErrorPresentation: Equatable {
+    let kind: FleckErrorKind
+    var sessionID: UUID?
+    var phase: FleckErrorButtonPhase
+    var dismissal: Double
+    var target: FleckErrorShellTarget
+    var sourceFrame: FleckPillArtworkFrame?
+    var messageOverride: String?
+    var actionToken: UInt64?
+    var sourceMessage: String? = nil
+    var accessibilityHintOverride: String? = nil
+    var recoveryAction: DictationCapsuleAction? = nil
+    var contentCenterOffset = 0.0
+    var repairStartedAt: TimeInterval? = nil
+
+    var message: String { messageOverride ?? sourceMessage ?? kind.message }
+
+    var actionTitle: String? {
+      switch phase {
+      case .pending:
+        switch kind {
+        case .microphone, .speechRecognition: "Opening…"
+        case .dictation: "Opening…"
+        case .insertion: "Copying…"
+        case .noSpeech: "Opening…"
+        case .usedOriginal, .repairing: recoveryAction?.buttonTitle
+        case .attention:
+          recoveryAction == .copy ? "Copying…" : recoveryAction?.buttonTitle
+        }
+      case .copied:
+        "Copied"
+      case .copyFailed:
+        "Try again"
+      default:
+        recoveryAction?.buttonTitle ?? kind.actionTitle
+      }
+    }
+
+    var accessibilityHint: String {
+      accessibilityHintOverride ?? kind.accessibilityHint
+    }
+
+    var hasTrailingContent: Bool {
+      actionTitle != nil || kind == .repairing
+    }
+
+    func messageCenterX(in layout: FleckErrorLayout = .approved) -> Double {
+      if contentCenterOffset != 0 { return layout.messageCenterX + contentCenterOffset }
+      return hasTrailingContent ? layout.messageCenterX : layout.canvasWidth / 2
+    }
+
+    var contentOpacity: Double {
+      1 - FleckPillGeometry.smooth(dismissal / 0.48)
+    }
+
+  }
+
+  @MainActor
+  final class FleckErrorPresentationModel: ObservableObject {
+    @Published private(set) var presentation: FleckErrorPresentation?
+    @Published private(set) var isActionPressed = false
+
+    var onTransitionComplete: @MainActor (FleckErrorShellTarget) -> Void = { _ in }
+    private let monotonicNow: @MainActor () -> TimeInterval
+    private var transitionTask: Task<Void, Never>?
+    private var transitionGeneration: UInt64 = 0
+    private var actionGeneration: UInt64 = 0
+    private var readinessTransitionInProgress = false
+    private var reduceMotion = false
+
+    var interactionGeneration: UInt64 { actionGeneration }
+
+    var canBeginAction: Bool {
+      guard let presentation else { return false }
+      return presentation.actionTitle != nil
+        && presentation.phase != .pending
+        && presentation.phase != .copied
+        && !readinessTransitionInProgress
+        && presentation.contentOpacity >= 0.1
+    }
+
+    init(
+      monotonicNow: @escaping @MainActor () -> TimeInterval = {
+        ProcessInfo.processInfo.systemUptime
+      }
+    ) {
+      self.monotonicNow = monotonicNow
+    }
+
+    func reconcile(
+      context: DictationCapsuleContext,
+      action: DictationCapsuleAction?,
+      chooser: DictationCapsuleChooser? = nil,
+      entryFrame: FleckPillArtworkFrame?,
+      animated: Bool,
+      reduceMotion: Bool
+    ) {
+      self.reduceMotion = reduceMotion
+      let displayableChooser = context.displayableChooser(chooser)
+      if let kind = FleckErrorKind.resolve(
+        context: context,
+        action: action,
+        chooser: displayableChooser
+      ) {
+        let capsulePresentation = DictationCapsulePresentation(
+          status: context.status,
+          action: action,
+          chooser: displayableChooser,
+          context: context
+        )
+        let message = kind == .attention ? capsulePresentation.visibleText ?? kind.message : kind.message
+        let accessibilityHint = kind == .attention ? capsulePresentation.voiceOverText : nil
+      let recoveryAction = kind == .attention && action != .undo ? action : nil
+        let contentCenterOffset = kind == .microphone
+          ? FleckErrorGeometry.microphoneContentOffset(
+            messageWidth: FleckErrorGeometry.microphoneMessageWidth()
+          )
+          : 0
+        guard readinessTransitionInProgress
+          || presentation?.kind != kind
+          || presentation?.sessionID != context.sessionID
+          || presentation?.sourceMessage != message
+          || presentation?.accessibilityHintOverride != accessibilityHint
+          || presentation?.recoveryAction != recoveryAction
+          || presentation?.contentCenterOffset != contentCenterOffset
+        else { return }
+        transitionTask?.cancel()
+        transitionGeneration &+= 1
+        actionGeneration &+= 1
+        readinessTransitionInProgress = false
+        let target = entryFrame.map {
+          $0.expansion > 0.5 ? FleckErrorShellTarget.activating : .standby
+        } ?? .standby
+        let shouldAnimate = animated && !reduceMotion && entryFrame != nil
+        isActionPressed = false
+        presentation = FleckErrorPresentation(
+          kind: kind,
+          sessionID: context.sessionID,
+          phase: .default,
+          dismissal: shouldAnimate ? 1 : 0,
+          target: target,
+          sourceFrame: shouldAnimate ? entryFrame : nil,
+          messageOverride: nil,
+          actionToken: nil,
+          sourceMessage: message,
+          accessibilityHintOverride: accessibilityHint,
+          recoveryAction: recoveryAction,
+          contentCenterOffset: contentCenterOffset,
+          repairStartedAt: kind == .repairing ? monotonicNow() : nil
+        )
+        if shouldAnimate {
+          animateDismissal(to: 0, duration: 0.24, generation: transitionGeneration)
+        }
+        return
+      }
+      if (context.status == .arming || context.status == .listening), presentation != nil {
+        retargetForReadiness(
+          sessionID: context.sessionID,
+          animated: animated,
+          reduceMotion: reduceMotion
+        )
+        return
+      }
+      if presentation != nil { clear() }
+    }
+
+    func beginAction() -> UInt64? {
+      guard canBeginAction, var presentation else { return nil }
+      isActionPressed = false
+      actionGeneration &+= 1
+      presentation.actionToken = actionGeneration
+      presentation.phase = .pending
+      presentation.messageOverride = nil
+      self.presentation = presentation
+      return actionGeneration
+    }
+
+    func presentation(forActionToken token: UInt64) -> FleckErrorPresentation? {
+      guard let presentation, presentation.actionToken == token else { return nil }
+      return presentation
+    }
+
+    func finishTransientAction(_ token: UInt64) {
+      guard var presentation, presentation.actionToken == token else { return }
+      presentation.actionToken = nil
+      presentation.phase = .default
+      self.presentation = presentation
+    }
+
+    func finishCopy(_ token: UInt64, succeeded: Bool) {
+      guard var presentation, presentation.actionToken == token,
+        (presentation.kind == .insertion || presentation.recoveryAction == .copy)
+      else { return }
+      if !succeeded {
+        isActionPressed = false
+        presentation.actionToken = nil
+        presentation.phase = .copyFailed
+        presentation.messageOverride = "Couldn’t copy text"
+        self.presentation = presentation
+        return
+      }
+      isActionPressed = false
+      presentation.phase = .copied
+      self.presentation = presentation
+      transitionTask?.cancel()
+      transitionGeneration &+= 1
+      let generation = transitionGeneration
+      transitionTask = Task { @MainActor [weak self] in
+        try? await Task.sleep(for: .milliseconds(700))
+        guard let self, !Task.isCancelled, self.transitionGeneration == generation,
+          self.presentation?.actionToken == token
+        else { return }
+        self.transition(
+          to: .standby,
+          sessionID: self.presentation?.sessionID,
+          animated: true,
+          reduceMotion: self.reduceMotion
+        )
+      }
+    }
+
+    func clear() {
+      transitionTask?.cancel()
+      transitionTask = nil
+      transitionGeneration &+= 1
+      actionGeneration &+= 1
+      readinessTransitionInProgress = false
+      isActionPressed = false
+      presentation = nil
+    }
+
+    func dismissUsedOriginalNotice(animated: Bool) {
+      guard let presentation, presentation.kind == .usedOriginal else { return }
+      transition(
+        to: .standby,
+        sessionID: presentation.sessionID,
+        animated: animated,
+        reduceMotion: reduceMotion
+      )
+    }
+
+    func setActionPressed(_ pressed: Bool) {
+      guard pressed, canBeginAction else {
+        isActionPressed = false
+        return
+      }
+      isActionPressed = true
+    }
+
+    private func retargetForReadiness(
+      sessionID: UUID?,
+      animated: Bool,
+      reduceMotion: Bool
+    ) {
+      guard var presentation else { return }
+      if readinessTransitionInProgress {
+        if presentation.sessionID != sessionID {
+          isActionPressed = false
+          presentation.sessionID = sessionID
+          presentation.actionToken = nil
+          self.presentation = presentation
+        }
+        if reduceMotion && presentation.dismissal < 1 {
+          transition(
+            to: .activating,
+            sessionID: sessionID,
+            animated: false,
+            reduceMotion: true
+          )
+        }
+        return
+      }
+      transition(
+        to: .activating,
+        sessionID: sessionID,
+        animated: animated,
+        reduceMotion: reduceMotion
+      )
+    }
+
+    private func transition(
+      to target: FleckErrorShellTarget,
+      sessionID: UUID?,
+      animated: Bool,
+      reduceMotion: Bool
+    ) {
+      guard var presentation else { return }
+      isActionPressed = false
+      readinessTransitionInProgress = target == .activating
+      transitionTask?.cancel()
+      transitionGeneration &+= 1
+      actionGeneration &+= 1
+      presentation.target = target
+      presentation.sessionID = sessionID
+      presentation.sourceFrame = nil
+      presentation.actionToken = nil
+      if !animated || reduceMotion {
+        presentation.dismissal = 1
+        self.presentation = presentation
+        onTransitionComplete(target)
+        return
+      }
+      self.presentation = presentation
+      animateDismissal(
+        to: 1,
+        duration: target == .activating
+          ? FleckErrorGeometry.retryMorphDuration
+          : FleckErrorGeometry.dismissalDuration,
+        generation: transitionGeneration
+      )
+    }
+
+    private func animateDismissal(to target: Double, duration: Double, generation: UInt64) {
+      guard let presentation else { return }
+      let startValue = presentation.dismissal
+      let startTime = monotonicNow()
+      transitionTask?.cancel()
+      transitionTask = Task { @MainActor [weak self] in
+        guard let self else { return }
+        while !Task.isCancelled {
+          try? await Task.sleep(for: .milliseconds(16))
+          guard !Task.isCancelled, self.transitionGeneration == generation,
+            var current = self.presentation
+          else { return }
+          let progress = min(max((self.monotonicNow() - startTime) / duration, 0), 1)
+          current.dismissal = FleckPillGeometry.mix(
+            startValue,
+            target,
+            FleckPillGeometry.smooth(progress)
+          )
+          self.presentation = current
+          guard progress < 1 else { break }
+        }
+        guard !Task.isCancelled, self.transitionGeneration == generation,
+          var final = self.presentation
+        else { return }
+        final.dismissal = target
+        self.presentation = final
+        if target == 1 {
+          self.onTransitionComplete(final.target)
+        }
+      }
     }
   }
 
@@ -173,17 +647,15 @@
       chooser: DictationCapsuleChooser? = nil,
       context: DictationCapsuleContext? = nil
     ) {
-      let inputContext = context ?? DictationCapsuleContext(status: status)
-      let isSavedResult = inputContext.status.isSavedResult
-      let context = inputContext.presentationContext()
-      let presentationStatus = context.status
-      let presentationAction = isSavedResult ? nil : action
-      let presentationChooser = isSavedResult ? nil : chooser
-      let treatments = FleckRailStageTreatment.forContext(context)
-      let copy = Self.copy(for: presentationStatus, context: context)
+      let context = context ?? DictationCapsuleContext(status: status)
+      let displayableChooser = context.displayableChooser(chooser)
+      let presentationContext = context.presentationContext(with: chooser)
+      let status = presentationContext.status
+      let treatments = FleckRailStageTreatment.forContext(presentationContext)
+      let copy = Self.copy(for: status, context: presentationContext)
       let visualMode: DictationCapsuleVisualMode
       let symbolName: String
-      switch presentationStatus {
+      switch status {
       case .idle:
         visualMode = .idle
         symbolName = "square.grid.2x2"
@@ -216,21 +688,22 @@
         symbolName = "exclamationmark.circle"
       }
 
+      let action = status == .idle ? nil : action
       let widthCeiling = Self.widthCeiling(
-        for: presentationStatus,
-        action: presentationAction,
-        chooser: presentationChooser
+        for: status,
+        action: action,
+        chooser: displayableChooser
       )
       let measuredWidth = Self.measuredWidth(
         for: copy,
-        status: presentationStatus,
-        action: presentationAction,
-        chooser: presentationChooser,
+        status: status,
+        action: action,
+        chooser: displayableChooser,
         ceiling: widthCeiling
       )
       self.visibleText = copy.visible
-      secondaryVisibleText = context.compactDetailText ?? context.detailText
-      voiceOverText = context.detailText.map { "\(copy.voiceOver). \($0)" } ?? copy.voiceOver
+      secondaryVisibleText = presentationContext.compactDetailText ?? presentationContext.detailText
+      voiceOverText = presentationContext.detailText.map { "\(copy.voiceOver). \($0)" } ?? copy.voiceOver
       self.symbolName = symbolName
       self.visualMode = visualMode
       self.widthCeiling = widthCeiling
@@ -296,6 +769,8 @@
       switch kind {
       case .microphoneAccess:
         "Microphone access needed"
+      case .speechRecognitionAccess:
+        "Speech access needed"
       case .save:
         "Couldn't save"
       case .modelRepair:
@@ -334,6 +809,7 @@
     static func chooserWidth(for chooser: DictationCapsuleChooser) -> CGFloat {
       CGFloat(chooser.menuTitle.count) * 7 + 9
     }
+
   }
 
   enum FleckRailStageTreatment: Equatable {
@@ -448,6 +924,15 @@
       )
     }
 
+    func mixed(with other: Self, amount: Double) -> Self {
+      let amount = min(max(amount, 0), 1)
+      return Self(
+        red: red + (other.red - red) * amount,
+        green: green + (other.green - green) * amount,
+        blue: blue + (other.blue - blue) * amount
+      )
+    }
+
     var hex: String {
       String(
         format: "#%02X%02X%02X",
@@ -466,7 +951,10 @@
   }
 
   struct FleckRailColors: Equatable {
+    static let shellHex = "#17151C"
     static let shellOpacity = 0.96
+    private static let textContrastMinimum = 5.2
+    private static let signalContrastMinimum = 3.6
 
     let accentHex: String
     let shell: FleckRailRGB
@@ -487,15 +975,44 @@
 
     init(theme: FleckThemeSnapshot = .initial) {
       let palette = theme.palette
+      let shell = FleckRailRGB(hex: Self.shellHex)!
       accentHex = palette[.accent]
-      shell = FleckRailRGB(hex: palette[.capsuleSurface])!
-      displayCore = FleckRailRGB(hex: palette[.accent])!
-      displayLive = FleckRailRGB(hex: palette[.focusRing])!
-      primaryText = FleckRailRGB(hex: palette[.capsuleText])!
-      secondaryText = FleckRailRGB(hex: palette[.caption])!
-      success = FleckRailRGB(hex: palette[.success])!
-      warning = FleckRailRGB(hex: palette[.warning])!
-      failure = FleckRailRGB(hex: palette[.error])!
+      self.shell = shell
+      displayCore = Self.contrastSafe(
+        FleckRailRGB(hex: palette[.accent])!,
+        against: shell,
+        minimum: Self.signalContrastMinimum
+      )
+      displayLive = Self.contrastSafe(
+        FleckRailRGB(hex: palette[.focusRing])!,
+        against: shell,
+        minimum: Self.signalContrastMinimum
+      )
+      primaryText = Self.contrastSafe(
+        FleckRailRGB(hex: palette[.capsuleText])!,
+        against: shell,
+        minimum: Self.textContrastMinimum
+      )
+      secondaryText = Self.contrastSafe(
+        FleckRailRGB(hex: palette[.caption])!,
+        against: shell,
+        minimum: Self.textContrastMinimum
+      )
+      success = Self.contrastSafe(
+        FleckRailRGB(hex: palette[.success])!,
+        against: shell,
+        minimum: Self.signalContrastMinimum
+      )
+      warning = Self.contrastSafe(
+        FleckRailRGB(hex: palette[.warning])!,
+        against: shell,
+        minimum: Self.signalContrastMinimum
+      )
+      failure = Self.contrastSafe(
+        FleckRailRGB(hex: palette[.error])!,
+        against: shell,
+        minimum: Self.signalContrastMinimum
+      )
       borderColor = theme.color(.capsuleBorder)
       reduceTransparency = theme.reduceTransparency
       increasedContrast = theme.increasedContrast
@@ -522,10 +1039,32 @@
       let darker = min(foreground.luminance, background.luminance)
       return (lighter + 0.05) / (darker + 0.05)
     }
+
+    private static func contrastSafe(
+      _ color: FleckRailRGB,
+      against background: FleckRailRGB,
+      minimum: Double
+    ) -> FleckRailRGB {
+      guard contrastRatio(color, against: background) < minimum else { return color }
+      var low = 0.0
+      var high = 1.0
+      let white = FleckRailRGB(red: 1, green: 1, blue: 1)
+      for _ in 0..<24 {
+        let amount = (low + high) / 2
+        let candidate = color.mixed(with: white, amount: amount)
+        if contrastRatio(candidate, against: background) >= minimum {
+          high = amount
+        } else {
+          low = amount
+        }
+      }
+      return color.mixed(with: white, amount: high)
+    }
   }
 
   enum FleckRailAccessibility {
     enum Action: Equatable {
+      case openFleck
       case stop
       case cancel
       case dismiss
@@ -536,6 +1075,7 @@
     }
 
     static func actions(for context: DictationCapsuleContext) -> [Action] {
+      if context.status == .idle { return [.openFleck] }
       if context.status == .listening, context.isHandsFree {
         return [.stop, .cancel]
       }
@@ -555,7 +1095,7 @@
   enum FleckRailContentElement: Equatable {
     case mark
     case waveform
-    case timer
+    case actions
     case terminalGlyph
     case statusText
     case divider
@@ -568,7 +1108,7 @@
     }
 
     static func listening(for dock: DictationCapsuleDock) -> [FleckRailContentElement] {
-      dock == .right ? [.timer, .waveform, .mark] : [.mark, .waveform, .timer]
+      dock == .right ? [.actions, .waveform, .mark] : [.mark, .waveform, .actions]
     }
 
     static func terminalCluster(
@@ -1178,6 +1718,7 @@
     @Published private(set) var isListeningHover = false
     @Published private(set) var isDragActive = false
     @Published private(set) var showsProcessingLabel = false
+    @Published private(set) var isPresented = false
     private(set) var presentationGeneration: UInt64 = 0
     private(set) var voiceOverLabel = "Fleck dictation ready"
     private(set) var actionHandler: @MainActor () -> Void
@@ -1205,13 +1746,12 @@
       },
       announcementHandler: @escaping @MainActor (String) -> Void = { _ in }
     ) {
-      let isSavedResult = context.status.isSavedResult
-      let presentationContext = context.presentationContext()
-      self.context = presentationContext
-      self.dock = dock.supportedPlacement
+      let context = context.presentationContext(with: chooser)
+      self.context = context
+      self.dock = dock
       self.colors = colors
-      self.action = isSavedResult ? nil : action
-      self.chooser = isSavedResult ? nil : chooser
+      self.action = context.status == .idle ? nil : action
+      self.chooser = context.displayableChooser(chooser)
       self.actionHandler = onAction
       self.choiceHandler = onChoice
       self.stopHandler = onStop
@@ -1219,17 +1759,17 @@
       self.dismissHandler = onDismiss
       self.announcementHandler = announcementHandler
       self.processingLabelSleeper = processingLabelSleeper
-      switch presentationContext.status {
+      switch context.status {
       case .idle, .arming, .listening, .saved, .savedWithoutCleanup, .noSpeech,
         .routingFailure, .failed:
         self.voiceOverLabel = DictationCapsulePresentation(
-          status: presentationContext.status,
-          context: presentationContext
+          status: context.status,
+          context: context
         ).voiceOverText
       default:
         break
       }
-      if presentationContext.status != .listening || !presentationContext.isHandsFree {
+      if context.status != .listening || !context.isHandsFree {
         isListeningHover = false
       }
     }
@@ -1243,32 +1783,32 @@
       onStop: (@MainActor () -> Void)? = nil,
       onCancel: (@MainActor () -> Void)? = nil
     ) {
+      let context = context.presentationContext(with: chooser)
       let previousContext = self.context
-      let isSavedResult = context.status.isSavedResult
-      let presentationContext = context.presentationContext()
       presentationGeneration &+= 1
       processingLabelTask?.cancel()
       processingLabelTask = nil
       showsProcessingLabel = false
-      self.context = presentationContext
-      self.action = isSavedResult ? nil : action
-      self.chooser = isSavedResult ? nil : chooser
+      isPresented = true
+      self.context = context
+      self.action = context.status == .idle ? nil : action
+      self.chooser = context.displayableChooser(chooser)
       self.actionHandler = onAction
       self.choiceHandler = onChoice
       if let onStop { self.stopHandler = onStop }
       if let onCancel { self.cancelHandler = onCancel }
-      if presentationContext.status != .listening || !presentationContext.isHandsFree {
+      if context.status != .listening || !context.isHandsFree {
         isListeningHover = false
       }
-      if isSavedResult || presentationContext.status != .idle {
+      if context.status != .idle {
         isDragActive = false
       }
-      updateVoiceOverLabel(from: previousContext, to: presentationContext)
-      scheduleProcessingLabel(for: presentationContext)
+      updateVoiceOverLabel(from: previousContext, to: context)
+      scheduleProcessingLabel(for: context)
     }
 
     func updateDock(_ dock: DictationCapsuleDock) {
-      self.dock = dock.supportedPlacement
+      self.dock = dock
     }
 
     func updateTheme(_ theme: FleckThemeSnapshot) {
@@ -1302,6 +1842,7 @@
     }
 
     func invalidatePresentation() {
+      isPresented = false
       presentationGeneration &+= 1
       processingLabelTask?.cancel()
       processingLabelTask = nil
@@ -1408,6 +1949,7 @@
     var onOpenSettings: @MainActor () -> Void = {}
     var onDismiss: @MainActor () -> Void = {}
     var onRecovery: @MainActor () -> Void = {}
+    var onErrorRecovery: @MainActor (UInt64) -> Void = { _ in }
     var onDragChanged: @MainActor (CGPoint) -> Void = { _ in }
     var onDragEnded: @MainActor (CGPoint, Bool) -> Void = { _, _ in }
   }
@@ -1458,15 +2000,24 @@
     nonisolated static let noSpeechSize = CGSize(width: 192, height: 36)
     nonisolated static let repairingModelSize = CGSize(width: 224, height: 36)
     nonisolated static let failureSize = CGSize(width: 264, height: 36)
-    static let edgeInset: CGFloat = 10
+    nonisolated static let errorSurfaceSize = CGSize(
+      width: FleckErrorLayout.approved.canvasWidth,
+      height: FleckErrorLayout.approved.canvasHeight
+    )
+    nonisolated static let edgeInset: CGFloat = 10
 
     let panel: DictationCapsulePanel
     let waveformModel: DictationWaveformModel
     let presentationModel: DictationCapsulePresentationModel
     let fleckPillModel: FleckPillLivePresentationModel
+    let errorPresentationModel: FleckErrorPresentationModel
     private let inputRouter: DictationCapsuleInputRouter
     private let monotonicNow: @MainActor () -> TimeInterval
     private let reduceMotionProvider: @MainActor () -> Bool
+#if DEBUG
+    private var reduceMotionOverrideForTesting: Bool? = nil
+    private var panelVisibilitySuppressedForTesting: Bool? = nil
+#endif
     private let automaticallyAdvancesLivePill: Bool
     private var hostingView: DictationCapsuleHostingView!
     private(set) var currentDock = DictationCapsuleDock.bottom
@@ -1508,6 +2059,7 @@
       self.reduceMotionProvider = reduceMotionProvider
       self.automaticallyAdvancesLivePill = automaticallyAdvancesLivePill
       self.fleckPillModel = FleckPillLivePresentationModel()
+      self.errorPresentationModel = FleckErrorPresentationModel(monotonicNow: monotonicNow)
       let persistentPanel = panel
       self.presentationModel = DictationCapsulePresentationModel(
         colors: FleckRailColors(theme: theme),
@@ -1533,6 +2085,8 @@
         model: presentationModel,
         waveformModel: waveformModel,
         fleckPillModel: fleckPillModel,
+        errorPresentationModel: errorPresentationModel,
+        monotonicNow: monotonicNow,
         markImage: markLoader(),
         inputRouter: inputRouter,
         automaticallyAdvancesLivePill: automaticallyAdvancesLivePill,
@@ -1547,10 +2101,49 @@
       inputRouter.onDragEnded = { [weak self] point, cancelled in
         self?.dragEnded(at: point, cancelled: cancelled)
       }
+      errorPresentationModel.onTransitionComplete = { [weak self] target in
+        guard let self else { return }
+        if target == .standby {
+          self.inputRouter.onDismiss()
+        } else {
+          self.finishErrorSurfaceTransition()
+        }
+      }
     }
 
+#if DEBUG
+    func setReduceMotionOverrideForTesting(_ override: Bool?) {
+      reduceMotionOverrideForTesting = override
+      hostingView.setReduceMotionOverrideForTesting(override)
+    }
+
+    func setPanelVisibilitySuppressedForTesting(_ suppressed: Bool?) {
+      panelVisibilitySuppressedForTesting = suppressed
+      if suppressed == true { panel.orderOut(nil) }
+    }
+
+    func setAccessibilityEnvironmentOverridesForTesting(
+      reduceTransparency: Bool? = nil,
+      increasedContrast: Bool? = nil,
+      observe: (@MainActor (Bool, ColorSchemeContrast) -> Void)? = nil
+    ) {
+      hostingView.setAccessibilityEnvironmentOverridesForTesting(
+        reduceTransparency: reduceTransparency,
+        increasedContrast: increasedContrast,
+        observe: observe
+      )
+    }
+#endif
+
     private var effectiveReduceMotion: Bool {
+#if DEBUG
+      DictationCapsuleReduceMotionOverride.resolve(
+        override: reduceMotionOverrideForTesting,
+        fallback: reduceMotionProvider()
+      )
+#else
       reduceMotionProvider()
+#endif
     }
 
     private static func postAnnouncement(_ panel: NSWindow, _ message: String) {
@@ -1574,6 +2167,7 @@
       let previousStatus = currentContext.status
       let now = monotonicNow()
       let renderedFrame = currentContext.sessionID.flatMap(fleckPillModel.displayedFrame(for:))
+      errorPresentationModel.clear()
       retireCoordinatorSession(currentContext.sessionID)
       currentDock = dock
       currentContext = DictationCapsuleContext(status: .idle)
@@ -1601,19 +2195,21 @@
       presentationModel.update(
         context: currentContext,
         action: nil,
-        onAction: {},
-        chooser: nil,
-        onChoice: { _, _ in }
+        onAction: {}
       )
       presentationModel.updateIdleAccessibilityLabel(accessibilityLabel)
       inputRouter.onOpenFleck = onOpenFleck
       hostingView.refreshMenu()
-      panel.hasShadow = !fleckPillModel.isVisible
+      panel.hasShadow = !fleckPillModel.isVisible && errorPresentationModel.presentation == nil
       applyCurrentFrame(
         animated: panel.isVisible,
         from: previousStatus
       )
+#if DEBUG
+      if panelVisibilitySuppressedForTesting != true { panel.orderFrontRegardless() }
+#else
       panel.orderFrontRegardless()
+#endif
     }
 
     func configureInteraction(
@@ -1624,7 +2220,8 @@
       onOpenHistory: @escaping @MainActor () -> Void,
       onOpenSettings: @escaping @MainActor () -> Void,
       onDismiss: @escaping @MainActor () -> Void,
-      onRecovery: @escaping @MainActor () -> Void
+      onRecovery: @escaping @MainActor () -> Void,
+      onErrorRecovery: @escaping @MainActor (UInt64) -> Void = { _ in }
     ) {
       inputRouter.onPrimaryClick = onPrimaryClick
       inputRouter.onOpenFleck = onOpenFleck
@@ -1632,6 +2229,7 @@
       inputRouter.onOpenSettings = onOpenSettings
       inputRouter.onDismiss = onDismiss
       inputRouter.onRecovery = onRecovery
+      inputRouter.onErrorRecovery = onErrorRecovery
       presentationModel.updateListeningActions(onStop: onStop, onCancel: onCancel)
       presentationModel.updateDismissHandler(onDismiss)
       hostingView.refreshMenu()
@@ -1673,10 +2271,8 @@
           coordinatorEvent.terminal != nil || chooser != nil || context.status.isTerminalResult
         else { return }
       }
-      let isSavedResult = context.status.isSavedResult
-      let presentationContext = context.presentationContext()
-      let presentationAction = isSavedResult ? nil : action
-      let presentationChooser = isSavedResult ? nil : chooser
+      let displayableChooser = context.displayableChooser(chooser)
+      let displayedContext = context.presentationContext(with: chooser)
       let previousStatus = currentContext.status
       let previousSessionID = currentContext.sessionID
       if let eventSessionID = coordinatorEvent?.context?.sessionID,
@@ -1686,30 +2282,36 @@
       }
       let wasListening = previousStatus == .listening
       let now = monotonicNow()
-      let displayedSessionID = presentationContext.sessionID
-        ?? currentContext.sessionID
-        ?? fleckPillModel.sessionID
+      let displayedSessionID = displayedContext.sessionID ?? currentContext.sessionID ?? fleckPillModel.sessionID
       let renderedFrame = displayedSessionID.flatMap(fleckPillModel.displayedFrame(for:))
-      var displayedEnergy = displayedWaveformEnergy(at: Date())
-      currentContext = presentationContext
+      let entryFrame = errorPresentationModel.presentation == nil
+        ? (renderedFrame ?? (fleckPillModel.isVisible ? fleckPillModel.frame : nil))
+        : nil
+      var displayedEnergy = waveformModel.displayedEnergy(monotonicNow: now)
+      currentContext = displayedContext
       lastCoordinatorEvent = coordinatorEvent
-      if presentationContext.status == .listening {
-        let isSameListeningSession = wasListening
-          && previousSessionID == presentationContext.sessionID
+      if displayedContext.status == .listening {
+        let isSameListeningSession = wasListening && previousSessionID == displayedContext.sessionID
         if !isSameListeningSession {
-          waveformModel.beginListening()
+          waveformModel.beginListening(monotonicNow: now)
           displayedEnergy = 0
         }
-      } else {
-        waveformModel.reset()
       }
       let reduceMotion = effectiveReduceMotion
-      let visibleAction = presentationContext.status == .idle ? nil : presentationAction
+      let visibleAction = displayedContext.status == .idle ? nil : action
+      errorPresentationModel.reconcile(
+        context: displayedContext,
+        action: visibleAction,
+        chooser: displayableChooser,
+        entryFrame: entryFrame,
+        animated: panel.isVisible,
+        reduceMotion: reduceMotion
+      )
       updateFleckPillPresentation(
-        context: presentationContext,
+        context: displayedContext,
         event: coordinatorEvent,
         renderedFrame: renderedFrame,
-        displayedEnergy: displayedEnergy,
+        displayedEnergy: Double(displayedEnergy),
         now: now,
         reduceMotion: reduceMotion,
         animated: panel.isVisible
@@ -1717,27 +2319,37 @@
       if coordinatorEvent?.terminal != nil {
         retireCoordinatorSession(coordinatorEvent?.context?.sessionID)
       }
-      currentChooser = presentationChooser
+      if displayedContext.status != .listening { waveformModel.reset() }
+      currentChooser = context.status.isSavedResult ? nil : chooser
       currentChoiceHandler = onChoice
-      panel.allowsActions = presentationAction != nil
-        || presentationChooser?.choices.isEmpty == false
-        || presentationChooser?.allowsKeepInInbox == true
+      panel.allowsActions = visibleAction != nil
+        || errorPresentationModel.presentation != nil
+        || displayableChooser?.choices.isEmpty == false
+        || displayableChooser?.allowsKeepInInbox == true
       presentationModel.update(
-        context: presentationContext,
+        context: displayedContext,
         action: visibleAction,
         onAction: onAction,
-        chooser: presentationChooser,
+        chooser: displayableChooser,
         onChoice: { [weak self] captureID, noteID in
           self?.selectRoutingChoice(captureID: captureID, noteID: noteID)
         }
       )
       hostingView.refreshMenu()
-      panel.hasShadow = !fleckPillModel.isVisible
+      panel.hasShadow = !fleckPillModel.isVisible && errorPresentationModel.presentation == nil
       applyCurrentFrame(
         animated: panel.isVisible,
         from: previousStatus
       )
+#if DEBUG
+      if panelVisibilitySuppressedForTesting != true { panel.orderFrontRegardless() }
+#else
       panel.orderFrontRegardless()
+#endif
+    }
+
+    func dismissUsedOriginalNotice() {
+      errorPresentationModel.dismissUsedOriginalNotice(animated: panel.isVisible)
     }
 
     func setDock(_ dock: DictationCapsuleDock) {
@@ -1749,13 +2361,13 @@
         context: currentContext,
         event: lastCoordinatorEvent,
         renderedFrame: currentContext.sessionID.flatMap(fleckPillModel.displayedFrame(for:)),
-        displayedEnergy: displayedWaveformEnergy(at: Date()),
+        displayedEnergy: Double(waveformModel.displayedEnergy(monotonicNow: now)),
         now: now,
         reduceMotion: effectiveReduceMotion,
         animated: panel.isVisible
       )
       hostingView.refreshMenu()
-      panel.hasShadow = !fleckPillModel.isVisible
+      panel.hasShadow = !fleckPillModel.isVisible && errorPresentationModel.presentation == nil
       applyCurrentFrame(
         animated: panel.isVisible,
         from: currentContext.status,
@@ -1775,6 +2387,7 @@
     func dismiss() {
       waveformModel.reset()
       hideLivePillImmediately()
+      errorPresentationModel.clear()
       lastCoordinatorEvent = nil
       currentChooser = nil
       currentChoiceHandler = { _, _ in }
@@ -1790,11 +2403,12 @@
     func selectRoutingChoice(captureID: UUID, noteID: UUID?) {
       guard
         let currentChooser,
-        currentChooser.captureID == captureID
+        currentChooser.captureID == captureID,
+        let displayableChooser = currentContext.displayableChooser(currentChooser)
       else { return }
       let isValidChoice = noteID.map { noteID in
-        currentChooser.choices.contains(where: { $0.id == noteID })
-      } ?? currentChooser.allowsKeepInInbox
+        displayableChooser.choices.contains(where: { $0.id == noteID })
+      } ?? displayableChooser.allowsKeepInInbox
       guard isValidChoice else { return }
       currentChoiceHandler(captureID, noteID)
     }
@@ -1812,11 +2426,10 @@
         return
       }
       let now = monotonicNow()
-      let waveformNow = Date()
       let reduceMotion = effectiveReduceMotion
       waveformModel.receive(
         level: level,
-        now: waveformNow,
+        monotonicNow: now,
         reduceMotion: reduceMotion
       )
       if currentDock == .bottom, fleckPillModel.sessionID == currentContext.sessionID,
@@ -1825,7 +2438,7 @@
         fleckPillModel.presentListening(
           sessionID: sessionID,
           at: now,
-          displayedEnergy: displayedWaveformEnergy(at: waveformNow),
+          displayedEnergy: Double(waveformModel.displayedEnergy(monotonicNow: now)),
           reduceMotion: reduceMotion
         )
       }
@@ -1912,13 +2525,14 @@
       let now = monotonicNow()
       fleckPillModel.tick(
         at: now,
-        displayedEnergy: displayedWaveformEnergy(at: Date()),
+        displayedEnergy: Double(waveformModel.displayedEnergy(monotonicNow: now)),
         reduceMotion: effectiveReduceMotion
       )
       if previousState != fleckPillModel.state
         || previousHost != fleckPillModel.usesFixedHost
       {
         panel.hasShadow = !fleckPillModel.isVisible
+          && errorPresentationModel.presentation == nil
         applyCurrentFrame(animated: false, from: currentContext.status)
       }
     }
@@ -1929,11 +2543,6 @@
       if retiredCoordinatorSessionOrder.count > 64 {
         retiredCoordinatorSessionIDs.remove(retiredCoordinatorSessionOrder.removeFirst())
       }
-    }
-
-    private func displayedWaveformEnergy(at date: Date) -> Double {
-      let levels = waveformModel.barLevels(at: date, reduceMotion: false)
-      return Double(levels[DictationWaveformModel.barCount / 2])
     }
 
     private func dragChanged(to point: CGPoint) {
@@ -1976,6 +2585,12 @@
       let ceiling: CGSize
       switch status {
       case .idle:
+        if let measuredWidth, measuredWidth > idleSize.width {
+          return CGSize(
+            width: min(max(measuredWidth, idleSize.width), widthCeiling ?? measuredWidth),
+            height: startingSize.height
+          )
+        }
         ceiling = idleSize
       case .arming:
         ceiling = startingSize
@@ -1983,7 +2598,9 @@
         ceiling = listeningSize
       case .finalizing, .cleaning, .routing, .saving:
         ceiling = activeSize
-      case .saved, .savedWithoutCleanup:
+      case .saved:
+        ceiling = idleSize
+      case .savedWithoutCleanup:
         ceiling = idleSize
       case .noSpeech:
         ceiling = noSpeechSize
@@ -2025,6 +2642,45 @@
       frame(for: dock, size: idleSize, in: visibleFrame)
     }
 
+    nonisolated static func livePillFrame(in visibleFrame: CGRect) -> CGRect {
+      let width = min(max(livePillHostSize.width, 0), max(visibleFrame.width, 0))
+      let height = min(max(livePillHostSize.height, 0), max(visibleFrame.height, 0))
+      return CGRect(
+        x: visibleFrame.midX - width / 2,
+        y: visibleFrame.minY,
+        width: width,
+        height: height
+      )
+    }
+
+    nonisolated static func errorSurfaceFrame(
+      for dock: DictationCapsuleDock,
+      in visibleFrame: CGRect
+    ) -> CGRect {
+      let width = min(max(errorSurfaceSize.width, 0), max(visibleFrame.width, 0))
+      let height = min(max(errorSurfaceSize.height, 0), max(visibleFrame.height, 0))
+      let layout = FleckErrorLayout.approved
+      let x: CGFloat
+      let y: CGFloat
+      switch dock {
+      case .bottom:
+        x = visibleFrame.midX - width / 2
+        y = visibleFrame.minY
+      case .left:
+        x = visibleFrame.minX + edgeInset - CGFloat(layout.artworkPadding)
+        y = visibleFrame.midY - CGFloat(layout.visibleHeight / 2)
+      case .right:
+        x = visibleFrame.maxX - edgeInset - width + CGFloat(layout.artworkPadding)
+        y = visibleFrame.midY - CGFloat(layout.visibleHeight / 2)
+      }
+      return CGRect(
+        x: x,
+        y: y,
+        width: width,
+        height: height
+      )
+    }
+
     static func frame(
       for dock: DictationCapsuleDock,
       size: CGSize,
@@ -2056,17 +2712,6 @@
       return CGRect(origin: origin, size: fittedSize)
     }
 
-    nonisolated static func livePillFrame(in visibleFrame: CGRect) -> CGRect {
-      let width = min(max(livePillHostSize.width, 0), max(visibleFrame.width, 0))
-      let height = min(max(livePillHostSize.height, 0), max(visibleFrame.height, 0))
-      return CGRect(
-        x: visibleFrame.midX - width / 2,
-        y: visibleFrame.minY,
-        width: width,
-        height: height
-      )
-    }
-
     static func nearestDock(
       to point: CGPoint,
       in visibleFrame: CGRect
@@ -2096,6 +2741,7 @@
           pipelineStage: pipelineStage(for: status) ?? currentContext.pipelineStage,
           cleanupOutcome: currentContext.cleanupOutcome,
           failureStage: currentContext.failureStage,
+          failureProvenance: currentContext.failureProvenance,
           failureKind: currentContext.failureKind
         )
       }
@@ -2136,12 +2782,17 @@
       let presentation = DictationCapsulePresentation(
         status: currentContext.status,
         action: presentationModel.action,
-        chooser: currentChooser,
+        chooser: presentationModel.chooser,
         context: currentContext
       )
-      let usesLivePillHost = currentDock == .bottom && fleckPillModel.usesFixedHost
+      let usesErrorSurface = errorPresentationModel.presentation != nil
+      let usesLivePillHost = currentDock == .bottom
+        && fleckPillModel.usesFixedHost
+        && !usesErrorSurface
       let finalFrame: CGRect = usesLivePillHost
         ? Self.livePillFrame(in: screen.visibleFrame)
+        : usesErrorSurface
+          ? Self.errorSurfaceFrame(for: currentDock, in: screen.visibleFrame)
         : Self.frame(
           for: currentDock,
           size: Self.size(
@@ -2170,11 +2821,11 @@
         hostingView.wantsLayer = true
         hostingView.layer?.add(
           transition,
-          forKey: "fleck-dictation-content-crossfade"
+          forKey: "transition"
         )
         return
       }
-      guard animated, !fleckPillModel.isVisible else {
+      guard animated, !fleckPillModel.isVisible, !usesErrorSurface else {
         panel.setFrame(finalFrame, display: true)
         panel.alphaValue = 1
         return
@@ -2219,12 +2870,12 @@
         context: currentContext,
         event: lastCoordinatorEvent,
         renderedFrame: currentContext.sessionID.flatMap(fleckPillModel.displayedFrame(for:)),
-        displayedEnergy: displayedWaveformEnergy(at: Date()),
+        displayedEnergy: Double(waveformModel.displayedEnergy(monotonicNow: now)),
         now: now,
         reduceMotion: effectiveReduceMotion,
         animated: panel.isVisible
       )
-      panel.hasShadow = !fleckPillModel.isVisible
+      panel.hasShadow = !fleckPillModel.isVisible && errorPresentationModel.presentation == nil
       applyCurrentFrame(
         animated: true,
         from: currentContext.status,
@@ -2238,6 +2889,12 @@
         return currentScreen
       }
       return panel.screen ?? activeScreen()
+    }
+
+    private func finishErrorSurfaceTransition() {
+      errorPresentationModel.clear()
+      panel.hasShadow = !fleckPillModel.isVisible
+      applyCurrentFrame(animated: false, from: currentContext.status)
     }
 
     private func screen(containing point: CGPoint) -> NSScreen? {
@@ -2260,17 +2917,97 @@
     }
   }
 
+#if DEBUG
+  enum DictationCapsuleReduceMotionOverride {
+    static func resolve(override: Bool?, fallback: Bool) -> Bool {
+      override ?? fallback
+    }
+  }
+
+  private struct DictationCapsuleAccessibilityOverrides: Equatable {
+    let reduceTransparency: Bool?
+    let increasedContrast: Bool?
+  }
+
+  private struct DictationCapsuleAccessibilityOverridesEnvironmentKey: EnvironmentKey {
+    static let defaultValue = DictationCapsuleAccessibilityOverrides(
+      reduceTransparency: nil,
+      increasedContrast: nil
+    )
+  }
+
+  extension EnvironmentValues {
+    fileprivate var dictationCapsuleAccessibilityOverrides: DictationCapsuleAccessibilityOverrides {
+      get { self[DictationCapsuleAccessibilityOverridesEnvironmentKey.self] }
+      set { self[DictationCapsuleAccessibilityOverridesEnvironmentKey.self] = newValue }
+    }
+  }
+
+  private func resolveDictationCapsuleAccessibilityProfile(
+    overrides: DictationCapsuleAccessibilityOverrides,
+    nativeReduceTransparency: Bool,
+    nativeColorSchemeContrast: ColorSchemeContrast
+  ) -> (reduceTransparency: Bool, colorSchemeContrast: ColorSchemeContrast) {
+    (
+      reduceTransparency: overrides.reduceTransparency ?? nativeReduceTransparency,
+      colorSchemeContrast: overrides.increasedContrast.map {
+        $0 ? ColorSchemeContrast.increased : ColorSchemeContrast.standard
+      } ?? nativeColorSchemeContrast
+    )
+  }
+#endif
+
   private struct DictationCapsuleView: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+#if DEBUG
+    @Environment(\.dictationCapsuleAccessibilityOverrides) private var accessibilityOverrides
+    @Environment(\.accessibilityReduceTransparency) private var nativeReduceTransparency
+    @Environment(\.colorSchemeContrast) private var nativeColorSchemeContrast
+    var reduceMotionOverrideForTesting: Bool? = nil
+
+    private var effectiveAccessibilityProfile: (
+      reduceTransparency: Bool,
+      colorSchemeContrast: ColorSchemeContrast
+    ) {
+      resolveDictationCapsuleAccessibilityProfile(
+        overrides: accessibilityOverrides,
+        nativeReduceTransparency: nativeReduceTransparency,
+        nativeColorSchemeContrast: nativeColorSchemeContrast
+      )
+    }
+
+    private var reduceTransparency: Bool {
+      effectiveAccessibilityProfile.reduceTransparency
+    }
+
+    private var colorSchemeContrast: ColorSchemeContrast {
+      effectiveAccessibilityProfile.colorSchemeContrast
+    }
+#else
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+#endif
 
     @ObservedObject var model: DictationCapsulePresentationModel
     @ObservedObject var waveformModel: DictationWaveformModel
     @ObservedObject var fleckPillModel: FleckPillLivePresentationModel
+    @ObservedObject var errorPresentationModel: FleckErrorPresentationModel
+    let inputRouter: DictationCapsuleInputRouter
+    let monotonicNow: @MainActor () -> TimeInterval
     let automaticallyAdvancesLivePill: Bool
     let onLivePillAnimationFrame: @MainActor () -> Void
     let markImage: NSImage?
+
+    private var reduceMotion: Bool {
+#if DEBUG
+      DictationCapsuleReduceMotionOverride.resolve(
+        override: reduceMotionOverrideForTesting,
+        fallback: accessibilityReduceMotion
+      )
+#else
+      accessibilityReduceMotion
+#endif
+    }
 
     private var presentation: DictationCapsulePresentation {
       DictationCapsulePresentation(
@@ -2329,7 +3066,12 @@
     @ViewBuilder
     private var accessibilityContent: some View {
       let actions = FleckRailAccessibility.actions(for: model.context)
-      if actions.contains(.stop) {
+      if actions.contains(.openFleck) {
+        shellContent
+          .accessibilityAction(named: "Open Fleck") {
+            inputRouter.onOpenFleck()
+          }
+      } else if actions.contains(.stop) {
         shellContent
           .accessibilityAction(named: "Stop") {
             model.stopHandler()
@@ -2348,6 +3090,29 @@
     }
 
     private var shellContent: some View {
+      Group {
+        if let error = errorPresentationModel.presentation {
+          FleckErrorCapsuleView(
+            model: errorPresentationModel,
+            fleckPillModel: fleckPillModel,
+            presentation: error,
+            inputRouter: inputRouter,
+            isPresented: model.isPresented,
+            increaseContrast: increaseContrast,
+            reduceTransparency: reduceTransparency,
+            reduceMotion: reduceMotion,
+            colors: model.colors
+          )
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .accessibilityElement(children: .contain)
+          .accessibilityLabel("\(error.message). \(error.kind.accessibilityHint)")
+        } else {
+          regularShellContent
+        }
+      }
+    }
+
+    private var regularShellContent: some View {
       railContent
         .foregroundStyle(model.colors.primaryTextColor)
         .padding(.horizontal, 8)
@@ -2367,13 +3132,18 @@
               receipt: fleckPillModel.renderReceipt,
               colors: model.colors
             )
+            .background(FleckRailFrameProbe(identifier: "fleck-pill-canvas"))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
           } else {
             RoundedRectangle(
               cornerRadius: presentation.visualMode == .idle || presentation.visualMode == .arming ? 10 : 12,
               style: .continuous
             )
-            .fill(model.colors.shellColor.opacity(model.colors.effectiveShellOpacity))
+            .fill(
+              model.colors.shellColor.opacity(
+                reduceTransparency ? 1 : model.colors.effectiveShellOpacity
+              )
+            )
             .overlay {
               RoundedRectangle(
                 cornerRadius: presentation.visualMode == .idle || presentation.visualMode == .arming ? 10 : 12,
@@ -2433,40 +3203,33 @@
       if usesLivePillPrimaryContent {
         livePillControls
       } else {
-        switch model.context.status {
-        case .idle:
-          idleContent
-        case .arming:
-          startingContent
-        case .listening:
-          listeningContent
-        case .finalizing, .cleaning, .routing, .saving:
-          processingCore
-        default:
-          FleckRailLayout(
-            order: FleckRailContentOrder.markAndContent(for: model.dock),
-            spacing: 7
-          ) {
-            railMark
-            stateContent
-          }
+      switch model.context.status {
+      case .idle:
+        idleContent
+      case .arming:
+        startingContent
+      case .listening:
+        listeningContent
+      case .finalizing, .cleaning, .routing, .saving:
+        processingCore
+      default:
+        FleckRailLayout(
+          order: FleckRailContentOrder.markAndContent(for: model.dock),
+          spacing: 7
+        ) {
+          railMark
+          stateContent
         }
+      }
       }
     }
 
     @ViewBuilder
     private var livePillControls: some View {
-      if model.context.status == .listening {
-        TimelineView(
-          .periodic(
-            from: .now,
-            by: DictationWaveformRefreshSchedule.interval(reduceMotion: reduceMotion)
-          )
-        ) { context in
-          HStack {
-            Spacer(minLength: 0)
-            listeningActionZone(at: context.date)
-          }
+      if model.context.status == .listening, model.isPresented {
+        HStack {
+          Spacer(minLength: 0)
+          listeningActionZone()
         }
       } else {
         Color.clear
@@ -2476,6 +3239,7 @@
       }
     }
 
+    @ViewBuilder
     private var idleContent: some View {
       identityMark
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2571,72 +3335,70 @@
       }
     }
 
+    @ViewBuilder
     private var listeningContent: some View {
-      TimelineView(
-        .periodic(
-          from: .now,
-          by: DictationWaveformRefreshSchedule.interval(reduceMotion: reduceMotion)
-        )
-      ) { context in
-        listeningCore(at: context.date)
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .accessibilityLabel("Dictation listening")
+      if model.isPresented {
+        TimelineView(
+          .periodic(
+            from: .now,
+            by: DictationWaveformRefreshSchedule.interval(reduceMotion: reduceMotion)
+          )
+        ) { _ in
+          listeningCore(at: monotonicNow())
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityLabel("Dictation listening")
+        }
       }
     }
 
-    private func listeningCore(at date: Date) -> some View {
+    private func listeningCore(at monotonicNow: TimeInterval) -> some View {
       ZStack {
-        waveform(at: date)
+        waveform(at: monotonicNow)
         HStack {
           if model.dock == .right {
-            listeningActionZone(at: date)
+            listeningActionZone()
             Spacer(minLength: 0)
             identityMark
           } else {
             identityMark
             Spacer(minLength: 0)
-            listeningActionZone(at: date)
+            listeningActionZone()
           }
         }
       }
     }
 
-    private func listeningActionZone(at date: Date) -> some View {
-      ZStack {
-        elapsedText(at: date)
-          .frame(maxWidth: .infinity, alignment: .trailing)
-          .opacity(model.isListeningHover && model.context.isHandsFree ? 0 : 1)
-        HStack(spacing: 2) {
-          Button(action: model.stopHandler) {
-            Image(systemName: "stop.fill")
-              .font(.system(size: 11, weight: .semibold))
-              .frame(width: 28, height: 28)
-          }
-            .buttonStyle(.borderless)
-            .accessibilityLabel("Stop")
-            .background(FleckRailInteractionProbe(region: .stop))
-          Button(action: model.cancelHandler) {
-            Image(systemName: "xmark")
-              .font(.system(size: 11, weight: .semibold))
-              .frame(width: 28, height: 28)
-          }
-            .buttonStyle(.borderless)
-            .accessibilityLabel("Cancel")
-            .background(FleckRailInteractionProbe(region: .cancel))
+    private func listeningActionZone() -> some View {
+      HStack(spacing: 2) {
+        Button(action: model.stopHandler) {
+          Image(systemName: "stop.fill")
+            .font(.system(size: 11, weight: .semibold))
+            .frame(width: 28, height: 28)
         }
-        .opacity(model.isListeningHover && model.context.isHandsFree ? 1 : 0)
-        .allowsHitTesting(model.isListeningHover && model.context.isHandsFree)
+        .buttonStyle(.borderless)
+        .accessibilityLabel("Stop")
+        .background(FleckRailInteractionProbe(region: .stop))
+        Button(action: model.cancelHandler) {
+          Image(systemName: "xmark")
+            .font(.system(size: 11, weight: .semibold))
+            .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel("Cancel")
+        .background(FleckRailInteractionProbe(region: .cancel))
       }
+      .opacity(model.isListeningHover && model.context.isHandsFree ? 1 : 0)
+      .allowsHitTesting(model.isListeningHover && model.context.isHandsFree)
       .frame(width: 58, height: 28)
-      .background(FleckRailFrameProbe(identifier: "fleck-rail-timer"))
+      .background(FleckRailFrameProbe(identifier: "fleck-rail-actions"))
     }
 
-    private func waveform(at date: Date) -> some View {
+    private func waveform(at monotonicNow: TimeInterval) -> some View {
       HStack(alignment: .center, spacing: DictationWaveformModel.barGap) {
         ForEach(
           Array(
             waveformModel.barHeights(
-              at: date,
+              monotonicNow: monotonicNow,
               reduceMotion: reduceMotion
             ).enumerated()
           ),
@@ -2649,18 +3411,6 @@
       }
       .accessibilityHidden(true)
       .background(FleckRailFrameProbe(identifier: "fleck-rail-waveform"))
-    }
-
-    private func elapsedText(at date: Date) -> some View {
-      Text(waveformModel.elapsedText(at: date))
-        .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-        .foregroundStyle(
-          increaseContrast ? model.colors.primaryTextColor : model.colors.secondaryTextColor
-        )
-        .monospacedDigit()
-        .frame(width: 34, alignment: .trailing)
-        .background(FleckRailFrameProbe(identifier: "fleck-rail-elapsed"))
-        .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -2835,6 +3585,291 @@
     }
   }
 
+  private struct FleckErrorCapsuleView: View {
+    @ObservedObject var model: FleckErrorPresentationModel
+    @ObservedObject var fleckPillModel: FleckPillLivePresentationModel
+    let presentation: FleckErrorPresentation
+    let inputRouter: DictationCapsuleInputRouter
+    let isPresented: Bool
+    let increaseContrast: Bool
+    let reduceTransparency: Bool
+    let reduceMotion: Bool
+    let colors: FleckRailColors
+
+    private var layout: FleckErrorLayout { .approved }
+
+    var body: some View {
+      ZStack {
+        FleckErrorCanvas(
+          presentation: presentation,
+          frame: fleckPillModel.frame,
+          sourceFrame: presentation.sourceFrame,
+          increaseContrast: increaseContrast,
+          reduceTransparency: reduceTransparency,
+          colors: colors
+        )
+        .allowsHitTesting(false)
+        .background(FleckRailFrameProbe(identifier: "fleck-error-surface"))
+        if presentation.kind == .repairing {
+          FleckErrorRepairProgressView(
+            startedAt: presentation.repairStartedAt ?? ProcessInfo.processInfo.systemUptime,
+            isVisible: isPresented,
+            increaseContrast: increaseContrast,
+            reduceTransparency: reduceTransparency,
+            reduceMotion: reduceMotion,
+            colors: colors
+          )
+          .opacity(presentation.contentOpacity)
+          .allowsHitTesting(false)
+        }
+        Text(presentation.message)
+          .font(.system(size: FleckErrorGeometry.messageSize, weight: .regular))
+          .foregroundStyle(colors.primaryTextColor)
+          .lineLimit(1)
+          .fixedSize()
+#if DEBUG
+          .background(FleckRailFrameProbe(identifier: "fleck-error-message"))
+#endif
+          .position(
+            x: presentation.messageCenterX(in: layout),
+            y: layout.messageTextCenterY
+          )
+          .opacity(presentation.contentOpacity)
+          .accessibilityLabel(presentation.message)
+          .accessibilityHint(presentation.actionTitle == nil ? presentation.accessibilityHint : "")
+        if let actionTitle = presentation.actionTitle {
+          FleckErrorActionButton(
+            title: actionTitle,
+            phase: presentation.phase,
+            isActionPressed: model.isActionPressed,
+            increaseContrast: increaseContrast,
+            reduceMotion: reduceMotion
+          ) {
+            guard let token = model.beginAction() else { return }
+            inputRouter.onErrorRecovery(token)
+          }
+          .frame(width: layout.buttonWidth, height: layout.buttonHeight)
+          .background(FleckRailInteractionProbe(region: .recovery))
+          .position(
+            x: layout.buttonX + layout.buttonWidth / 2 + presentation.contentCenterOffset,
+            y: layout.buttonY + layout.buttonHeight / 2
+          )
+          .accessibilityLabel(presentation.recoveryAction?.accessibilityLabel ?? actionTitle)
+          .accessibilityHint(presentation.accessibilityHint)
+          .disabled(!model.canBeginAction)
+          .opacity(presentation.contentOpacity)
+          .accessibilityHidden(presentation.contentOpacity < 0.1)
+        }
+      }
+      .frame(width: layout.canvasWidth, height: layout.canvasHeight)
+      .accessibilityElement(children: .contain)
+    }
+  }
+
+  private struct FleckErrorRepairProgressView: View {
+    let startedAt: TimeInterval
+    let isVisible: Bool
+    let increaseContrast: Bool
+    let reduceTransparency: Bool
+    let reduceMotion: Bool
+    let colors: FleckRailColors
+
+    private var layout: FleckErrorLayout { .approved }
+
+    var body: some View {
+      TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion || !isVisible)) { _ in
+        let sample = FleckErrorRepairMotion.sample(
+          at: ProcessInfo.processInfo.systemUptime - startedAt,
+          reduceMotion: reduceMotion
+        )
+        Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: false) { context, _ in
+          drawFleckErrorRepairProgress(
+            sample,
+            increaseContrast: increaseContrast,
+            reduceTransparency: reduceTransparency,
+            colors: colors,
+            layout: layout,
+            in: context
+          )
+        }
+        .frame(width: layout.canvasWidth, height: layout.canvasHeight)
+      }
+      .accessibilityHidden(true)
+    }
+  }
+
+  private struct FleckErrorActionButton: View {
+    let title: String
+    let phase: FleckErrorButtonPhase
+    let isActionPressed: Bool
+    let increaseContrast: Bool
+    let reduceMotion: Bool
+    let action: () -> Void
+    @State private var isHovering = false
+    @FocusState private var isFocused: Bool
+
+    private var interaction: FleckErrorButtonInteraction {
+      if isActionPressed { .pressed }
+      else if isFocused { .focus }
+      else if isHovering { .hover }
+      else { .idle }
+    }
+
+    var body: some View {
+      Button(title, action: action)
+        .buttonStyle(FleckErrorActionStyle(
+          phase: phase,
+          title: title,
+          interaction: interaction,
+          increaseContrast: increaseContrast,
+          reduceMotion: reduceMotion
+        ))
+        .focused($isFocused)
+        .onHover { isHovering = $0 }
+    }
+  }
+
+  struct FleckErrorActionStyle: ButtonStyle {
+    let phase: FleckErrorButtonPhase
+    let title: String
+    var interaction: FleckErrorButtonInteraction = .idle
+    let increaseContrast: Bool
+    var reduceMotion = false
+
+    static func pressAnimationDuration(reduceMotion: Bool) -> Double? {
+      animationDuration(FleckErrorGeometry.pressDuration, reduceMotion: reduceMotion)
+    }
+
+    static func animationDuration(_ duration: Double, reduceMotion: Bool) -> Double? {
+      reduceMotion ? nil : duration
+    }
+
+    static func feedbackPhase(
+      for phase: FleckErrorButtonPhase,
+      interaction: FleckErrorButtonInteraction
+    ) -> FleckErrorButtonPhase {
+      switch phase {
+      case .pending, .copied:
+        phase
+      case .default, .copyFailed:
+        switch interaction {
+        case .idle: phase
+        case .hover: .hover
+        case .focus: .focus
+        case .pressed: .pressed
+        }
+      case .hover, .focus, .pressed:
+        phase
+      }
+    }
+
+    private static func animation(duration: Double, reduceMotion: Bool) -> Animation? {
+      animationDuration(duration, reduceMotion: reduceMotion).map { .easeOut(duration: $0) }
+    }
+
+    func makeBody(configuration: Configuration) -> some View {
+      let feedbackInteraction = configuration.isPressed ? FleckErrorButtonInteraction.pressed : interaction
+      let renderedPhase = Self.feedbackPhase(for: phase, interaction: feedbackInteraction)
+      let feedback = FleckErrorGeometry.buttonFeedback(for: renderedPhase)
+      let label = configuration.label
+        .font(.system(size: FleckErrorGeometry.actionSize, weight: .regular))
+        .lineLimit(1)
+        .fixedSize()
+      return ZStack {
+        FleckErrorButtonCanvas(
+          feedback: feedback,
+          increaseContrast: increaseContrast,
+          reduceMotion: reduceMotion
+        )
+        FleckErrorButtonLabelTransition(title: title, reduceMotion: reduceMotion) {
+          if increaseContrast {
+            label.foregroundStyle(Color(nsColor: .controlTextColor))
+          } else {
+            FleckErrorButtonLabelColor(label: label, color: feedback.color, reduceMotion: reduceMotion)
+          }
+        }
+          .position(
+            x: FleckErrorLayout.approved.buttonFaceWidth / 2,
+            y: FleckErrorLayout.approved.actionLabelCenterY
+          )
+      }
+      .frame(width: FleckErrorLayout.approved.buttonFaceWidth, height: FleckErrorLayout.approved.buttonFaceHeight)
+      .scaleEffect(feedback.scale)
+      .animation(
+        Self.animation(duration: FleckErrorGeometry.pressDuration, reduceMotion: reduceMotion),
+        value: feedback.scale
+      )
+      .frame(width: FleckErrorLayout.approved.buttonWidth, height: FleckErrorLayout.approved.buttonHeight)
+      .overlay {
+        if renderedPhase == .focus {
+          Capsule()
+            .stroke(
+              increaseContrast
+                ? Color(nsColor: .selectedTextBackgroundColor)
+                : (Color(hex: "#929294") ?? Color(nsColor: .labelColor)),
+              lineWidth: increaseContrast ? 2 : 1
+            )
+            .padding(1)
+        }
+      }
+      .contentShape(Rectangle())
+      .transaction { if reduceMotion { $0.animation = nil } }
+    }
+  }
+
+  private struct FleckErrorButtonLabelTransition<Label: View>: View {
+    let title: String
+    let reduceMotion: Bool
+    let label: Label
+
+    init(title: String, reduceMotion: Bool, @ViewBuilder label: () -> Label) {
+      self.title = title
+      self.reduceMotion = reduceMotion
+      self.label = label()
+    }
+
+    var body: some View {
+      label
+#if DEBUG
+        .background(FleckRailFrameProbe(identifier: "fleck-error-action-label"))
+#endif
+        .contentTransition(.opacity)
+        .animation(
+          reduceMotion ? nil : .easeOut(duration: FleckErrorGeometry.labelFadeDuration),
+          value: title
+        )
+    }
+  }
+
+  private typealias FleckErrorButtonColorPair = AnimatablePair<Double, Double>
+  private typealias FleckErrorButtonColorVector = AnimatablePair<FleckErrorButtonColorPair, Double>
+
+  private struct FleckErrorButtonLabelColor<Label: View>: View, Animatable {
+    let label: Label
+    var color: FleckErrorButtonColor
+    let reduceMotion: Bool
+
+    nonisolated var animatableData: FleckErrorButtonColorVector {
+      get { AnimatablePair(AnimatablePair(color.red, color.green), color.blue) }
+      set {
+        color = FleckErrorButtonColor(
+          red: newValue.first.first,
+          green: newValue.first.second,
+          blue: newValue.second
+        )
+      }
+    }
+
+    var body: some View {
+      label
+        .foregroundStyle(Color(.sRGB, red: color.red, green: color.green, blue: color.blue, opacity: 1))
+        .animation(
+          reduceMotion ? nil : .easeOut(duration: FleckErrorGeometry.buttonColorReflectionDuration),
+          value: color
+        )
+    }
+  }
+
   private extension DictationCapsuleStatus {
     var isSavedResult: Bool {
       switch self {
@@ -2866,7 +3901,90 @@
     }
   }
 
-  private extension FleckRailColors {
+#if DEBUG
+  private struct DictationCapsuleAccessibilityEnvironmentProbe: View {
+    @Environment(\.dictationCapsuleAccessibilityOverrides) private var accessibilityOverrides
+    @Environment(\.accessibilityReduceTransparency) private var nativeReduceTransparency
+    @Environment(\.colorSchemeContrast) private var nativeColorSchemeContrast
+    let observe: @MainActor (Bool, ColorSchemeContrast) -> Void
+
+    private var effectiveAccessibilityProfile: (
+      reduceTransparency: Bool,
+      colorSchemeContrast: ColorSchemeContrast
+    ) {
+      resolveDictationCapsuleAccessibilityProfile(
+        overrides: accessibilityOverrides,
+        nativeReduceTransparency: nativeReduceTransparency,
+        nativeColorSchemeContrast: nativeColorSchemeContrast
+      )
+    }
+
+    @MainActor
+    private func observeEffectiveAccessibilityProfile() {
+      let profile = effectiveAccessibilityProfile
+      observe(profile.reduceTransparency, profile.colorSchemeContrast)
+    }
+
+    var body: some View {
+      Color.clear
+        .frame(width: 1, height: 1)
+        .onAppear(perform: observeEffectiveAccessibilityProfile)
+        .onChange(of: effectiveAccessibilityProfile.reduceTransparency) { _, _ in
+          observeEffectiveAccessibilityProfile()
+        }
+        .onChange(of: effectiveAccessibilityProfile.colorSchemeContrast) { _, _ in
+          observeEffectiveAccessibilityProfile()
+        }
+    }
+  }
+
+  private struct DictationCapsuleEventRootView: View {
+    var capsule: DictationCapsuleView
+    var reduceTransparencyOverrideForTesting: Bool? = nil
+    var increasedContrastOverrideForTesting: Bool? = nil
+    var environmentObserverForTesting: (@MainActor (Bool, ColorSchemeContrast) -> Void)? = nil
+
+    var model: DictationCapsulePresentationModel { capsule.model }
+    var inputRouter: DictationCapsuleInputRouter { capsule.inputRouter }
+    var fleckPillModel: FleckPillLivePresentationModel { capsule.fleckPillModel }
+    var errorPresentationModel: FleckErrorPresentationModel { capsule.errorPresentationModel }
+
+    var reduceMotionOverrideForTesting: Bool? {
+      get { capsule.reduceMotionOverrideForTesting }
+      set { capsule.reduceMotionOverrideForTesting = newValue }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+      if let environmentObserverForTesting {
+        capsule.background {
+          DictationCapsuleAccessibilityEnvironmentProbe(
+            observe: environmentObserverForTesting
+          )
+          .allowsHitTesting(false)
+          .accessibilityHidden(true)
+        }
+      } else {
+        capsule
+      }
+    }
+
+    @ViewBuilder
+    var body: some View {
+      content.environment(
+        \.dictationCapsuleAccessibilityOverrides,
+        DictationCapsuleAccessibilityOverrides(
+          reduceTransparency: reduceTransparencyOverrideForTesting,
+          increasedContrast: increasedContrastOverrideForTesting
+        )
+      )
+    }
+  }
+#else
+  private typealias DictationCapsuleEventRootView = DictationCapsuleView
+#endif
+
+  extension FleckRailColors {
     var warningColor: Color {
       Color(red: warning.red, green: warning.green, blue: warning.blue)
     }
@@ -2882,6 +4000,7 @@
   private final class DictationCapsuleHostingView: NSView {
     private let model: DictationCapsulePresentationModel
     private let fleckPillModel: FleckPillLivePresentationModel
+    private let errorPresentationModel: FleckErrorPresentationModel
     private let inputRouter: DictationCapsuleInputRouter
     private let onDockSelected: @MainActor (DictationCapsuleDock) -> Void
     private let hostingView: DictationCapsuleEventHostingView
@@ -2890,6 +4009,8 @@
       model: DictationCapsulePresentationModel,
       waveformModel: DictationWaveformModel,
       fleckPillModel: FleckPillLivePresentationModel,
+      errorPresentationModel: FleckErrorPresentationModel,
+      monotonicNow: @escaping @MainActor () -> TimeInterval,
       markImage: NSImage?,
       inputRouter: DictationCapsuleInputRouter,
       automaticallyAdvancesLivePill: Bool,
@@ -2898,17 +4019,27 @@
     ) {
       self.model = model
       self.fleckPillModel = fleckPillModel
+      self.errorPresentationModel = errorPresentationModel
       self.inputRouter = inputRouter
       self.onDockSelected = onDockSelected
+      let capsuleRoot = DictationCapsuleView(
+        model: model,
+        waveformModel: waveformModel,
+        fleckPillModel: fleckPillModel,
+        errorPresentationModel: errorPresentationModel,
+        inputRouter: inputRouter,
+        monotonicNow: monotonicNow,
+        automaticallyAdvancesLivePill: automaticallyAdvancesLivePill,
+        onLivePillAnimationFrame: onLivePillAnimationFrame,
+        markImage: markImage
+      )
+#if DEBUG
+      let eventRoot = DictationCapsuleEventRootView(capsule: capsuleRoot)
+#else
+      let eventRoot = capsuleRoot
+#endif
       self.hostingView = DictationCapsuleEventHostingView(
-        rootView: DictationCapsuleView(
-          model: model,
-          waveformModel: waveformModel,
-          fleckPillModel: fleckPillModel,
-          automaticallyAdvancesLivePill: automaticallyAdvancesLivePill,
-          onLivePillAnimationFrame: onLivePillAnimationFrame,
-          markImage: markImage
-        ),
+        rootView: eventRoot,
         model: model,
         inputRouter: inputRouter
       )
@@ -2931,9 +4062,59 @@
       fatalError("init(coder:) has not been implemented")
     }
 
+#if DEBUG
+    func setReduceMotionOverrideForTesting(_ override: Bool?) {
+      var rootView = hostingView.rootView
+      rootView.reduceMotionOverrideForTesting = override
+      hostingView.rootView = rootView
+    }
+
+    func setAccessibilityEnvironmentOverridesForTesting(
+      reduceTransparency: Bool?,
+      increasedContrast: Bool?,
+      observe: (@MainActor (Bool, ColorSchemeContrast) -> Void)?
+    ) {
+      var rootView = hostingView.rootView
+      rootView.reduceTransparencyOverrideForTesting = reduceTransparency
+      rootView.increasedContrastOverrideForTesting = increasedContrast
+      rootView.environmentObserverForTesting = observe
+      hostingView.rootView = rootView
+    }
+#endif
+
     override func hitTest(_ point: NSPoint) -> NSView? {
       let localPoint = convert(point, from: superview)
       guard bounds.contains(localPoint) else { return nil }
+      if let error = errorPresentationModel.presentation {
+        let actionPoint = hostingView.convert(localPoint, from: self)
+        if hostingView.actionRegion(at: actionPoint) != nil {
+          return super.hitTest(point)
+        }
+        let geometry = FleckErrorGeometry.shell(
+          dismissal: error.dismissal,
+          target: error.target
+        )
+        let path = NSBezierPath()
+        func local(_ point: FleckPillPoint) -> NSPoint {
+          NSPoint(
+            x: bounds.minX + point.x,
+            y: isFlipped ? bounds.minY + point.y : bounds.maxY - point.y
+          )
+        }
+        for command in geometry.fill.commands {
+          switch command {
+          case .move(let point):
+            path.move(to: local(point))
+          case .line(let point):
+            path.line(to: local(point))
+          case .cubic(let first, let second, let end):
+            path.curve(to: local(end), controlPoint1: local(first), controlPoint2: local(second))
+          case .close:
+            path.close()
+          }
+        }
+        return path.contains(localPoint) ? hostingView : nil
+      }
       if fleckPillModel.isVisible {
         let actionPoint = hostingView.convert(localPoint, from: self)
         if hostingView.actionRegion(at: actionPoint) != nil {
@@ -2990,10 +4171,14 @@
       addItem("Dock Bottom", action: #selector(dockBottom), to: menu)
 
       if model.context.status.isFailure || model.context.status.isTerminalResult {
-        addItem("Dismiss", action: #selector(dismiss), to: menu)
+        addItem("Dismiss", action: #selector(dismiss(_:)), to: menu)
       }
-      if let action = model.action, action != .openHistory {
-        addItem(action.title, action: #selector(recovery), to: menu)
+      if let error = errorPresentationModel.presentation,
+        let actionTitle = error.actionTitle
+      {
+        addItem(actionTitle, action: #selector(recovery(_:)), to: menu)
+      } else if let action = model.action, action != .openHistory {
+        addItem(action.title, action: #selector(recovery(_:)), to: menu)
       }
       return menu
     }
@@ -3001,6 +4186,7 @@
     private func addItem(_ title: String, action: Selector, to menu: NSMenu) {
       let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
       item.target = self
+      item.representedObject = NSNumber(value: model.presentationGeneration)
       menu.addItem(item)
     }
 
@@ -3016,11 +4202,20 @@
       inputRouter.onOpenSettings()
     }
 
-    @objc private func dismiss() {
+    @objc private func dismiss(_ sender: NSMenuItem) {
+      guard (sender.representedObject as? NSNumber)?.uint64Value == model.presentationGeneration
+      else { return }
       inputRouter.onDismiss()
     }
 
-    @objc private func recovery() {
+    @objc private func recovery(_ sender: NSMenuItem) {
+      guard (sender.representedObject as? NSNumber)?.uint64Value == model.presentationGeneration
+      else { return }
+      if errorPresentationModel.presentation != nil {
+        guard let token = errorPresentationModel.beginAction() else { return }
+        inputRouter.onErrorRecovery(token)
+        return
+      }
       inputRouter.onRecovery()
     }
 
@@ -3031,16 +4226,17 @@
   }
 
   @MainActor
-  private final class DictationCapsuleEventHostingView: NSHostingView<DictationCapsuleView> {
+  private final class DictationCapsuleEventHostingView: NSHostingView<DictationCapsuleEventRootView> {
     private let model: DictationCapsulePresentationModel
     private let inputRouter: DictationCapsuleInputRouter
     private var gesture = FleckRailPointerGesture()
     private var consumedGesture = false
     private var consumedRegion: FleckRailInteractionRegion?
+    private var consumedRecoveryGeneration: UInt64?
     private weak var consumedTarget: NSView?
 
     init(
-      rootView: DictationCapsuleView,
+      rootView: DictationCapsuleEventRootView,
       model: DictationCapsulePresentationModel,
       inputRouter: DictationCapsuleInputRouter
     ) {
@@ -3049,9 +4245,9 @@
       super.init(rootView: rootView)
     }
 
-    required init(rootView: DictationCapsuleView) {
+    required init(rootView: DictationCapsuleEventRootView) {
       self.model = rootView.model
-      self.inputRouter = DictationCapsuleInputRouter()
+      self.inputRouter = rootView.inputRouter
       super.init(rootView: rootView)
     }
 
@@ -3064,15 +4260,23 @@
       let point = convert(event.locationInWindow, from: nil)
       let region = actionRegion(at: point)
       consumedRegion = region
+      consumedRecoveryGeneration = region == .recovery
+        ? rootView.errorPresentationModel.interactionGeneration : nil
       consumedGesture = region != nil
       consumedTarget = region == nil ? nil : actionTarget(at: point)
       gesture.mouseDown(at: point, consumed: consumedGesture)
+      if region == .recovery {
+        rootView.errorPresentationModel.setActionPressed(true)
+      }
     }
 
     override func mouseDragged(with event: NSEvent) {
       let point = convert(event.locationInWindow, from: nil)
       gesture.mouseDragged(to: point)
       if consumedGesture {
+        rootView.errorPresentationModel.setActionPressed(
+          actionRegion(at: point) == .recovery
+        )
         return
       }
       guard gesture.isDragging else { return }
@@ -3086,21 +4290,32 @@
       let wasDragging = gesture.isDragging
       let wasConsumed = consumedGesture
       let region = consumedRegion
+      let recoveryGeneration = consumedRecoveryGeneration
       consumedGesture = false
       consumedRegion = nil
+      consumedRecoveryGeneration = nil
       let target = consumedTarget
       consumedTarget = nil
+      rootView.errorPresentationModel.setActionPressed(false)
       let result = gesture.mouseUp(at: point)
       let screenPoint = window?.convertPoint(toScreen: event.locationInWindow)
         ?? NSEvent.mouseLocation
       switch result {
       case .none:
         if wasConsumed, let region, actionRegion(at: point) == region {
-          forwardAction(to: target)
+          if region == .recovery,
+            recoveryGeneration != rootView.errorPresentationModel.interactionGeneration
+          { return }
+          forwardAction(to: target, in: region)
         }
         inputRouter.onDragEnded(screenPoint, true)
       case .primaryClick:
-        inputRouter.onPrimaryClick()
+        guard rootView.errorPresentationModel.presentation == nil else { return }
+        if model.context.status == .idle, rootView.fleckPillModel.isVisible {
+          inputRouter.onOpenFleck()
+        } else {
+          inputRouter.onPrimaryClick()
+        }
       case .drag:
         if !wasDragging {
           inputRouter.onDragChanged(screenPoint)
@@ -3122,7 +4337,9 @@
       let wasDragging = gesture.isDragging
       consumedGesture = false
       consumedRegion = nil
+      consumedRecoveryGeneration = nil
       consumedTarget = nil
+      rootView.errorPresentationModel.setActionPressed(false)
       gesture.cancel()
       if wasDragging {
         inputRouter.onDragEnded(NSEvent.mouseLocation, true)
@@ -3136,7 +4353,9 @@
         if actions.contains(.stop), model.isListeningHover {
           regions += [.stop, .cancel]
         }
-        if (model.action != nil || model.chooser != nil), model.context.status.isTerminalResult {
+        if rootView.errorPresentationModel.presentation != nil
+          || (model.action != nil && model.context.status.isTerminalResult)
+        {
           regions.append(.recovery)
         }
         return regions
@@ -3164,7 +4383,14 @@
       return nil
     }
 
-    private func forwardAction(to target: NSView?) {
+    private func forwardAction(to target: NSView?, in region: FleckRailInteractionRegion) {
+      if region == .recovery,
+        rootView.errorPresentationModel.presentation != nil
+      {
+        guard let token = rootView.errorPresentationModel.beginAction() else { return }
+        inputRouter.onErrorRecovery(token)
+        return
+      }
       let performClick = #selector(NSButton.performClick(_:))
       guard let target, target.responds(to: performClick) else { return }
       // SwiftUI's AppKit button owns this selector but its mouse tracking loop

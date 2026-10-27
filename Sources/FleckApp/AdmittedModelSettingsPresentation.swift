@@ -356,6 +356,7 @@ private final class AdmittedModelSettingsCancellationRelay {
 @MainActor
 final class AdmittedModelSettingsViewModel: ObservableObject {
   @Published private(set) var presentation: AdmittedModelSettingsPresentation
+  @Published private(set) var isRepairOperationActive = false
 
   private let installer: any AdmittedModelInstalling
   private let context: AdmittedModelSettingsContext
@@ -374,6 +375,7 @@ final class AdmittedModelSettingsViewModel: ObservableObject {
       snapshot: installer.snapshot,
       context: context
     )
+    isRepairOperationActive = installer.snapshot.activeOperation == .repair
     subscribeToUpdates()
   }
 
@@ -430,6 +432,7 @@ final class AdmittedModelSettingsViewModel: ObservableObject {
 
   private func apply(_ snapshot: AdmittedModelInstallationSnapshot) {
     presentation = AdmittedModelSettingsPresentation(snapshot: snapshot, context: context)
+    isRepairOperationActive = snapshot.activeOperation == .repair
   }
 
   deinit {
