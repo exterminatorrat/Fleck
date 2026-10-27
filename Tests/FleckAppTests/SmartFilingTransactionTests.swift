@@ -12,7 +12,8 @@ import Testing
   let metadata = try #require(receipt.filing)
   #expect(metadata.insertions.count == 2)
   let persisted = try await fixture.store.loadWorkspace()
-  #expect(persisted == fixture.state.workspace)
+  let expected = try persistedSmartFilingWorkspace(fixture.state.workspace)
+  #expect(persisted == expected)
   #expect(persisted.dictationFilingLedger.commits == [metadata])
   let alpha = try #require(persisted.notes.first(where: { $0.id == fixture.notes[0].id }))
   let captureStart = try #require(alpha.body.range(of: "Alpha planning task.")?.lowerBound)
@@ -39,7 +40,8 @@ import Testing
   #expect(fixture.state.workspace == committed)
   let restarted = try await SmartFilingFixture.load(store: fixture.store, notes: fixture.notes)
   #expect(try await restarted.saveSmartFiling(plan, captureID: captureID) == receipt)
-  #expect(restarted.workspace == committed)
+  let expected = try persistedSmartFilingWorkspace(committed)
+  #expect(restarted.workspace == expected)
   #expect(await restarted.undoSmartCapture(receipt))
   do {
     _ = try await restarted.saveSmartFiling(plan, captureID: captureID)
@@ -274,6 +276,14 @@ func smartFilingFailureAndSupersededResultRollbackAllOutputs(_ superseded: Bool)
   #expect(fixture.state.workspace.notes.contains(unrelated))
   #expect(fixture.state.workspace.notes.prefix(2).map(\.body) == fixture.notes.map(\.body))
   #expect(fixture.state.workspace.dictationFilingLedger.commits.isEmpty)
+}
+
+private func persistedSmartFilingWorkspace(_ workspace: Workspace) throws -> Workspace {
+  let encoder = JSONEncoder()
+  encoder.dateEncodingStrategy = .iso8601
+  let decoder = JSONDecoder()
+  decoder.dateDecodingStrategy = .iso8601
+  return try decoder.decode(Workspace.self, from: encoder.encode(workspace))
 }
 
 @MainActor
