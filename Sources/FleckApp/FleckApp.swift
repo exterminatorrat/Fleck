@@ -126,33 +126,42 @@
           "capabilities.previous.json"
         )
       )
-      let agentCapabilityAuthority: any AgentCapabilityAuthorizing =
-        AgentCapabilityAuthority(store: agentCapabilityStore)
+      let agentCapabilityAuthority = AgentCapabilityAuthority(store: agentCapabilityStore)
+      let localStore = LocalStore(rootURL: appSupport)
+      let agentEventMonitoringRuntime = AgentEventMonitoringRuntime.production(
+        applicationSupportURL: appSupport,
+        localStore: localStore,
+        profileStore: agentProfileStore,
+        authority: agentCapabilityAuthority
+      )
       let appState = AppState(
-        store: LocalStore(rootURL: appSupport),
+        store: localStore,
         agentProfileStore: agentProfileStore,
         agentActivityStore: agentActivityStore,
         agentCapabilityStore: agentCapabilityStore,
         agentCapabilityAuthority: agentCapabilityAuthority,
+        agentEventMonitoringRuntime: agentEventMonitoringRuntime,
         startupMigrationError: startup.migrationError
       )
       let agentService = AgentCommandService(
         state: appState,
         profileStore: agentProfileStore,
         activityStore: agentActivityStore,
-        capabilityAuthority: agentCapabilityAuthority
+        capabilityAuthority: agentCapabilityAuthority,
+        eventRuntime: agentEventMonitoringRuntime
       )
       let agentServer = AgentIPCServer(
         endpointURL: appSupport
           .appendingPathComponent("AgentBridge", isDirectory: true)
-          .appendingPathComponent("fleck.sock")
-      ) { profileID, credential, command in
-        try await agentService.execute(
-          profileID: profileID,
-          credential: credential,
-          command: command
-        )
-      }
+          .appendingPathComponent("fleck.sock"),
+        executeWithDisposition: { profileID, credential, command in
+          try await agentService.executeForIPC(
+            profileID: profileID,
+            credential: credential,
+            command: command
+          )
+        }
+      )
       agentRuntime = AgentIPCRuntime(
         appState: appState,
         server: agentServer

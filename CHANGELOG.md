@@ -14,6 +14,9 @@ public release log. Packaging unchanged source does not add a changelog entry.
 - Add the content-free event journal with snapshot integrity/history fencing, default-off
   scoped observation authority, global privacy exclusions and pending subscription/key lifecycle
   persistence. Event commands and callback delivery remain unavailable until the next layer.
+- Connect owner-approved event subscriptions, verified HTTPS callbacks, signed delivery,
+  bounded outbox/receipt handling and global privacy controls. Observation remains off by
+  default and delivery requires current authorization, endpoint verification and owner consent.
 
 ### Fixed
 

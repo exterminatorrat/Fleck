@@ -276,7 +276,8 @@
       allowedCapabilities: Set<AgentCapability>,
       expectedGrantRevision: UInt64,
       directAccess: [UUID: AgentNoteAccessLevel],
-      folderAccess: [UUID: AgentFolderAccessLevel]
+      folderAccess: [UUID: AgentFolderAccessLevel],
+      allowsEventObservation: Bool? = nil
     ) -> AgentProfileCapabilities {
       var grants = baseline.grants
       for noteID in directAccess.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
@@ -327,7 +328,7 @@
         grantRevision: expectedGrantRevision + 1,
         allowedCapabilities: allowedCapabilities,
         grants: grants,
-        allowsEventObservation: baseline.allowsEventObservation
+        allowsEventObservation: allowsEventObservation ?? baseline.allowsEventObservation
       )
     }
 
@@ -336,18 +337,21 @@
       allowedCapabilities: Set<AgentCapability>,
       expectedGrantRevision: UInt64,
       directAccess: [UUID: AgentNoteAccessLevel],
-      folderAccess: [UUID: AgentFolderAccessLevel]
+      folderAccess: [UUID: AgentFolderAccessLevel],
+      allowsEventObservation: Bool? = nil
     ) -> AgentProfileCapabilities? {
       let replacement = capabilityReplacement(
         baseline: baseline,
         allowedCapabilities: allowedCapabilities,
         expectedGrantRevision: expectedGrantRevision,
         directAccess: directAccess,
-        folderAccess: folderAccess
+        folderAccess: folderAccess,
+        allowsEventObservation: allowsEventObservation
       )
       guard
         replacement.allowedCapabilities != baseline.allowedCapabilities
           || replacement.grants != baseline.grants
+          || replacement.allowsEventObservation != baseline.allowsEventObservation
       else { return nil }
       return replacement
     }
@@ -523,6 +527,7 @@
     let profile: AgentIntegrationProfile
     let capabilities: AgentProfileCapabilities
     @State private var allowedCapabilities: Set<AgentCapability>
+    @State private var allowsEventObservation: Bool
     @State private var baselineCapabilities: AgentProfileCapabilities
     @State private var expectedGrantRevision: UInt64
     @State private var directAccess: [UUID: AgentNoteAccessLevel] = [:]
@@ -536,6 +541,7 @@
       self.profile = profile
       self.capabilities = capabilities
       _allowedCapabilities = State(initialValue: capabilities.allowedCapabilities)
+      _allowsEventObservation = State(initialValue: capabilities.allowsEventObservation)
       _baselineCapabilities = State(initialValue: capabilities)
       _expectedGrantRevision = State(initialValue: capabilities.grantRevision)
     }
@@ -547,6 +553,16 @@
           capabilityToggle(.readNotes, title: "Read notes and tasks")
           capabilityToggle(.writeNotes, title: "Edit notes and tasks")
           capabilityToggle(.undoChanges, title: "Undo changes")
+        }
+
+        Section("Event observation") {
+          Toggle("Allow event observation", isOn: $allowsEventObservation)
+            .accessibilityHint(
+              "Allows this profile to request event subscriptions. Each subscription still needs your separate approval."
+            )
+          Text(AgentEventOwnerPresentation.observationPermissionDescription)
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
 
         Section("Direct notes") {
@@ -754,7 +770,8 @@
         allowedCapabilities: allowedCapabilities,
         expectedGrantRevision: expectedGrantRevision,
         directAccess: directAccess,
-        folderAccess: folderAccess
+        folderAccess: folderAccess,
+        allowsEventObservation: allowsEventObservation
       )
     }
 

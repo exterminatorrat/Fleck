@@ -1,6 +1,7 @@
 #if os(macOS)
   import AppKit
   import FleckCore
+  import Foundation
   import SwiftUI
 
   enum AgentProfilesPresentation {
@@ -34,6 +35,181 @@
       connectorInstalled: Bool
     ) -> Bool {
       workspaceAvailable && connectorInstalled
+    }
+  }
+
+  enum AgentEventOwnerPresentation {
+    static let observationPermissionDescription =
+      "Event observation is off by default. Allowing it lets this profile request subscriptions; "
+      + "you must separately approve each subscription and, if desired, automatic renewal for the same scope and host."
+    static let renewalConsentDescription =
+      "Approving or resuming enables delivery. Leave automatic renewal off for delivery-only approval; "
+      + "select it only for this same event scope and callback host. Data an agent already received cannot be recalled."
+    static let receiptDescription =
+      "A callback receipt confirms the endpoint accepted the event; it does not confirm that an agent read or acted on it."
+    static let globalPrivacyDescription =
+      "These exclusions apply across every agent profile, separately from each profile’s access settings, "
+      + "and override existing grants. Turning one off may restore access through an existing grant "
+      + "but never creates a new one; folder exclusions also cover notes in that folder."
+    static let removalConfirmationDescription =
+      "Removing stops future delivery and deletes pending events. Data an agent already received cannot be recalled."
+    static let chatGPTConnectionDescription =
+      "OpenAI’s Secure MCP Tunnel can connect a configured stdio MCP server without public exposure "
+      + "in ChatGPT developer mode. A Fleck connection still needs separate setup and a connection test; "
+      + "no tunnel or account is configured here."
+
+    static func operationErrorDescription(_ sanitizedError: String) -> String {
+      sanitizedError
+    }
+
+    static func eventTitle(_ event: AgentEventName) -> String {
+      switch event {
+      case .noteCreated: "Note created"
+      case .noteUpdated: "Note updated"
+      case .taskStateChanged: "Task state changed"
+      }
+    }
+
+    static func scopeSummary(
+      for scope: AgentEventScope,
+      in workspace: Workspace
+    ) -> String {
+      switch scope {
+      case .note(let noteID):
+        guard let note = workspace.notes.first(where: { $0.id == noteID }) else {
+          return "Note unavailable"
+        }
+        return "Note “\(note.displayTitle)”"
+      case .folder(let folderID):
+        guard let folder = workspace.folders.first(where: { $0.id == folderID }) else {
+          return "Folder unavailable"
+        }
+        return "Folder “\(folder.name)”"
+      }
+    }
+
+    static func callbackHost(from callbackHost: String) -> String {
+      let candidate =
+        callbackHost.contains("://")
+        ? callbackHost
+        : "https://\(callbackHost)"
+      guard let host = URLComponents(string: candidate)?.host, !host.isEmpty else {
+        return "Host unavailable"
+      }
+      return host
+    }
+
+    static func statusTitle(for state: AgentEventOwnerState) -> String {
+      switch state {
+      case .awaitingApproval: "Awaiting owner approval"
+      case .awaitingVerification: "Awaiting callback verification"
+      case .enabled: "Enabled"
+      case .paused: "Paused"
+      case .pausedCapacity: "Paused at capacity"
+      case .pausedHistory: "Paused for history recovery"
+      case .retrying: "Retrying"
+      case .stopped: "Stopped"
+      case .expired: "Expired"
+      case .unavailable: "Unavailable"
+      }
+    }
+
+    static func statusDetail(for state: AgentEventOwnerState) -> String {
+      switch state {
+      case .awaitingApproval:
+        "Owner approval is required; delivery stays paused."
+      case .awaitingVerification:
+        "Callback verification is pending; delivery stays paused."
+      case .enabled:
+        "Owner-approved event delivery is active for this subscription."
+      case .paused:
+        "Delivery is paused until you approve and resume."
+      case .pausedCapacity:
+        "Pending events are retained. An in-flight delivery may free capacity; "
+          + "a fully blocked backlog cannot be resumed from this row. "
+          + "Pause or remove the subscription to stop it."
+      case .pausedHistory:
+        "Required history is unavailable, so delivery remains paused. "
+          + "Fleck cannot replay that history or silently restart this subscription."
+      case .retrying:
+        "Delivery retry is in progress; a callback receipt is still required."
+      case .stopped:
+        "This subscription is stopped. Restore its profile and required access, "
+          + "then refresh status."
+      case .expired:
+        "This subscription expired. Ask the client to request a fresh subscription, "
+          + "then review and approve that request. New subscriptions start at the "
+          + "current event head; Fleck does not replay prior history."
+      case .unavailable:
+        "This subscription is unavailable. Restore the profile, access, or local "
+          + "availability, then refresh status."
+      }
+    }
+
+    static func approvalActionTitle(
+      for state: AgentEventOwnerState,
+      allowsAutomaticRenewal: Bool
+    ) -> String? {
+      switch state {
+      case .awaitingApproval, .awaitingVerification, .paused:
+        return "Approve & Resume"
+      case .enabled, .retrying:
+        return allowsAutomaticRenewal ? nil : "Approve Renewal"
+      case .pausedCapacity, .pausedHistory, .stopped, .expired, .unavailable:
+        return nil
+      }
+    }
+
+    static func canPause(_ state: AgentEventOwnerState) -> Bool {
+      switch state {
+      case .paused: false
+      default: true
+      }
+    }
+  }
+
+  struct AgentEventOwnerConsentSelection {
+    private var optedInSubscriptionIDs: Set<String> = []
+
+    func allowsAutomaticRenewal(for subscription: AgentEventOwnerSummary) -> Bool {
+      optedInSubscriptionIDs.contains(subscription.id)
+    }
+
+    mutating func setAutomaticRenewal(
+      _ enabled: Bool,
+      for subscription: AgentEventOwnerSummary
+    ) {
+      if enabled {
+        optedInSubscriptionIDs.insert(subscription.id)
+      } else {
+        optedInSubscriptionIDs.remove(subscription.id)
+      }
+    }
+
+    func approvalOptions(
+      for subscription: AgentEventOwnerSummary
+    ) -> (enabled: Bool, allowsAutomaticRenewal: Bool) {
+      (
+        enabled: true,
+        allowsAutomaticRenewal: allowsAutomaticRenewal(for: subscription)
+      )
+    }
+
+    mutating func consumeApprovalOptions(
+      for subscription: AgentEventOwnerSummary
+    ) -> (enabled: Bool, allowsAutomaticRenewal: Bool) {
+      let options = approvalOptions(for: subscription)
+      setAutomaticRenewal(false, for: subscription)
+      return options
+    }
+
+    func canApplyApproval(for subscription: AgentEventOwnerSummary) -> Bool {
+      switch subscription.state {
+      case .enabled, .retrying:
+        allowsAutomaticRenewal(for: subscription)
+      default:
+        true
+      }
     }
   }
 
@@ -73,12 +249,16 @@
     @State private var profileForCapabilities: AgentIntegrationProfile?
     @State private var isActivityExpanded = false
     @State private var isAccessExpanded = false
+    @State private var subscriptionPendingRemoval: AgentEventOwnerSummary?
+    @State private var ownerConsentSelection = AgentEventOwnerConsentSelection()
 
     var body: some View {
       VStack(alignment: .leading, spacing: 16) {
         connectorStatus
         availableIntegrations
         connectedProfiles
+        eventSubscriptions
+        globalPrivacyControls
         setupInstructions
         VStack(alignment: .leading, spacing: 4) {
           DisclosureGroup("Activity", isExpanded: $isActivityExpanded) {
@@ -164,6 +344,29 @@
           )
           .environmentObject(appState)
         }
+      }
+      .confirmationDialog(
+        "Remove event subscription?",
+        isPresented: Binding(
+          get: { subscriptionPendingRemoval != nil },
+          set: { if !$0 { subscriptionPendingRemoval = nil } }
+        )
+      ) {
+        Button("Remove", role: .destructive) {
+          guard let subscription = subscriptionPendingRemoval else { return }
+          subscriptionPendingRemoval = nil
+          ownerConsentSelection.setAutomaticRenewal(false, for: subscription)
+          Task {
+            await appState.removeAgentEventMonitoringSubscription(
+              subscriptionID: subscription.id
+            )
+          }
+        }
+        Button("Cancel", role: .cancel) {
+          subscriptionPendingRemoval = nil
+        }
+      } message: {
+        Text(AgentEventOwnerPresentation.removalConfirmationDescription)
       }
     }
 
@@ -333,6 +536,196 @@
       .settingsSearchAnchor(.agentsConnectedProfiles, request: searchRequest)
     }
 
+    private var eventSubscriptions: some View {
+      VStack(alignment: .leading, spacing: 8) {
+        HStack {
+          Text("Event subscriptions")
+            .font(.headline)
+          Spacer()
+          Button("Refresh Status") {
+            Task { await appState.refreshAgentEventMonitoring() }
+          }
+          .controlSize(.small)
+          .accessibilityLabel("Refresh event subscription status")
+        }
+        Text(AgentEventOwnerPresentation.renewalConsentDescription)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        Text(AgentEventOwnerPresentation.receiptDescription)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        if let error = appState.agentEventMonitoringError {
+          Text(AgentEventOwnerPresentation.operationErrorDescription(error))
+            .font(.caption)
+            .foregroundStyle(.orange)
+        }
+        if appState.agentEventSubscriptions.isEmpty {
+          Text(
+            appState.agentEventMonitoringError == nil
+              ? "No subscriptions are listed. Refresh status to check this Mac."
+              : "No saved subscription details are available."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        } else {
+          ForEach(appState.agentEventSubscriptions) { subscription in
+            eventSubscriptionRow(subscription)
+          }
+        }
+      }
+    }
+
+    private func eventSubscriptionRow(
+      _ subscription: AgentEventOwnerSummary
+    ) -> some View {
+      let eventTitle = AgentEventOwnerPresentation.eventTitle(subscription.event)
+      let statusTitle = AgentEventOwnerPresentation.statusTitle(for: subscription.state)
+      let statusDetail = AgentEventOwnerPresentation.statusDetail(for: subscription.state)
+      let profileName =
+        appState.agentProfiles.first {
+          $0.id == subscription.profileID
+        }?.displayName ?? "Unavailable"
+      let scopeSummary = AgentEventOwnerPresentation.scopeSummary(
+        for: subscription.scope,
+        in: appState.workspace
+      )
+      let callbackHost = AgentEventOwnerPresentation.callbackHost(from: subscription.callbackHost)
+      let approvalTitle = AgentEventOwnerPresentation.approvalActionTitle(
+        for: subscription.state,
+        allowsAutomaticRenewal: subscription.allowsAutomaticRenewal
+      )
+
+      return VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .firstTextBaseline) {
+          Text(eventTitle)
+            .font(.callout.weight(.medium))
+          Spacer()
+          Text(statusTitle)
+            .font(.caption.weight(.semibold))
+            .accessibilityLabel("Subscription status: \(statusTitle)")
+        }
+        Text("Profile: \(profileName)")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        Text("Scope: \(scopeSummary)")
+          .font(.caption)
+        Text("Callback host: \(callbackHost)")
+          .font(.caption)
+        Text(statusDetail)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        if approvalTitle != nil {
+          Toggle(
+            "Allow automatic renewal",
+            isOn: Binding(
+              get: { ownerConsentSelection.allowsAutomaticRenewal(for: subscription) },
+              set: { enabled in
+                ownerConsentSelection.setAutomaticRenewal(enabled, for: subscription)
+              }
+            )
+          )
+          .accessibilityHint(AgentEventOwnerPresentation.renewalConsentDescription)
+        }
+        Text(
+          subscription.allowsAutomaticRenewal
+            ? "Automatic renewal approved for this same scope and host"
+            : "Automatic renewal not approved"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        Text(
+          "Expires \(subscription.expiresAt.formatted(date: .abbreviated, time: .shortened))"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        if let lastReceiptAt = subscription.lastReceiptAt {
+          Text(
+            "Last callback receipt: \(lastReceiptAt.formatted(date: .abbreviated, time: .shortened))"
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        }
+        HStack(spacing: 8) {
+          if let title = approvalTitle {
+            Button(title) {
+              let options = ownerConsentSelection.consumeApprovalOptions(for: subscription)
+              Task {
+                await appState.setAgentEventMonitoring(
+                  subscriptionID: subscription.id,
+                  enabled: options.enabled,
+                  allowsAutomaticRenewal: options.allowsAutomaticRenewal
+                )
+              }
+            }
+            .disabled(!ownerConsentSelection.canApplyApproval(for: subscription))
+            .accessibilityHint(AgentEventOwnerPresentation.renewalConsentDescription)
+          }
+          Button("Pause") {
+            ownerConsentSelection.setAutomaticRenewal(false, for: subscription)
+            Task {
+              await appState.setAgentEventMonitoring(
+                subscriptionID: subscription.id,
+                enabled: false,
+                allowsAutomaticRenewal: false
+              )
+            }
+          }
+          .disabled(!AgentEventOwnerPresentation.canPause(subscription.state))
+          Button("Remove…", role: .destructive) {
+            subscriptionPendingRemoval = subscription
+          }
+        }
+        .controlSize(.small)
+      }
+      .padding(.vertical, 8)
+    }
+
+    private var globalPrivacyControls: some View {
+      DisclosureGroup("Global privacy") {
+        VStack(alignment: .leading, spacing: 8) {
+          Text(AgentEventOwnerPresentation.globalPrivacyDescription)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+          DisclosureGroup("Private notes") {
+            if appState.workspace.notes.isEmpty {
+              Text("No notes")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            } else {
+              ForEach(appState.workspace.notes) { note in
+                Toggle(
+                  "Exclude \(note.displayTitle) from all agents",
+                  isOn: privateNoteBinding(for: note.id)
+                )
+                .accessibilityHint("Overrides note grants for every agent profile")
+              }
+            }
+          }
+          DisclosureGroup("Private folders") {
+            if appState.workspace.folders.isEmpty {
+              Text("No folders")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            } else {
+              ForEach(appState.workspace.folders, id: \.id) { folder in
+                Toggle(
+                  "Exclude folder “\(folder.name)” from all agents",
+                  isOn: privateFolderBinding(for: folder.id)
+                )
+                .accessibilityHint(
+                  "Overrides folder grants for every agent profile and excludes notes in this folder"
+                )
+              }
+            }
+          }
+        }
+        .padding(.top, 4)
+      }
+    }
+
     private func connectedProfile(_ profile: AgentIntegrationProfile) -> some View {
       SettingsPreferenceRow(profile.displayName, detail: lastConnection(profile)) {
         VStack(alignment: .trailing, spacing: 7) {
@@ -422,6 +815,10 @@
           title: "Use the generated local snippet",
           detail: "Copy the snippet and grant only the note capabilities you need."
         )
+        Text(AgentEventOwnerPresentation.chatGPTConnectionDescription)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .settingsSearchAnchor(.agentsSetup, request: searchRequest)
@@ -446,6 +843,24 @@
     private func lastConnection(_ profile: AgentIntegrationProfile) -> String {
       guard let date = profile.lastConnectedAt else { return "Never connected" }
       return "Last connected \(date.formatted(date: .abbreviated, time: .shortened))"
+    }
+
+    private func privateNoteBinding(for noteID: UUID) -> Binding<Bool> {
+      Binding(
+        get: { appState.agentPrivateNoteIDs.contains(noteID) },
+        set: { isPrivate in
+          Task { await appState.setAgentNotePrivate(noteID: noteID, isPrivate: isPrivate) }
+        }
+      )
+    }
+
+    private func privateFolderBinding(for folderID: UUID) -> Binding<Bool> {
+      Binding(
+        get: { appState.agentPrivateFolderIDs.contains(folderID) },
+        set: { isPrivate in
+          Task { await appState.setAgentFolderPrivate(folderID: folderID, isPrivate: isPrivate) }
+        }
+      )
     }
   }
 #endif
