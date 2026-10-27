@@ -3177,7 +3177,10 @@
         )
       }
       let containsImages = selections.contains { containsInlineImage(in: $0) }
-      guard expandedSelections != selections || containsImages,
+      let exportsText = !types.isEmpty
+        && types.allSatisfy { $0 == .rtf || $0 == .string }
+        && selections.contains { $0.length > 0 }
+      guard expandedSelections != selections || containsImages || exportsText,
         let storage = textStorage
       else {
         return super.writeSelection(to: pasteboard, types: types)
@@ -3193,7 +3196,7 @@
         ? types.filter { $0 == .rtf || $0 == .string }
         : types
       guard !exportTypes.isEmpty else { return false }
-      guard hasManagedImages else {
+      if !hasManagedImages && !exportsText {
         let exporter = NSTextView(frame: bounds)
         exporter.isRichText = isRichText
         exporter.textStorage?.setAttributedString(source)
@@ -3290,7 +3293,10 @@
           && NSMaxRange(selection) >= NSMaxRange(item.contentRange)
       }
       let containsImages = selections.contains { containsInlineImage(in: $0) }
-      guard expandsBullet || containsImages else {
+      let exportsText = (type == .rtf || type == .string)
+        && textStorage != nil
+        && selections.contains { $0.length > 0 }
+      guard expandsBullet || containsImages || exportsText else {
         return super.writeSelection(to: pasteboard, type: type)
       }
       if containsImages, type != .rtf && type != .string { return false }
