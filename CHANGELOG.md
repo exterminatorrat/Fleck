@@ -43,6 +43,9 @@ and native behavior remain unverified; hosted verification is pending.
 
 - Inherit the explicit interface-font correction while preserving transactional multi-note
   and semantic-section filing, durable receipts, guarded undo and filing regression coverage.
+- Keep mixed-marker fence closers from exposing code-block headings as filing destinations.
+- Reject backtick fence openers whose info contains a backtick while preserving valid
+  backtick and tilde fences, including indented longer matching closers.
 
 Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
 and native behavior remain unverified; hosted verification is pending.
