@@ -84,14 +84,18 @@
     let settings = try String(contentsOf: root.appendingPathComponent("Sources/FleckApp/SettingsView.swift"), encoding: .utf8)
     let notes = try String(contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"), encoding: .utf8)
 
+    let modifierLines = settings.split(separator: "\n").map {
+      String($0).trimmingCharacters(in: .whitespaces)
+    }
     for style in ["body", "caption", "caption2", "callout", "headline", "footnote", "title2"] {
-      #expect(!settings.contains(".font(.\(style)"))
+      #expect(!modifierLines.contains { $0.hasPrefix(".font(.\(style)") })
     }
     #expect(settings.contains(".fleckUIFont(.callout, weight: .medium)"))
     #expect(settings.contains(".fleckUIFont(.footnote, weight: .medium)"))
     #expect(settings.contains(".fleckUIFont(.title2, weight: .semibold)"))
     #expect(settings.contains(".font(uiFont.font(size: 10, weight: .bold, design: .rounded))"))
     #expect(settings.contains(".font(uiFont.font(size: 13, weight: isSelected ? .semibold : .regular))"))
+    #expect(settings.contains("Text(detail).fleckUIFont(.caption)"))
 
     #expect(notes.contains("Text(\"Could not save: \\(error)\")\n                .fleckUIFont(.caption)"))
     #expect(notes.contains("Text(error)\n                .fleckUIFont(.caption)"))
