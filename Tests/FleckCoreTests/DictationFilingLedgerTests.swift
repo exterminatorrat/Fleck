@@ -38,8 +38,9 @@ import Testing
 @Test func filingSnapshotPartialWriteRecoversAllNotesAndLedgerTogetherThenRetries() throws {
   let root = filingStoreRoot()
   defer { try? FileManager.default.removeItem(at: root) }
-  let first = Note(title: "Alpha", body: "old alpha")
-  let second = Note(title: "Beta", body: "old beta")
+  let date = Date(timeIntervalSince1970: 1_700_000_000)
+  let first = Note(title: "Alpha", body: "old alpha", createdAt: date, modifiedAt: date)
+  let second = Note(title: "Beta", body: "old beta", createdAt: date, modifiedAt: date)
   let baseline = Workspace(notes: [first, second], selectedNoteID: first.id)
   let writer = LocalStoreSnapshotWriter(
     rootURL: root,
@@ -49,8 +50,14 @@ import Testing
   )
   #expect(try writer.save(workspace: baseline, preferences: .init(), generation: 1) == .committed)
   var filed = baseline
-  filed.updateContent(id: first.id, body: "old alpha\n\nalpha addition", rtf: nil)
-  filed.updateContent(id: second.id, body: "old beta\n\nbeta addition", rtf: nil)
+  filed.updateContent(
+    id: first.id, body: "old alpha\n\nalpha addition", rtf: nil,
+    now: date.addingTimeInterval(1)
+  )
+  filed.updateContent(
+    id: second.id, body: "old beta\n\nbeta addition", rtf: nil,
+    now: date.addingTimeInterval(1)
+  )
   filed.dictationFilingLedger.commits = [filingCommit(noteIDs: [first.id, second.id])]
   #expect(throws: FilingStoreFailure.injected) {
     try writer.save(workspace: filed, preferences: .init(), generation: 2)
@@ -67,7 +74,8 @@ import Testing
 @Test func filingSnapshotPostManifestFailureKeepsCommittedNotesAndCaptureIdentity() throws {
   let root = filingStoreRoot()
   defer { try? FileManager.default.removeItem(at: root) }
-  let note = Note(title: "Alpha", body: "filed content")
+  let date = Date(timeIntervalSince1970: 1_700_000_000)
+  let note = Note(title: "Alpha", body: "filed content", createdAt: date, modifiedAt: date)
   let workspace = Workspace(
     notes: [note], selectedNoteID: note.id,
     dictationFilingLedger: .init(commits: [filingCommit(noteIDs: [note.id])])
@@ -84,12 +92,13 @@ import Testing
 func filingSnapshotRejectsCorruptMetadataAsOneGeneration(_ corruption: String) throws {
   let root = filingStoreRoot()
   defer { try? FileManager.default.removeItem(at: root) }
-  let note = Note(title: "Alpha", body: "before")
+  let date = Date(timeIntervalSince1970: 1_700_000_000)
+  let note = Note(title: "Alpha", body: "before", createdAt: date, modifiedAt: date)
   let baseline = Workspace(notes: [note], selectedNoteID: note.id)
   let writer = LocalStoreSnapshotWriter(rootURL: root)
   try writer.save(workspace: baseline, preferences: .init(), generation: 1)
   var filed = baseline
-  filed.updateContent(id: note.id, body: "after", rtf: nil)
+  filed.updateContent(id: note.id, body: "after", rtf: nil, now: date.addingTimeInterval(1))
   filed.dictationFilingLedger.commits = [filingCommit(noteIDs: [note.id])]
   try writer.save(workspace: filed, preferences: .init(), generation: 2)
   let manifestURL = root.appendingPathComponent("workspace.json")
@@ -117,7 +126,8 @@ func filingSnapshotRejectsCorruptMetadataAsOneGeneration(_ corruption: String) t
 @Test func filingSnapshotAcceptsLegacyMetadataAbsenceWithoutDestructiveMigration() throws {
   let root = filingStoreRoot()
   defer { try? FileManager.default.removeItem(at: root) }
-  let note = Note(title: "Legacy", body: "preserved")
+  let date = Date(timeIntervalSince1970: 1_700_000_000)
+  let note = Note(title: "Legacy", body: "preserved", createdAt: date, modifiedAt: date)
   let writer = LocalStoreSnapshotWriter(rootURL: root)
   let baseline = Workspace(notes: [note], selectedNoteID: note.id)
   try writer.save(workspace: baseline, preferences: .init(), generation: 1)
