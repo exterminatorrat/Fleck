@@ -4091,6 +4091,7 @@
     }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.fleckThemeSnapshot) private var theme
     @ObservedObject var appState: AppState
     @ObservedObject var commands: EditorCommands
     @ObservedObject var dictationRuntime: DictationRuntime
