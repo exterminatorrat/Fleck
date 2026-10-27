@@ -11,6 +11,9 @@ public release log. Packaging unchanged source does not add a changelog entry.
   request ownership, cancellation, output ordering and EOF settlement.
 - Add strict version-2 event contracts and wire compatibility checks. Subscription execution
   and callback delivery remain unavailable in this foundational layer.
+- Add the content-free event journal with snapshot integrity/history fencing, default-off
+  scoped observation authority, global privacy exclusions and pending subscription/key lifecycle
+  persistence. Event commands and callback delivery remain unavailable until the next layer.
 
 ### Fixed
 
