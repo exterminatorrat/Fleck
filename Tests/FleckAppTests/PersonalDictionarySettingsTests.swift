@@ -2150,8 +2150,26 @@ func personalDictionarySortPopoverKeepsSearchAndKeyboardInteractionsAccessible()
   )
   let sortSource = settingsSource[sortStart.lowerBound..<reloadStart.lowerBound]
 
+  let themeSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/FleckThemeSnapshot.swift"),
+    encoding: .utf8
+  )
+  let surfaceStart = try #require(themeSource.range(of: "private struct FleckThemedSurface: ViewModifier"))
+  let surfaceEnd = try #require(
+    themeSource.range(
+      of: "struct FleckQuietButtonStyle: ButtonStyle",
+      range: surfaceStart.upperBound..<themeSource.endIndex
+    )
+  )
+  let surfaceSource = themeSource[surfaceStart.lowerBound..<surfaceEnd.lowerBound]
+  #expect(surfaceSource.contains("@Environment(\\.fleckThemeSnapshot) private var theme"))
+  #expect(surfaceSource.contains("content.background("))
+  #expect(surfaceSource.contains("theme.color(.card)"))
+  #expect(surfaceSource.contains("in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)"))
+
   #expect(sortSource.contains("Text(\"SORT BY\")"))
-  #expect(sortSource.contains(".background(.regularMaterial"))
+  #expect(sortSource.contains(".fleckThemedSurface(cornerRadius: 12)"))
+  #expect(sortSource.contains("sortPopover\n          .fleckPopoverTheme(theme)"))
   #expect(sortSource.contains("sortOrdersForCurrentFilter"))
   #expect(sortSource.contains("SettingsVocabularySortOrder.allCases"))
   #expect(sortSource.contains("viewModel.filter == .suggestions"))
