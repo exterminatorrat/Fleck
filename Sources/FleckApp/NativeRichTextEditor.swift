@@ -4541,6 +4541,7 @@
       let ns = string as NSString
       guard ns.length > 0 else { return [] }
       var markers: [NSRange] = []
+      var seenMarkers = Set<NSRange>()
       for selection in selectedRanges.map(\.rangeValue) where selection.length > 0 {
         guard selection.location != NSNotFound,
           selection.location >= 0,
@@ -4557,7 +4558,7 @@
           if let item = parsedListItem(in: paragraphRange, string: ns),
             case .bullet = item.parsed.style,
             NSIntersectionRange(selection, item.markerRange).length > 0,
-            !markers.contains(item.markerRange)
+            seenMarkers.insert(item.markerRange).inserted
           {
             markers.append(item.markerRange)
           }
