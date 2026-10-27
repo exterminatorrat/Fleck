@@ -37,6 +37,9 @@ and native behavior remain unverified; hosted verification is pending.
 
 - Inherit the explicit interface-font correction while preserving theme propagation,
   Settings/Models appearance, neutral hover and filing regression coverage.
+- Use AppKit's supported light/dark appearance assignment so system accessibility contrast
+  remains authoritative, and preserve rectangular padded hit targets beneath rounded hover paint.
+- Match Models keyboard-focus regression coverage to its dynamically updated native key loop.
 
 Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
 and native behavior remain unverified; hosted verification is pending.
