@@ -101,5 +101,5 @@ private func packagedInfo() -> [String: Any] {
   #expect(about.contains(".textSelection(.enabled)"))
   #expect(about.contains("Build info copied"))
   #expect(settings.contains("case about = \"About\""))
-  #expect(settings.contains("AboutSettingsView(identity: buildIdentity)"))
+  #expect(settings.contains("AboutSettingsView(\n                      identity: buildIdentity,\n                      updateController: updateController\n                    )"))
 }

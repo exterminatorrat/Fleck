@@ -92,6 +92,7 @@
   @main
   struct FleckApp: App {
     @StateObject private var appState: AppState
+    @StateObject private var updateController: AppUpdateController
     @StateObject private var dictationRuntime: DictationRuntime
     @StateObject private var onboarding: OnboardingCoordinator
     @StateObject private var menuPanelGeometry = MenuPanelGeometryStore()
@@ -99,7 +100,11 @@
     private let statusItemContextMenuController: StatusItemContextMenuController
 
     init() {
-      statusItemContextMenuController = StatusItemContextMenuController()
+      let updateController = AppUpdateController()
+      _updateController = StateObject(wrappedValue: updateController)
+      let statusItemContextMenuController = StatusItemContextMenuController()
+      statusItemContextMenuController.bindUpdateController(updateController)
+      self.statusItemContextMenuController = statusItemContextMenuController
       let applicationSupportParent = FileManager.default.urls(
         for: .applicationSupportDirectory,
         in: .userDomainMask
@@ -237,7 +242,7 @@
       }
 
       Settings {
-        SettingsView(runtime: dictationRuntime)
+        SettingsView(runtime: dictationRuntime, updateController: updateController)
           .environmentObject(appState)
           .fleckTheme(appState)
           .frame(

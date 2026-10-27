@@ -9,6 +9,9 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Add native status-menu actions for Notes, Settings and About while preserving Quit,
   secondary-click behavior and an explicitly unavailable update check.
+- Add explicit signed update-information checks shared by About and the status menu,
+  remaining unavailable without trusted configuration and packaged identity. Checks
+  do not download or install updates, and do not verify release artifact bytes.
 
 This focused layer belongs to the retained-feature 1.7.0-beta.1 release cohort.
 Local compilation, tests and native visual/accessibility behavior remain unverified.

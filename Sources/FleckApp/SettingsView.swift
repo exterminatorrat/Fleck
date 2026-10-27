@@ -918,6 +918,7 @@
       PersonalDictionarySettingsViewModel
     @ObservedObject private var historyController: DictationHistoryController
     private let buildIdentity: BuildIdentity
+    private let updateController: AppUpdateController?
     @State private var selectedSection = SettingsSection.editing
     @State private var showsHistoryClearConfirmation = false
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
@@ -933,9 +934,14 @@
     @State private var isDictationPrivacyExpanded = false
     @State private var isUIFontPickerPresented = false
 
-    init(runtime: DictationRuntime, buildIdentity: BuildIdentity = .current()) {
+    init(
+      runtime: DictationRuntime,
+      buildIdentity: BuildIdentity = .current(),
+      updateController: AppUpdateController? = nil
+    ) {
       self.runtime = runtime
       self.buildIdentity = buildIdentity
+      self.updateController = updateController
       _personalDictionarySettingsViewModel = ObservedObject(
         wrappedValue: runtime.personalDictionarySettingsViewModel
       )
@@ -1008,7 +1014,10 @@
                   case .agents:
                     AgentSettingsView()
                   case .about:
-                    AboutSettingsView(identity: buildIdentity)
+                    AboutSettingsView(
+                      identity: buildIdentity,
+                      updateController: updateController
+                    )
                   }
                 }
                 .environment(\.settingsSearchRequest, searchRequest)
