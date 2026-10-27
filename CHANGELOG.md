@@ -3,6 +3,17 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.1-beta.1] - 2026-10-27
+
+### Fixed
+
+- Propagate the selected theme to native window backing and app-owned surfaces while preserving
+  transparent material Notes and existing opaque accessibility policies.
+- Align Models page/detail headers with Settings and add neutral, disabled-aware button hover.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests, visual/accessibility inspection and native behavior remain unverified.
+
 ## [1.5.0-beta.1] - 2026-10-27
 
 ### Added

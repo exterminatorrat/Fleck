@@ -174,7 +174,118 @@
     }
   }
 
+  struct FleckWindowTheme: NSViewRepresentable {
+    @Environment(\.fleckThemeSnapshot) private var theme
+    var usesOpaqueBackground = true
+
+    func makeNSView(context: Context) -> FleckWindowThemeView {
+      let view = FleckWindowThemeView()
+      view.setAccessibilityElement(false)
+      view.updateTheme(theme, usesOpaqueBackground: usesOpaqueBackground)
+      return view
+    }
+
+    func updateNSView(_ view: FleckWindowThemeView, context: Context) {
+      view.updateTheme(theme, usesOpaqueBackground: usesOpaqueBackground)
+    }
+  }
+
+  final class FleckWindowThemeView: NSView {
+    private var theme: FleckThemeSnapshot?
+    private var usesOpaqueBackground = true
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func updateTheme(_ theme: FleckThemeSnapshot, usesOpaqueBackground: Bool = true) {
+      guard self.theme != theme || self.usesOpaqueBackground != usesOpaqueBackground else { return }
+      self.theme = theme
+      self.usesOpaqueBackground = usesOpaqueBackground
+      applyWindowTheme()
+    }
+
+    private func applyWindowTheme() {
+      guard let theme, let window else { return }
+      let appearanceName: NSAppearance.Name
+      switch (theme.appearance, theme.increasedContrast) {
+      case (.light, false): appearanceName = .aqua
+      case (.dark, false): appearanceName = .darkAqua
+      case (.light, true): appearanceName = .accessibilityHighContrastAqua
+      case (.dark, true): appearanceName = .accessibilityHighContrastDarkAqua
+      }
+      if window.appearance?.name != appearanceName {
+        window.appearance = NSAppearance(named: appearanceName)
+      }
+      let color = usesOpaqueBackground ? theme.nsColor(.window) : .clear
+      if window.backgroundColor != color {
+        window.backgroundColor = color
+      }
+      if window.isOpaque != usesOpaqueBackground {
+        window.isOpaque = usesOpaqueBackground
+      }
+    }
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      applyWindowTheme()
+    }
+  }
+
+  private struct FleckThemedSurface: ViewModifier {
+    @Environment(\.fleckThemeSnapshot) private var theme
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+      content.background(
+        theme.color(.card),
+        in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+      )
+    }
+  }
+
+  struct FleckQuietButtonStyle: ButtonStyle {
+    var cornerRadius: CGFloat = 5
+
+    func makeBody(configuration: Configuration) -> some View {
+      FleckQuietButtonBody(configuration: configuration, cornerRadius: cornerRadius)
+    }
+  }
+
+  private struct FleckQuietButtonBody: View {
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.fleckThemeSnapshot) private var theme
+    @State private var isHovered = false
+    let configuration: ButtonStyleConfiguration
+    let cornerRadius: CGFloat
+
+    var body: some View {
+      let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+      configuration.label
+        .contentShape(shape)
+        .background {
+          shape.fill(
+            isEnabled && (isHovered || configuration.isPressed)
+              ? Color.primary.opacity(theme.increasedContrast ? 0.18 : configuration.isPressed ? 0.12 : 0.08)
+              : Color.clear
+          )
+        }
+        .onHover { isHovered = $0 }
+    }
+  }
+
   extension View {
+    func fleckThemedSurface(cornerRadius: CGFloat) -> some View {
+      modifier(FleckThemedSurface(cornerRadius: cornerRadius))
+    }
+
+    func fleckPopoverTheme(_ theme: FleckThemeSnapshot) -> some View {
+      environment(\.fleckThemeSnapshot, theme)
+        .environment(\.colorScheme, theme.colorScheme)
+        .foregroundStyle(theme.color(.textPrimary))
+        .tint(theme.color(.accent))
+        .presentationBackground(theme.color(.card))
+        .background(theme.color(.card))
+    }
+
     func fleckNeutralControlOutline(
       isFocused: Bool,
       cornerRadius: CGFloat,

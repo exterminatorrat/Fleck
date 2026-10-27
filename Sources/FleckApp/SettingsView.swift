@@ -423,32 +423,36 @@
     let section: SettingsSection
     let searchRequest: SettingsSearchRequest?
     let title: String?
+    let description: String?
+    let titleAccessibilityIdentifier: String?
+    let searchAnchorEnabled: Bool
     let accessory: AnyView?
 
     init(
       section: SettingsSection,
       title: String? = nil,
+      description: String? = nil,
+      titleAccessibilityIdentifier: String? = nil,
+      searchAnchorEnabled: Bool = true,
       searchRequest: SettingsSearchRequest?,
       accessory: AnyView? = nil
     ) {
       self.section = section
       self.title = title
+      self.description = description
+      self.titleAccessibilityIdentifier = titleAccessibilityIdentifier
+      self.searchAnchorEnabled = searchAnchorEnabled
       self.searchRequest = searchRequest
       self.accessory = accessory
     }
 
+    @ViewBuilder
     var body: some View {
-      HStack(alignment: .top, spacing: 12) {
+      let header = HStack(alignment: .top, spacing: 12) {
         VStack(alignment: .leading, spacing: 4) {
-          Text(title ?? section.title)
-            .font(
-              section == .editing
-                ? uiFont.font(size: generalTitleSize, weight: .semibold)
-                : uiFont.font(.title2, weight: .semibold)
-            )
-            .background(SettingsPageHeaderProbe())
+          headerTitle
           if section != .editing {
-            Text(section.description)
+            Text(description ?? section.description)
               .fleckUIFont(.callout)
               .foregroundStyle(theme.color(.textSecondary))
               .fixedSize(horizontal: false, vertical: true)
@@ -458,7 +462,28 @@
         if let accessory { accessory }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
-      .settingsSearchAnchor(.section(section), request: searchRequest)
+
+      if searchAnchorEnabled {
+        header.settingsSearchAnchor(.section(section), request: searchRequest)
+      } else {
+        header
+      }
+    }
+
+    @ViewBuilder
+    private var headerTitle: some View {
+      let titleView = Text(title ?? section.title)
+        .font(
+          section == .editing
+            ? uiFont.font(size: generalTitleSize, weight: .semibold)
+            : uiFont.font(.title2, weight: .semibold)
+        )
+        .background(SettingsPageHeaderProbe())
+      if let titleAccessibilityIdentifier {
+        titleView.accessibilityIdentifier(titleAccessibilityIdentifier)
+      } else {
+        titleView
+      }
     }
   }
 
@@ -1025,6 +1050,7 @@
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .ignoresSafeArea(.container, edges: .top)
       .background(theme.color(.window))
+      .background(FleckWindowTheme().frame(width: 0, height: 0))
       .background(SettingsWindowChromeConfigurator())
       .environment(\.fleckChromeAppearance, appState.preferences.chromeAppearance)
       .tint(theme.color(.accent))
@@ -1240,6 +1266,7 @@
               onCancel: { isUIFontPickerPresented = false }
             )
             .frame(width: 280, height: 320)
+            .fleckPopoverTheme(theme)
           }
         }
         SettingsPreferenceRow(
@@ -1445,6 +1472,7 @@
       .controlSize(.small)
       .popover(isPresented: $isReadinessPopoverPresented, arrowEdge: .top) {
         dictationReadinessPopover
+          .fleckPopoverTheme(theme)
       }
       .settingsSearchAnchor(.dictationStatus, request: searchRequest)
       .accessibilityLabel("Dictation readiness")
@@ -2167,7 +2195,7 @@
           .padding(6)
           .contentShape(Rectangle())
       }
-      .buttonStyle(.plain)
+      .buttonStyle(FleckQuietButtonStyle(cornerRadius: 7))
       .contentShape(Rectangle())
       .focusEffectDisabled()
       .keyboardShortcut("f", modifiers: .command)
@@ -2193,7 +2221,7 @@
           toggleOptions()
         }
         .font(.footnote)
-        .buttonStyle(.plain)
+        .buttonStyle(FleckQuietButtonStyle(cornerRadius: 7))
         .foregroundStyle(theme.color(.textSecondary))
         .focused($isOptionsTriggerFocused)
         .accessibilityIdentifier("settings-vocabulary-options-trigger")
@@ -2201,6 +2229,7 @@
         .id(SettingsSearchTarget.vocabularyTransferFooter)
         .popover(isPresented: optionsPresentation, arrowEdge: .bottom) {
           optionsPopover
+            .fleckPopoverTheme(theme)
         }
         Spacer(minLength: 0)
       }
@@ -2310,7 +2339,7 @@
       }
       .padding(8)
       .frame(width: 196)
-      .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .fleckThemedSurface(cornerRadius: 12)
       .overlay {
         RoundedRectangle(cornerRadius: 12, style: .continuous)
           .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.8)
@@ -2401,7 +2430,7 @@
           .padding(6)
           .contentShape(Rectangle())
       }
-      .buttonStyle(.plain)
+      .buttonStyle(FleckQuietButtonStyle(cornerRadius: 7))
       .contentShape(Rectangle())
       .help("Sort \(sortOrderForCurrentFilter.rawValue)")
       .accessibilityLabel("Sort vocabulary")
@@ -2414,6 +2443,7 @@
       .settingsSearchAnchor(.vocabularySort, request: visibleSearchRequest)
       .popover(isPresented: $isSortPresented, arrowEdge: .bottom) {
         sortPopover
+          .fleckPopoverTheme(theme)
       }
     }
 
@@ -2432,7 +2462,7 @@
             .contentShape(Rectangle())
         }
       }
-      .buttonStyle(.plain)
+      .buttonStyle(FleckQuietButtonStyle(cornerRadius: 7))
       .contentShape(Rectangle())
       .disabled(isReloading)
       .help("Refresh dictionary")
