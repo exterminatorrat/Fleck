@@ -34,13 +34,16 @@
         }
       }
       for appearance in [FleckThemeAppearance.light, .dark] {
-        view.updateTheme(.resolve(
+        let theme = FleckThemeSnapshot.resolve(
           colorTheme: .monochrome, mode: appearance == .dark ? .dark : .light,
           systemAppearance: appearance, reduceTransparency: true, increasedContrast: true
+        )
+        view.updateTheme(theme)
+        #expect(window.appearance?.name == (appearance == .dark ? .darkAqua : .aqua))
+        #expect(window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == (
+          appearance == .dark ? .darkAqua : .aqua
         ))
-        #expect(window.appearance?.name == (
-          appearance == .dark ? .accessibilityHighContrastDarkAqua : .accessibilityHighContrastAqua
-        ))
+        #expect(window.backgroundColor == theme.nsColor(.window) && window.isOpaque)
       }
       #expect(NSApplication.shared.appearance === applicationAppearance)
     }
