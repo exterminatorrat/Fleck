@@ -7,6 +7,48 @@ import Testing
 
 @Suite(.serialized)
 struct AgentEventSubscriptionTests {
+  @Test func pendingLookupRejectsInvalidOrRolledBackClockWithoutChangingStorage() async throws {
+    let fixture = try EventSubscriptionFixture()
+    defer { fixture.remove() }
+    let profileID = UUID()
+    let noteID = UUID()
+    let workspace = Workspace(notes: [Note(id: noteID)])
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    _ = try await fixture.createProfile(
+      profileID: profileID,
+      workspace: workspace,
+      allowed: [.readNotes],
+      grants: [AgentResourceGrant(scope: .note(noteID: noteID), authority: .read)],
+      observation: true
+    )
+    let receipt = try await fixture.service.createPending(
+      profileID: profileID,
+      event: .noteCreated,
+      scope: .note(noteID: noteID),
+      callbackURL: "https://example.com/clock-watermark",
+      signingSecret: eventSecret(byte: 0x21, count: 24),
+      requestedTTLSeconds: 60,
+      workspace: workspace,
+      now: now
+    )
+    let trustedNow = receipt.expiresAt.addingTimeInterval(1)
+    #expect(try await fixture.pendingStore.observeTrustedClock(now: trustedNow) == false)
+    let persisted = try Data(contentsOf: fixture.subscriptionURL)
+    for invalidNow in [
+      now,
+      Date(timeIntervalSince1970: -1),
+      Date(timeIntervalSince1970: .infinity),
+      Date(timeIntervalSince1970: .nan),
+    ] {
+      await #expect(throws: AgentEventSubscriptionError.invalidConfiguration) {
+        _ = try await fixture.pendingStore.pendingSubscriptions(now: invalidNow)
+      }
+      #expect(try Data(contentsOf: fixture.subscriptionURL) == persisted)
+    }
+    #expect(try await fixture.pendingStore.pendingSubscriptions(now: trustedNow).isEmpty)
+    #expect(try await fixture.pendingStore.allSubscriptions().count == 1)
+  }
+
   @Test func legacyAndNewProfilesDefaultObservationOffAndOmitFalseOnDisk() async throws {
     let profileID = eventTestUUID("00000000-0000-4000-8000-000000000101")
     let legacyProfile = Data(

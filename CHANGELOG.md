@@ -19,6 +19,8 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Handle closed output pipes without SIGPIPE termination, forward legacy notification-only
   batches without responses, preserve cancellation ownership and reject unsupported replay age.
+- Fail closed on interrupted privacy-policy generations and pending-subscription lookups
+  behind the persisted trusted-clock watermark.
 
 This is one constituent of the shared 1.7.0-beta.1 retained-feature development cohort, not a
 separate release. Local compilation, tests and native behavior remain unrun; hosted checks are

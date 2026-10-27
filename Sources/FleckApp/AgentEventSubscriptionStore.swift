@@ -497,7 +497,11 @@ actor AgentEventSubscriptionStore {
     now: Date = Date()
   ) throws -> [AgentEventPendingSubscription] {
     try Self.stateLock.withLock {
-      try loadState().subscriptions.values
+      let state = try loadState()
+      guard Self.isValidClockDate(now), now >= state.lastObservedAt else {
+        throw AgentEventSubscriptionError.invalidConfiguration
+      }
+      return state.subscriptions.values
         .filter { subscription in
           subscription.expiresAt > now
             && (profileID == nil || profileID == subscription.profileID)

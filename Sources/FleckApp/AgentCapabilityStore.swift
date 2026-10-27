@@ -338,6 +338,18 @@ actor AgentCapabilityStore {
     else {
       throw AgentWorkspaceError(code: .internalSaveFailure)
     }
+    if let policy = state.privacyPolicy,
+      FileManager.default.fileExists(atPath: previousCapabilitiesURL.path)
+    {
+      do {
+        let previousPolicy = try readState(from: previousCapabilitiesURL).privacyPolicy
+        if let previousPolicy, previousPolicy.generation != policy.generation {
+          throw CapabilityStoreDecodingError.invalid
+        }
+      } catch {
+        throw AgentWorkspaceError(code: .internalSaveFailure)
+      }
+    }
     return state
   }
 
