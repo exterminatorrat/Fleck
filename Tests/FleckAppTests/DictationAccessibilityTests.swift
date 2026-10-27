@@ -1176,7 +1176,7 @@ private func brightPixelBounds<Content: View>(
   #expect(!FleckRailAccessibility.usesIncreasedContrast(.standard))
 }
 
-@Test func DictationAccessibilityUsesHorizontalDockGeometryWithTenPointInset() {
+@Test @MainActor func DictationAccessibilityUsesHorizontalDockGeometryWithTenPointInset() {
   #expect(DictationCapsuleDock.allCases == [.bottom])
   #expect(DictationCapsuleController.livePillHostSize == CGSize(width: 180, height: 39))
   #expect(DictationCapsuleController.edgeInset == 10)

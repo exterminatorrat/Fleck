@@ -496,7 +496,7 @@
     #expect(panel.frame.size == DictationCapsuleController.livePillHostSize)
   }
 
-  @Test func DictationCapsuleSingleRowFramesClampInsideSmallOffsetVisibleFrames() {
+  @Test @MainActor func DictationCapsuleSingleRowFramesClampInsideSmallOffsetVisibleFrames() {
     let chooser = DictationCapsuleChooser(
       ambiguity: .init(
         captureID: UUID(),
