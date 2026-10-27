@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import FleckCore
 import SwiftUI
 import Testing
@@ -1354,7 +1355,8 @@ private func brightPixelBounds<Content: View>(
   )
 }
 
-@Test @MainActor func DictationAccessibilityKeepsProcessingLabelSlotFencedUntilTheDelay() async {
+@Test(.timeLimit(.minutes(1))) @MainActor
+func DictationAccessibilityKeepsProcessingLabelSlotFencedUntilTheDelay() async {
   let gate = AccessibilitySleepGate()
   let model = DictationCapsulePresentationModel(
     processingLabelSleeper: { _ in await gate.wait() }
@@ -1367,8 +1369,18 @@ private func brightPixelBounds<Content: View>(
   await gate.waitUntilWaiting()
   #expect(!model.showsProcessingLabel)
   #expect(DictationCapsuleMotion.processingLabelDelay == .milliseconds(450))
+  let (labels, continuation) = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingNewest(1))
+  let subscription = model.$showsProcessingLabel.sink { value in
+    continuation.yield(value)
+  }
+  defer {
+    subscription.cancel()
+    continuation.finish()
+  }
   await gate.resume()
-  for _ in 0..<10 { await Task.yield() }
+  for await shown in labels {
+    if shown { break }
+  }
   #expect(model.showsProcessingLabel)
 }
 
