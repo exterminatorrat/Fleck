@@ -8,7 +8,8 @@ public release log. Packaging unchanged source does not add a changelog entry.
 ### Fixed
 
 - Keep the selected interface font on explicitly styled Settings and Notes text while
-  preserving semantic sizes, weights, symbol sizing, monospaced diagnostics and editor fonts.
+  preserving System defaults, semantic sizes, weights, symbol sizing, monospaced diagnostics
+  and editor fonts.
 
 Source-only review correction. Compilation, tests, visual/accessibility inspection and native
 behavior remain unverified locally.

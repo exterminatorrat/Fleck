@@ -28,7 +28,7 @@
       return font.weight(weight ?? (style == .headline ? .semibold : .regular))
     }
 
-    func font(size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> Font {
+    func font(size: CGFloat, weight: Font.Weight = .regular, design: Font.Design? = nil) -> Font {
       guard let fontName else { return .system(size: size, weight: weight, design: design) }
       return .custom(fontName, fixedSize: size).weight(weight)
     }
