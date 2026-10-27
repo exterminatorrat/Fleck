@@ -3336,9 +3336,12 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
 {
   for cleanupFails in [false, true] {
     let sleeper = RuntimeCapsuleSleeper()
+    let destination = Note(title: "Projects", body: "Roadmap")
     let fixture = try await RuntimeFixture(
       finalText: "saved",
       capsuleEnabled: true,
+      routingNotes: [destination],
+      resolvedDestinationID: destination.id,
       cleanupFails: cleanupFails,
       capsuleSleeper: { duration in await sleeper.sleep(duration) }
     )
@@ -3357,6 +3360,7 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
     #expect(fixture.appState.workspace.notes.contains { $0.body.contains("saved") })
     let record = try #require(fixture.history.records.first)
     #expect(record.insertionOutcome == .saved)
+    #expect(record.destination?.noteID == destination.id)
     #expect(record.cleanupOutcome == (cleanupFails ? .usedRaw : .cleaned))
 
     await fixture.runtime.toggle()
@@ -5438,6 +5442,7 @@ private final class RuntimeFixture {
     cleanupModelViewModel: AdmittedModelSettingsViewModel? = nil,
     routingNotes: [Note] = [],
     ambiguousRouting: Bool = false,
+    resolvedDestinationID: UUID? = nil,
     cleanupFails: Bool = false,
     historySaveFailureAttempt: Int? = nil,
     historySaveBlockingAttempt: Int? = nil,
@@ -5522,7 +5527,10 @@ private final class RuntimeFixture {
         )
       },
       cleaner: RuntimeCleaner(fails: cleanupFails),
-      router: RuntimeRouter(returnsAmbiguity: ambiguousRouting),
+      router: RuntimeRouter(
+        returnsAmbiguity: ambiguousRouting,
+        resolvedDestinationID: resolvedDestinationID
+      ),
       saver: saving ?? appState,
       historyController: history,
       historyEnabled: { true },
@@ -5816,9 +5824,11 @@ private final class RuntimeSaving: DictationSaving {
 
 private struct RuntimeRouter: DestinationRouting {
   let returnsAmbiguity: Bool
+  let resolvedDestinationID: UUID?
 
-  init(returnsAmbiguity: Bool = false) {
+  init(returnsAmbiguity: Bool = false, resolvedDestinationID: UUID? = nil) {
     self.returnsAmbiguity = returnsAmbiguity
+    self.resolvedDestinationID = resolvedDestinationID
   }
 
   func route(
@@ -5826,6 +5836,7 @@ private struct RuntimeRouter: DestinationRouting {
     candidates: [DictationRoutingCandidate],
     inboxID: UUID?
   ) async -> DictationRoutingDecision {
+    if let resolvedDestinationID { return .resolved(resolvedDestinationID) }
     if returnsAmbiguity {
       return .ambiguous(candidates.prefix(4).map {
         DictationRoutingChoice(
