@@ -3,6 +3,37 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.5-beta.1] - 2026-10-27
+
+### Fixed
+
+- Propagate the filing codec and formatting-popover compiler repairs through the bottom-only
+  dictation pill stack while preserving its reviewed source and regression guards.
+
+Source-only integration checkpoint. Local compilation, tests and native pill behavior remain
+unrun; hosted verification is pending.
+
+## [1.5.4-beta.1] - 2026-10-27
+
+### Fixed
+
+- Bind formatting-toolbar popovers to the existing theme snapshot and integrate the filing
+  rich-text codec compiler repair.
+
+Source-only compiler repair checkpoint. Local compilation, tests and native appearance remain
+unrun; hosted verification is pending.
+
+## [1.5.3-beta.1] - 2026-10-27
+
+### Fixed
+
+- Include the existing bounded rich-text codec required by semantic-section filing without
+  replacing ordinary note-appending behavior.
+- Add codec round-trip and invalid-metadata regression source.
+
+Source-only compiler repair checkpoint. Local compilation, tests and native behavior remain
+unrun; hosted verification is pending.
+
 ## [1.5.2-beta.1] - 2026-10-27
 
 ### Fixed
