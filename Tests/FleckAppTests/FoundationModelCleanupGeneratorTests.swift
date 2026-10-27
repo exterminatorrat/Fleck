@@ -59,10 +59,58 @@ private actor FoundationModelOperationProbe {
 
   let concurrent = Task { try await session.result() }
   await probe.release("first")
-  _ = try await first.value
+  let candidate = try await first.value
   _ = try await concurrent.value
   _ = try await session.result()
+  #expect(candidate.cleanupFallbackProvenance == nil)
   #expect(await probe.calls == 1)
+}
+
+@Test func foundationModelCleanupGeneratorPreservesServiceFallbackProvenance() async throws {
+  let raw = "Do not cancel the 2 meetings with Jordan Lee on July 29."
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    cleanupGenerator: { _, _ in "Cancel the meetings with Jordan." },
+    routingGenerator: { _, _ in .inbox }
+  )
+  let session = try FoundationModelCleanupGenerator(dictation: dictation).start(
+    .init(
+      baseline: raw,
+      protectedForms: [],
+      replacements: 0,
+      deadline: ContinuousClock().now.advanced(by: .seconds(1))
+    ),
+    maximumOutputTokens: 32
+  )
+
+  let candidate = try await session.result()
+
+  #expect(candidate.cleaned == raw)
+  #expect(candidate.cleanupFallbackProvenance == .serviceFallback)
+  await session.acknowledgement()
+}
+
+@Test func foundationModelCleanupGeneratorPreservesResponderCancellation() async throws {
+  let raw = "Send the report."
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    cleanupGenerator: { _, _ in throw CancellationError() },
+    routingGenerator: { _, _ in .inbox }
+  )
+  let session = try FoundationModelCleanupGenerator(dictation: dictation).start(
+    .init(
+      baseline: raw,
+      protectedForms: [],
+      replacements: 0,
+      deadline: ContinuousClock().now.advanced(by: .seconds(1))
+    ),
+    maximumOutputTokens: 32
+  )
+
+  await #expect(throws: CleanupGenerationError.requestCancelled) {
+    try await session.result()
+  }
+  await session.acknowledgement()
 }
 
 @Test func foundationModelPreResultCancellationDoesNotStartGeneration() async throws {

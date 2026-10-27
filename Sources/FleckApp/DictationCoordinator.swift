@@ -19,13 +19,20 @@ enum DictationPipelineStage: Equatable, Sendable {
   case save
 }
 
+enum DictationFailureProvenance: Equatable, Sendable {
+  case insertion
+  case persistence
+}
+
 struct DictationCoordinatorContext: Equatable, Sendable {
   let sessionID: UUID
   let mode: DictationMode
   let destination: DictationDestination?
   let pipelineStage: DictationPipelineStage
   let cleanupOutcome: DictationCleanupOutcome?
+  let cleanupFallbackProvenance: DictationCleanupFallbackProvenance?
   let failureStage: DictationPipelineStage?
+  let failureProvenance: DictationFailureProvenance?
 
   init(
     sessionID: UUID,
@@ -33,14 +40,18 @@ struct DictationCoordinatorContext: Equatable, Sendable {
     destination: DictationDestination? = nil,
     pipelineStage: DictationPipelineStage,
     cleanupOutcome: DictationCleanupOutcome?,
-    failureStage: DictationPipelineStage?
+    cleanupFallbackProvenance: DictationCleanupFallbackProvenance? = nil,
+    failureStage: DictationPipelineStage?,
+    failureProvenance: DictationFailureProvenance? = nil
   ) {
     self.sessionID = sessionID
     self.mode = mode
     self.destination = destination
     self.pipelineStage = pipelineStage
     self.cleanupOutcome = cleanupOutcome
+    self.cleanupFallbackProvenance = cleanupFallbackProvenance
     self.failureStage = failureStage
+    self.failureProvenance = failureProvenance
   }
 }
 
@@ -140,6 +151,7 @@ final class DictationCoordinator {
     var stablePrefix = ""
     var pipelineStage: DictationPipelineStage = .capture
     var cleanupOutcome: DictationCleanupOutcome?
+    var cleanupFallbackProvenance: DictationCleanupFallbackProvenance? = nil
     var isStarting = true
     var isFinishing = false
     var isSourceFinishing = false
@@ -1067,6 +1079,9 @@ final class DictationCoordinator {
       setCleanupOutcome(.cleaned, captureID: capture.id)
     } catch {
       guard await continueCapture(capture.id) else { return }
+      if case .usedRaw(let provenance)? = error as? FoundationModelCleanupError {
+        setCleanupFallbackProvenance(provenance, captureID: capture.id)
+      }
       recordMeasurement(.cleanupDecisionCompleted, at: clock.now(), captureID: capture.id)
       cleanedText = rawText
       record.cleanupOutcome = .usedRaw
@@ -1146,6 +1161,7 @@ final class DictationCoordinator {
       }
     }
     latestProcessingResult = result
+    setCleanupFallbackProvenance(result.cleanupFallbackProvenance, captureID: id)
     overlay(result.measurements, captureID: id)
 
     let savesHistory = historyEnabled()
@@ -1442,7 +1458,8 @@ final class DictationCoordinator {
         id,
         text: text,
         historyIsDurable: durable || historyIsDurable,
-        failureStage: .save
+        failureStage: .save,
+        failureProvenance: .insertion
       )
       return
     }
@@ -1481,7 +1498,8 @@ final class DictationCoordinator {
         id,
         text: text,
         historyIsDurable: durable || historyIsDurable,
-        failureStage: .save
+        failureStage: .save,
+        failureProvenance: .persistence
       )
     }
   }
@@ -1650,7 +1668,8 @@ final class DictationCoordinator {
         id,
         text: text,
         historyIsDurable: durable || historyIsDurable,
-        failureStage: .save
+        failureStage: .save,
+        failureProvenance: .persistence
       )
     }
   }
@@ -1659,7 +1678,8 @@ final class DictationCoordinator {
     _ id: UUID,
     text: String,
     historyIsDurable: Bool,
-    failureStage: DictationPipelineStage
+    failureStage: DictationPipelineStage,
+    failureProvenance: DictationFailureProvenance? = nil
   ) async {
     guard let capture, capture.id == id else { return }
     if historyIsDurable {
@@ -1672,7 +1692,8 @@ final class DictationCoordinator {
       id,
       phase: .failed("Unable to save dictation."),
       cancelEditor: capture.mode == .focused,
-      failureStage: failureStage
+      failureStage: failureStage,
+      failureProvenance: failureProvenance
     )
   }
 
@@ -1846,7 +1867,8 @@ final class DictationCoordinator {
     deleteHistory: Bool = false,
     outcome: DictationTerminalOutcome? = nil,
     diagnosticFailure: DictationRuntimeMeasurements.Failure? = nil,
-    failureStage: DictationPipelineStage? = nil
+    failureStage: DictationPipelineStage? = nil,
+    failureProvenance: DictationFailureProvenance? = nil
   ) async {
     guard var capture, capture.id == id, !capture.isTerminating else { return }
     capture.isTerminating = true
@@ -1856,6 +1878,7 @@ final class DictationCoordinator {
     var terminalOutcome = outcome
     var terminalDiagnosticFailure = diagnosticFailure
     var terminalFailureStage = failureStage
+    var terminalFailureProvenance = failureProvenance
     if deleteHistory, !(await historyController.delete(id)) {
       let message = "Dictation cancellation could not remove its History transcript."
       recoveryAction = .openHistory
@@ -1863,6 +1886,7 @@ final class DictationCoordinator {
       terminalOutcome = .failed(message)
       terminalDiagnosticFailure = .persistenceFailure
       terminalFailureStage = nil
+      terminalFailureProvenance = nil
     }
     guard let current = self.capture, current.id == id else { return }
     if let session = current.processingSession {
@@ -1873,7 +1897,8 @@ final class DictationCoordinator {
     }
     let terminalContext = contextForCapture(
       current,
-      failureStage: terminalFailureStage
+      failureStage: terminalFailureStage,
+      failureProvenance: terminalFailureProvenance
     )
     let resolvedOutcome = terminalOutcome ?? inferredTerminalOutcome(for: terminalPhase)
     resolveMeasurements(
@@ -2043,6 +2068,15 @@ final class DictationCoordinator {
   ) {
     guard var capture, capture.id == captureID else { return }
     capture.cleanupOutcome = cleanupOutcome
+    self.capture = capture
+  }
+
+  private func setCleanupFallbackProvenance(
+    _ provenance: DictationCleanupFallbackProvenance?,
+    captureID: UUID
+  ) {
+    guard var capture, capture.id == captureID else { return }
+    capture.cleanupFallbackProvenance = provenance
     self.capture = capture
   }
 
@@ -2409,7 +2443,8 @@ final class DictationCoordinator {
 
   private func contextForCapture(
     _ capture: Capture,
-    failureStage: DictationPipelineStage? = nil
+    failureStage: DictationPipelineStage? = nil,
+    failureProvenance: DictationFailureProvenance? = nil
   ) -> DictationCoordinatorContext {
     DictationCoordinatorContext(
       sessionID: capture.id,
@@ -2417,7 +2452,9 @@ final class DictationCoordinator {
       destination: capture.destination,
       pipelineStage: capture.pipelineStage,
       cleanupOutcome: capture.cleanupOutcome,
-      failureStage: failureStage
+      cleanupFallbackProvenance: capture.cleanupFallbackProvenance,
+      failureStage: failureStage,
+      failureProvenance: failureProvenance
     )
   }
 }
