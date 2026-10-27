@@ -3,6 +3,17 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.0-beta.1] - 2026-10-27
+
+### Fixed
+
+- Align wrapped checklist content without changing paragraph formatting, preserve completion
+  formatting while typing and pasting, and restore checklist selection through undo and redo.
+
+This checkpoint is part of the retained-feature 1.7.0-beta.1 development cohort, not a
+separate release. Local compilation, tests and native visual/accessibility behavior remain
+unrun; hosted verification is pending.
+
 ## [1.5.9-beta.1] - 2026-10-27
 
 ### Fixed
