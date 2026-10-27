@@ -190,12 +190,16 @@ enum DictationSectionInsertion {
         if let currentFence = fenceRun(in: line),
           currentFence.marker == activeFence.marker,
           currentFence.length >= activeFence.length,
-          fenceRemainderIsWhitespace(in: line, run: currentFence.length)
+          fenceRemainderIsWhitespace(
+            in: line,
+            marker: activeFence.marker,
+            run: currentFence.length
+          )
         {
           fence = nil
           previousLine = nil
         }
-      } else if let openingFence = fenceRun(in: line) {
+      } else if let openingFence = openingFence(in: line) {
         fence = openingFence
         previousLine = nil
       } else if let heading = markdownHeading(in: line) {
@@ -296,13 +300,30 @@ enum DictationSectionInsertion {
     return Fence(marker: marker, length: length)
   }
 
-  private static func fenceRemainderIsWhitespace(in line: String, run: Int) -> Bool {
+  private static func openingFence(in line: String) -> Fence? {
+    guard let fence = fenceRun(in: line) else { return nil }
+    guard fence.marker == "`" else { return fence }
     let characters = Array(line)
     var position = 0
     while position < characters.count, position < 3, characters[position] == " " {
       position += 1
     }
-    while position < characters.count, characters[position] == "`" || characters[position] == "~" {
+    position += fence.length
+    guard !characters[position...].contains("`") else { return nil }
+    return fence
+  }
+
+  private static func fenceRemainderIsWhitespace(
+    in line: String,
+    marker: Character,
+    run: Int
+  ) -> Bool {
+    let characters = Array(line)
+    var position = 0
+    while position < characters.count, position < 3, characters[position] == " " {
+      position += 1
+    }
+    while position < characters.count, characters[position] == marker {
       position += 1
     }
     guard position >= run else { return false }
