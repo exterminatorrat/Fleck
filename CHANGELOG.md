@@ -3,6 +3,17 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.3-beta.1] - 2026-10-27
+
+### Fixed
+
+- Include the existing bounded rich-text codec required by semantic-section filing without
+  replacing ordinary note-appending behavior.
+- Add codec round-trip and invalid-metadata regression source.
+
+Source-only compiler repair checkpoint. Local compilation, tests and native behavior remain
+unrun; hosted verification is pending.
+
 ## [1.5.0-beta.1] - 2026-10-27
 
 ### Added
