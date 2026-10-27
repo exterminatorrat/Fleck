@@ -3,6 +3,20 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.2-beta.1] - 2026-10-27
+
+### Fixed
+
+- Return confirmed clean and raw dictation saves directly to standby without a success message,
+  result actions, chooser or success-return timer.
+- Keep the dictation capsule bottom-only and restore the existing live-pill artwork with
+  session-bound rendered-frame receipts and control-safe hit testing.
+- Reconcile standby, placement and live-artwork test source while retaining recovery and
+  ownership guards.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests, visual/accessibility inspection and native behavior remain unverified.
+
 ## [1.5.1-beta.1] - 2026-10-27
 
 ### Fixed

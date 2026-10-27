@@ -35,26 +35,99 @@
   }
 
   @MainActor
+  private func visualCoordinatorEvent(
+    for context: DictationCapsuleContext
+  ) -> DictationCoordinatorEvent? {
+    guard let sessionID = context.sessionID else { return nil }
+    let mode = context.mode ?? .smartCapture
+    let phase: DictationPhase
+    let fallbackStage: DictationPipelineStage
+    switch context.status {
+    case .arming:
+      phase = .arming
+      fallbackStage = .capture
+    case .listening:
+      phase = .listening(mode: mode, engine: .standard)
+      fallbackStage = .capture
+    case .finalizing:
+      phase = .finalizing
+      fallbackStage = .capture
+    case .cleaning:
+      phase = .cleaning
+      fallbackStage = .polish
+    case .routing:
+      phase = .routing
+      fallbackStage = .organize
+    case .saving:
+      phase = .routing
+      fallbackStage = .save
+    default:
+      return nil
+    }
+    return DictationCoordinatorEvent(
+      phase: phase,
+      terminal: nil,
+      context: DictationCoordinatorContext(
+        sessionID: sessionID,
+        mode: mode,
+        pipelineStage: context.pipelineStage ?? fallbackStage,
+        cleanupOutcome: context.cleanupOutcome,
+        failureStage: context.failureStage
+      )
+    )
+  }
+
+  @MainActor
   private func captureVisualState(
     _ name: String,
     controller: DictationCapsuleController,
-    size: CGSize,
+    size: CGSize? = nil,
     directory: URL?
   ) throws {
     guard let host = controller.panel.contentView else {
       Issue.record("Expected a hosted Fleck rail for \(name)")
       return
     }
-    controller.panel.setFrame(CGRect(origin: .zero, size: size), display: false)
-    host.frame = CGRect(origin: .zero, size: size)
+    let screen = try #require(controller.panel.screen ?? NSScreen.main ?? NSScreen.screens.first)
+    let renderedContext = controller.currentContext
+    let presentation = DictationCapsulePresentation(
+      status: renderedContext.status,
+      action: controller.presentationModel.action,
+      chooser: controller.currentChooser,
+      context: renderedContext
+    )
+    let expectedFrame = controller.fleckPillModel.usesFixedHost
+      ? DictationCapsuleController.livePillFrame(in: screen.visibleFrame)
+      : DictationCapsuleController.frame(
+        for: controller.currentDock,
+        size: DictationCapsuleController.size(
+          for: renderedContext.status,
+          measuredWidth: presentation.measuredWidth,
+          widthCeiling: presentation.widthCeiling
+        ),
+        in: screen.visibleFrame
+      )
+    let panelFrame = controller.panel.frame
+    #expect(abs(panelFrame.minX - expectedFrame.minX) <= 0.5)
+    #expect(abs(panelFrame.minY - expectedFrame.minY) <= 0.5)
+    #expect(abs(panelFrame.width - expectedFrame.width) <= 0.5)
+    #expect(abs(panelFrame.height - expectedFrame.height) <= 0.5)
+    if let size { #expect(panelFrame.size == size) }
+    #expect(host.bounds.size == panelFrame.size)
     host.layoutSubtreeIfNeeded()
-    #expect(controller.panel.frame.size == size)
-    #expect(host.bounds.size == size)
 
     let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
     host.cacheDisplay(in: host.bounds, to: imageRep)
     #expect(imageRep.pixelsWide > 0)
     #expect(imageRep.pixelsHigh > 0)
+    if let sessionID = controller.fleckPillModel.sessionID {
+      let snapshot = try #require(controller.fleckPillModel.renderReceipt.snapshot(for: sessionID))
+      #expect(snapshot.sessionID == sessionID)
+      #expect(snapshot.generation == controller.fleckPillModel.renderGeneration)
+      #expect(hasBrightPixel(in: host.bounds, imageRep: imageRep, hostedBy: host))
+    } else if controller.fleckPillModel.state == .standby {
+      #expect(hasBrightPixel(in: host.bounds, imageRep: imageRep, hostedBy: host))
+    }
 
     guard let directory else { return }
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -92,6 +165,32 @@
   }
 
   @MainActor
+  private func hasBrightPixel(
+    in frame: CGRect,
+    imageRep: NSBitmapImageRep,
+    hostedBy host: NSView,
+    threshold: CGFloat = 0.35
+  ) -> Bool {
+    let scaleX = CGFloat(imageRep.pixelsWide) / host.bounds.width
+    let scaleY = CGFloat(imageRep.pixelsHigh) / host.bounds.height
+    let minimumX = max(0, Int(floor(frame.minX * scaleX)))
+    let maximumX = min(imageRep.pixelsWide, Int(ceil(frame.maxX * scaleX)))
+    let minimumY = max(0, Int(floor(frame.minY * scaleY)))
+    let maximumY = min(imageRep.pixelsHigh, Int(ceil(frame.maxY * scaleY)))
+    for y in minimumY..<maximumY {
+      for x in minimumX..<maximumX {
+        guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else {
+          continue
+        }
+        if max(color.redComponent, color.greenComponent, color.blueComponent) > threshold {
+          return true
+        }
+      }
+    }
+    return false
+  }
+
+  @MainActor
   private func canonicalFleckMarkImage() -> NSImage? {
     let sourceRoot = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()
@@ -123,11 +222,10 @@
 
     func host(for context: DictationCapsuleContext) throws -> NSView {
       controller.render(context)
-      let size = DictationCapsuleController.size(for: context.status)
-      panel.setFrame(CGRect(origin: .zero, size: size), display: false)
-      panel.contentView?.frame = CGRect(origin: .zero, size: size)
-      panel.contentView?.layoutSubtreeIfNeeded()
-      return try #require(panel.contentView)
+      #expect(!controller.fleckPillModel.usesFixedHost)
+      let host = try #require(panel.contentView)
+      host.layoutSubtreeIfNeeded()
+      return host
     }
 
     for dock in DictationCapsuleDock.allCases {
@@ -232,7 +330,6 @@
       cancel: CGRect
     ) {
       let host = try #require(panel.contentView)
-      host.frame = CGRect(origin: .zero, size: panel.frame.size)
       host.layoutSubtreeIfNeeded()
       return (
         host.bounds,
@@ -282,6 +379,7 @@
       panel.orderOut(nil)
       controller.setDock(dock)
       controller.render(listeningContext)
+      #expect(!controller.fleckPillModel.usesFixedHost)
       #expect(abs(panel.frame.width - DictationCapsuleController.listeningSize.width) <= 0.5)
       #expect(abs(panel.frame.height - 36) <= 0.5)
       #expect(
@@ -331,7 +429,7 @@
     ]
     for (detailText, compactDetailText) in contextTextPairs {
       panel.orderOut(nil)
-      controller.render(DictationCapsuleContext(
+      let context = DictationCapsuleContext(
         status: .listening,
         detailText: detailText,
         compactDetailText: compactDetailText,
@@ -339,21 +437,26 @@
         trigger: .hold,
         mode: .smartCapture,
         pipelineStage: .capture
-      ))
+      )
+      controller.render(context, coordinatorEvent: visualCoordinatorEvent(for: context))
       #expect(DictationCapsuleController.size(for: controller.currentContext.status).height == 36)
-      #expect(abs(panel.frame.height - 36) <= 0.5)
+      #expect(panel.frame.size == DictationCapsuleController.livePillHostSize)
       #expect(visualProbe("fleck-rail-context", in: try #require(panel.contentView)) == nil)
     }
 
     panel.orderOut(nil)
-    controller.render(DictationCapsuleContext(
+    let listeningWithoutDetail = DictationCapsuleContext(
       status: .listening,
       sessionID: UUID(),
       trigger: .hold,
       mode: .smartCapture,
       pipelineStage: .capture
-    ))
-    #expect(panel.frame.size == DictationCapsuleController.listeningSize)
+    )
+    controller.render(
+      listeningWithoutDetail,
+      coordinatorEvent: visualCoordinatorEvent(for: listeningWithoutDetail)
+    )
+    #expect(panel.frame.size == DictationCapsuleController.livePillHostSize)
 
     let progress: [(DictationCapsuleStatus, DictationPipelineStage)] = [
       (.finalizing, .capture),
@@ -363,49 +466,38 @@
     ]
     for (status, stage) in progress {
       panel.orderOut(nil)
-      controller.render(DictationCapsuleContext(
+      let context = DictationCapsuleContext(
         status: status,
         detailText: "Smart Capture",
         compactDetailText: "Smart Capture",
-        sessionID: visualCaptureSessionID,
+        sessionID: listeningWithoutDetail.sessionID,
         trigger: .hold,
         mode: .smartCapture,
         pipelineStage: stage
-      ))
-      #expect(DictationCapsuleController.size(for: controller.currentContext.status).height == 36)
-      #expect(abs(panel.frame.width - DictationCapsuleController.activeSize.width) <= 0.5)
-      #expect(abs(panel.frame.height - 36) <= 0.5)
+      )
+      controller.render(context, coordinatorEvent: visualCoordinatorEvent(for: context))
+      #expect(panel.frame.size == DictationCapsuleController.livePillHostSize)
       let host = try #require(panel.contentView)
-      host.frame = CGRect(origin: .zero, size: panel.frame.size)
       host.layoutSubtreeIfNeeded()
-      let mark = try visualFrame("fleck-rail-mark", in: host)
       #expect(visualProbe("fleck-rail-context", in: host) == nil)
-      #expect(host.bounds.contains(mark))
+      #expect(visualProbe("fleck-rail-mark", in: host) == nil)
+      #expect(controller.fleckPillModel.state == .processing)
     }
 
     panel.orderOut(nil)
-    controller.render(DictationCapsuleContext(
+    let cleaning = DictationCapsuleContext(
       status: .cleaning,
-      sessionID: visualCaptureSessionID,
+      sessionID: UUID(),
       trigger: .hold,
       mode: .smartCapture,
       pipelineStage: .polish
-    ))
-    #expect(panel.frame.size == DictationCapsuleController.activeSize)
+    )
+    controller.render(cleaning, coordinatorEvent: visualCoordinatorEvent(for: cleaning))
+    #expect(panel.frame.size == DictationCapsuleController.livePillHostSize)
   }
 
-  @Test @MainActor func DictationCapsuleSingleRowFramesClampInsideSmallOffsetVisibleFrames() {
-    let activeSizes = [
-      DictationCapsuleController.size(for: .listening),
-      DictationCapsuleController.size(for: .cleaning),
-    ]
-    #expect(activeSizes == [CGSize(width: 176, height: 36), CGSize(width: 192, height: 36)])
-    let terminalContext = DictationCapsuleContext(
-      status: .saved(destination: String(repeating: "Quarterly planning ", count: 8)),
-      detailText: "Captured in Inbox",
-      compactDetailText: "Inbox"
-    )
-    let terminalChooser = DictationCapsuleChooser(
+  @Test func DictationCapsuleSingleRowFramesClampInsideSmallOffsetVisibleFrames() {
+    let chooser = DictationCapsuleChooser(
       ambiguity: .init(
         captureID: UUID(),
         choices: [
@@ -416,62 +508,119 @@
         ]
       )
     )
-    let terminalPresentation = DictationCapsulePresentation(
-      status: terminalContext.status,
-      action: .undo,
-      chooser: terminalChooser,
-      context: terminalContext
-    )
-    let sizes = activeSizes + [
-      DictationCapsuleController.size(
-        for: terminalContext.status,
-        measuredWidth: terminalPresentation.measuredWidth,
-        widthCeiling: terminalPresentation.widthCeiling
-      )
+    let savedStatuses: [DictationCapsuleStatus] = [
+      .saved(destination: String(repeating: "Quarterly planning ", count: 8)),
+      .savedWithoutCleanup(destination: String(repeating: "Quarterly planning ", count: 8)),
     ]
-    #expect(terminalPresentation.measuredWidth > DictationCapsuleController.activeSize.width)
+    let savedPresentations = savedStatuses.map {
+      DictationCapsulePresentation(status: $0, action: .undo, chooser: chooser)
+    }
+    #expect(savedPresentations.allSatisfy { $0.visibleText == nil })
+    #expect(savedPresentations.allSatisfy { $0.voiceOverText == "Fleck dictation ready" })
+    #expect(savedPresentations.allSatisfy { $0.measuredWidth <= DictationCapsuleController.idleSize.width })
+    #expect(savedStatuses.allSatisfy { DictationCapsuleController.size(for: $0) == DictationCapsuleController.idleSize })
+    #expect(DictationCapsuleDock.allCases == [.bottom])
+
+    let failure = DictationCapsulePresentation(
+      status: .failed("Destination unavailable"),
+      action: .openDestination
+    )
     let visibleFrames = [
       CGRect(x: -1_280, y: 37, width: 120, height: 44),
       CGRect(x: 640, y: 280, width: 320, height: 90),
     ]
 
     for visibleFrame in visibleFrames {
-      for size in sizes {
-        for dock in DictationCapsuleDock.allCases {
-          let frame = DictationCapsuleController.frame(
-            for: dock,
-            size: size,
-            in: visibleFrame
-          )
-          #expect(visibleFrame.contains(frame))
-          #expect(frame.width == min(size.width, visibleFrame.width))
-          #expect(frame.height == min(size.height, visibleFrame.height))
-          switch dock {
-          case .bottom:
-            #expect(abs(frame.midX - visibleFrame.midX) <= 0.5)
-            #expect(
-              frame.minY
-                == visibleFrame.minY
-                  + min(10, max((visibleFrame.height - frame.height) / 2, 0))
-            )
-          case .left:
-            #expect(
-              frame.minX
-                == visibleFrame.minX
-                  + min(10, max((visibleFrame.width - frame.width) / 2, 0))
-            )
-            #expect(abs(frame.midY - visibleFrame.midY) <= 0.5)
-          case .right:
-            #expect(
-              frame.maxX
-                == visibleFrame.maxX
-                  - min(10, max((visibleFrame.width - frame.width) / 2, 0))
-            )
-            #expect(abs(frame.midY - visibleFrame.midY) <= 0.5)
-          }
-        }
-      }
+      let standbyFrame = DictationCapsuleController.livePillFrame(in: visibleFrame)
+      #expect(visibleFrame.contains(standbyFrame))
+      #expect(standbyFrame.width == min(180, visibleFrame.width))
+      #expect(standbyFrame.height == min(39, visibleFrame.height))
+      #expect(standbyFrame.midX == visibleFrame.midX)
+      #expect(standbyFrame.minY == visibleFrame.minY)
+
+      let failureFrame = DictationCapsuleController.frame(
+        for: .bottom,
+        status: .failed("Destination unavailable"),
+        measuredWidth: failure.measuredWidth,
+        in: visibleFrame
+      )
+      #expect(visibleFrame.contains(failureFrame))
+      #expect(failureFrame.width == min(failure.measuredWidth, visibleFrame.width))
+      #expect(failureFrame.height == min(DictationCapsuleController.failureSize.height, visibleFrame.height))
+      #expect(failureFrame.minY == visibleFrame.minY + min(10, max((visibleFrame.height - failureFrame.height) / 2, 0)))
     }
+  }
+
+  @Test @MainActor
+  func DictationCapsuleLiveArtworkRequiresMatchingNonterminalCoordinatorEvents() throws {
+    let panel = DictationCapsulePanel()
+    let controller = DictationCapsuleController(panel: panel)
+    defer { controller.dismiss() }
+    controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
+
+    let sessionID = UUID()
+    let listening = DictationCapsuleContext(
+      status: .listening,
+      sessionID: sessionID,
+      mode: .smartCapture,
+      pipelineStage: .capture
+    )
+    let matchingEvent = try #require(visualCoordinatorEvent(for: listening))
+    controller.render(listening, coordinatorEvent: matchingEvent)
+    #expect(controller.fleckPillModel.state == .listening)
+    #expect(controller.fleckPillModel.sessionID == sessionID)
+    try captureVisualState(
+      "matching-session-live-pill",
+      controller: controller,
+      size: DictationCapsuleController.livePillHostSize,
+      directory: nil
+    )
+
+    let otherSessionID = UUID()
+    let mismatchedEvent = DictationCoordinatorEvent(
+      phase: .listening(mode: .smartCapture, engine: .standard),
+      terminal: nil,
+      context: DictationCoordinatorContext(
+        sessionID: otherSessionID,
+        mode: .smartCapture,
+        pipelineStage: .capture,
+        cleanupOutcome: nil,
+        failureStage: nil
+      )
+    )
+    controller.render(listening, coordinatorEvent: mismatchedEvent)
+    #expect(controller.currentContext.status == .listening)
+    #expect(controller.fleckPillModel.state == .hidden)
+    #expect(!controller.fleckPillModel.usesFixedHost)
+
+    controller.render(listening, coordinatorEvent: matchingEvent)
+    #expect(controller.currentContext.status == .listening)
+    #expect(controller.fleckPillModel.state == .hidden)
+
+    let message = "Unable to save dictation."
+    let failed = DictationCapsuleContext(
+      status: .failed(message),
+      sessionID: sessionID,
+      mode: .smartCapture,
+      pipelineStage: .save,
+      failureStage: .save,
+      failureKind: .save
+    )
+    let terminalEvent = DictationCoordinatorEvent(
+      phase: .failed(message),
+      terminal: .failed(message),
+      context: DictationCoordinatorContext(
+        sessionID: sessionID,
+        mode: .smartCapture,
+        pipelineStage: .save,
+        cleanupOutcome: nil,
+        failureStage: .save
+      )
+    )
+    controller.render(failed, coordinatorEvent: terminalEvent)
+    #expect(controller.currentContext.status == .failed(message))
+    #expect(controller.fleckPillModel.state == .hidden)
+    #expect(!controller.fleckPillModel.usesFixedHost)
   }
 
   @Test @MainActor
@@ -484,23 +633,25 @@
     ]
     for mode in [DictationMode.focused, .smartCapture] {
       for dock in DictationCapsuleDock.allCases {
+        let sessionID = UUID()
         for status in statuses {
           panel.orderOut(nil)
           controller.setDock(dock)
-          controller.render(DictationCapsuleContext(
+          let context = DictationCapsuleContext(
             status: status,
             detailText: "Synthetic captured destination",
             compactDetailText: "Synthetic context",
-            sessionID: visualCaptureSessionID,
+            sessionID: sessionID,
             trigger: .doubleTap,
             mode: mode,
             isHandsFree: true
-          ))
+          )
+          controller.render(context, coordinatorEvent: visualCoordinatorEvent(for: context))
           let host = try #require(panel.contentView)
           host.layoutSubtreeIfNeeded()
           #expect(visualProbe("fleck-rail-context", in: host) == nil)
-          #expect(panel.frame.size == DictationCapsuleController.size(for: status))
-          #expect(panel.frame.height == 36)
+          #expect(panel.frame.size == DictationCapsuleController.livePillHostSize)
+          #expect(panel.frame.height == DictationCapsuleController.livePillHostSize.height)
         }
       }
     }
@@ -526,21 +677,33 @@
         isHandsFree: true,
         pipelineStage: .capture
       )
-      controller.render(listening)
+      controller.render(listening, coordinatorEvent: visualCoordinatorEvent(for: listening))
       controller.presentationModel.setListeningHover(true)
       let host = try #require(panel.contentView)
       host.layoutSubtreeIfNeeded()
-      let waveform = try visualFrame("fleck-rail-waveform", in: host)
+      let signal = FleckPillMotion.signalGeometry(controller.fleckPillModel.frame)
+      let signalMinX = try #require(signal.points.map(\.x).min())
+      let signalMaxX = try #require(signal.points.map(\.x).max())
+      let signalCenterX = (Double(host.bounds.width) - FleckPillGeometry.canvasSize.width) / 2
+        + FleckPillGeometry.artworkScale * (8 + (signalMinX + signalMaxX) / 2)
       let stop = try visualFrame("fleck-rail-stop", in: host)
       let cancel = try visualFrame("fleck-rail-cancel", in: host)
-      #expect(panel.frame.size == DictationCapsuleController.listeningSize)
+      #expect(panel.frame.size == DictationCapsuleController.livePillHostSize)
       #expect(visualProbe("fleck-rail-context", in: host) == nil)
-      #expect(abs(waveform.midX - host.bounds.midX) <= 0.5)
+      #expect(abs(signalCenterX - Double(host.bounds.midX)) <= 0.5)
+      #expect(visualProbe("fleck-rail-waveform", in: host) == nil)
       #expect(stop.size == CGSize(width: 28, height: 28))
       #expect(cancel.size == CGSize(width: 28, height: 28))
       #expect(host.bounds.contains(stop))
       #expect(host.bounds.contains(cancel))
+      #expect(!stop.intersects(cancel))
       #expect(controller.presentationModel.voiceOverLabel == "Dictation listening. \(detail)")
+      try captureVisualState(
+        "focused-listening-live-artwork",
+        controller: controller,
+        size: DictationCapsuleController.livePillHostSize,
+        directory: nil
+      )
 
       panel.orderOut(nil)
       let processing = DictationCapsuleContext(
@@ -553,12 +716,12 @@
         isHandsFree: true,
         pipelineStage: .polish
       )
-      controller.render(processing)
+      controller.render(processing, coordinatorEvent: visualCoordinatorEvent(for: processing))
       host.layoutSubtreeIfNeeded()
-      let mark = try visualFrame("fleck-rail-mark", in: host)
-      #expect(panel.frame.size == DictationCapsuleController.activeSize)
+      #expect(panel.frame.size == DictationCapsuleController.livePillHostSize)
       #expect(visualProbe("fleck-rail-context", in: host) == nil)
-      #expect(host.bounds.contains(mark))
+      #expect(visualProbe("fleck-rail-mark", in: host) == nil)
+      #expect(controller.fleckPillModel.state == .processing)
       #expect(
         DictationCapsulePresentation(status: processing.status, context: processing)
           .voiceOverText == "Polishing dictation. \(detail)"
@@ -604,6 +767,10 @@
       chooser: DictationCapsuleChooser?
     ) throws {
       let host = try #require(panel.contentView)
+      let renderedContext = controller.currentContext
+      let renderedAction = controller.presentationModel.action
+      let renderedChooser = controller.currentChooser
+      let usesFixedHost = controller.fleckPillModel.usesFixedHost
       let probes = visualDescendants(of: host).compactMap { view -> (String, CGRect)? in
         guard let identifier = view.identifier?.rawValue, identifier.hasPrefix("fleck-") else {
           return nil
@@ -618,32 +785,45 @@
       let probeUnionInScreen = probeUnion.map {
         panel.convertToScreen(host.convert($0, to: nil))
       }
-      let expectedCenteredFrame = DictationCapsuleController.frame(
-        for: .bottom,
-        size: panel.frame.size,
-        in: screen.visibleFrame
-      )
+      let expectedCenteredFrame = usesFixedHost
+        ? DictationCapsuleController.livePillFrame(in: screen.visibleFrame)
+        : DictationCapsuleController.frame(
+          for: .bottom,
+          size: panel.frame.size,
+          in: screen.visibleFrame
+        )
       let presentation = DictationCapsulePresentation(
-        status: context.status,
-        action: action,
-        chooser: chooser,
-        context: context
+        status: renderedContext.status,
+        action: renderedAction,
+        chooser: renderedChooser,
+        context: renderedContext
       )
-      let declaredSize = DictationCapsuleController.size(
-        for: context.status,
-        measuredWidth: presentation.measuredWidth,
-        widthCeiling: presentation.widthCeiling
-      )
-      let declaredCenteredFrame = DictationCapsuleController.frame(
-        for: .bottom,
-        size: declaredSize,
-        in: screen.visibleFrame
-      )
+      let declaredCenteredFrame: CGRect
+      if usesFixedHost {
+        declaredCenteredFrame = DictationCapsuleController.livePillFrame(in: screen.visibleFrame)
+      } else {
+        let declaredSize = DictationCapsuleController.size(
+          for: renderedContext.status,
+          measuredWidth: presentation.measuredWidth,
+          widthCeiling: presentation.widthCeiling
+        )
+        declaredCenteredFrame = DictationCapsuleController.frame(
+          for: .bottom,
+          size: declaredSize,
+          in: screen.visibleFrame
+        )
+      }
+      let declaredSize = declaredCenteredFrame.size
       observations.append([
         "scenario": scenario,
         "phase": phase,
-        "hasAction": action != nil,
-        "hasChooser": chooser != nil,
+        "inputStatus": String(describing: context.status),
+        "requestedHasAction": action != nil,
+        "requestedHasChooser": chooser != nil,
+        "renderedStatus": String(describing: renderedContext.status),
+        "usesFixedHost": usesFixedHost,
+        "hasAction": renderedAction != nil,
+        "hasChooser": renderedChooser != nil,
         "screenFrame": rectRecord(screen.frame),
         "screenVisibleFrame": rectRecord(screen.visibleFrame),
         "panelFrame": rectRecord(panel.frame),
@@ -659,6 +839,7 @@
         "hostBoundsInScreen": rectRecord(
           panel.convertToScreen(host.convert(host.bounds, to: nil))
         ),
+        "hasProbeUnion": probeUnion != nil,
         "probeUnionContainedInHost": probeUnion.map { host.bounds.contains($0) } ?? false,
         "probeUnion": probeUnion.map { rectRecord($0) as Any } ?? NSNull(),
         "probeUnionInScreen": probeUnionInScreen.map { rectRecord($0) as Any } ?? NSNull(),
@@ -675,9 +856,19 @@
     }
 
     func capture(_ scenario: String) throws {
-      guard let outputDirectory, let host = panel.contentView else { return }
+      let host = try #require(panel.contentView)
       let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
       host.cacheDisplay(in: host.bounds, to: imageRep)
+      #expect(imageRep.pixelsWide > 0)
+      #expect(imageRep.pixelsHigh > 0)
+      if let sessionID = controller.fleckPillModel.sessionID {
+        let snapshot = try #require(controller.fleckPillModel.renderReceipt.snapshot(for: sessionID))
+        #expect(snapshot.sessionID == sessionID)
+        #expect(snapshot.generation == controller.fleckPillModel.renderGeneration)
+      } else if controller.fleckPillModel.state == .standby {
+        #expect(hasBrightPixel(in: host.bounds, imageRep: imageRep, hostedBy: host))
+      }
+      guard let outputDirectory else { return }
       let data = try #require(imageRep.representation(using: .png, properties: [:]))
       try data.write(to: outputDirectory.appendingPathComponent("\(scenario)-settled.png"))
     }
@@ -719,45 +910,75 @@
       )
       try capture(scenario)
       let host = try #require(panel.contentView)
+      let renderedContext = controller.currentContext
+      let renderedAction = controller.presentationModel.action
+      let renderedChooser = controller.currentChooser
+      let usesFixedHost = controller.fleckPillModel.usesFixedHost
       let probeFrames = visualDescendants(of: host).compactMap { view -> CGRect? in
         guard view.identifier?.rawValue.hasPrefix("fleck-") == true else { return nil }
         let frame = view.convert(view.bounds, to: host)
         return frame.width > 0 && frame.height > 0 ? frame : nil
       }
-      let probeUnion = try #require(probeFrames.reduce(nil as CGRect?) { partial, frame in
+      let probeUnion = probeFrames.reduce(nil as CGRect?) { partial, frame in
         partial?.union(frame) ?? frame
-      })
+      }
       let presentation = DictationCapsulePresentation(
-        status: context.status,
-        action: action,
-        chooser: chooser,
-        context: context
+        status: renderedContext.status,
+        action: renderedAction,
+        chooser: renderedChooser,
+        context: renderedContext
       )
-      let declaredSize = DictationCapsuleController.size(
-        for: context.status,
-        measuredWidth: presentation.measuredWidth,
-        widthCeiling: presentation.widthCeiling
-      )
+      let expectedFrame = usesFixedHost
+        ? DictationCapsuleController.livePillFrame(in: screen.visibleFrame)
+        : DictationCapsuleController.frame(
+          for: .bottom,
+          size: DictationCapsuleController.size(
+            for: renderedContext.status,
+            measuredWidth: presentation.measuredWidth,
+            widthCeiling: presentation.widthCeiling
+          ),
+          in: screen.visibleFrame
+        )
+      let declaredSize = expectedFrame.size
       #expect(abs(panel.frame.midX - screen.visibleFrame.midX) <= 0.5)
       #expect(abs(panel.frame.width - declaredSize.width) <= 0.5)
       #expect(abs(panel.frame.height - declaredSize.height) <= 0.5)
       #expect(abs(host.bounds.width - declaredSize.width) <= 0.5)
       #expect(abs(host.bounds.height - declaredSize.height) <= 0.5)
-      #expect(host.bounds.contains(probeUnion))
+      if let probeUnion {
+        #expect(host.bounds.contains(probeUnion))
+      } else if let sessionID = controller.fleckPillModel.sessionID {
+        let snapshot = try #require(controller.fleckPillModel.renderReceipt.snapshot(for: sessionID))
+        #expect(snapshot.sessionID == sessionID)
+        #expect(snapshot.generation == controller.fleckPillModel.renderGeneration)
+      } else {
+        let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: imageRep)
+        #expect(controller.fleckPillModel.state == .standby)
+        #expect(hasBrightPixel(in: host.bounds, imageRep: imageRep, hostedBy: host))
+      }
       for frame in probeFrames {
         #expect(host.bounds.contains(frame))
       }
-      if case .saved = context.status {
-        let terminalText = try visualFrame("fleck-terminal-text", in: host)
-        #expect(terminalText.width > 0)
-        #expect(host.bounds.contains(terminalText))
+      switch context.status {
+      case .saved, .savedWithoutCleanup:
+        #expect(renderedContext.status == .idle)
+        #expect(renderedAction == nil)
+        #expect(renderedChooser == nil)
+        #expect(controller.fleckPillModel.usesFixedHost)
+        #expect(presentation.visibleText == nil)
+        #expect(presentation.voiceOverText == "Fleck dictation ready")
+        #expect(!panel.allowsActions)
+      default:
+        break
       }
-      if chooser != nil {
+      if renderedChooser != nil {
         let chooserFrame = try visualFrame("fleck-rail-chooser", in: host)
         #expect(chooserFrame.width > 0)
         #expect(chooserFrame.height > 0)
         #expect(host.bounds.contains(chooserFrame))
       }
+      #expect(abs(panel.frame.origin.y - expectedFrame.origin.y) <= 0.5)
     }
 
     controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
@@ -794,7 +1015,7 @@
       )),
     ]
     for (name, context) in compactContexts {
-      controller.render(context)
+      controller.render(context, coordinatorEvent: visualCoordinatorEvent(for: context))
       try await settleAndRecord(name, screen: selectedScreen, context: context)
     }
 
@@ -802,62 +1023,57 @@
     controller.render(shortSaved)
     try await settleAndRecord("saved-inbox", screen: selectedScreen, context: shortSaved)
 
-    let longSaved = DictationCapsuleContext(
-      status: .saved(destination: String(repeating: "Quarterly planning ", count: 8)),
-      detailText: "Captured in Inbox",
-      compactDetailText: "Inbox"
-    )
-    controller.render(longSaved)
-    try await settleAndRecord("saved-long-title", screen: selectedScreen, context: longSaved)
-
-    controller.render(shortSaved, action: .undo)
-    try await settleAndRecord(
-      "saved-undo",
-      screen: selectedScreen,
-      context: shortSaved,
-      action: .undo
-    )
-
-    let captureID = UUID()
-    let noteID = UUID()
-    let chooser = DictationCapsuleChooser(
+    let savedChooser = DictationCapsuleChooser(
       ambiguity: .init(
-        captureID: captureID,
+        captureID: UUID(),
         choices: [
           .init(
-            destination: .init(noteID: noteID, title: "Projects"),
+            destination: .init(noteID: UUID(), title: "Projects"),
             contextHint: "Synthetic roadmap"
           )
         ]
       )
     )
-    controller.render(shortSaved, chooser: chooser)
-    try await settleAndRecord(
-      "saved-chooser",
-      screen: selectedScreen,
-      context: shortSaved,
-      chooser: chooser
+    let longSaved = DictationCapsuleContext(
+      status: .saved(destination: String(repeating: "Quarterly planning ", count: 8)),
+      detailText: "Captured in Inbox",
+      compactDetailText: "Inbox"
     )
-
-    controller.render(shortSaved, action: .undo, chooser: chooser)
+    controller.render(longSaved, action: .undo, chooser: savedChooser)
     try await settleAndRecord(
-      "saved-undo-chooser",
+      "saved-long-title-undo-chooser-cleared",
       screen: selectedScreen,
-      context: shortSaved,
+      context: longSaved,
       action: .undo,
-      chooser: chooser
+      chooser: savedChooser
     )
 
-    let keepInboxChooser = DictationCapsuleChooser(
-      ambiguity: .init(captureID: UUID(), choices: [])
+    let rawSaved = DictationCapsuleContext(
+      status: .savedWithoutCleanup(
+        destination: String(repeating: "Quarterly planning ", count: 8)
+      )
     )
-    controller.render(shortSaved, chooser: keepInboxChooser)
+    controller.render(rawSaved, action: .copy, chooser: savedChooser)
     try await settleAndRecord(
-      "saved-keep-inbox",
+      "saved-original-copy-chooser-cleared",
       screen: selectedScreen,
-      context: shortSaved,
-      chooser: keepInboxChooser
+      context: rawSaved,
+      action: .copy,
+      chooser: savedChooser
     )
+
+    let routingContext = DictationCapsuleContext(
+      status: .routing,
+      sessionID: UUID(),
+      trigger: .hold,
+      mode: .smartCapture,
+      pipelineStage: .organize
+    )
+    controller.render(
+      routingContext,
+      coordinatorEvent: visualCoordinatorEvent(for: routingContext)
+    )
+    try await settleAndRecord("routing", screen: selectedScreen, context: routingContext)
 
     if let outputDirectory {
       let data = try JSONSerialization.data(
@@ -896,10 +1112,16 @@
       context: DictationCapsuleContext,
       size: CGSize? = nil,
       action: DictationCapsuleAction? = nil,
+      chooser: DictationCapsuleChooser? = nil,
       seedSyntheticWaveform: Bool = false
     ) throws {
       controller.panel.orderOut(nil)
-      controller.render(context, action: action)
+      controller.render(
+        context,
+        action: action,
+        chooser: chooser,
+        coordinatorEvent: visualCoordinatorEvent(for: context)
+      )
       if seedSyntheticWaveform {
         prepareSyntheticWaveformFixture(for: controller)
       }
@@ -907,7 +1129,7 @@
       try captureVisualState(
         name,
         controller: controller,
-        size: size ?? DictationCapsuleController.size(for: context.status),
+        size: size,
         directory: captureDirectory
       )
     }
@@ -915,7 +1137,7 @@
     try render(
       "idle-bottom",
       context: DictationCapsuleContext(status: .idle),
-      size: DictationCapsuleController.idleSize
+      size: DictationCapsuleController.livePillHostSize
     )
 
     func renderStarting(_ dock: DictationCapsuleDock) throws {
@@ -932,7 +1154,7 @@
       try captureVisualState(
         "arming-\(dock.rawValue)",
         controller: startingController,
-        size: DictationCapsuleController.size(for: .arming),
+        size: DictationCapsuleController.startingSize,
         directory: captureDirectory
       )
     }
@@ -958,31 +1180,39 @@
           onOpenFleck: {},
           onDockChanged: { _ in }
         )
-        feedbackController.render(.arming)
+        let arming = visualCaptureContext(.arming, stage: .capture)
+        feedbackController.render(
+          arming,
+          coordinatorEvent: visualCoordinatorEvent(for: arming)
+        )
         feedbackController.panel.contentView?.appearance = NSAppearance(named: appearance)
         try captureVisualState(
-          "capture-feedback-starting-\(appearanceName)-\(dock.rawValue)",
+          "capture-feedback-admitted-arming-\(appearanceName)-\(dock.rawValue)",
           controller: feedbackController,
-          size: DictationCapsuleController.size(for: .arming),
+          size: DictationCapsuleController.livePillHostSize,
           directory: captureDirectory
         )
 
-        feedbackController.render(visualCaptureContext(
+        let listening = visualCaptureContext(
           .listening,
           stage: .capture
-        ))
+        )
+        feedbackController.render(
+          listening,
+          coordinatorEvent: visualCoordinatorEvent(for: listening)
+        )
         feedbackController.panel.contentView?.appearance = NSAppearance(named: appearance)
         try captureVisualState(
           "capture-feedback-listening-quiet-\(appearanceName)-\(dock.rawValue)",
           controller: feedbackController,
-          size: DictationCapsuleController.listeningSize,
+          size: DictationCapsuleController.livePillHostSize,
           directory: captureDirectory
         )
         prepareSyntheticWaveformFixture(for: feedbackController)
         try captureVisualState(
           "capture-feedback-listening-synthetic-live-\(appearanceName)-\(dock.rawValue)",
           controller: feedbackController,
-          size: DictationCapsuleController.listeningSize,
+          size: DictationCapsuleController.livePillHostSize,
           directory: captureDirectory
         )
 
@@ -994,21 +1224,24 @@
           stage: .capture
         )
         feedbackController.panel.orderOut(nil)
-        feedbackController.render(smartCapture)
+        feedbackController.render(
+          smartCapture,
+          coordinatorEvent: visualCoordinatorEvent(for: smartCapture)
+        )
         feedbackController.waveformModel.reset()
         feedbackController.waveformModel.beginListening()
         feedbackController.panel.contentView?.appearance = NSAppearance(named: appearance)
         try captureVisualState(
           "single-row-smart-capture-listening-quiet-\(appearanceName)-\(dock.rawValue)",
           controller: feedbackController,
-          size: DictationCapsuleController.size(for: smartCapture.status),
+          size: DictationCapsuleController.livePillHostSize,
           directory: captureDirectory
         )
         prepareSyntheticWaveformFixture(for: feedbackController)
         try captureVisualState(
           "single-row-smart-capture-listening-live-\(appearanceName)-\(dock.rawValue)",
           controller: feedbackController,
-          size: DictationCapsuleController.size(for: smartCapture.status),
+          size: DictationCapsuleController.livePillHostSize,
           directory: captureDirectory
         )
         feedbackController.presentationModel.setListeningHover(true)
@@ -1017,7 +1250,7 @@
         try captureVisualState(
           "single-row-smart-capture-listening-hover-\(appearanceName)-\(dock.rawValue)",
           controller: feedbackController,
-          size: DictationCapsuleController.size(for: smartCapture.status),
+          size: DictationCapsuleController.livePillHostSize,
           directory: captureDirectory
         )
         feedbackController.presentationModel.setListeningHover(false)
@@ -1031,14 +1264,17 @@
           mode: .focused,
           pipelineStage: .capture
         )
-        feedbackController.render(longTitleContext)
+        feedbackController.render(
+          longTitleContext,
+          coordinatorEvent: visualCoordinatorEvent(for: longTitleContext)
+        )
         feedbackController.waveformModel.reset()
         feedbackController.waveformModel.beginListening()
         feedbackController.panel.contentView?.appearance = NSAppearance(named: appearance)
         try captureVisualState(
           "focused-long-title-header-free-\(appearanceName)-\(dock.rawValue)",
           controller: feedbackController,
-          size: DictationCapsuleController.size(for: longTitleContext.status),
+          size: DictationCapsuleController.livePillHostSize,
           directory: captureDirectory
         )
       }
@@ -1055,13 +1291,13 @@
     try render(
       "listening-right-option-held-bottom",
       context: heldListening,
-      size: DictationCapsuleController.listeningSize
+      size: DictationCapsuleController.livePillHostSize
     )
     prepareSyntheticWaveformFixture(for: controller)
     try captureVisualState(
       "listening-right-option-held-bottom-seeded",
       controller: controller,
-      size: DictationCapsuleController.listeningSize,
+      size: DictationCapsuleController.livePillHostSize,
       directory: captureDirectory
     )
 
@@ -1074,7 +1310,7 @@
       mode: .focused,
       pipelineStage: .capture
     )
-    for dock in [DictationCapsuleDock.bottom, .left, .right] {
+    for dock in DictationCapsuleDock.allCases {
       controller.setDock(dock)
       try render(
         "listening-focused-destination-\(dock.rawValue)",
@@ -1094,20 +1330,20 @@
     try render(
       "listening-hands-free-bottom",
       context: handsFreeListening,
-      size: DictationCapsuleController.listeningSize
+      size: DictationCapsuleController.livePillHostSize
     )
     prepareSyntheticWaveformFixture(for: controller)
     try captureVisualState(
       "listening-hands-free-bottom-seeded",
       controller: controller,
-      size: DictationCapsuleController.listeningSize,
+      size: DictationCapsuleController.livePillHostSize,
       directory: captureDirectory
     )
     controller.presentationModel.setListeningHover(true)
     try captureVisualState(
       "listening-hands-free-hover-stop-cancel-bottom",
       controller: controller,
-      size: DictationCapsuleController.listeningSize,
+      size: DictationCapsuleController.livePillHostSize,
       directory: captureDirectory
     )
 
@@ -1127,7 +1363,7 @@
     try captureVisualState(
       "polishing-after-label-delay-bottom-visible",
       controller: controller,
-      size: DictationCapsuleController.size(for: polishing.status),
+      size: DictationCapsuleController.livePillHostSize,
       directory: captureDirectory
     )
     let smartPolishing = DictationCapsuleContext(
@@ -1143,16 +1379,30 @@
       context: smartPolishing
     )
 
-    try render(
-      "saved-undo-bottom",
-      context: visualCaptureContext(.saved(destination: "Inbox")),
-      size: DictationCapsuleController.savedSize,
-      action: .undo
+    let savedChooser = DictationCapsuleChooser(
+      ambiguity: .init(
+        captureID: UUID(),
+        choices: [
+          .init(
+            destination: .init(noteID: UUID(), title: "Projects"),
+            contextHint: "Synthetic roadmap"
+          )
+        ]
+      )
     )
     try render(
-      "saved-original-bottom",
+      "saved-undo-chooser-cleared-bottom",
+      context: visualCaptureContext(.saved(destination: "Inbox")),
+      size: DictationCapsuleController.livePillHostSize,
+      action: .undo,
+      chooser: savedChooser
+    )
+    try render(
+      "saved-original-copy-chooser-cleared-bottom",
       context: visualCaptureContext(.savedWithoutCleanup(destination: "Inbox")),
-      size: DictationCapsuleController.savedWithoutCleanupSize
+      size: DictationCapsuleController.livePillHostSize,
+      action: .copy,
+      chooser: savedChooser
     )
     try render(
       "save-failure-recovery-bottom",
@@ -1162,13 +1412,11 @@
         failureStage: .save,
         failureKind: .save
       ),
-      size: DictationCapsuleController.failureSize,
       action: .openDestination
     )
     try render(
       "no-speech-bottom",
-      context: visualCaptureContext(.noSpeech),
-      size: DictationCapsuleController.noSpeechSize
+      context: visualCaptureContext(.noSpeech)
     )
   }
 
@@ -1180,7 +1428,8 @@
     panel.appearance = NSAppearance(named: .darkAqua)
     let controller = DictationCapsuleController(panel: panel)
     defer { controller.dismiss() }
-    controller.render(visualCaptureContext(.listening, isHandsFree: true, stage: .capture))
+    let listening = visualCaptureContext(.listening, isHandsFree: true, stage: .capture)
+    controller.render(listening, coordinatorEvent: visualCoordinatorEvent(for: listening))
     controller.panel.orderOut(nil)
     // Synthetic RMS only. No microphone session or notes are created by this fixture.
     var levels = [Float](repeating: 0, count: 10)
@@ -1193,21 +1442,20 @@
       try await Task.sleep(for: .milliseconds(80))
       try captureVisualState(
         String(format: "frame-%03d", index), controller: controller,
-        size: DictationCapsuleController.listeningSize, directory: directory
+        size: DictationCapsuleController.livePillHostSize, directory: directory
       )
     }
-    for dock in [DictationCapsuleDock.left, .right] {
-      controller.setDock(dock)
-      controller.waveformModel.receive(level: 0.20)
-      controller.presentationModel.setListeningHover(true)
-      try await Task.sleep(for: .milliseconds(80))
-      try captureVisualState("listening-\(dock.rawValue)-controls", controller: controller,
-        size: DictationCapsuleController.listeningSize, directory: directory)
-    }
-    controller.render(visualCaptureContext(.cleaning, stage: .polish))
+    controller.setDock(.bottom)
+    controller.waveformModel.receive(level: 0.20)
+    controller.presentationModel.setListeningHover(true)
+    try await Task.sleep(for: .milliseconds(80))
+    try captureVisualState("listening-bottom-controls", controller: controller,
+      size: DictationCapsuleController.livePillHostSize, directory: directory)
+    let processing = visualCaptureContext(.cleaning, stage: .polish)
+    controller.render(processing, coordinatorEvent: visualCoordinatorEvent(for: processing))
     #expect(controller.waveformModel.energy == 0)
     try captureVisualState("processing", controller: controller,
-      size: DictationCapsuleController.activeSize, directory: directory)
+      size: DictationCapsuleController.livePillHostSize, directory: directory)
     controller.dismiss()
     #expect(controller.waveformModel.energy == 0)
   }
