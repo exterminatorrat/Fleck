@@ -97,14 +97,23 @@ private func brightPixelBounds<Content: View>(
   let host = NSHostingView(rootView: content)
   host.frame = CGRect(origin: .zero, size: size)
   host.layoutSubtreeIfNeeded()
+  return try brightPixelBounds(in: host, threshold: threshold)
+}
+
+@MainActor
+private func brightPixelBounds(
+  in host: NSView,
+  threshold: CGFloat = 0.05
+) throws -> CGRect? {
   let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
   host.cacheDisplay(in: host.bounds, to: imageRep)
-  let scaleX = CGFloat(imageRep.pixelsWide) / size.width
-  let scaleY = CGFloat(imageRep.pixelsHigh) / size.height
+  let scaleX = CGFloat(imageRep.pixelsWide) / host.bounds.width
+  let scaleY = CGFloat(imageRep.pixelsHigh) / host.bounds.height
   var bounds: CGRect?
   for y in 0..<imageRep.pixelsHigh {
     for x in 0..<imageRep.pixelsWide {
       guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+        color.alphaComponent > 0,
         max(color.redComponent, color.greenComponent, color.blueComponent) > threshold
       else { continue }
       let pixel = CGRect(
@@ -240,6 +249,21 @@ private func renderedPixels(with identifier: String, in host: NSView) throws -> 
   #expect(fallback.measuredWidth <= fallback.widthCeiling)
   #expect(saved.visibleText == nil)
   #expect(fallback.visibleText == nil)
+
+  for action in [DictationCapsuleAction.copy, .openHistory, .openDestination] {
+    let failure = DictationCapsulePresentation(
+      status: .failed("technical capture detail"),
+      action: action
+    )
+    #expect(failure.measuredWidth <= failure.widthCeiling)
+    if action == .openDestination {
+      #expect(failure.measuredWidth == 264)
+      #expect(failure.widthCeiling == 264)
+    } else {
+      #expect(failure.measuredWidth < DictationCapsuleController.failureSize.width)
+    }
+    #expect(failure.visibleText == "Dictation failed")
+  }
   #expect(DictationCapsulePresentation.actionDividerSize == CGSize(width: 1, height: 16))
 }
 
@@ -291,18 +315,26 @@ private func renderedPixels(with identifier: String, in host: NSView) throws -> 
   #expect(savedOriginalShortFrame.width < DictationCapsuleController.savedWithoutCleanupSize.width)
   #expect(savedOriginalLongFrame.size == DictationCapsuleController.idleSize)
 
-  let failure = DictationCapsulePresentation(
-    status: .failed("technical capture detail"),
-    action: .copy
-  )
-  let failureFrame = DictationCapsuleController.frame(
-    for: .bottom,
-    status: .failed("technical capture detail"),
-    measuredWidth: failure.measuredWidth,
-    in: visibleFrame
-  )
-  #expect(failure.measuredWidth < DictationCapsuleController.failureSize.width)
-  #expect(failureFrame.width == failure.measuredWidth)
+  for action in [DictationCapsuleAction.copy, .openHistory, .openDestination] {
+    let failure = DictationCapsulePresentation(
+      status: .failed("technical capture detail"),
+      action: action
+    )
+    let failureFrame = DictationCapsuleController.frame(
+      for: .bottom,
+      status: .failed("technical capture detail"),
+      measuredWidth: failure.measuredWidth,
+      in: visibleFrame
+    )
+    if action == .openDestination {
+      #expect(failure.measuredWidth == 264)
+      #expect(failure.widthCeiling == 264)
+    } else {
+      #expect(failure.measuredWidth < DictationCapsuleController.failureSize.width)
+    }
+    #expect(failureFrame.width == failure.measuredWidth)
+    #expect(failureFrame.height == DictationCapsuleController.failureSize.height)
+  }
 
   let noSpeech = DictationCapsulePresentation(status: .noSpeech)
   let noSpeechFrame = DictationCapsuleController.frame(
@@ -706,6 +738,17 @@ private func renderedPixels(with identifier: String, in host: NSView) throws -> 
 
   #expect(controller.fleckPillModel.state == .standby)
   #expect(controller.fleckPillModel.usesFixedHost)
+  controller.render(.idle)
+  let standbyHost = try #require(panel.contentView)
+  standbyHost.layoutSubtreeIfNeeded()
+  let standbyPainted = try #require(try brightPixelBounds(in: standbyHost))
+  #expect(controller.fleckPillModel.state == .standby)
+  #expect(panel.frame.size == DictationCapsuleController.livePillHostSize)
+  #expect(standbyHost.bounds.size == DictationCapsuleController.livePillHostSize)
+  #expect(abs(standbyPainted.midX - standbyHost.bounds.midX) <= 2)
+  #expect(standbyPainted.width < standbyHost.bounds.width / 2)
+  #expect(standbyPainted.minY >= standbyHost.bounds.height - 14)
+  #expect(standbyPainted.maxY >= standbyHost.bounds.height - 1)
 
   let listening = DictationCapsuleContext(
     status: .listening,
