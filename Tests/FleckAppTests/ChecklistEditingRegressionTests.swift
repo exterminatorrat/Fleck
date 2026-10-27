@@ -3,7 +3,8 @@ import Testing
 
 @testable import FleckApp
 
-@Test @MainActor func completedChecklistTextInsertionStrikesOnlyFirstParagraph() throws {
+@Test(arguments: [false, true]) @MainActor
+func completedChecklistTextInsertionStrikesOnlyFirstParagraph(implicitReplacement: Bool) throws {
   let frame = NSRect(x: 0, y: 0, width: 320, height: 160)
   let textView = ListAwareTextView(frame: frame)
   let window = NSWindow(
@@ -32,10 +33,16 @@ import Testing
     textView.typingAttributes[.strikethroughStyle] as? Int
       == NSUnderlineStyle.single.rawValue
   )
+  let original = textView.attributedString()
+  let undoManager = try #require(textView.undoManager)
+  let originalGroupsByEvent = undoManager.groupsByEvent
+  undoManager.groupsByEvent = false
+  defer { undoManager.groupsByEvent = originalGroupsByEvent }
+  undoManager.removeAllActions()
 
   textView.insertText(
     " done\nplain",
-    replacementRange: NSRange(location: insertionLocation, length: 0)
+    replacementRange: NSRange(location: implicitReplacement ? NSNotFound : insertionLocation, length: 0)
   )
 
   #expect(textView.string == "● Task done\nplain")
@@ -44,6 +51,18 @@ import Testing
       == NSUnderlineStyle.single.rawValue
   )
   let plainContinuationLocation = ("● Task done\n" as NSString).length
+  #expect(
+    storage.attribute(.strikethroughStyle, at: plainContinuationLocation, effectiveRange: nil) == nil
+  )
+  undoManager.undo()
+  #expect(textView.attributedString().isEqual(to: original))
+  #expect(!undoManager.canUndo)
+  undoManager.redo()
+  #expect(textView.string == "● Task done\nplain")
+  #expect(
+    storage.attribute(.strikethroughStyle, at: insertionLocation, effectiveRange: nil) as? Int
+      == NSUnderlineStyle.single.rawValue
+  )
   #expect(
     storage.attribute(.strikethroughStyle, at: plainContinuationLocation, effectiveRange: nil) == nil
   )

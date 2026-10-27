@@ -202,6 +202,13 @@ private func bulletEditor(_ text: String) -> (ListAwareTextView, NSWindow) {
   )
   #expect(richText.string == "• note")
 
+  let explicitTypesPasteboard = NSPasteboard.withUniqueName()
+  defer { explicitTypesPasteboard.releaseGlobally() }
+  #expect(source.writeSelection(to: explicitTypesPasteboard, types: [.rtf, .string]))
+  #expect(explicitTypesPasteboard.string(forType: .string) == "• note")
+  #expect(explicitTypesPasteboard.data(forType: .rtf) != nil)
+  #expect(source.selectedRange() == NSRange(location: 2, length: 4))
+
   for type in [NSPasteboard.PasteboardType.string, .rtf] {
     let directPasteboard = NSPasteboard.withUniqueName()
     defer { directPasteboard.releaseGlobally() }
@@ -232,6 +239,23 @@ private func bulletEditor(_ text: String) -> (ListAwareTextView, NSWindow) {
   defer { directSubstringPasteboard.releaseGlobally() }
   #expect(source.writeSelection(to: directSubstringPasteboard, type: .string))
   #expect(directSubstringPasteboard.string(forType: .string) == "ot")
+  let directRichSubstringPasteboard = NSPasteboard.withUniqueName()
+  defer { directRichSubstringPasteboard.releaseGlobally() }
+  #expect(source.writeSelection(to: directRichSubstringPasteboard, type: .rtf))
+  let directRichSubstring = try NSAttributedString(
+    data: #require(directRichSubstringPasteboard.data(forType: .rtf)),
+    options: [.documentType: NSAttributedString.DocumentType.rtf],
+    documentAttributes: nil
+  )
+  #expect(directRichSubstring.string == "ot")
+  #expect(source.selectedRange() == NSRange(location: 3, length: 2))
+
+  source.setSelectedRange(NSRange(location: 3, length: 0))
+  let emptySelectionPasteboard = NSPasteboard.withUniqueName()
+  defer { emptySelectionPasteboard.releaseGlobally() }
+  #expect(!source.writeSelection(to: emptySelectionPasteboard, type: .string))
+  #expect(emptySelectionPasteboard.string(forType: .string) == nil)
+  #expect(source.selectedRange() == NSRange(location: 3, length: 0))
 }
 
 @Test @MainActor func multiSelectionClipboardPreservesWholeItemsWithoutChangingSelections() throws {

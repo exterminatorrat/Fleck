@@ -2917,7 +2917,30 @@
           text, replacing: effectiveRange, clearingInheritedContinuation: true
         )
         if !completedText.isEqual(to: text) {
-          super.insertText(completedText, replacementRange: replacementRange)
+          let insertionRange = replacementRange.location == NSNotFound && hasMarkedText()
+            ? markedRange() : effectiveRange
+          let originalLength = (string as NSString).length
+          let changeGeneration = textChangeGeneration
+          performUndoGroup {
+            super.insertText(completedText, replacementRange: replacementRange)
+            guard textChangeGeneration > changeGeneration, let storage = textStorage else { return }
+            let insertedLength = storage.length - originalLength + insertionRange.length
+            guard insertionRange.location >= 0,
+              insertionRange.location <= storage.length,
+              insertedLength > 0,
+              insertedLength <= storage.length - insertionRange.location
+            else { return }
+            let insertedRange = NSRange(location: insertionRange.location, length: insertedLength)
+            let nativeText = storage.attributedSubstring(from: insertedRange)
+            let normalizedText = completedChecklistInsertion(
+              nativeText, replacing: insertedRange, clearingInheritedContinuation: true
+            )
+            if !normalizedText.isEqual(to: nativeText) {
+              _ = replaceAttributedText(
+                in: insertedRange, with: normalizedText, selecting: selectedRange()
+              )
+            }
+          }
           return
         }
       } else if let text = insertString as? NSAttributedString {
@@ -3170,7 +3193,10 @@
         )
       }
       let containsImages = selections.contains { containsInlineImage(in: $0) }
-      guard expandedSelections != selections || containsImages,
+      let exportsText = !types.isEmpty
+        && types.allSatisfy { $0 == .rtf || $0 == .string }
+        && selections.contains { $0.length > 0 }
+      guard expandedSelections != selections || containsImages || exportsText,
         let storage = textStorage
       else {
         return super.writeSelection(to: pasteboard, types: types)
@@ -3186,7 +3212,7 @@
         ? types.filter { $0 == .rtf || $0 == .string }
         : types
       guard !exportTypes.isEmpty else { return false }
-      guard hasManagedImages else {
+      if !hasManagedImages && !exportsText {
         let exporter = NSTextView(frame: bounds)
         exporter.isRichText = isRichText
         exporter.textStorage?.setAttributedString(source)
@@ -3283,7 +3309,10 @@
           && NSMaxRange(selection) >= NSMaxRange(item.contentRange)
       }
       let containsImages = selections.contains { containsInlineImage(in: $0) }
-      guard expandsBullet || containsImages else {
+      let exportsText = (type == .rtf || type == .string)
+        && textStorage != nil
+        && selections.contains { $0.length > 0 }
+      guard expandsBullet || containsImages || exportsText else {
         return super.writeSelection(to: pasteboard, type: type)
       }
       if containsImages, type != .rtf && type != .string { return false }
