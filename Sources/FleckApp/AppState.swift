@@ -825,7 +825,13 @@
           destination: DictationDestination(noteID: $0.id, title: $0.displayTitle),
           semanticContext: $0.body,
           contentRevision: $0.revision,
-          presentationContext: $0.folderID.flatMap { folderNames[$0] } ?? "Unfiled"
+          presentationContext: $0.folderID.flatMap { folderNames[$0] } ?? "Unfiled",
+          headings: DictationSectionInsertion.headings(
+            in: $0,
+            defaults: NoteTextAppendDefaults(
+              fontFamily: preferences.fontFamily, fontSize: preferences.fontSize
+            )
+          )
         )
       }
     }
@@ -1021,11 +1027,183 @@
       }
     }
 
+    func saveSmartFiling(
+      _ plan: DictationFilingPlan,
+      captureID: UUID
+    ) async throws -> DictationInsertionReceipt {
+      try Task.checkCancellation()
+      let digest = DictationFilingLedger.digest(plan.text)
+      if let receipt = try committedFilingReceipt(text: plan.text, captureID: captureID) {
+        return receipt
+      }
+      guard plan.isValid(against: activeDestinations()), !plan.outputs.isEmpty else {
+        throw DictationFilingSaveError.invalidPlan
+      }
+      let noteIDs = Set(plan.outputs.map(\.destinationID))
+      let ownerID = UUID()
+      guard acquireSmartCaptureTransferLock(for: noteIDs, ownerID: ownerID) else {
+        throw SmartCaptureTransferBusy()
+      }
+      defer { releaseSmartCaptureTransferLock(for: noteIDs, ownerID: ownerID) }
+      beginAwaitedSave()
+      defer { endAwaitedSave() }
+
+      let defaults = NoteTextAppendDefaults(
+        fontFamily: preferences.fontFamily, fontSize: preferences.fontSize
+      )
+      let originals = workspace.notes.filter { noteIDs.contains($0.id) }
+      var attempted = workspace
+      var insertions: [DictationFilingInsertion] = []
+      for original in originals {
+        let outputs = plan.outputs.enumerated().filter {
+          $0.element.destinationID == original.id
+        }.sorted {
+          let lhs = $0.element.heading?.insertionUTF16Offset ?? original.body.utf16.count
+          let rhs = $1.element.heading?.insertionUTF16Offset ?? original.body.utf16.count
+          return lhs == rhs ? $0.offset > $1.offset : lhs > rhs
+        }
+        var note = original
+        var ranges: [(location: Int, length: Int, digest: String)] = []
+        for output in outputs {
+          let inserted = try DictationSectionInsertion.inserting(
+            output.element.text, into: note,
+            atUTF16Offset: output.element.heading?.insertionUTF16Offset
+              ?? original.body.utf16.count,
+            defaults: defaults
+          )
+          ranges = ranges.map {
+            ($0.location >= inserted.location ? $0.location + inserted.length : $0.location,
+             $0.length, $0.digest)
+          }
+          ranges.append((inserted.location, inserted.length, inserted.digest))
+          note.body = inserted.body
+          note.richTextRTF = inserted.richTextRTF
+        }
+        attempted.updateContent(id: note.id, body: note.body, rtf: note.richTextRTF)
+        guard let updated = attempted.notes.first(where: { $0.id == note.id }) else {
+          throw DictationFilingSaveError.invalidPlan
+        }
+        insertions += ranges.map {
+          DictationFilingInsertion(
+            noteID: note.id, noteRevision: updated.revision,
+            location: $0.location, length: $0.length, digest: $0.digest
+          )
+        }
+      }
+      let committed = DictationFilingCommit(
+        captureID: captureID, inputDigest: digest, insertions: insertions
+      )
+      let priorLedger = workspace.dictationFilingLedger
+      attempted.dictationFilingLedger.commits.append(committed)
+      guard attempted.dictationFilingLedger.isValid,
+        let firstOutput = plan.outputs.first,
+        insertions.contains(where: { $0.noteID == firstOutput.destinationID }),
+        let first = committed.insertions.first
+      else {
+        throw DictationFilingSaveError.invalidPlan
+      }
+      workspace = attempted
+      do {
+        try await saveSmartCaptureTransfer(ownerID: ownerID, requiresCommit: true).value
+      } catch {
+        rollbackSmartFiling(originals: originals, attempted: attempted, ledger: priorLedger)
+        throw error
+      }
+      return DictationInsertionReceipt(
+        captureID: captureID, noteID: first.noteID, insertedSuffix: "", filing: committed
+      )
+    }
+
+    private func undoSmartFiling(_ receipt: DictationInsertionReceipt) async -> Bool {
+      guard let committed = receipt.filing, committed.captureID == receipt.captureID,
+        committed.state == .committed,
+        committed.insertions.first?.noteID == receipt.noteID,
+        let ledgerIndex = workspace.dictationFilingLedger.commits.firstIndex(of: committed)
+      else { return false }
+      let noteIDs = Set(committed.insertions.map(\.noteID))
+      let ownerID = UUID()
+      guard acquireSmartCaptureTransferLock(for: noteIDs, ownerID: ownerID) else {
+        return false
+      }
+      defer { releaseSmartCaptureTransferLock(for: noteIDs, ownerID: ownerID) }
+      beginAwaitedSave()
+      defer { endAwaitedSave() }
+      let defaults = NoteTextAppendDefaults(
+        fontFamily: preferences.fontFamily, fontSize: preferences.fontSize
+      )
+      let originals = workspace.notes.filter { noteIDs.contains($0.id) }
+      guard originals.count == noteIDs.count else { return false }
+      var attempted = workspace
+      do {
+        for original in originals {
+          let insertions = committed.insertions.filter { $0.noteID == original.id }
+            .sorted { $0.location > $1.location }
+          guard insertions.allSatisfy({ $0.noteRevision == original.revision }) else {
+            return false
+          }
+          var note = original
+          for insertion in insertions {
+            let removed = try DictationSectionInsertion.removing(
+              range: NSRange(location: insertion.location, length: insertion.length),
+              digest: insertion.digest, from: note, defaults: defaults
+            )
+            note.body = removed.body
+            note.richTextRTF = removed.richTextRTF
+          }
+          attempted.updateContent(id: note.id, body: note.body, rtf: note.richTextRTF)
+        }
+      } catch { return false }
+      let priorLedger = workspace.dictationFilingLedger
+      attempted.dictationFilingLedger.commits[ledgerIndex].state = .undone
+      workspace = attempted
+      do {
+        try await saveSmartCaptureTransfer(ownerID: ownerID, requiresCommit: true).value
+        return true
+      } catch {
+        rollbackSmartFiling(originals: originals, attempted: attempted, ledger: priorLedger)
+        return false
+      }
+    }
+
+    private func rollbackSmartFiling(
+      originals: [Note], attempted: Workspace, ledger: DictationFilingLedger
+    ) {
+      for original in originals {
+        if let index = workspace.notes.firstIndex(where: { $0.id == original.id }),
+          workspace.notes[index] == attempted.notes.first(where: { $0.id == original.id })
+        {
+          workspace.notes[index] = original
+        }
+      }
+      if workspace.dictationFilingLedger == attempted.dictationFilingLedger {
+        workspace.dictationFilingLedger = ledger
+      }
+    }
+
+    private func committedFilingReceipt(
+      text: String, captureID: UUID
+    ) throws -> DictationInsertionReceipt? {
+      guard let committed = workspace.dictationFilingLedger.commits.first(where: {
+        $0.captureID == captureID
+      }) else { return nil }
+      guard smartCaptureTransferOwnerID == nil else { throw SmartCaptureTransferBusy() }
+      guard committed.state == .committed,
+        committed.inputDigest == DictationFilingLedger.digest(text),
+        let first = committed.insertions.first
+      else { throw DictationFilingSaveError.conflictingCapture }
+      return DictationInsertionReceipt(
+        captureID: captureID, noteID: first.noteID, insertedSuffix: "", filing: committed
+      )
+    }
+
     func saveSmartCapture(
       text: String,
       captureID: UUID,
       destinationID: UUID?
     ) async throws -> DictationInsertionReceipt {
+      if let receipt = try committedFilingReceipt(text: text, captureID: captureID) {
+        return receipt
+      }
       beginAwaitedSave()
       defer { endAwaitedSave() }
       let destinationIndex: Int
@@ -1196,6 +1374,7 @@
     }
 
     func undoSmartCapture(_ receipt: DictationInsertionReceipt) async -> Bool {
+      if receipt.filing != nil { return await undoSmartFiling(receipt) }
       guard let index = workspace.notes.firstIndex(where: { $0.id == receipt.noteID }) else {
         return false
       }
@@ -1645,7 +1824,9 @@
       }
     }
 
-    private func saveSmartCaptureTransfer(ownerID: UUID) -> Task<Void, Error> {
+    private func saveSmartCaptureTransfer(
+      ownerID: UUID, requiresCommit: Bool = false
+    ) -> Task<Void, Error> {
       guard startupMigrationError == nil,
         smartCaptureTransferOwnerID == ownerID
       else {
@@ -1655,7 +1836,7 @@
       markSaveStarted()
       let snapshot = saveSnapshot()
       return Task {
-        try await persist(snapshot)
+        try await persist(snapshot, requiresCommit: requiresCommit)
       }
     }
 
@@ -1843,18 +2024,21 @@
       )
     }
 
-    private func persist(_ snapshot: SaveSnapshot) async throws {
+    private func persist(_ snapshot: SaveSnapshot, requiresCommit: Bool = false) async throws {
       do {
         if let beforeSaveOperation {
           await beforeSaveOperation()
         }
         try Task.checkCancellation()
-        _ = try await saveOperation(
+        let result = try await saveOperation(
           snapshot.workspace,
           snapshot.preferences,
           snapshot.trashedNotes,
           snapshot.generation
         )
+        if requiresCommit, result != .committed {
+          throw DictationFilingSaveError.superseded
+        }
       } catch {
         if Task.isCancelled || error is CancellationError {
           throw CancellationError()

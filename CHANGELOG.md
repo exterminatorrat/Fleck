@@ -3,6 +3,17 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.0-beta.1] - 2026-10-27
+
+### Added
+
+- File smart captures into validated note and semantic-section destinations with bounded,
+  lossless chunks while preserving focused-caret insertion.
+- Persist atomic filing receipts for retry/restart recovery and guarded whole-capture undo.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests and native behavior remain unverified.
+
 ## [1.4.13-beta.1] - 2026-10-26
 
 ### Added
