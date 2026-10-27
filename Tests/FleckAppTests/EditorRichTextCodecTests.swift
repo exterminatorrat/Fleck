@@ -71,10 +71,35 @@ import Testing
   let savedParagraph = try #require(
     saved.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
   )
-  #expect(saved.string.utf16.elementsEqual(expectedBody.utf16))
+  #expect(
+    saved.string.utf16.elementsEqual(expectedBody.precomposedStringWithCanonicalMapping.utf16)
+  )
   #expect(savedParagraph.tailIndent == -24)
   #expect(
     saved.attribute(.underlineStyle, at: inlineRange.location, effectiveRange: nil) as? Int
+      == NSUnderlineStyle.single.rawValue
+  )
+
+  let reload = NativeRichTextEditor(
+    text: expectedBody,
+    richTextRTF: savedRTF,
+    onChange: { _, _ in },
+    fontFamily: "Helvetica",
+    fontSize: 17,
+    reduceMotion: true,
+    automaticLists: false,
+    commands: commands
+  )
+  let reloadedView = ListAwareTextView(frame: textView.frame)
+  #expect(reload.applyExternalContentIfNeeded(to: reloadedView, coordinator: editor.makeCoordinator()))
+  #expect(reloadedView.string.utf16.elementsEqual(expectedBody.utf16))
+  let reloadedStorage = try #require(reloadedView.textStorage)
+  let reloadedParagraph = try #require(
+    reloadedStorage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+  )
+  #expect(reloadedParagraph.tailIndent == -24)
+  #expect(
+    reloadedStorage.attribute(.underlineStyle, at: inlineRange.location, effectiveRange: nil) as? Int
       == NSUnderlineStyle.single.rawValue
   )
 }

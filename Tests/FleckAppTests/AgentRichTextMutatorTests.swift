@@ -335,7 +335,7 @@ import Testing
 }
 
 @Test @MainActor func agentAppendPreservesRelativeTailIndentAndUTF16AttributedText() throws {
-  let body = "👩🏽‍💻 Cafe\u{301} inline"
+  let body = "👩🏽‍💻 Café inline"
   let source = NSMutableAttributedString(string: body)
   let style = NSMutableParagraphStyle()
   style.tailIndent = -24
@@ -376,7 +376,7 @@ import Testing
 }
 
 @Test @MainActor func agentReplacementPreservesRelativeTailIndentAfterUTF16OffsetShift() throws {
-  let first = "👩🏽‍💻 Cafe\u{301} inline"
+  let first = "👩🏽‍💻 Café inline"
   let last = "Untouched 🪴"
   let body = first + "\nTarget\n" + last
   let source = NSMutableAttributedString(string: body)
@@ -400,7 +400,7 @@ import Testing
     range: inlineRange
   )
   let note = Note(body: body, richTextRTF: try NoteRichTextCodec.encode(source))
-  let replacement = "Changed e\u{301} 🧑🏼‍🚀"
+  let replacement = "Changed é 🧑🏼‍🚀"
   let draft = try AgentNoteMutationEngine.replaceLines(
     in: body,
     startLine: 2,
@@ -459,6 +459,27 @@ import Testing
     try AgentRichTextMutator.applying(
       insertDraft,
       operation: .insertText,
+      to: note,
+      preferences: .init()
+    )
+  }
+}
+
+@Test @MainActor func agentMutatorRejectsCanonicallyEquivalentButUTF16DifferentRTF() throws {
+  let body = "👩🏽‍💻 Cafe\u{301} inline"
+  let richTextRTF = try NoteRichTextCodec.encode(NSAttributedString(
+    string: body.precomposedStringWithCanonicalMapping
+  ))
+  let decoded = try NoteRichTextCodec.decode(richTextRTF)
+  #expect(decoded.string == body)
+  #expect(!decoded.string.utf16.elementsEqual(body.utf16))
+  let note = Note(body: body, richTextRTF: richTextRTF)
+  let draft = try AgentNoteMutationEngine.append(text: "Added", to: body)
+
+  #expect(throws: AgentWorkspaceError(code: .fleckUnavailable)) {
+    try AgentRichTextMutator.applying(
+      draft,
+      operation: .appendText,
       to: note,
       preferences: .init()
     )
