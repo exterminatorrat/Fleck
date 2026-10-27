@@ -1166,6 +1166,14 @@ func reorderInteractionNativeLifetimeDoesNotEndBetweenPointerEvents() throws {
     && (!hasIntermediatePosition || sibling.layer?.animation(forKey: "fleck.tab-reorder") != nil)
   #expect(observedAnimation)
   #expect(hasIntermediatePosition)
+  #expect(sibling.layer?.animation(forKey: "fleck.tab-reorder") == nil)
+  let finalLayer = try #require(sibling.layer)
+  let finalRoot = try #require(destination.layer)
+  if let presentation = finalLayer.presentation(), let root = finalRoot.presentation() {
+    positions.append(presentation.convert(presentation.bounds, to: root).minX)
+  } else {
+    positions.append(finalLayer.convert(finalLayer.bounds, to: finalRoot).minX)
+  }
   let finalPosition = try #require(positions.last)
   #expect(abs(finalPosition - first.minX) < 1)
   #expect(controller.preview?.frames[notes[1].id] == second)
