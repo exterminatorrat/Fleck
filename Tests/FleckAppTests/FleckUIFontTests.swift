@@ -43,7 +43,7 @@
     #expect(resolutions == 3)
   }
 
-  @Test(arguments: [Font.TextStyle.body, .headline, .title2, .callout, .caption])
+  @Test(arguments: [Font.TextStyle.body, .headline, .title2, .callout, .caption, .caption2, .footnote])
   func interfaceFontSystemFallbackPreservesSemanticStyles(_ style: Font.TextStyle) {
     #expect(FleckUIFont.system.font(style) == Font.system(style))
     #expect(FleckUIFont.system.font(style, weight: .semibold) == Font.system(style).weight(.semibold))
@@ -60,6 +60,50 @@
     #expect(environment.fleckUIFont == .system)
     environment.fleckUIFont = typography
     #expect(environment.fleckUIFont == typography)
+  }
+
+  @Test(arguments: [Font.Weight.regular, .medium, .semibold, .bold])
+  func interfaceFontFixedTextPreservesWeightsAndSystemDesign(_ weight: Font.Weight) {
+    #expect(
+      FleckUIFont.system.font(size: 10, weight: weight, design: .rounded)
+        == Font.system(size: 10, weight: weight, design: .rounded)
+    )
+    #expect(
+      FleckUIFont(fontName: "FixtureUI-Regular").font(size: 10, weight: weight, design: .rounded)
+        == Font.custom("FixtureUI-Regular", fixedSize: 10).weight(weight)
+    )
+    #expect(
+      FleckUIFont.system.font(.caption).monospacedDigit()
+        == Font.system(.caption).monospacedDigit()
+    )
+  }
+
+  @Test func interfaceFontExplicitTextStylesKeepTheSelectedFamilyAndPreserveStyleExceptions() throws {
+    let root = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let settings = try String(contentsOf: root.appendingPathComponent("Sources/FleckApp/SettingsView.swift"), encoding: .utf8)
+    let notes = try String(contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"), encoding: .utf8)
+
+    for style in ["body", "caption", "caption2", "callout", "headline", "footnote", "title2"] {
+      #expect(!settings.contains(".font(.\(style)"))
+    }
+    #expect(settings.contains(".fleckUIFont(.callout, weight: .medium)"))
+    #expect(settings.contains(".fleckUIFont(.footnote, weight: .medium)"))
+    #expect(settings.contains(".fleckUIFont(.title2, weight: .semibold)"))
+    #expect(settings.contains(".font(uiFont.font(size: 10, weight: .bold, design: .rounded))"))
+    #expect(settings.contains(".font(uiFont.font(size: 13, weight: isSelected ? .semibold : .regular))"))
+
+    #expect(notes.contains("Text(\"Could not save: \\(error)\")\n                .fleckUIFont(.caption)"))
+    #expect(notes.contains("Text(error)\n                .fleckUIFont(.caption)"))
+    #expect(notes.contains("Text(\"Fleck needs your help\")\n          .fleckUIFont(.headline)"))
+    #expect(notes.contains(".fleckUIFont(.caption, weight: isSave ? .semibold : .medium)"))
+    #expect(notes.contains("Text(presentation.statusCopy)\n            .fleckUIFont(.caption)"))
+    #expect(notes.contains("Text(\"Smart Capture\")\n                    .fleckUIFont(.headline)"))
+    #expect(notes.contains(".font(uiFont.font(.caption).monospacedDigit())"))
+    #expect(notes.contains(".font(.caption2.monospaced())"))
+    #expect(notes.contains("Image(systemName: \"pin.fill\")\n                    .font(.caption2)"))
+    #expect(notes.contains("Image(systemName: \"externaldrive.badge.exclamationmark\")\n          .font(.system(size: 28))"))
+    #expect(settings.contains("Image(systemName: systemImage)\n          .font(.system(size: 13, weight: .medium))"))
   }
 
   @Test func interfaceFontUsesExistingSceneAndPickerSeamsWithoutEditorMutation() throws {

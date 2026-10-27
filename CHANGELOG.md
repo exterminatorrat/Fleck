@@ -3,6 +3,26 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.7-beta.1] - 2026-10-27
+
+### Fixed
+
+- Inherit the explicit interface-font correction while preserving transactional multi-note
+  and semantic-section filing, durable receipts, guarded undo and filing regression coverage.
+
+Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
+and native behavior remain unverified; hosted verification is pending.
+
+## [1.5.6-beta.1] - 2026-10-27
+
+### Fixed
+
+- Keep the selected interface font on explicitly styled Settings and Notes text while
+  preserving semantic sizes, weights, symbol sizing, monospaced diagnostics and editor fonts.
+
+Source-only review correction. Compilation, tests, visual/accessibility inspection and native
+behavior remain unverified locally.
+
 ## [1.5.3-beta.1] - 2026-10-27
 
 ### Fixed
