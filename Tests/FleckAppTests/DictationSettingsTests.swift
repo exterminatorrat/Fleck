@@ -3498,6 +3498,7 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
 @Test @MainActor func DictationRuntimeReplaysRawFallbackChooserAfterDisableAndReenable()
   async throws
 {
+  let sleeper = RuntimeCapsuleSleeper()
   let project = Note(title: "Projects", body: "Roadmap")
   let personal = Note(title: "Personal", body: "Weekend")
   let fixture = try await RuntimeFixture(
@@ -3505,7 +3506,8 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
     capsuleEnabled: true,
     routingNotes: [project, personal],
     ambiguousRouting: true,
-    cleanupFails: true
+    cleanupFails: true,
+    capsuleSleeper: { duration in await sleeper.sleep(duration) }
   )
   await fixture.runtime.awaitStartupAssessment()
   await fixture.runtime.toggle()

@@ -1618,7 +1618,7 @@ private actor AccessibilitySleepGate {
   controller.dismiss()
 }
 
-@Test @MainActor func DictationAccessibilityChooserRemainsCaptureBoundAndNonactivating() {
+@Test @MainActor func DictationAccessibilityChooserRemainsCaptureBoundAndNonactivating() throws {
   let panel = DictationCapsulePanel()
   let controller = DictationCapsuleController(panel: panel)
   let firstCaptureID = UUID()
@@ -1699,7 +1699,7 @@ private actor AccessibilitySleepGate {
   #expect(selections.count == movedSelectionCount)
 }
 
-@Test @MainActor func DictationAccessibilityChooserSurvivesDockReinstallationWithUndo() {
+@Test @MainActor func DictationAccessibilityChooserSurvivesDockReinstallationWithUndo() throws {
   let panel = DictationCapsulePanel()
   let controller = DictationCapsuleController(panel: panel)
   let captureID = UUID()
