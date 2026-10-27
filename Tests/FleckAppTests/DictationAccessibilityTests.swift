@@ -96,14 +96,23 @@ private func brightPixelBounds<Content: View>(
   let host = NSHostingView(rootView: content)
   host.frame = CGRect(origin: .zero, size: size)
   host.layoutSubtreeIfNeeded()
+  return try brightPixelBounds(in: host, threshold: threshold)
+}
+
+@MainActor
+private func brightPixelBounds(
+  in host: NSView,
+  threshold: CGFloat = 0.05
+) throws -> CGRect? {
   let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
   host.cacheDisplay(in: host.bounds, to: imageRep)
-  let scaleX = CGFloat(imageRep.pixelsWide) / size.width
-  let scaleY = CGFloat(imageRep.pixelsHigh) / size.height
+  let scaleX = CGFloat(imageRep.pixelsWide) / host.bounds.width
+  let scaleY = CGFloat(imageRep.pixelsHigh) / host.bounds.height
   var bounds: CGRect?
   for y in 0..<imageRep.pixelsHigh {
     for x in 0..<imageRep.pixelsWide {
       guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+        color.alphaComponent > 0,
         max(color.redComponent, color.greenComponent, color.blueComponent) > threshold
       else { continue }
       let pixel = CGRect(
@@ -251,7 +260,12 @@ private func brightPixelBounds<Content: View>(
       action: action
     )
     #expect(failure.measuredWidth <= failure.widthCeiling)
-    #expect(failure.measuredWidth < DictationCapsuleController.failureSize.width)
+    if action == .openDestination {
+      #expect(failure.measuredWidth == 264)
+      #expect(failure.widthCeiling == 264)
+    } else {
+      #expect(failure.measuredWidth < DictationCapsuleController.failureSize.width)
+    }
     #expect(failure.visibleText == "Dictation failed")
   }
   #expect(DictationCapsulePresentation.actionDividerSize == CGSize(width: 1, height: 16))
@@ -270,7 +284,12 @@ private func brightPixelBounds<Content: View>(
       measuredWidth: failure.measuredWidth,
       in: visibleFrame
     )
-    #expect(failure.measuredWidth < DictationCapsuleController.failureSize.width)
+    if action == .openDestination {
+      #expect(failure.measuredWidth == 264)
+      #expect(failure.widthCeiling == 264)
+    } else {
+      #expect(failure.measuredWidth < DictationCapsuleController.failureSize.width)
+    }
     #expect(failureFrame.width == failure.measuredWidth)
     #expect(failureFrame.height == DictationCapsuleController.failureSize.height)
   }
@@ -598,7 +617,7 @@ private func brightPixelBounds<Content: View>(
   #expect(bottom.mark.maxX < bottom.content.minX)
 }
 
-@Test @MainActor func DictationAccessibilityAnchorsIdentityAndListeningToRailEdges() {
+@Test @MainActor func DictationAccessibilityAnchorsIdentityAndListeningToRailEdges() throws {
   let sourceRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
@@ -631,15 +650,16 @@ private func brightPixelBounds<Content: View>(
   }
 
   controller.render(.idle)
-  guard let idleMark = probeFrame(
-    "fleck-rail-mark",
-    size: DictationCapsuleController.idleSize
-  ) else {
-    Issue.record("Expected the canonical idle mark probe")
-    return
-  }
-  #expect(abs(idleMark.midX - 23) < 0.1)
-  #expect(abs(idleMark.midY - 12) < 0.1)
+  let standbyHost = try #require(panel.contentView)
+  standbyHost.layoutSubtreeIfNeeded()
+  let standbyPainted = try #require(try brightPixelBounds(in: standbyHost))
+  #expect(controller.fleckPillModel.state == .standby)
+  #expect(panel.frame.size == DictationCapsuleController.livePillHostSize)
+  #expect(standbyHost.bounds.size == DictationCapsuleController.livePillHostSize)
+  #expect(abs(standbyPainted.midX - standbyHost.bounds.midX) <= 2)
+  #expect(standbyPainted.width < standbyHost.bounds.width / 2)
+  #expect(standbyPainted.minY >= standbyHost.bounds.height - 14)
+  #expect(standbyPainted.maxY >= standbyHost.bounds.height - 1)
 
   let listening = DictationCapsuleContext(
     status: .listening,
