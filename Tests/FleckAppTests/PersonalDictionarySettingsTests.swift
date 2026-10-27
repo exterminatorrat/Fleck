@@ -1308,6 +1308,20 @@ func personalDictionaryVocabularySearchUsesResponsiveInlineFieldAndAccessibleDis
     encoding: .utf8
   )
 
+  let themeSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/FleckThemeSnapshot.swift"),
+    encoding: .utf8
+  )
+  let buttonStart = try #require(themeSource.range(of: "private struct FleckQuietButtonBody: View"))
+  let buttonEnd = try #require(
+    themeSource.range(of: "extension View {", range: buttonStart.upperBound..<themeSource.endIndex)
+  )
+  let buttonSource = themeSource[buttonStart.lowerBound..<buttonEnd.lowerBound]
+  #expect(buttonSource.contains(".contentShape(Rectangle())"))
+  #expect(buttonSource.contains("let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)"))
+  #expect(buttonSource.contains("shape.fill("))
+  #expect(buttonSource.contains("isEnabled && (isHovered || configuration.isPressed)"))
+
   #expect(settingsSource.contains("ViewThatFits(in: .horizontal)"))
   #expect(settingsSource.contains("private var dictionaryToolbar: some View"))
   #expect(settingsSource.contains("private var searchControl: some View"))
