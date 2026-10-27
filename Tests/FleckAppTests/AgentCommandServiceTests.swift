@@ -6,6 +6,45 @@ import Testing
 
 @testable import FleckApp
 
+@Test @MainActor func agentEventCommandsStayDeniedUntilMonitoringIsConnected() async throws {
+  let fixture = AgentServiceFixture()
+  let commands: [AgentWorkspaceCommand] = [
+    .listEvents,
+    .prepareEventSubscription(
+      request: .init(
+        event: .noteUpdated,
+        scope: .note(fixture.note.id),
+        callbackURL: "https://callback.example.test/events",
+        signingSecret: "whsec_" + Data(repeating: 7, count: 32).base64EncodedString()
+      )
+    ),
+    .removeEventSubscription(
+      request: .init(
+        event: .noteUpdated,
+        scope: .note(fixture.note.id),
+        callbackURL: "https://callback.example.test/events"
+      )
+    ),
+  ]
+  let originalWorkspace = fixture.state.workspace
+  let originalGeneration = fixture.state.persistenceGeneration
+
+  for command in commands {
+    await #expect(throws: AgentWorkspaceError(code: .invalidOperation)) {
+      try await fixture.execute(command)
+    }
+  }
+
+  #expect(fixture.state.workspace == originalWorkspace)
+  #expect(fixture.state.persistenceGeneration == originalGeneration)
+  #expect(
+    fixture.activityStore.list(
+      profileID: fixture.profile.id,
+      visibleNoteIDs: [fixture.note.id]
+    ).isEmpty
+  )
+}
+
 @Test @MainActor func agentIndicatorSuccessfulReadPublishesLifecycle() async throws {
   let fixture = AgentServiceFixture()
 

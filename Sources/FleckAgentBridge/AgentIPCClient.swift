@@ -17,6 +17,8 @@
   }
 
   final class AgentIPCClient {
+    private static let prepareEventSubscriptionResponseTimeout: TimeInterval = 120
+
     typealias Connector = (URL) throws -> Int32
     typealias Launcher = () throws -> Void
     typealias Sleeper = (TimeInterval) -> Void
@@ -64,20 +66,32 @@
     }
 
     func send(_ request: AgentWireRequest) throws -> AgentWorkspaceResponse {
+      try Task.checkCancellation()
       let descriptor = try connectOrLaunch()
       defer { close(descriptor) }
 
+      try Task.checkCancellation()
       do {
         try write(try AgentWireFraming.encode(request), descriptor)
       } catch AgentIPCClientError.writeTimedOut {
         throw AgentIPCClientError.writeTimedOut
+      } catch let error as CancellationError {
+        throw error
       } catch {
         throw AgentIPCClientError.connectionClosed
       }
+      try Task.checkCancellation()
 
-      let responseDeadline = now() + responseTimeout
+      let requestResponseTimeout: TimeInterval
+      if case .prepareEventSubscription = request.command {
+        requestResponseTimeout = Self.prepareEventSubscriptionResponseTimeout
+      } else {
+        requestResponseTimeout = responseTimeout
+      }
+      let responseDeadline = now() + requestResponseTimeout
       var buffer = Data()
       while true {
+        try Task.checkCancellation()
         guard now() < responseDeadline else {
           throw AgentIPCClientError.responseTimedOut
         }
@@ -86,6 +100,7 @@
             AgentWireResponse.self,
             from: &buffer
           ) {
+            try Task.checkCancellation()
             guard response.requestID == request.requestID else {
               throw AgentIPCClientError.responseMismatch
             }
@@ -96,6 +111,7 @@
               throw AgentIPCClientError.protocolMismatch
             }
             if let error = response.error {
+              try Task.checkCancellation()
               throw error
             }
             guard let result = response.result else {
@@ -104,11 +120,14 @@
             guard result.isSupported(wireVersion: request.protocolVersion) else {
               throw AgentIPCClientError.invalidFrame
             }
+            try Task.checkCancellation()
             return result
           }
         } catch let error as AgentIPCClientError {
           throw error
         } catch let error as AgentWorkspaceError {
+          throw error
+        } catch let error as CancellationError {
           throw error
         } catch {
           throw AgentIPCClientError.invalidFrame
@@ -118,6 +137,7 @@
           descriptor,
           max(0, responseDeadline - now())
         )
+        try Task.checkCancellation()
         guard now() < responseDeadline else {
           throw AgentIPCClientError.responseTimedOut
         }
@@ -132,20 +152,29 @@
     }
 
     private func connectOrLaunch() throws -> Int32 {
+      try Task.checkCancellation()
       do {
         return try connect(endpointURL)
+      } catch let error as CancellationError {
+        throw error
       } catch {
+        try Task.checkCancellation()
         try launch()
       }
 
       let deadline = now() + readinessTimeout
       while now() < deadline {
+        try Task.checkCancellation()
         do {
           return try connect(endpointURL)
+        } catch let error as CancellationError {
+          throw error
         } catch {
+          try Task.checkCancellation()
           sleep(min(pollInterval, max(0, deadline - now())))
         }
       }
+      try Task.checkCancellation()
       throw AgentIPCClientError.fleckUnavailable
     }
 
@@ -227,6 +256,7 @@
       var offset = 0
       let deadline = ProcessInfo.processInfo.systemUptime + 10
       while offset < data.count {
+        try Task.checkCancellation()
         let written = data.withUnsafeBytes { bytes in
           Darwin.write(
             descriptor,
@@ -252,12 +282,18 @@
             revents: 0
           )
           let milliseconds = Int32(
-            min(remaining * 1_000, Double(Int32.max))
+            min(ceil(remaining * 1_000), 50)
           )
           let result = Darwin.poll(&descriptorPoll, 1, milliseconds)
           if result > 0 { continue }
           if result < 0, errno == EINTR { continue }
-          if result == 0 { throw AgentIPCClientError.writeTimedOut }
+          if result == 0 {
+            try Task.checkCancellation()
+            guard ProcessInfo.processInfo.systemUptime < deadline else {
+              throw AgentIPCClientError.writeTimedOut
+            }
+            continue
+          }
         }
         throw AgentIPCClientError.connectionClosed
       }
@@ -272,6 +308,7 @@
       }
       let deadline = ProcessInfo.processInfo.systemUptime + timeout
       while true {
+        try Task.checkCancellation()
         var descriptorPoll = pollfd(
           fd: descriptor,
           events: Int16(POLLIN),
@@ -282,12 +319,16 @@
           throw AgentIPCClientError.responseTimedOut
         }
         let milliseconds = Int32(
-          min(ceil(remaining * 1_000), Double(Int32.max))
+          min(ceil(min(remaining, 0.05) * 1_000), Double(Int32.max))
         )
         let pollResult = Darwin.poll(&descriptorPoll, 1, milliseconds)
         if pollResult < 0, errno == EINTR { continue }
         if pollResult == 0 {
-          throw AgentIPCClientError.responseTimedOut
+          try Task.checkCancellation()
+          guard ProcessInfo.processInfo.systemUptime < deadline else {
+            throw AgentIPCClientError.responseTimedOut
+          }
+          continue
         }
         guard pollResult > 0 else {
           throw AgentIPCClientError.connectionClosed

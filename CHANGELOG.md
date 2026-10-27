@@ -3,6 +3,24 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.0-beta.1] - 2026-10-27
+
+### Added
+
+- Add bounded MCP stdio transport and modern request dispatch while retaining legacy tools,
+  request ownership, cancellation, output ordering and EOF settlement.
+- Add strict version-2 event contracts and wire compatibility checks. Subscription execution
+  and callback delivery remain unavailable in this foundational layer.
+
+### Fixed
+
+- Handle closed output pipes without SIGPIPE termination, forward legacy notification-only
+  batches without responses, preserve cancellation ownership and reject unsupported replay age.
+
+This is one constituent of the shared 1.7.0-beta.1 retained-feature development cohort, not a
+separate release. Local compilation, tests and native behavior remain unrun; hosted checks are
+pending. Existing 1.6.x candidates and all earlier development history remain preserved.
+
 ## [1.5.9-beta.1] - 2026-10-27
 
 ### Fixed
