@@ -3,6 +3,16 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.0-beta.1] - 2026-10-27
+
+### Added
+
+- Add native status-menu actions for Notes, Settings and About while preserving Quit,
+  secondary-click behavior and an explicitly unavailable update check.
+
+This focused layer belongs to the retained-feature 1.7.0-beta.1 release cohort.
+Local compilation, tests and native visual/accessibility behavior remain unverified.
+
 ## [1.5.9-beta.1] - 2026-10-27
 
 ### Fixed
