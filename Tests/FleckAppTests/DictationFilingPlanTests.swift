@@ -128,6 +128,78 @@ struct DictationFilingPlanTests {
 
   @MainActor
   @Test
+  func mixedMarkerFenceClosersDoNotExposeFollowingHeadings() {
+    let defaults = NoteTextAppendDefaults()
+    let bodies = [
+      "```\n# Hidden\n```~~~\n# Still hidden\n```\n# Visible",
+      "~~~\n# Hidden\n~~~```\n# Still hidden\n~~~\n# Visible",
+    ]
+
+    for body in bodies {
+      let headings = DictationSectionInsertion.headings(in: Note(body: body), defaults: defaults)
+      #expect(headings.map(\.title) == ["Visible"])
+    }
+  }
+
+  @MainActor
+  @Test
+  func markdownFenceCloserRequiresWhitespaceAfterMarkerRun() {
+    let body = "```\n# Hidden\n```suffix\n# Still hidden\n```\n# Visible"
+    let headings = DictationSectionInsertion.headings(
+      in: Note(body: body),
+      defaults: NoteTextAppendDefaults()
+    )
+    #expect(headings.map(\.title) == ["Visible"])
+  }
+
+  @MainActor
+  @Test
+  func indentedLongerMatchingFenceRunsCloseBacktickAndTildeFences() {
+    let defaults = NoteTextAppendDefaults()
+    let bodies = [
+      "   ```swift\n# Hidden\n   ```` \t\n# Backtick visible",
+      "   ~~~swift\n# Hidden\n   ~~~~ \t\n# Tilde visible",
+    ]
+    let expectedTitles = [["Backtick visible"], ["Tilde visible"]]
+
+    for (body, expected) in zip(bodies, expectedTitles) {
+      let headings = DictationSectionInsertion.headings(in: Note(body: body), defaults: defaults)
+      #expect(headings.map(\.title) == expected)
+    }
+  }
+
+  @MainActor
+  @Test
+  func backtickInFenceInfoDoesNotHideFollowingHeadings() {
+    let body = "```swift`draft\n# Visible"
+    let headings = DictationSectionInsertion.headings(
+      in: Note(body: body),
+      defaults: NoteTextAppendDefaults()
+    )
+    #expect(headings.map(\.title) == ["Visible"])
+  }
+
+  @MainActor
+  @Test
+  func validBacktickAndTildeFenceInfoStringsOpenFences() {
+    let defaults = NoteTextAppendDefaults()
+    let backtickBody = "```swift\n# Hidden\n```\n# Backtick visible"
+    let tildeBody = "~~~swift`draft\n# Hidden\n~~~\n# Tilde visible"
+
+    let backtickHeadings = DictationSectionInsertion.headings(
+      in: Note(body: backtickBody),
+      defaults: defaults
+    )
+    let tildeHeadings = DictationSectionInsertion.headings(
+      in: Note(body: tildeBody),
+      defaults: defaults
+    )
+    #expect(backtickHeadings.map(\.title) == ["Backtick visible"])
+    #expect(tildeHeadings.map(\.title) == ["Tilde visible"])
+  }
+
+  @MainActor
+  @Test
   func insertionAndDigestBoundRemovalPreserveCapturedText() throws {
     let defaults = NoteTextAppendDefaults()
     let body = "Existing paragraph."
