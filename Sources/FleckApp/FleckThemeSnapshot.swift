@@ -205,13 +205,7 @@
 
     private func applyWindowTheme() {
       guard let theme, let window else { return }
-      let appearanceName: NSAppearance.Name
-      switch (theme.appearance, theme.increasedContrast) {
-      case (.light, false): appearanceName = .aqua
-      case (.dark, false): appearanceName = .darkAqua
-      case (.light, true): appearanceName = .accessibilityHighContrastAqua
-      case (.dark, true): appearanceName = .accessibilityHighContrastDarkAqua
-      }
+      let appearanceName: NSAppearance.Name = theme.appearance == .dark ? .darkAqua : .aqua
       if window.appearance?.name != appearanceName {
         window.appearance = NSAppearance(named: appearanceName)
       }
@@ -260,7 +254,7 @@
     var body: some View {
       let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
       configuration.label
-        .contentShape(shape)
+        .contentShape(Rectangle())
         .background {
           shape.fill(
             isEnabled && (isHovered || configuration.isPressed)
