@@ -53,6 +53,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   public var dictationCapsuleEnabled: Bool
   public var showDictationShortcutGuide: Bool
   public var dictationMicrophoneUID: String?
+  public var pendingDictationModelID: String?
+  public var pendingCleanupModelID: String?
   public var pinnedLocalModelKeys: [String]
   public var onboardingProgress: OnboardingProgress?
 
@@ -81,6 +83,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     dictationCapsuleEnabled: Bool = true,
     showDictationShortcutGuide: Bool = true,
     dictationMicrophoneUID: String? = nil,
+    pendingDictationModelID: String? = nil,
+    pendingCleanupModelID: String? = nil,
     pinnedLocalModelKeys: [String] = [],
     onboardingProgress: OnboardingProgress? = nil
   ) {
@@ -118,6 +122,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     self.dictationCapsuleEnabled = dictationCapsuleEnabled
     self.showDictationShortcutGuide = showDictationShortcutGuide
     self.dictationMicrophoneUID = dictationMicrophoneUID
+    self.pendingDictationModelID = pendingDictationModelID
+    self.pendingCleanupModelID = pendingCleanupModelID
     self.pinnedLocalModelKeys = Array(Set(pinnedLocalModelKeys)).sorted()
     self.onboardingProgress = onboardingProgress
   }
@@ -130,7 +136,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       launchAtLogin, shortcuts, dictationSpeechEngine,
       legacyDictationShortcut = "dictationShortcut", dictationModifierKey,
       dictationCapsuleDock, dictationHistoryEnabled, dictationCapsuleEnabled,
-      showDictationShortcutGuide, dictationMicrophoneUID, pinnedLocalModelKeys,
+      showDictationShortcutGuide, dictationMicrophoneUID,
+      pendingDictationModelID, pendingCleanupModelID, pinnedLocalModelKeys,
       onboardingProgress
   }
   public init(from decoder: Decoder) throws {
@@ -261,6 +268,14 @@ public struct AppPreferences: Codable, Equatable, Sendable {
         forKey: .showDictationShortcutGuide
       ) ?? true,
       dictationMicrophoneUID: try c.decodeIfPresent(String.self, forKey: .dictationMicrophoneUID),
+      pendingDictationModelID: try c.decodeIfPresent(
+        String.self,
+        forKey: .pendingDictationModelID
+      ),
+      pendingCleanupModelID: try c.decodeIfPresent(
+        String.self,
+        forKey: .pendingCleanupModelID
+      ),
       pinnedLocalModelKeys: try c.decodeIfPresent(
         [String].self,
         forKey: .pinnedLocalModelKeys

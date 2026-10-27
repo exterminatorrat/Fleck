@@ -41,8 +41,12 @@ enum ParakeetTDTTestConfiguration {
     startup: @escaping @MainActor () async throws -> Void,
     calibrate: @escaping @MainActor () async throws -> Void,
     applicationResourceRoot: URL? = Bundle.main.resourceURL,
-    moduleBundle: Bundle? = FleckAppResourceBundle.defaultModuleBundle()
+    moduleBundle: Bundle? = FleckAppResourceBundle.defaultModuleBundle(),
+    pendingDictationModelID: String? = nil
   ) throws -> AdmittedModelSignedConfiguration {
+    guard pendingDictationModelID == nil || pendingDictationModelID == expectedModelID else {
+      throw ParakeetTDTTestConfigurationError.unexpectedManifestIdentity
+    }
     let manifest = try loadManifest(
       applicationResourceRoot: applicationResourceRoot,
       moduleBundle: moduleBundle
