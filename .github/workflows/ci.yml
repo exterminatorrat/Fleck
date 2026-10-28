@@ -31,6 +31,9 @@ on:
 permissions:
   contents: read
 
+env:
+  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+
 jobs:
   detect-changes:
     name: Detect documentation-only changes
@@ -57,6 +60,17 @@ jobs:
             swift --version
             xcrun --sdk macosx --show-sdk-version
             printf '%s\n' /Applications/Xcode*.app
+            printf 'Launch manager: '
+            launchctl managername
+            printf 'Launch manager UID: '
+            launchctl manageruid
+            printf 'Console UID: '
+            stat -f '%u' /dev/console
+            if launchctl print "gui/$(id -u)" >/dev/null 2>&1; then
+              printf 'GUI bootstrap domain: present\n'
+            else
+              printf 'GUI bootstrap domain: absent\n'
+            fi
           fi
       - name: Check out repository (actions/checkout v6.0.2, without credentials)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
