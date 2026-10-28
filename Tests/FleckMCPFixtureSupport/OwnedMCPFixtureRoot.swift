@@ -361,9 +361,12 @@ public final class OwnedMCPFixtureRoot: @unchecked Sendable {
       else {
         throw OwnedMCPFixtureRootError.unsafeDirectory
       }
-      let path = withoutDirectorySeparator(
-        foundationTemporaryDirectory.standardizedFileURL.resolvingSymlinksInPath().path
-      )
+      guard let resolvedPath = foundationTemporaryDirectory.path.withCString({ realpath($0, nil) })
+      else {
+        throw OwnedMCPFixtureRootError.unsafeDirectory
+      }
+      defer { free(resolvedPath) }
+      let path = String(cString: resolvedPath)
       let parent = try openDirectoryPath(path)
       return OpenedRoot(
         runFD: -1, runPath: nil, runIdentity: nil, parentFD: parent.fd, parentPath: path,

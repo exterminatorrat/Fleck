@@ -319,6 +319,30 @@ private func identity(at url: URL) throws -> stat {
   }
 }
 
+@Test func ordinaryFoundationFallbackResolvesPhysicalAliasesBeforeAdmission() throws {
+  let sandbox = try makeSandbox()
+  defer { recordCleanup(sandbox) }
+  let parent = sandbox.url.appendingPathComponent("physical-parent", isDirectory: true)
+  try makeDirectory(parent)
+  let alias = sandbox.url.appendingPathComponent("temporary-alias", isDirectory: true)
+  guard directoryPath(parent).withCString({ target in
+    directoryPath(alias).withCString { symlink(target, $0) }
+  }) == 0 else {
+    throw FixtureAdmissionTestError.setupFailure
+  }
+  let child = try OwnedMCPFixtureRoot.createForTesting(
+    kind: .eventJournal,
+    environment: [:],
+    foundationTemporaryDirectory: alias,
+    guardedBuild: false
+  )
+  #expect(directoryPath(child.url.deletingLastPathComponent()) == directoryPath(parent))
+  #expect(try contents(of: parent).map(\.lastPathComponent) == [child.url.lastPathComponent])
+  try child.cleanup()
+  #expect(try contents(of: parent).isEmpty)
+  #expect(try alias.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true)
+}
+
 @Test func staleIdentityAndIncorrectExpectedUidOrModeFailClosed() throws {
   let sandbox = try makeSandbox()
   defer { recordCleanup(sandbox) }
