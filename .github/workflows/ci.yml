@@ -34,7 +34,7 @@ permissions:
 jobs:
   detect-changes:
     name: Detect documentation-only changes
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-fleck
     timeout-minutes: 5
     permissions:
       contents: read
@@ -70,7 +70,7 @@ jobs:
     name: macOS ordinary graph and package
     needs: detect-changes
     if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
-    runs-on: macos-26
+    runs-on: namespace-profile-fleck
     timeout-minutes: 90
     outputs:
       source_commit: ${{ steps.source.outputs.commit }}
@@ -168,7 +168,7 @@ jobs:
     name: macOS ordinary repeat and bundle validation
     needs: [detect-changes, macos-build]
     if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
-    runs-on: macos-26
+    runs-on: namespace-profile-fleck
     timeout-minutes: 90
     outputs:
       source_commit: ${{ steps.source.outputs.commit }}
@@ -245,7 +245,7 @@ jobs:
     name: Validate README-only change
     needs: detect-changes
     if: ${{ needs.detect-changes.outputs.route == 'docs' }}
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-fleck
     timeout-minutes: 5
     permissions:
       contents: read
@@ -285,7 +285,7 @@ jobs:
     name: macOS build and tests
     if: ${{ always() }}
     needs: [detect-changes, docs-validation, macos-build, macos-validation, macos-enhanced]
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-fleck
     timeout-minutes: 90
     env:
       DETECTOR_RESULT: ${{ needs.detect-changes.result }}
@@ -356,7 +356,7 @@ jobs:
     name: macOS Enhanced Local candidate gates
     needs: detect-changes
     if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
-    runs-on: macos-26
+    runs-on: namespace-profile-fleck
     timeout-minutes: 60
     steps:
       - name: Check out repository (actions/checkout v6.0.2)
@@ -404,7 +404,7 @@ jobs:
   own-window-capture-probe:
     name: Supplemental own-window capture probe
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.own_window_capture_probe }}
-    runs-on: macos-26
+    runs-on: namespace-profile-fleck
     timeout-minutes: 15
     permissions:
       contents: read
@@ -427,7 +427,7 @@ jobs:
           {
             printf 'Git commit SHA: '
             git rev-parse --verify HEAD
-            printf 'Runner image: GitHub-hosted macos-26\n'
+            printf 'Runner profile: namespace-profile-fleck\n'
             sw_vers
             xcodebuild -version
             swift --version
@@ -457,7 +457,7 @@ jobs:
   folder-navigator-diagnostic:
     name: Supplemental folder navigator diagnostic (ordinary)
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe }}
-    runs-on: macos-26
+    runs-on: namespace-profile-fleck
     timeout-minutes: 60
     permissions:
       contents: read
@@ -489,7 +489,7 @@ jobs:
   folder-navigator-diagnostic-enhanced:
     name: Supplemental folder navigator diagnostic (Enhanced)
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe }}
-    runs-on: macos-26
+    runs-on: namespace-profile-fleck
     timeout-minutes: 60
     permissions:
       contents: read
