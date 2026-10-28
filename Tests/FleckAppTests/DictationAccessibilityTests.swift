@@ -2345,6 +2345,7 @@ private actor AccessibilitySleepGate {
         mode: .smartCapture,
         pipelineStage: .save,
         cleanupOutcome: .usedRaw,
+        cleanupFallbackProvenance: .serviceFallback,
         failureStage: nil
       )
     ),
@@ -2576,6 +2577,7 @@ private actor AccessibilitySleepGate {
   let controller = DictationCapsuleController(
     monotonicNow: { 10 }, automaticallyAdvancesLivePill: false
   )
+  controller.setReduceMotionOverrideForTesting(false)
   defer { controller.dismiss() }
   let context = capsuleContext(.listening)
   controller.render(context, coordinatorEvent: DictationCoordinatorEvent(
@@ -2709,6 +2711,7 @@ private actor AccessibilitySleepGate {
       return now
     }
   )
+  controller.setReduceMotionOverrideForTesting(false)
   defer { controller.dismiss() }
   controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
 
@@ -3373,7 +3376,7 @@ private func settingsViewSource() throws -> String {
     #expect(controller.currentChooser == nil)
     #expect(!panel.allowsActions)
     #expect(controller.fleckPillModel.state == .standby)
-    #expect(FleckRailAccessibility.actions(for: controller.currentContext).isEmpty)
+    #expect(FleckRailAccessibility.actions(for: controller.currentContext) == [.openFleck])
     #expect(renderedActionButton(in: try #require(panel.contentView)) == nil)
   }
 }

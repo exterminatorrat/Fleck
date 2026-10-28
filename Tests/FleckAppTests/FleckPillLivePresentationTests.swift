@@ -643,6 +643,7 @@ func FleckPillReducedMotionKeepsGeometryStaticAcrossTransitionsAndStopsDecorativ
     monotonicNow: { 50 },
     automaticallyAdvancesLivePill: false
   )
+  controller.setReduceMotionOverrideForTesting(false)
   defer { controller.dismiss() }
   let sessionID = UUID()
   let captureContext = DictationCoordinatorContext(

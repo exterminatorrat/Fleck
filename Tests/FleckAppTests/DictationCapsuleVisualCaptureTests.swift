@@ -289,6 +289,7 @@
       monotonicNow: { clock.now },
       automaticallyAdvancesLivePill: false
     )
+    controller.setReduceMotionOverrideForTesting(false)
     defer { controller.dismiss() }
     controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
     let outputDirectory = ProcessInfo.processInfo.environment["FLECK_PILL_LIVE_CAPTURE_DIRECTORY"]
