@@ -5033,6 +5033,9 @@
           if wasFocused && !isFocused { applyFontSizeText(targetNoteID: targetNoteID) }
         }
         .onSubmit { applyFontSizeText(targetNoteID: targetNoteID) }
+        .onDisappear {
+          if targetNoteID != nil { applyFontSizeText(targetNoteID: targetNoteID) }
+        }
         .accessibilityLabel("Font size")
         .accessibilityValue(commands.isFontSizeMixed ? "Mixed" : fontSizeDisplay)
         .accessibilityHint("Enter a size from 1 through 512 points.")

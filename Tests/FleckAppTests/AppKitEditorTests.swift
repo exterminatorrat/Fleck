@@ -3714,12 +3714,11 @@ func toolbarFontSizeNativePromptAndEditLifecycle(width: Double) async throws {
   @MainActor
   func finishEditing(_ field: NSTextField) async throws {
     if width == 380 {
-      let fieldWindow = try #require(field.window)
       let more = try #require(fontPickerAccessibilityElement(host, label: "More formatting"))
       window.makeKeyAndOrderFront(nil)
       try sendHostedAccessibilityPress(more, to: window)
       await settleHostedView(host)
-      #expect(!fieldWindow.isVisible)
+      #expect(visibleHostedTextFields(label: "Font size", as: NSTextField.self, owner: window).isEmpty)
       if visibleAccessibilityElement(label: "Font Size", owner: window) != nil {
         let expandedMore = try #require(
           fontPickerAccessibilityElement(host, label: "More formatting")
