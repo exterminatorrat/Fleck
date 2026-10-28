@@ -13,7 +13,7 @@ import Testing
     .prepareEventSubscription(
       request: .init(
         event: .noteUpdated,
-        scope: .note(fixture.note.id),
+        scope: .note(noteID: fixture.note.id),
         callbackURL: "https://callback.example.test/events",
         signingSecret: "whsec_" + Data(repeating: 7, count: 32).base64EncodedString()
       )
@@ -21,7 +21,7 @@ import Testing
     .removeEventSubscription(
       request: .init(
         event: .noteUpdated,
-        scope: .note(fixture.note.id),
+        scope: .note(noteID: fixture.note.id),
         callbackURL: "https://callback.example.test/events"
       )
     ),
