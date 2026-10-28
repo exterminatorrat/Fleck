@@ -34,7 +34,7 @@ permissions:
 jobs:
   detect-changes:
     name: Detect documentation-only changes
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-exterminatorrat
     timeout-minutes: 5
     permissions:
       contents: read
@@ -245,7 +245,7 @@ jobs:
     name: Validate README-only change
     needs: detect-changes
     if: ${{ needs.detect-changes.outputs.route == 'docs' }}
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-exterminatorrat
     timeout-minutes: 5
     permissions:
       contents: read
@@ -285,7 +285,7 @@ jobs:
     name: macOS build and tests
     if: ${{ always() }}
     needs: [detect-changes, docs-validation, macos-build, macos-validation, macos-enhanced]
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-exterminatorrat
     timeout-minutes: 90
     env:
       DETECTOR_RESULT: ${{ needs.detect-changes.result }}
