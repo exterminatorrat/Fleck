@@ -12,6 +12,8 @@ public release log. Packaging unchanged source does not add a changelog entry.
 - Keep mixed-marker fence closers from exposing code-block headings as filing destinations.
 - Reject backtick fence openers whose info contains a backtick while preserving valid
   backtick and tilde fences, including indented longer matching closers.
+- 2026-10-29: Honor explicit Inbox routing without unrelated destination suggestions while
+  preserving ambiguous/invalid-route fallback, durable receipts, history and undo.
 
 Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
 and native behavior remain unverified; hosted verification is pending.

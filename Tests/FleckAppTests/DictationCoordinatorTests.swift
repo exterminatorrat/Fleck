@@ -3155,6 +3155,49 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   #expect(fixture.coordinator.phase == .saved(fixture.inbox))
 }
 
+@Test(arguments: [false, true]) @MainActor
+func explicitInboxRoutingSavesWithoutOfferingUnrelatedManualDestinations(_ inboxExists: Bool)
+  async throws
+{
+  let fixture = try Fixture()
+  let unrelated = [
+    DictationDestination(noteID: UUID(), title: "Untitled"),
+    DictationDestination(noteID: UUID(), title: "Untitled"),
+    DictationDestination(noteID: UUID(), title: "Project"),
+  ]
+  fixture.saver.destinations = inboxExists ? [fixture.inbox] + unrelated : unrelated
+  fixture.saver.createdInboxID = fixture.inbox.noteID
+  fixture.standard.finalText = "Save directly to Inbox"
+  fixture.router.result = .inbox
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  #expect(fixture.saver.savedTexts == ["Save directly to Inbox"])
+  #expect(fixture.saver.destinationIDs == [inboxExists ? fixture.inbox.noteID : nil])
+  #expect(fixture.saver.savedFilingPlans.isEmpty)
+  #expect(fixture.coordinator.phase == .saved(fixture.inbox))
+  #expect(fixture.coordinator.routingAmbiguity == nil)
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  let receipt = try #require(fixture.coordinator.recoveryReceipt)
+  #expect(receipt.noteID == fixture.inbox.noteID)
+  let records = try await fixture.history.list()
+  #expect(records.count == 1)
+  #expect(records.first?.id == receipt.captureID)
+  #expect(records.first?.destination == fixture.inbox)
+  #expect(records.first?.insertionOutcome == .saved)
+  #expect(await fixture.coordinator.chooseDestination(
+    captureID: receipt.captureID, noteID: unrelated[0].noteID
+  ) == nil)
+  #expect(fixture.saver.moveCount == 0)
+  #expect(fixture.coordinator.recoveryReceipt == receipt)
+  #expect(await fixture.coordinator.performRecoveryAction() == .completed)
+  #expect(fixture.saver.undoReceipts == [receipt])
+  #expect(fixture.coordinator.recoveryReceipt == nil)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(try await fixture.history.list().isEmpty)
+}
+
 @Test @MainActor func ordinaryInboxFallbackOffersEveryManualDestinationAndMovesGenericNote()
   async throws
 {
@@ -3169,7 +3212,7 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   ]
   fixture.saver.destinations += destinations
   fixture.standard.finalText = "Choose after fallback"
-  fixture.router.result = .inbox
+  fixture.router.result = .resolved(UUID())
 
   await fixture.coordinator.start(mode: .smartCapture)
   await fixture.coordinator.finish()
@@ -3195,7 +3238,7 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   let fixture = try Fixture()
   fixture.saver.destinations.append(.init(noteID: UUID(), title: "Note"))
   fixture.standard.finalText = "Leave in Inbox"
-  fixture.router.result = .inbox
+  fixture.router.result = .resolved(UUID())
 
   await fixture.coordinator.start(mode: .smartCapture)
   await fixture.coordinator.finish()
