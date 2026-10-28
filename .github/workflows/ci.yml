@@ -402,7 +402,28 @@ jobs:
         env:
           FLECK_NATIVE_CAPTURE_QA: "0"
         run: |
-          Scripts/run-nonempty-enhanced-tests.sh '^.+$'
+          runner_uid="$(id -u)"
+          test "$runner_uid" -ne 0
+          test "$(stat -f '%u' /dev/console)" = "$runner_uid"
+          /bin/launchctl print "gui/$runner_uid" >/dev/null
+          native_environment=(
+            "PATH=$PATH" "HOME=$HOME" "DEVELOPER_DIR=$DEVELOPER_DIR"
+            "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+            "FLECK_NATIVE_CAPTURE_QA=$FLECK_NATIVE_CAPTURE_QA"
+          )
+          if [[ ${TMPDIR+x} ]]; then
+            native_environment+=("TMPDIR=$TMPDIR")
+          fi
+          /usr/bin/sudo -n -E /bin/launchctl asuser "$runner_uid" \
+            /usr/bin/sudo -n -E -u "#$runner_uid" \
+            /usr/bin/env "${native_environment[@]}" /bin/bash -euo pipefail -c '
+              printf "Native test launch manager: "
+              /bin/launchctl managername
+              test "$(/bin/launchctl managername)" = Aqua
+              test "$(id -u)" = "$(stat -f "%u" /dev/console)"
+              cd "$GITHUB_WORKSPACE"
+              exec Scripts/run-nonempty-enhanced-tests.sh "$@"
+            ' -- '^.+$'
           git diff --exit-code -- Package.resolved
       - name: Declare native capture boundary (candidate graph)
         if: always()
