@@ -34,7 +34,7 @@ permissions:
 jobs:
   detect-changes:
     name: Detect documentation-only changes
-    runs-on: namespace-profile-exterminatorrat
+    runs-on: namespace-profile-fleck
     timeout-minutes: 5
     permissions:
       contents: read
@@ -47,6 +47,17 @@ jobs:
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
+      - name: Report Namespace runner platform and toolchain
+        run: |
+          uname -s
+          uname -m
+          if [ "$(uname -s)" = Darwin ]; then
+            sw_vers
+            xcodebuild -version
+            swift --version
+            xcrun --sdk macosx --show-sdk-version
+            printf '%s\n' /Applications/Xcode*.app
+          fi
       - name: Check out repository (actions/checkout v6.0.2, without credentials)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -245,7 +256,7 @@ jobs:
     name: Validate README-only change
     needs: detect-changes
     if: ${{ needs.detect-changes.outputs.route == 'docs' }}
-    runs-on: namespace-profile-exterminatorrat
+    runs-on: namespace-profile-fleck
     timeout-minutes: 5
     permissions:
       contents: read
@@ -285,7 +296,7 @@ jobs:
     name: macOS build and tests
     if: ${{ always() }}
     needs: [detect-changes, docs-validation, macos-build, macos-validation, macos-enhanced]
-    runs-on: namespace-profile-exterminatorrat
+    runs-on: namespace-profile-fleck
     timeout-minutes: 90
     env:
       DETECTOR_RESULT: ${{ needs.detect-changes.result }}
