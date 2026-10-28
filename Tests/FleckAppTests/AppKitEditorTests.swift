@@ -3390,7 +3390,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   await setWidth(measuredTransition.upper)
   let directSize = try #require(
     hostedDescendants(in: host, as: NSTextField.self).first {
-      $0.accessibilityLabel() == "Font size"
+      hostedTextFieldMatches($0, label: "Font size")
     }
   )
   #expect(window.makeFirstResponder(directSize))
@@ -3402,7 +3402,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   await setWidth(measuredTransition.lower)
   let transitionedSize = try #require(
     hostedDescendants(in: host, as: NSTextField.self).first {
-      $0.accessibilityLabel() == "Font size"
+      hostedTextFieldMatches($0, label: "Font size")
     }
   )
   #expect(transitionedSize.stringValue == "123")
@@ -3456,7 +3456,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   await settleHostedView(host)
   #expect(window.contentView?.bounds.width == 380)
   #expect(hostedDescendants(in: host, as: NSTextField.self).allSatisfy {
-    $0.accessibilityLabel() != "Font size" && $0.placeholderString != "Font size"
+    !hostedTextFieldMatches($0, label: "Font size")
   })
 
   let editor = try #require(hostedPanelEditor(in: host))
@@ -3479,7 +3479,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   #expect(window.contentView?.bounds.width == 800)
   let field = try #require(
     hostedDescendants(in: host, as: NSTextField.self).first {
-      $0.accessibilityLabel() == "Font size" || $0.placeholderString == "Font size"
+      hostedTextFieldMatches($0, label: "Font size")
     }
   )
   #expect(field.stringValue == "28")
@@ -3541,7 +3541,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   await settleHostedView(host)
   #expect(window.contentView?.bounds.width == 380)
   #expect(hostedDescendants(in: host, as: NSTextField.self).allSatisfy {
-    $0.accessibilityLabel() != "Font size" && $0.placeholderString != "Font size"
+    !hostedTextFieldMatches($0, label: "Font size")
   })
 
   let editor = try #require(hostedPanelEditor(in: host))
@@ -3565,7 +3565,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   #expect(window.contentView?.bounds.width == 800)
   let field = try #require(
     hostedDescendants(in: host, as: NSTextField.self).first {
-      $0.accessibilityLabel() == "Font size" || $0.placeholderString == "Font size"
+      hostedTextFieldMatches($0, label: "Font size")
     }
   )
   #expect(field.stringValue.isEmpty)
@@ -3652,6 +3652,194 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
     let row = try #require(visibleAccessibilityElement(label: label, owner: window))
     #expect(hostedAccessibilityValue(row) == expectedValue)
   }
+}
+
+@Test(arguments: [800.0, 380.0]) @MainActor
+func toolbarFontSizeNativePromptAndEditLifecycle(width: Double) async throws {
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let attributedText = NSMutableAttributedString(
+    string: "SmallLarge",
+    attributes: [.font: NSFont.systemFont(ofSize: 14)]
+  )
+  attributedText.addAttribute(
+    .font, value: NSFont.systemFont(ofSize: 28), range: NSRange(location: 5, length: 5)
+  )
+  let rtf = try attributedText.data(
+    from: NSRange(location: 0, length: attributedText.length),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+  let note = Note(title: "Font size lifecycle", body: "SmallLarge", richTextRTF: rtf)
+  let state = await hostedPanelState(
+    root: root, workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  state.updatePreferences {
+    $0.panelWidth = width
+    $0.uiFontFamily = "Menlo"
+  }
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  defer {
+    for child in window.childWindows ?? [] { child.orderOut(nil) }
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+  window.setContentSize(NSSize(width: width, height: 430))
+  await settleHostedView(host)
+  let editor = try #require(hostedPanelEditor(in: host))
+  let storage = try #require(editor.textStorage)
+
+  @MainActor
+  func presentedField() async throws -> NSTextField {
+    if visibleHostedTextFields(label: "Font size", as: NSTextField.self, owner: window).isEmpty {
+      #expect(width == 380)
+      try await pressHostedToolbarAction("Font Size", in: host)
+      await settleHostedView(host)
+    }
+    let field = try #require(
+      visibleHostedTextFields(label: "Font size", as: NSTextField.self, owner: window).first
+    )
+    let fieldWindow = try #require(field.window)
+    #expect((fieldWindow === window) == (width == 800))
+    #expect(ownedWindowTree(window).contains { $0 === fieldWindow })
+    let alignmentRect = field.alignmentRect(forFrame: field.frame)
+    #expect(abs(alignmentRect.width - 48) < 0.5)
+    #expect(field.alignment == .center)
+    #expect(field.font?.familyName == "Menlo")
+    return field
+  }
+
+  @MainActor
+  func finishEditing(_ field: NSTextField) async throws {
+    if width == 380 {
+      let more = try #require(fontPickerAccessibilityElement(host, label: "More formatting"))
+      window.makeKeyAndOrderFront(nil)
+      try sendHostedAccessibilityPress(more, to: window)
+      await settleHostedView(host)
+      #expect(visibleHostedTextFields(label: "Font size", as: NSTextField.self, owner: window).isEmpty)
+      if visibleAccessibilityElement(label: "Font Size", owner: window) != nil {
+        let expandedMore = try #require(
+          fontPickerAccessibilityElement(host, label: "More formatting")
+        )
+        try sendHostedAccessibilityPress(expandedMore, to: window)
+        await settleHostedView(host)
+      }
+    } else {
+      #expect(window.makeFirstResponder(editor))
+      await settleHostedView(host)
+      #expect(field.currentEditor() == nil)
+    }
+  }
+
+  @MainActor
+  func replaceFieldText(_ value: String) async throws -> NSTextField {
+    let field = try await presentedField()
+    let fieldWindow = try #require(field.window)
+    fieldWindow.makeKeyAndOrderFront(nil)
+    #expect(fieldWindow.makeFirstResponder(field))
+    await settleHostedView(host)
+    let fieldEditor = try #require(field.currentEditor() as? NSTextView)
+    fieldEditor.insertText(
+      value, replacementRange: NSRange(location: 0, length: fieldEditor.string.utf16.count)
+    )
+    await settleHostedView(host)
+    #expect(fieldEditor.string == value)
+    return field
+  }
+
+  @MainActor
+  func accessibilityValue() throws -> String? {
+    let element = try #require(visibleAccessibilityElement(label: "Font size", owner: window))
+    return hostedAccessibilityValue(element)
+  }
+
+  #expect(window.makeFirstResponder(editor))
+  editor.setSelectedRange(NSRange(location: 5, length: 5))
+  commands.refreshFormattingState()
+  await settleHostedView(host)
+  if width == 380 {
+    #expect(visibleHostedTextFields(label: "Font size", as: NSTextField.self, owner: window).isEmpty)
+  }
+  var field = try await presentedField()
+  #expect(field.stringValue == "28")
+  let fieldWindow = try #require(field.window)
+  fieldWindow.makeKeyAndOrderFront(nil)
+  #expect(fieldWindow.makeFirstResponder(field))
+  await settleHostedView(host)
+  let unchangedEditor = try #require(field.currentEditor() as? NSTextView)
+  #expect(unchangedEditor.string == "28")
+  if width == 380 {
+    try await finishEditing(field)
+    window.makeKeyAndOrderFront(nil)
+    #expect(window.makeFirstResponder(editor))
+  }
+  editor.setSelectedRange(NSRange(location: 0, length: 10))
+  commands.refreshFormattingState()
+  await settleHostedView(host)
+  #expect(commands.isFontSizeMixed)
+  if width == 800 {
+    #expect(unchangedEditor.string == "28")
+    try await finishEditing(field)
+  }
+  field = try await presentedField()
+  #expect(field.stringValue.isEmpty)
+  #expect(editor.selectedRange() == NSRange(location: 0, length: 10))
+  #expect((storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize == 14)
+  #expect((storage.attribute(.font, at: 5, effectiveRange: nil) as? NSFont)?.pointSize == 28)
+
+  let cell = try #require(field.cell as? NSTextFieldCell)
+  let fieldFont = try #require(field.font)
+  let placeholder = cell.placeholderAttributedString
+    ?? NSAttributedString(string: cell.placeholderString ?? "", attributes: [.font: fieldFont])
+  #expect(placeholder.string == "Mixed")
+  let textRect = cell.titleRect(forBounds: field.bounds)
+  #expect(placeholder.size().width <= textRect.width + 0.5)
+  #expect(placeholder.size().height <= textRect.height + 0.5)
+  #expect(try accessibilityValue() == "Mixed")
+  let mixedWindow = try #require(field.window)
+  #expect(mixedWindow.makeFirstResponder(field))
+  await settleHostedView(host)
+  #expect((field.currentEditor() as? NSTextView)?.string.isEmpty == true)
+  try await finishEditing(field)
+  field = try await presentedField()
+  #expect(commands.isFontSizeMixed && field.stringValue.isEmpty)
+  #expect((storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize == 14)
+  #expect((storage.attribute(.font, at: 5, effectiveRange: nil) as? NSFont)?.pointSize == 28)
+
+  for invalid in ["0", "513", "nan", "not a number", ""] {
+    field = try await replaceFieldText(invalid)
+    try await finishEditing(field)
+    field = try await presentedField()
+    #expect(field.stringValue.isEmpty && commands.isFontSizeMixed)
+    #expect(editor.selectedRange() == NSRange(location: 0, length: 10))
+    #expect((storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize == 14)
+    #expect((storage.attribute(.font, at: 5, effectiveRange: nil) as? NSFont)?.pointSize == 28)
+    #expect(try accessibilityValue() == "Mixed")
+  }
+
+  field = try await replaceFieldText("24")
+  try await finishEditing(field)
+  field = try await presentedField()
+  #expect(field.stringValue == "24" && !commands.isFontSizeMixed)
+  #expect(editor.selectedRange() == NSRange(location: 0, length: 10))
+  #expect((storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize == 24)
+  #expect((storage.attribute(.font, at: 5, effectiveRange: nil) as? NSFont)?.pointSize == 24)
+  #expect(try accessibilityValue() == "24")
+
+  field = try await replaceFieldText("20")
+  let submitWindow = try #require(field.window)
+  try sendHostedKeyDown("\r", keyCode: 36, to: submitWindow)
+  await settleHostedView(host)
+  #expect(field.stringValue == "20" && commands.currentFontSize == 20)
+  #expect(editor.selectedRange() == NSRange(location: 0, length: 10))
+  #expect((storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize == 20)
+  #expect((storage.attribute(.font, at: 5, effectiveRange: nil) as? NSFont)?.pointSize == 20)
+  #expect(try accessibilityValue() == "20")
+  try await finishEditing(field)
+  field = try await presentedField()
+  #expect(field.stringValue == "20" && commands.currentFontSize == 20)
 }
 
 @Test func formattingBarCanAlwaysBeCollapsedAndRestoredFromTheHeader() throws {
@@ -7075,6 +7263,13 @@ private func expectOneReachableFormattingActionAcrossVisibleWindows(owner: NSWin
 }
 
 @MainActor
+private func hostedTextFieldMatches(_ field: NSTextField, label: String) -> Bool {
+  let placeholder = field.placeholderAttributedString?.string ?? field.placeholderString
+  return field.accessibilityLabel() == label || placeholder == label
+    || (label == "Font size" && (placeholder == "Size" || placeholder == "Mixed"))
+}
+
+@MainActor
 private func visibleHostedTextFields<T: NSTextField>(
   label: String,
   as type: T.Type,
@@ -7084,7 +7279,7 @@ private func visibleHostedTextFields<T: NSTextField>(
     .filter(\.isVisible)
     .compactMap(\.contentView)
     .flatMap { hostedDescendants(in: $0, as: type) }
-    .filter { $0.accessibilityLabel() == label || $0.placeholderString == label }
+    .filter { hostedTextFieldMatches($0, label: label) }
 }
 
 @MainActor
