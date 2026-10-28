@@ -160,6 +160,9 @@ public enum AgentWorkspaceCommand: Codable, Equatable, Sendable {
   case listActivity
   case undoChange(request: UndoChangeRequest)
   case getCapabilities
+  case listEvents
+  case prepareEventSubscription(request: AgentEventSubscriptionRequest)
+  case removeEventSubscription(request: AgentEventUnsubscribeRequest)
 
   public func isSupported(wireVersion: Int) -> Bool {
     switch self {
@@ -178,6 +181,8 @@ public enum AgentWorkspaceCommand: Codable, Equatable, Sendable {
       return wireVersion == 1 || wireVersion == 2
     case .getCapabilities:
       return wireVersion == 2
+    case .listEvents, .prepareEventSubscription, .removeEventSubscription:
+      return wireVersion == 2
     }
   }
 
@@ -191,11 +196,14 @@ public enum AgentWorkspaceCommand: Codable, Equatable, Sendable {
         )
       )
     }
-    guard [
-      "listSharedNotes", "readNote", "appendText", "insertText",
-      "replaceLines", "listTasks", "addTask", "renameTask", "setTaskState",
-      "removeTask", "listActivity", "undoChange", "getCapabilities",
-    ].contains(key.stringValue) else {
+    guard
+      [
+        "listSharedNotes", "readNote", "appendText", "insertText",
+        "replaceLines", "listTasks", "addTask", "renameTask", "setTaskState",
+        "removeTask", "listActivity", "undoChange", "getCapabilities",
+        "listEvents", "prepareEventSubscription", "removeEventSubscription",
+      ].contains(key.stringValue)
+    else {
       throw DecodingError.dataCorrupted(
         DecodingError.Context(
           codingPath: container.codingPath,
@@ -226,6 +234,9 @@ private enum LegacyAgentWorkspaceCommand: Codable {
   case listActivity
   case undoChange(request: AgentWorkspaceCommand.UndoChangeRequest)
   case getCapabilities
+  case listEvents
+  case prepareEventSubscription(request: AgentEventSubscriptionRequest)
+  case removeEventSubscription(request: AgentEventUnsubscribeRequest)
 
   init(_ command: AgentWorkspaceCommand) {
     switch command {
@@ -242,6 +253,11 @@ private enum LegacyAgentWorkspaceCommand: Codable {
     case .listActivity: self = .listActivity
     case .undoChange(let request): self = .undoChange(request: request)
     case .getCapabilities: self = .getCapabilities
+    case .listEvents: self = .listEvents
+    case .prepareEventSubscription(let request):
+      self = .prepareEventSubscription(request: request)
+    case .removeEventSubscription(let request):
+      self = .removeEventSubscription(request: request)
     }
   }
 
@@ -260,6 +276,11 @@ private enum LegacyAgentWorkspaceCommand: Codable {
     case .listActivity: return .listActivity
     case .undoChange(let request): return .undoChange(request: request)
     case .getCapabilities: return .getCapabilities
+    case .listEvents: return .listEvents
+    case .prepareEventSubscription(let request):
+      return .prepareEventSubscription(request: request)
+    case .removeEventSubscription(let request):
+      return .removeEventSubscription(request: request)
     }
   }
 }
@@ -420,6 +441,10 @@ public enum AgentWorkspaceResponse: Codable, Equatable, Sendable {
   case activity(entries: [AgentActivitySummary])
   case undo(receipt: AgentWriteReceipt)
   case capabilities(summary: AgentCapabilitySummary)
+  case events(events: [AgentEventDescriptor])
+  case pendingEventSubscription(receipt: AgentEventPendingReceipt)
+  case verifiedEventSubscription(receipt: AgentEventVerifiedSubscriptionReceipt)
+  case eventUnsubscribed
 
   public func isSupported(wireVersion: Int) -> Bool {
     switch self {
@@ -431,6 +456,8 @@ public enum AgentWorkspaceResponse: Codable, Equatable, Sendable {
       .undo:
       return wireVersion == 1 || wireVersion == 2
     case .capabilities:
+      return wireVersion == 2
+    case .events, .pendingEventSubscription, .verifiedEventSubscription, .eventUnsubscribed:
       return wireVersion == 2
     }
   }
@@ -448,6 +475,12 @@ public enum AgentWorkspaceResponse: Codable, Equatable, Sendable {
     switch key.stringValue {
     case "sharedNotes", "note", "tasks", "write", "activity", "undo":
       try validateResponsePayload(from: container, caseKey: key)
+      self = try LegacyAgentWorkspaceResponse(from: decoder).response
+    case "events", "pendingEventSubscription", "verifiedEventSubscription", "eventUnsubscribed":
+      try validateAgentEventIPCResponse(
+        from: container.superDecoder(forKey: key),
+        caseKey: key.stringValue
+      )
       self = try LegacyAgentWorkspaceResponse(from: decoder).response
     case "capabilities":
       let payload = try container.nestedContainer(
@@ -506,6 +539,10 @@ private enum LegacyAgentWorkspaceResponse: Codable {
   case activity(entries: [AgentActivitySummary])
   case undo(receipt: AgentWriteReceipt)
   case capabilities(summary: AgentCapabilitySummary)
+  case events(events: [AgentEventDescriptor])
+  case pendingEventSubscription(receipt: AgentEventPendingReceipt)
+  case verifiedEventSubscription(receipt: AgentEventVerifiedSubscriptionReceipt)
+  case eventUnsubscribed
 
   init(_ response: AgentWorkspaceResponse) {
     switch response {
@@ -516,6 +553,12 @@ private enum LegacyAgentWorkspaceResponse: Codable {
     case .activity(let entries): self = .activity(entries: entries)
     case .undo(let receipt): self = .undo(receipt: receipt)
     case .capabilities(let summary): self = .capabilities(summary: summary)
+    case .events(let events): self = .events(events: events)
+    case .pendingEventSubscription(let receipt):
+      self = .pendingEventSubscription(receipt: receipt)
+    case .verifiedEventSubscription(let receipt):
+      self = .verifiedEventSubscription(receipt: receipt)
+    case .eventUnsubscribed: self = .eventUnsubscribed
     }
   }
 
@@ -528,6 +571,12 @@ private enum LegacyAgentWorkspaceResponse: Codable {
     case .activity(let entries): return .activity(entries: entries)
     case .undo(let receipt): return .undo(receipt: receipt)
     case .capabilities(let summary): return .capabilities(summary: summary)
+    case .events(let events): return .events(events: events)
+    case .pendingEventSubscription(let receipt):
+      return .pendingEventSubscription(receipt: receipt)
+    case .verifiedEventSubscription(let receipt):
+      return .verifiedEventSubscription(receipt: receipt)
+    case .eventUnsubscribed: return .eventUnsubscribed
     }
   }
 }
@@ -551,13 +600,13 @@ private struct AgentWorkspaceCodingKey: CodingKey, Hashable {
   }
 }
 
-private extension KeyedDecodingContainer where Key == AgentWorkspaceCodingKey {
-  func requireNestedKeys(forKey key: Key, expected: Set<String>) throws {
+extension KeyedDecodingContainer where Key == AgentWorkspaceCodingKey {
+  fileprivate func requireNestedKeys(forKey key: Key, expected: Set<String>) throws {
     let payload = try nestedContainer(keyedBy: Key.self, forKey: key)
     try payload.requireExactKeys(expected)
   }
 
-  func requireExactKeys(_ expected: Set<String>) throws {
+  fileprivate func requireExactKeys(_ expected: Set<String>) throws {
     guard Set(allKeys.map(\.stringValue)) == expected else {
       throw DecodingError.dataCorrupted(
         DecodingError.Context(
@@ -568,7 +617,7 @@ private extension KeyedDecodingContainer where Key == AgentWorkspaceCodingKey {
     }
   }
 
-  func requireKeys(
+  fileprivate func requireKeys(
     required: Set<String>,
     optional: Set<String> = []
   ) throws {
@@ -604,6 +653,14 @@ private func validateCommandPayload(
   switch caseKey.stringValue {
   case "listSharedNotes", "listActivity", "getCapabilities":
     try container.requireNestedKeys(forKey: caseKey, expected: [])
+  case "listEvents":
+    try container.requireNestedKeys(forKey: caseKey, expected: [])
+  case "prepareEventSubscription", "removeEventSubscription":
+    try validateCommandRequest(
+      from: container,
+      caseKey: caseKey,
+      validator: { try validateAgentEventIPCCommand(from: $0, caseKey: caseKey.stringValue) }
+    )
   case "readNote":
     try validateCommandRequest(
       from: container,
@@ -1000,19 +1057,117 @@ public enum AgentWorkspaceErrorCode: String, Codable, CaseIterable, Sendable {
   case protocolVersionUnsupported = "protocol_version_unsupported"
 }
 
+public struct AgentWorkspaceEventFailure: Codable, Equatable, Sendable {
+  public enum Reason: String, Codable, Equatable, Sendable {
+    case challengeFailed = "challenge_failed"
+    case timedOut = "timeout"
+    case connectionFailed = "connection_failed"
+    case signingKeyRotationInProgress = "signing_key_rotation_in_progress"
+  }
+
+  public static let maximumRetryAfterMs = 60_000
+
+  public let reason: Reason
+  public let retryAfterMs: Int?
+
+  fileprivate init(reason: Reason, retryAfterMs: Int? = nil) {
+    self.reason = reason
+    self.retryAfterMs = retryAfterMs
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: AgentWorkspaceCodingKey.self)
+    try container.requireKeys(required: ["reason"], optional: ["retryAfterMs"])
+    reason = try container.decode(Reason.self, forKey: AgentWorkspaceCodingKey("reason"))
+    let retryAfterKey = AgentWorkspaceCodingKey("retryAfterMs")
+    if container.contains(retryAfterKey) {
+      retryAfterMs = try container.decode(Int.self, forKey: retryAfterKey)
+    } else {
+      retryAfterMs = nil
+    }
+    guard Self.hasValidRetryAfter(reason: reason, retryAfterMs: retryAfterMs) else {
+      throw DecodingError.dataCorrupted(
+        DecodingError.Context(
+          codingPath: container.codingPath,
+          debugDescription: "Event failure detail is invalid."
+        )
+      )
+    }
+  }
+
+  public func encode(to encoder: any Encoder) throws {
+    guard Self.hasValidRetryAfter(reason: reason, retryAfterMs: retryAfterMs) else {
+      throw EncodingError.invalidValue(
+        reason,
+        EncodingError.Context(
+          codingPath: encoder.codingPath,
+          debugDescription: "Event failure detail is invalid."
+        )
+      )
+    }
+    var container = encoder.container(keyedBy: AgentWorkspaceCodingKey.self)
+    try container.encode(reason, forKey: AgentWorkspaceCodingKey("reason"))
+    try container.encodeIfPresent(retryAfterMs, forKey: AgentWorkspaceCodingKey("retryAfterMs"))
+  }
+
+  private static func hasValidRetryAfter(reason: Reason, retryAfterMs: Int?) -> Bool {
+    switch reason {
+    case .signingKeyRotationInProgress:
+      guard let retryAfterMs else { return false }
+      return (1...maximumRetryAfterMs).contains(retryAfterMs)
+    case .challengeFailed, .timedOut, .connectionFailed:
+      return retryAfterMs == nil
+    }
+  }
+}
+
 public struct AgentWorkspaceError: Codable, Equatable, Error, Sendable {
   public let code: AgentWorkspaceErrorCode
   public let recoveryAction: String?
+  public let eventFailure: AgentWorkspaceEventFailure?
 
-  public init(code: AgentWorkspaceErrorCode, recoveryAction: String? = nil) {
+  public init(
+    code: AgentWorkspaceErrorCode,
+    recoveryAction: String? = nil,
+    eventFailure: AgentWorkspaceEventFailure? = nil
+  ) {
     self.code = code
     self.recoveryAction = recoveryAction
+    self.eventFailure = eventFailure
+  }
+
+  public static func callbackEndpointFailure(
+    reason: AgentWorkspaceEventFailure.Reason
+  ) -> Self {
+    Self(
+      code: .internalSaveFailure,
+      eventFailure: AgentWorkspaceEventFailure(reason: reason)
+    )
+  }
+
+  public static func signingKeyRotationInProgress(retryAfterMs: Int) -> Self {
+    Self(
+      code: .writeTooLarge,
+      eventFailure: AgentWorkspaceEventFailure(
+        reason: .signingKeyRotationInProgress,
+        retryAfterMs: min(max(retryAfterMs, 1), AgentWorkspaceEventFailure.maximumRetryAfterMs)
+      )
+    )
+  }
+
+  public func isSupported(wireVersion: Int) -> Bool {
+    guard hasValidEventFailure else { return false }
+    return eventFailure == nil || wireVersion == 2
   }
 
   public init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: AgentWorkspaceCodingKey.self)
     let keys = Set(container.allKeys.map(\.stringValue))
-    guard keys == ["code"] || keys == ["code", "recoveryAction"] else {
+    guard
+      keys == ["code"]
+        || keys == ["code", "recoveryAction"]
+        || keys == ["code", "eventFailure"]
+    else {
       throw DecodingError.dataCorrupted(
         DecodingError.Context(
           codingPath: container.codingPath,
@@ -1028,15 +1183,63 @@ public struct AgentWorkspaceError: Codable, Equatable, Error, Sendable {
       String.self,
       forKey: AgentWorkspaceCodingKey("recoveryAction")
     )
+    let eventFailureKey = AgentWorkspaceCodingKey("eventFailure")
+    if keys.contains("eventFailure") {
+      eventFailure = try container.decode(
+        AgentWorkspaceEventFailure.self,
+        forKey: eventFailureKey
+      )
+    } else {
+      eventFailure = nil
+    }
+    guard hasValidEventFailure else {
+      throw DecodingError.dataCorrupted(
+        DecodingError.Context(
+          codingPath: container.codingPath,
+          debugDescription: "Event workspace error detail is invalid."
+        )
+      )
+    }
   }
 
   public func encode(to encoder: any Encoder) throws {
+    guard hasValidEventFailure else {
+      throw EncodingError.invalidValue(
+        code,
+        EncodingError.Context(
+          codingPath: encoder.codingPath,
+          debugDescription: "Event workspace error detail is invalid."
+        )
+      )
+    }
     var container = encoder.container(keyedBy: AgentWorkspaceCodingKey.self)
     try container.encode(code, forKey: AgentWorkspaceCodingKey("code"))
     try container.encodeIfPresent(
       recoveryAction,
       forKey: AgentWorkspaceCodingKey("recoveryAction")
     )
+    try container.encodeIfPresent(
+      eventFailure,
+      forKey: AgentWorkspaceCodingKey("eventFailure")
+    )
+  }
+
+  private var hasValidEventFailure: Bool {
+    if eventFailure != nil && recoveryAction != nil { return false }
+    switch code {
+    case .internalSaveFailure:
+      guard let eventFailure else { return true }
+      return eventFailure.retryAfterMs == nil
+        && eventFailure.reason != .signingKeyRotationInProgress
+    case .writeTooLarge:
+      guard let eventFailure else { return true }
+      return eventFailure.reason == .signingKeyRotationInProgress
+        && eventFailure.retryAfterMs.map {
+          (1...AgentWorkspaceEventFailure.maximumRetryAfterMs).contains($0)
+        } == true
+    default:
+      return eventFailure == nil
+    }
   }
 }
 

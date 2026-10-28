@@ -359,6 +359,8 @@
           snapshot: snapshot,
           beginRequest: beginRequest
         )
+      case .listEvents, .prepareEventSubscription, .removeEventSubscription:
+        throw AgentWorkspaceError(code: .invalidOperation)
       case .getCapabilities:
         beginRequest()
         return try await checkedRead(

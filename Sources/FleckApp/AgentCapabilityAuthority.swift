@@ -126,7 +126,7 @@ extension AgentWorkspaceCommand {
       return .capability(.writeNotes, .write)
     case .undoChange:
       return .capability(.undoChanges, .write)
-    case .getCapabilities:
+    case .getCapabilities, .listEvents, .prepareEventSubscription, .removeEventSubscription:
       return .authenticated
     }
   }
