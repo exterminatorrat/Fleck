@@ -117,7 +117,7 @@ func WorkspaceSearchSourceAuditDoesNotOutlineTheQueryFieldSeparatelyFromItsPanel
   #expect(queryField.contains(".accessibilityLabel(\"Search notes\")"))
   #expect(queryField.contains(".accessibilityHint(\"Search note titles and bodies\")"))
   #expect(!queryField.contains(".fleckNeutralControlOutline("))
-  #expect(searchView.contains(".fill(.regularMaterial)"))
+  #expect(searchView.contains(".fleckThemedSurface(cornerRadius: 10)"))
   #expect(searchView.contains(".strokeBorder(.quaternary)"))
 }
 
