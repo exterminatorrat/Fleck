@@ -467,7 +467,7 @@ jobs:
       max-parallel: 4
       matrix:
         include:
-          - source: 37649a57f8e6e9c3116413914bfa353e0fe03f8e
+          - source: 39dececc539d267bed27c179885745f8f3af45eb
             lane: host-receipt
             graph: enhanced
             expected_count: 1
@@ -478,7 +478,7 @@ jobs:
               Scripts/run-nonempty-enhanced-tests.sh bd0e9706b5e2536ac356dac7b92f5eae2b3e6f8d
               Scripts/test-enhanced-candidate-pin.sh 3cf05fe69df708afc82df3cf5fc277048d00922d
               Scripts/run-swift-tests-with-appkit-host.sh e86b3468b3a3e0476b13934e9a317e43ca023aa4
-              Tests/Support/AppKitTestMain.swift 89582bb9191b78ee4cb0c6a3d125023cc76d2ea7
+              Tests/Support/AppKitTestMain.swift bf17ca62c02993251b381fda6ffdb323f7f2ee7d
               Tests/FleckAppTests/MenuPanelResizeTests.swift 1b58fab7194dbaa0c95ba42d4b5062b76585d67f
     env:
       TEST_SOURCE_SHA: ${{ matrix.source }}
