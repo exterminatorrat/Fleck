@@ -5309,8 +5309,11 @@ private func withHostedTitleEditors(
   #expect(window.makeFirstResponder(editor))
   await settleHostedView(host)
 
+  let schoolDiagnosticElements: @MainActor () -> [NSObject] = {
+    hostedAccessibilityElements(in: host, identifier: "folder-\(folder.id.uuidString)")
+  }
   let before = hostedNavigatorKeyViewFrames(in: host)
-  let beforeFolderFrame = try #require(hostedSchoolFolderFrame(in: host))
+  let beforeFolderFrame = try #require(hostedSchoolFolderFrame(in: host, diagnosticElements: schoolDiagnosticElements))
   let beforeHostSize = host.bounds.size
   let beforeEditorFrame = host.convert(editor.bounds, from: editor)
   let unfiledControl = try #require(hostedNavigatorKeyViews(in: host).first)
@@ -5323,7 +5326,7 @@ private func withHostedTitleEditors(
   #expect(window.makeFirstResponder(unfiledControl))
   await settleHostedView(host)
   let focused = hostedNavigatorKeyViewFrames(in: host)
-  let focusedFolderFrame = try #require(hostedSchoolFolderFrame(in: host))
+  let focusedFolderFrame = try #require(hostedSchoolFolderFrame(in: host, diagnosticElements: schoolDiagnosticElements))
 
   #expect(state.preferences.isUnfiledCompact)
   #expect(focused.count == before.count)
@@ -5338,10 +5341,10 @@ private func withHostedTitleEditors(
     to: window
   )
   forceHostedViewUpdate(host)
-  let expandingFolderFrame = try #require(hostedSchoolFolderFrame(in: host))
+  let expandingFolderFrame = try #require(hostedSchoolFolderFrame(in: host, diagnosticElements: schoolDiagnosticElements))
   try await Task.sleep(for: .milliseconds(300))
   await settleHostedView(host)
-  let expandedFolderFrame = try #require(hostedSchoolFolderFrame(in: host))
+  let expandedFolderFrame = try #require(hostedSchoolFolderFrame(in: host, diagnosticElements: schoolDiagnosticElements))
 
   #expect(!state.preferences.isUnfiledCompact)
   #expect(expandingFolderFrame == expandedFolderFrame)
@@ -5397,7 +5400,8 @@ private func withHostedTitleEditors(
         try #require(
           hostedNavigatorKeyView(
             matchingAccessibilityIdentifier: identifier,
-            in: host
+            in: host,
+            diagnosticCase: .keyboardFocus
           )
         )
       )
@@ -5501,7 +5505,8 @@ private func hostedFolderSelectionGeometry(
         try #require(
           hostedNavigatorKeyView(
             matchingAccessibilityIdentifier: identifier,
-            in: host
+            in: host,
+            diagnosticCase: .compactPill
           )
         )
       )
@@ -6252,8 +6257,21 @@ private func hostedNavigatorKeyViewFrames(in view: NSView) -> [CGRect] {
 }
 
 @MainActor
-private func hostedSchoolFolderFrame(in view: NSView) -> CGRect? {
-  hostedNavigatorKeyViewFrames(in: view).first { abs($0.width - 108) < 0.5 }
+private func hostedSchoolFolderFrame(
+  in view: NSView,
+  diagnosticElements: (@MainActor () -> [NSObject])? = nil
+) -> CGRect? {
+  let frame = hostedNavigatorKeyViewFrames(in: view).first { abs($0.width - 108) < 0.5 }
+  if frame == nil, let diagnosticElements, HostedFolderShapeDiagnostics.isEnabled {
+    HostedFolderShapeDiagnostics.record(
+      diagnosticCase: .disclosure,
+      reason: "width-miss",
+      accessibilityElements: diagnosticElements(),
+      candidates: hostedNavigatorKeyViews(in: view),
+      in: view
+    )
+  }
+  return frame
 }
 
 @MainActor
@@ -6297,10 +6315,18 @@ private func restoreHostedAccessibility(_ value: Any?) {
 @MainActor
 private func hostedNavigatorKeyView(
   matchingAccessibilityIdentifier identifier: String,
-  in view: NSView
+  in view: NSView,
+  diagnosticCase: HostedFolderShapeCase? = nil
 ) -> NSView? {
   let accessibilityElements = hostedAccessibilityElements(in: view, identifier: identifier)
   #expect(accessibilityElements.count == 1)
+  if accessibilityElements.count != 1, let diagnosticCase, HostedFolderShapeDiagnostics.isEnabled {
+    HostedFolderShapeDiagnostics.record(
+      diagnosticCase: diagnosticCase, reason: "ax-count",
+      accessibilityElements: accessibilityElements,
+      candidates: hostedNavigatorKeyViews(in: view), in: view
+    )
+  }
   guard accessibilityElements.count == 1,
     let accessibilityFrame = accessibilityElements.first?.value(forKey: "accessibilityFrame") as? NSValue,
     let window = view.window
@@ -6318,11 +6344,114 @@ private func hostedNavigatorKeyView(
     $0.1.contains(accessibilityCenter)
   }.map(\.0)
   #expect(!matchingKeyViews.isEmpty)
+  if matchingKeyViews.isEmpty, let diagnosticCase, HostedFolderShapeDiagnostics.isEnabled {
+    HostedFolderShapeDiagnostics.record(
+      diagnosticCase: diagnosticCase, reason: "no-center-candidate",
+      accessibilityElements: accessibilityElements, candidates: keyViews, in: view
+    )
+  }
   guard let matchingKeyView = matchingKeyViews.first else { return nil }
   let matchingFrames = matchingKeyViews.map { $0.convert($0.bounds, to: view) }
   let matchingFrame = matchingKeyView.convert(matchingKeyView.bounds, to: view)
+  if !matchingFrames.allSatisfy({ $0 == matchingFrame }),
+    let diagnosticCase, HostedFolderShapeDiagnostics.isEnabled {
+    HostedFolderShapeDiagnostics.record(
+      diagnosticCase: diagnosticCase, reason: "frame-mismatch",
+      accessibilityElements: accessibilityElements, candidates: matchingKeyViews, in: view
+    )
+  }
   #expect(matchingFrames.allSatisfy { $0 == matchingFrame })
   return matchingKeyView
+}
+
+private enum HostedFolderShapeCase: String, Hashable {
+  case compactPill = "compact-pill"
+  case disclosure
+  case keyboardFocus = "keyboard-focus"
+}
+
+@MainActor
+private enum HostedFolderShapeDiagnostics {
+  private static var recordedCases: Set<HostedFolderShapeCase> = []
+  private static var recordCount = 0
+  private static var byteCount = 0
+
+  static var isEnabled: Bool {
+    ProcessInfo.processInfo.environment["FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC"] == "1"
+  }
+
+  static func record(
+    diagnosticCase: HostedFolderShapeCase?,
+    reason: String,
+    accessibilityElements: [NSObject],
+    candidates: [NSView],
+    in host: NSView
+  ) {
+    guard isEnabled, let diagnosticCase, !recordedCases.contains(diagnosticCase) else { return }
+    recordedCases.insert(diagnosticCase)
+    var caseRecords = 0
+    var caseBytes = 0
+    func emit(_ fields: String) {
+      let line = "FLECK_FOLDER_SHAPE case=\(diagnosticCase.rawValue) \(fields)"
+      let bytes = line.utf8.count + 1
+      guard bytes <= 1024, caseRecords < 8, recordCount < 24,
+        caseBytes + bytes <= 5461, byteCount + bytes <= 16384
+      else { return }
+      print(line)
+      caseRecords += 1
+      caseBytes += bytes
+      recordCount += 1
+      byteCount += bytes
+    }
+    func rect(_ value: CGRect?) -> String {
+      guard let value else { return "none" }
+      return "\(value.origin.x),\(value.origin.y),\(value.width),\(value.height)"
+    }
+    func concreteClass(_ value: NSView) -> String {
+      let name = NSStringFromClass(Swift.type(of: value))
+      return String(String.UnicodeScalarView(name.unicodeScalars.filter {
+        $0.value >= 32 && $0.value < 127
+      }.prefix(80)))
+    }
+    let window = host.window
+    let screenFrame = accessibilityElements.count == 1
+      ? (accessibilityElements[0].value(forKey: "accessibilityFrame") as? NSValue)?.rectValue : nil
+    let ownerFrame: CGRect?
+    if let screenFrame, let window {
+      ownerFrame = host.convert(window.convertFromScreen(screenFrame), from: nil)
+    } else {
+      ownerFrame = nil
+    }
+    let enhanced = NSApplication.shared.accessibilityAttributeValue(
+      NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+    ) as? Bool
+    emit(
+      "kind=snapshot reason=\(reason) axCount=\(accessibilityElements.count) " +
+        "axEnhanced=\(enhanced.map { $0 ? 1 : 0 } ?? -1) axFrame=\(rect(ownerFrame)) " +
+        "host=\(rect(host.bounds)) windowAttached=\(window == nil ? 0 : 1) " +
+        "candidates=\(candidates.count) candidateLimit=7 chainLimit=32 ancestryLimit=6"
+    )
+    let responder = window?.firstResponder as? NSView
+    for (index, candidate) in candidates.prefix(7).enumerated() {
+      let frame = candidate.convert(candidate.bounds, to: host)
+      let ancestors = Array(sequence(first: candidate) {
+        $0 === host ? nil : $0.superview
+      }.prefix(32))
+      let reorderDepth = ancestors.firstIndex { $0 is ReorderSourceHostingView } ?? -1
+      let equalsAXFrame = ownerFrame.map { frame == $0 } ?? false
+      let ownsFocus = responder.map { $0 === candidate || $0.isDescendant(of: candidate) } ?? false
+      let role = reorderDepth >= 0 ? "reorder-descendant" : equalsAXFrame ? "ax-rect-peer" : "other"
+      emit(
+        "kind=candidate ordinal=\(index) frame=\(rect(frame)) " +
+          "class=\(concreteClass(candidate)) role=\(role) reorderDepth=\(reorderDepth) " +
+          "axRectEqual=\(equalsAXFrame ? 1 : 0) ownsFocus=\(ownsFocus ? 1 : 0) " +
+          "attached=\(candidate.window == nil ? 0 : 1) windowMatches=\(candidate.window === window ? 1 : 0) " +
+          "chainComplete=\(ancestors.last === host ? 1 : 0) hidden=\(candidate.isHiddenOrHasHiddenAncestor ? 1 : 0) " +
+          "acceptsFocus=\(candidate.acceptsFirstResponder ? 1 : 0) canKey=\(candidate.canBecomeKeyView ? 1 : 0) " +
+          "ancestry=\(ancestors.prefix(6).map(concreteClass).joined(separator: ">"))"
+      )
+    }
+  }
 }
 
 @MainActor
