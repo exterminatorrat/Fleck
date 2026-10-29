@@ -418,6 +418,7 @@
 
   struct SettingsPageHeader: View {
     @Environment(\.fleckThemeSnapshot) private var theme
+    @Environment(\.fleckUIFont) private var uiFont
     @ScaledMetric(relativeTo: .title2) private var generalTitleSize = 20
     let section: SettingsSection
     let searchRequest: SettingsSearchRequest?
@@ -442,13 +443,13 @@
           Text(title ?? section.title)
             .font(
               section == .editing
-                ? .system(size: generalTitleSize, weight: .semibold)
-                : .title2.weight(.semibold)
+                ? uiFont.font(size: generalTitleSize, weight: .semibold)
+                : uiFont.font(.title2, weight: .semibold)
             )
             .background(SettingsPageHeaderProbe())
           if section != .editing {
             Text(section.description)
-              .font(.callout)
+              .fleckUIFont(.callout)
               .foregroundStyle(theme.color(.textSecondary))
               .fixedSize(horizontal: false, vertical: true)
           }
@@ -474,7 +475,7 @@
     var body: some View {
       VStack(alignment: .leading, spacing: 8) {
         Text(title)
-          .font(.headline)
+          .fleckUIFont(.headline)
 
         VStack(alignment: .leading, spacing: 12) {
           content
@@ -511,9 +512,9 @@
       HStack(alignment: .top, spacing: 16) {
         VStack(alignment: .leading, spacing: 3) {
           Text(title)
-            .font(.body.weight(.semibold))
+            .fleckUIFont(.body, weight: .semibold)
           Text(detail)
-            .font(.caption)
+            .fleckUIFont(.caption)
             .foregroundStyle(theme.color(.caption))
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -541,6 +542,7 @@
 
   private struct SettingsToggleRow: View {
     @Environment(\.fleckThemeSnapshot) private var theme
+    @Environment(\.fleckUIFont) private var uiFont
     @ScaledMetric(relativeTo: .body) private var generalTitleSize = 13
     @ScaledMetric(relativeTo: .callout) private var generalDetailSize = 12
     let title: String
@@ -569,12 +571,12 @@
       HStack(alignment: .top, spacing: 16) {
         VStack(alignment: .leading, spacing: 3) {
           Text(title)
-            .font(.system(size: generalTitleSize, weight: .regular))
+            .font(uiFont.font(size: generalTitleSize))
             .background(
               SettingsTypographyProbe(identifier: "settings-general-title-\(title)")
             )
           Text(detail)
-            .font(.system(size: generalDetailSize, weight: .regular))
+            .font(uiFont.font(size: generalDetailSize))
             .foregroundStyle(theme.color(.textSecondary))
             .fixedSize(horizontal: false, vertical: true)
             .background(
@@ -609,6 +611,7 @@
 
   private struct GeneralSettingsGroup<Content: View>: View {
     @Environment(\.fleckThemeSnapshot) private var theme
+    @Environment(\.fleckUIFont) private var uiFont
     @ScaledMetric(relativeTo: .callout) private var titleSize = 12
     let title: String
     let content: Content
@@ -621,7 +624,7 @@
     var body: some View {
       VStack(alignment: .leading, spacing: 8) {
         Text(title)
-          .font(.system(size: titleSize, weight: .medium))
+          .font(uiFont.font(size: titleSize, weight: .medium))
           .background(
             SettingsTypographyProbe(identifier: "settings-general-section-\(title)")
           )
@@ -884,6 +887,7 @@
   struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.fleckThemeSnapshot) private var theme
+    @Environment(\.fleckUIFont) private var uiFont
     @ObservedObject var runtime: DictationRuntime
     @ObservedObject private var personalDictionarySettingsViewModel:
       PersonalDictionarySettingsViewModel
@@ -902,6 +906,7 @@
     @State private var searchRequest: SettingsSearchRequest?
     @State private var vocabularyPageScrollRequestID: UUID?
     @State private var isDictationPrivacyExpanded = false
+    @State private var isUIFontPickerPresented = false
 
     init(runtime: DictationRuntime, buildIdentity: BuildIdentity = .current()) {
       self.runtime = runtime
@@ -1180,10 +1185,15 @@
       selectedSection = .models
     }
 
+    private var uiFontDisplayName: String {
+      guard let family = appState.preferences.uiFontFamily else { return "System" }
+      return uiFont.fontName == nil ? "\(family) (unavailable — using System)" : family
+    }
+
     private var appearance: some View {
       VStack(alignment: .leading, spacing: 12) {
         Text("Interface")
-          .font(.headline)
+          .fleckUIFont(.headline)
         SettingsPreferenceRow(
           "Appearance",
           detail: "Follow macOS, or keep Fleck in Light or Dark mode."
@@ -1208,6 +1218,31 @@
         }
         .settingsSearchAnchor(.appearanceColorTheme, request: searchRequest)
         SettingsPreferenceRow(
+          "Interface font",
+          detail: "Use an installed font for Fleck’s interface. Note text and saved formatting stay unchanged."
+        ) {
+          Button(uiFontDisplayName) {
+            isUIFontPickerPresented = true
+          }
+          .lineLimit(1)
+          .accessibilityLabel("Interface font")
+          .accessibilityValue(uiFontDisplayName)
+          .accessibilityHint("Choose an installed interface font or return to System.")
+          .popover(isPresented: $isUIFontPickerPresented, arrowEdge: .bottom) {
+            FontFamilyPicker(
+              currentFamily: appState.preferences.uiFontFamily ?? ".AppleSystemUIFont",
+              isMixed: false,
+              targetLabel: "Fleck interface",
+              onCommit: { family in
+                appState.updatePreferences { $0.uiFontFamily = family }
+                isUIFontPickerPresented = false
+              },
+              onCancel: { isUIFontPickerPresented = false }
+            )
+            .frame(width: 280, height: 320)
+          }
+        }
+        SettingsPreferenceRow(
           "Window appearance",
           detail: "Use solid chrome or subtle glass while keeping the editor canvas opaque."
         ) {
@@ -1230,7 +1265,7 @@
         .settingsSearchAnchor(.appearanceGlassOpacity, request: searchRequest)
 
         Text("Menu size")
-          .font(.headline)
+          .fleckUIFont(.headline)
           .padding(.top, 12)
         SettingsPreferenceRow(
           "Width",
@@ -1352,13 +1387,13 @@
                 Text(
                   "This shortcut may replace normal typing or navigation while Fleck is active."
                 )
-                .font(.caption)
+                .fleckUIFont(.caption)
                 .foregroundStyle(theme.color(.caption))
                 .multilineTextAlignment(.trailing)
               }
               if conflicts.contains(action) {
                 Label("Conflicts with another shortcut", systemImage: "exclamationmark.triangle.fill")
-                  .font(.caption)
+                  .fleckUIFont(.caption)
                   .foregroundStyle(theme.color(.warning))
               }
             }
@@ -1368,7 +1403,7 @@
         Text(
           "Click a shortcut, then press the key combination. Conflicts are highlighted. Restore brings back the default shortcut."
         )
-        .font(.caption)
+        .fleckUIFont(.caption)
         .foregroundStyle(theme.color(.caption))
       }
     }
@@ -1382,7 +1417,7 @@
           Text(
             "Audio stays in memory only and is discarded when capture finishes, is cancelled, is interrupted, or fails. History is local, contains no audio, and expires after 30 days. Turning history off affects future successful captures only."
           )
-          .font(.caption)
+          .fleckUIFont(.caption)
           .foregroundStyle(theme.color(.caption))
           .padding(.top, 4)
           .accessibilityIdentifier("settings-dictation-privacy-content")
@@ -1404,7 +1439,7 @@
           isReady ? "Ready" : "Needs attention",
           systemImage: isReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
         )
-        .font(.callout.weight(.medium))
+        .fleckUIFont(.callout, weight: .medium)
       }
       .buttonStyle(.bordered)
       .controlSize(.small)
@@ -1449,20 +1484,20 @@
             isReady ? "Dictation is ready" : "Dictation needs attention",
             systemImage: isReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
           )
-          .font(.headline)
+          .fleckUIFont(.headline)
           .foregroundStyle(theme.color(isReady ? .success : .warning))
 
           if isReady {
             Text("Dictation is ready to capture and process your voice locally.")
-              .font(.callout)
+              .fleckUIFont(.callout)
               .foregroundStyle(theme.color(.textSecondary))
           } else {
             ForEach(availabilityIssues, id: \.title) { issue in
               VStack(alignment: .leading, spacing: 2) {
                 Text(issue.title)
-                  .font(.callout.weight(.medium))
+                  .fleckUIFont(.callout, weight: .medium)
                 Text(issue.detail)
-                  .font(.caption)
+                  .fleckUIFont(.caption)
                   .foregroundStyle(theme.color(.caption))
                   .fixedSize(horizontal: false, vertical: true)
               }
@@ -1479,9 +1514,9 @@
               Divider()
               VStack(alignment: .leading, spacing: 6) {
                 Text("Modifier key")
-                  .font(.callout.weight(.medium))
+                  .fleckUIFont(.callout, weight: .medium)
                 Text(dictationModifierPresentation.statusCopy)
-                  .font(.caption)
+                  .fleckUIFont(.caption)
                   .foregroundStyle(theme.color(.caption))
                   .fixedSize(horizontal: false, vertical: true)
                 dictationModifierRecoveryButton
@@ -1505,7 +1540,7 @@
     private var capture: some View {
       VStack(alignment: .leading, spacing: 12) {
         Text(DictationSettingsGroup.capture.rawValue)
-          .font(.headline)
+          .fleckUIFont(.headline)
         SettingsPreferenceRow(
           "Modifier key",
           detail: dictationModifierPresentation.statusCopy
@@ -1524,7 +1559,7 @@
             .disabled(!dictationModifierPresentation.isPickerEnabled)
             if let guidance = dictationModifierPresentation.guidanceCopy {
               Text(guidance)
-                .font(.caption)
+                .fleckUIFont(.caption)
                 .foregroundStyle(theme.color(.caption))
                 .multilineTextAlignment(.trailing)
             }
@@ -1559,7 +1594,7 @@
     private var experienceAndHistory: some View {
       VStack(alignment: .leading, spacing: 12) {
         Text(DictationSettingsGroup.experience.rawValue)
-          .font(.headline)
+          .fleckUIFont(.headline)
         SettingsToggleRow(
           title: "Show status capsule",
           detail: "Show a compact status surface while Fleck is listening.",
@@ -1807,6 +1842,7 @@
 
   struct PersonalDictionarySettingsSection: View {
     @Environment(\.fleckThemeSnapshot) private var theme
+    @Environment(\.fleckUIFont) private var uiFont
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var viewModel: PersonalDictionarySettingsViewModel
     @Binding var searchRequest: SettingsSearchRequest?
@@ -2069,7 +2105,7 @@
           Button(title) {
             viewModel.filter = viewModel.filter == .suggestions ? .all : .suggestions
           }
-          .font(.footnote.weight(.medium))
+          .fleckUIFont(.footnote, weight: .medium)
           .buttonStyle(.bordered)
           .controlSize(.small)
           .accessibilityLabel(title)
@@ -2157,7 +2193,7 @@
         Button("Import / Export…") {
           toggleOptions()
         }
-        .font(.footnote)
+        .fleckUIFont(.footnote)
         .buttonStyle(.plain)
         .foregroundStyle(theme.color(.textSecondary))
         .focused($isOptionsTriggerFocused)
@@ -2177,7 +2213,7 @@
         ScrollView {
           VStack(alignment: .leading, spacing: 10) {
             Text("Transfer")
-              .font(.headline)
+              .fleckUIFont(.headline)
               .settingsSearchAnchor(.vocabularyTransfer, request: optionsSearchRequest)
 
             Button("Export Dictionary") {
@@ -2209,7 +2245,7 @@
             Text(
               "CSV excludes pending suggestions and cannot restore a complete personal dictionary."
             )
-            .font(.caption)
+            .fleckUIFont(.caption)
             .foregroundStyle(theme.color(.caption))
             .fixedSize(horizontal: false, vertical: true)
 
@@ -2253,7 +2289,7 @@
     private var sortPopover: some View {
       VStack(alignment: .leading, spacing: 8) {
         Text("SORT BY")
-          .font(.system(size: 10, weight: .bold, design: .rounded))
+          .font(uiFont.font(size: 10, weight: .bold, design: .rounded))
           .tracking(1.2)
           .foregroundStyle(theme.color(.caption))
           .padding(.horizontal, 8)
@@ -2267,7 +2303,7 @@
 
         if viewModel.filter != .suggestions {
           Text("Usage reflects saved data, not live dictation.")
-            .font(.caption2)
+            .fleckUIFont(.caption2)
             .foregroundStyle(theme.color(.caption))
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 8)
@@ -2316,7 +2352,7 @@
             .accessibilityHidden(true)
 
           Text(order.rawValue)
-            .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+            .font(uiFont.font(size: 13, weight: isSelected ? .semibold : .regular))
 
           Spacer(minLength: 0)
 
@@ -2416,19 +2452,19 @@
           Text("Reloading dictionary…")
             .foregroundStyle(theme.color(.caption))
         }
-        .font(.caption)
+        .fleckUIFont(.caption)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Reloading dictionary")
       } else if let errorMessage = viewModel.errorMessage {
         Label(errorMessage, systemImage: "exclamationmark.triangle")
           .foregroundStyle(theme.color(.error))
-          .font(.caption)
+          .fleckUIFont(.caption)
           .accessibilityLabel("Personal dictionary error")
           .accessibilityValue(errorMessage)
       } else if let statusMessage = viewModel.statusMessage {
         Label(statusMessage, systemImage: "checkmark.circle")
           .foregroundStyle(theme.color(.caption))
-          .font(.caption)
+          .fleckUIFont(.caption)
           .accessibilityLabel("Personal dictionary status")
           .accessibilityValue(statusMessage)
       }
@@ -2506,7 +2542,7 @@
             .foregroundStyle(theme.color(.textSecondary))
         }
       }
-      .font(.callout)
+      .fleckUIFont(.callout)
       .foregroundStyle(theme.color(.textSecondary))
       .padding(16)
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -2568,7 +2604,7 @@
           .fixedSize(horizontal: false, vertical: true)
         if !suggestion.observedForms.isEmpty {
           Text(suggestion.observedForms.joined(separator: ", "))
-            .font(.caption)
+            .fleckUIFont(.caption)
             .foregroundStyle(theme.color(.caption))
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -2978,13 +3014,13 @@
         Button(action: onEdit) {
           HStack(spacing: 6) {
             Text(title)
-              .font(.body)
+              .fleckUIFont(.body)
               .underline(focusedAction == .edit || accessibilityFocusedAction == .edit)
               .multilineTextAlignment(.leading)
               .fixedSize(horizontal: false, vertical: true)
             if !entry.isEnabled {
               Text("Disabled")
-                .font(.caption)
+                .fleckUIFont(.caption)
                 .foregroundStyle(theme.color(.textSecondary))
             }
             Spacer(minLength: 8)
@@ -3121,7 +3157,7 @@
               .accessibilityLabel("Correct from")
               .accessibilityHint("The spelling or phrase Fleck should replace")
             Text("For multiple corrections, separate each one with a comma or new line.")
-              .font(.caption)
+              .fleckUIFont(.caption)
               .foregroundStyle(theme.color(.caption))
           }
 
@@ -3134,7 +3170,7 @@
 
         if let errorMessage {
           Label(errorMessage, systemImage: "exclamationmark.triangle")
-            .font(.caption)
+            .fleckUIFont(.caption)
             .foregroundStyle(theme.color(.error))
             .accessibilityLabel("Vocabulary editor error")
             .accessibilityValue(errorMessage)
@@ -3198,18 +3234,18 @@
         TextField("Preferred form", text: $preferredForm)
         TextField("Aliases", text: $aliases)
         Text("Separate aliases with commas or new lines.")
-          .font(.caption)
+          .fleckUIFont(.caption)
           .foregroundStyle(theme.color(.caption))
         if let errorMessage {
           Label(errorMessage, systemImage: "exclamationmark.triangle")
             .foregroundStyle(theme.color(.error))
-            .font(.caption)
+            .fleckUIFont(.caption)
             .accessibilityLabel("Suggestion edit error")
             .accessibilityValue(errorMessage)
         } else if let statusMessage {
           Label(statusMessage, systemImage: "info.circle")
             .foregroundStyle(theme.color(.caption))
-            .font(.caption)
+            .fleckUIFont(.caption)
             .accessibilityLabel("Suggestion edit status")
             .accessibilityValue(statusMessage)
         }
@@ -3238,17 +3274,17 @@
     var body: some View {
       VStack(alignment: .leading, spacing: 12) {
         Text("Review Dictionary Import")
-          .font(.title2.weight(.semibold))
+          .fleckUIFont(.title2, weight: .semibold)
         if let errorMessage = viewModel.errorMessage {
           Label(errorMessage, systemImage: "exclamationmark.triangle")
             .foregroundStyle(theme.color(.error))
-            .font(.caption)
+            .fleckUIFont(.caption)
             .accessibilityLabel("Dictionary import error")
             .accessibilityValue(errorMessage)
         } else if let statusMessage = viewModel.statusMessage {
           Label(statusMessage, systemImage: "info.circle")
             .foregroundStyle(theme.color(.caption))
-            .font(.caption)
+            .fleckUIFont(.caption)
             .accessibilityLabel("Dictionary import status")
             .accessibilityValue(statusMessage)
         }
@@ -3270,7 +3306,7 @@
                   VStack(alignment: .trailing, spacing: 2) {
                     Text(row.title)
                     if let detail = row.detail {
-                      Text(detail).font(.caption).foregroundStyle(theme.color(.caption))
+                      Text(detail).fleckUIFont(.caption).foregroundStyle(theme.color(.caption))
                     }
                   }
                 } label: {
