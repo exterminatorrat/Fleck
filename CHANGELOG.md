@@ -3,6 +3,16 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.0-beta.1] - 2026-10-28
+
+### Fixed
+
+- Keep process-transport completion open until bounded stderr validation and graceful drain
+  finish, while streaming request lifecycle events without waiting for process shutdown.
+
+Part of the approved substantial development cohort. Source-only correction; compilation,
+process tests and native behavior remain unverified locally.
+
 ## [1.5.6-beta.1] - 2026-10-27
 
 ### Fixed
