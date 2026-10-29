@@ -426,6 +426,21 @@ launch_host() {
   fi
   if [[ ! -f "$receipt_path" || -L "$receipt_path" ]]; then
     printf '%s\n' 'error: AppKit test host completion receipt is missing' >&2
+    local receipt_kind=absent host_phase=unavailable
+    if [[ -L "$receipt_path" ]]; then
+      receipt_kind=symlink
+    elif [[ -e "$receipt_path" ]]; then
+      receipt_kind=nonregular
+    fi
+    if [[ -f "$phase_path" && ! -L "$phase_path" ]]; then
+      IFS= read -r host_phase 2>/dev/null < "$phase_path" || host_phase=unreadable
+      case "$host_phase" in
+        starting|listingTests|didFinishLaunching|requestingActivation|runningTests|completed|unreadable) ;;
+        *) host_phase=unrecognized ;;
+      esac
+    fi
+    printf 'AppKit receipt observation: kind=%s phase=%s openStatus=%s watchdogStatus=%s\n' \
+      "$receipt_kind" "$host_phase" "$open_status" "$watchdog_status" >&2
     return 1
   fi
   IFS=$'\t' read -r receipt_nonce receipt_pid receipt_status receipt_extra \
