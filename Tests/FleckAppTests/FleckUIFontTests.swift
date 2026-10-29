@@ -100,7 +100,34 @@
     #expect(notes.contains("Text(\"Could not save: \\(error)\")\n                .fleckUIFont(.caption)"))
     #expect(notes.contains("Text(error)\n                .fleckUIFont(.caption)"))
     #expect(notes.contains("Text(\"Fleck needs your help\")\n          .fleckUIFont(.headline)"))
-    #expect(notes.contains(".fleckUIFont(.caption, weight: isSave ? .semibold : .medium)"))
+    let composerStart = try #require(notes.range(of: "private var folderComposer: some View"))
+    let composerEnd = try #require(notes.range(
+      of: "private struct NativeFolderNameField: NSViewRepresentable",
+      range: composerStart.upperBound..<notes.endIndex
+    ))
+    let composer = notes[composerStart.lowerBound..<composerEnd.lowerBound]
+    for (action, symbol, label) in [
+      ("commitFolderEditing", "checkmark", "Create folder"),
+      ("cancelFolderEditing", "xmark", "Cancel new folder"),
+    ] {
+      let buttonStart = try #require(composer.range(
+        of: "Button {\n              \(action)(source: currentInteractionSource)"
+      ))
+      let buttonEnd = composer.range(
+        of: "\n            Button {", range: buttonStart.upperBound..<composer.endIndex
+      )?.lowerBound ?? composer.endIndex
+      let button = composer[buttonStart.lowerBound..<buttonEnd]
+      #expect(button.contains("Image(systemName: \"\(symbol)\")\n                .frame(width: 24, height: 24)"))
+      #expect(button.contains(".accessibilityLabel(\"\(label)\")"))
+    }
+    let editorStart = try #require(notes.range(of: "private func folderEditor("))
+    let editorEnd = try #require(notes.range(
+      of: "private func rowLabel(", range: editorStart.upperBound..<notes.endIndex
+    ))
+    let editor = notes[editorStart.lowerBound..<editorEnd.lowerBound]
+    #expect(editor.contains("NativeFolderNameField("))
+    #expect(editor.contains("onSubmit: { commitFolderEditing() }"))
+    #expect(editor.contains("onCancel: { cancelFolderEditing() }"))
     #expect(notes.contains("Text(presentation.statusCopy)\n            .fleckUIFont(.caption)"))
     #expect(notes.contains("Text(\"Smart Capture\")\n                    .fleckUIFont(.headline)"))
     #expect(notes.contains(".font(uiFont.font(.caption).monospacedDigit())"))
