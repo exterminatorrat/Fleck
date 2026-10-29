@@ -264,6 +264,7 @@
 
       init(
         applicationSupportURL: URL,
+        pendingDictationModelID: String? = nil,
         profile: DictationResourceProfile = .current(),
         inference: (any EnhancedSpeechInferring)? = nil,
         snapshot: @escaping @MainActor () -> DictationResourceSnapshot = {
@@ -290,7 +291,8 @@
         let activation = ParakeetTDTTestActivation.make(
           applicationSupportURL: applicationSupportURL,
           modelMutationWillBegin: { await adaptiveInference.forceCold() },
-          makeInference: activationInferenceFactory
+          makeInference: activationInferenceFactory,
+          pendingDictationModelID: pendingDictationModelID
         )
         let modelManager = activation.manager
         self.modelManager = modelManager
@@ -505,7 +507,8 @@
     ) {
       #if CLEAN_DICTATION_ENHANCED_CANDIDATE
         let enhancedComposition = DictationEnhancedCandidateComposition(
-          applicationSupportURL: applicationSupportURL
+          applicationSupportURL: applicationSupportURL,
+          pendingDictationModelID: appState.preferences.pendingDictationModelID
         )
         let modelManager = enhancedComposition.modelManager
         let admittedModelInstaller = enhancedComposition.installer
@@ -561,6 +564,7 @@
       #if CLEAN_DICTATION_ENHANCED_CANDIDATE
         let cleanupComposition = GemmaCleanupCandidateComposition(
           applicationSupportURL: applicationSupportURL,
+          pendingCleanupModelID: appState.preferences.pendingCleanupModelID,
           foundationIsAvailable: {
             DictationAvailability.currentFoundationModelAvailability == .available
           },

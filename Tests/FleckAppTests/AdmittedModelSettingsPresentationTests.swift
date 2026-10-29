@@ -81,17 +81,34 @@ private enum AdmittedModelSettingsTestDescriptors {
     )
   )
 
-  #expect(recommended.modelLabel == "Parakeet TDT 0.6B v2")
+  #expect(recommended.modelLabel == AdmittedModelSettingsTestDescriptors.tinyAdmittedASR.modelID)
   #expect(builtIn.modelLabel == "Apple Speech")
 }
 
-@Test func cleanupContextNamesGemmaAndCurrentFaithfulFallback() {
+@Test func cleanupContextNamesGemmaAndCurrentFaithfulFallback() throws {
   let context = AdmittedModelSettingsContext.cleanup(
     fallbackLabel: "Deterministic Fallback"
   )
+  let fixture = AdmittedModelSettingsTestDescriptors.tinyAdmittedASR
+  let gemma = try AdmittedModelDescriptor(validating: RawAdmittedModelDescriptor(
+    role: .cleanup,
+    modelID: "mlx-community/gemma-3-1b-it-qat-4bit",
+    revision: fixture.revision,
+    runtimeABI: fixture.runtimeABI,
+    conversion: fixture.conversion,
+    quantization: fixture.quantization,
+    license: fixture.license,
+    notices: fixture.notices,
+    source: fixture.source,
+    files: fixture.files,
+    downloadBytes: fixture.downloadBytes,
+    installedBytes: fixture.installedBytes,
+    languages: fixture.languages,
+    architectures: fixture.architectures
+  ))
   let recommended = AdmittedModelSettingsPresentation(
     snapshot: .init(
-      recommendation: .recommended(AdmittedModelSettingsTestDescriptors.tinyAdmittedASR),
+      recommendation: .recommended(gemma),
       phase: .notInstalled,
       lastError: nil
     ),
@@ -185,7 +202,7 @@ private enum AdmittedModelSettingsTestDescriptors {
   )
   #expect(downloading.progress == 0.25)
   #expect(downloading.progressAccessibilityValue == "25%")
-  #expect(downloading.accessibilityValue == "Gemma 3 1B, Downloading, 25%")
+  #expect(downloading.accessibilityValue == "\(descriptor.modelID), Downloading, 25%")
 }
 
 @Test func ordinaryStatesStayCompactWithOnlyRelevantActions() {
@@ -280,7 +297,10 @@ private enum AdmittedModelSettingsTestDescriptors {
     )
   )
   #expect(presentation.accessibilityLabel == "Dictation model")
-  #expect(presentation.accessibilityValue == "Parakeet TDT 0.6B v2, Available to install")
+  #expect(
+    presentation.accessibilityValue
+      == "\(AdmittedModelSettingsTestDescriptors.tinyAdmittedASR.modelID), Available to install"
+  )
   #expect(!presentation.detail.contains("Supported architectures"))
   #expect(!presentation.detail.contains("Supported languages"))
   #expect(!presentation.detail.contains("Checksums"))
@@ -490,7 +510,10 @@ private enum AdmittedModelSettingsTestDescriptors {
     )
   )
   #expect(presentation.accessibilityLabel == "Dictation model")
-  #expect(presentation.accessibilityValue == "Parakeet TDT 0.6B v2, Downloading, 50%")
+  #expect(
+    presentation.accessibilityValue
+      == "\(AdmittedModelSettingsTestDescriptors.tinyAdmittedASR.modelID), Downloading, 50%"
+  )
   #expect(presentation.progressAccessibilityValue == "50%")
   #expect(!presentation.accessibilityValue.contains("Loading"))
 }
@@ -806,14 +829,14 @@ func cleanupViewModelRetainsContextAcrossActionUpdates() async {
     context: .cleanup(fallbackLabel: "Deterministic Fallback")
   )
 
-  #expect(viewModel.presentation.modelLabel == "Gemma 3 1B")
+  #expect(viewModel.presentation.modelLabel == AdmittedModelSettingsTestDescriptors.tinyAdmittedASR.modelID)
   #expect(viewModel.presentation.accessibilityLabel == "Cleanup model")
 
   viewModel.perform(.install)
   await probe.waitUntilPhase(.ready)
   await waitForPresentation(viewModel, phase: .ready)
 
-  #expect(viewModel.presentation.modelLabel == "Gemma 3 1B")
+  #expect(viewModel.presentation.modelLabel == AdmittedModelSettingsTestDescriptors.tinyAdmittedASR.modelID)
   #expect(viewModel.presentation.accessibilityLabel == "Cleanup model")
   #expect(!viewModel.presentation.detail.localizedCaseInsensitiveContains("dictation"))
 }

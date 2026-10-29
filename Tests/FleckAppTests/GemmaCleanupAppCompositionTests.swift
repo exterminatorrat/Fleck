@@ -88,7 +88,9 @@ struct GemmaCleanupAppCompositionTests {
     )
 
     #expect(composition.settingsViewModel.presentation.accessibilityLabel == "Cleanup model")
-    #expect(composition.settingsViewModel.presentation.modelLabel == "Gemma 3 1B")
+    #expect(
+      composition.settingsViewModel.presentation.modelLabel == TestDescriptors.tinyAdmittedASR.modelID
+    )
     #expect(composition.isGemmaReady)
 
     foundationAvailability.value = true
