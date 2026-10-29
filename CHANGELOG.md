@@ -9,6 +9,8 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Align wrapped checklist content without changing paragraph formatting, preserve completion
   formatting while typing and pasting, and restore checklist selection through undo and redo.
+- Keep selected bullet glyphs free of selection highlights without replacing configured
+  backgrounds, and copy whole list items and managed-image references without changing selections.
 
 This checkpoint is part of the retained-feature 1.7.0-beta.1 development cohort, not a
 separate release. Local compilation, tests and native visual/accessibility behavior remain
