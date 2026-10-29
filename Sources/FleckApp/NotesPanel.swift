@@ -730,8 +730,12 @@
   enum TabOverflowPresentation {
     static let tabOverflowRailWidth: CGFloat = 56
 
-    static func tabViewportWidth(totalStripWidth: CGFloat) -> CGFloat {
-      max(0, totalStripWidth - tabOverflowRailWidth)
+    static func overflows(contentWidth: CGFloat, totalStripWidth: CGFloat) -> Bool {
+      contentWidth > totalStripWidth
+    }
+
+    static func tabViewportWidth(totalStripWidth: CGFloat, showsOverflow: Bool) -> CGFloat {
+      max(0, totalStripWidth - (showsOverflow ? tabOverflowRailWidth : 0))
     }
   }
 
@@ -783,6 +787,14 @@
       .frame(maxWidth: TabTitlePresentation.maximumWidth, alignment: .leading)
       .fixedSize(horizontal: true, vertical: false)
       .accessibilityLabel(title)
+    }
+  }
+
+  private struct TabStripContentWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+      value = max(value, nextValue())
     }
   }
 
@@ -967,6 +979,7 @@
     @StateObject private var fluidTabDrag = FluidTabDragController()
     @StateObject private var menuWindowDrop = MenuWindowNoteDropCoordinator()
     @StateObject private var menuPanelResize = MenuPanelResizeController()
+    @State private var tabStripContentWidth: CGFloat = 0
     @State private var tabColorPickerNoteID: UUID?
     @State private var activeFolderID: UUID?
     @State private var bannerDismissalState = NotesPanelBannerDismissalState()
@@ -1659,7 +1672,14 @@
     private var tabStrip: some View {
       ScrollViewReader { scrollProxy in
         GeometryReader { proxy in
-          let tabViewportWidth = TabOverflowPresentation.tabViewportWidth(totalStripWidth: proxy.size.width)
+          let hasOverflow = TabOverflowPresentation.overflows(
+            contentWidth: tabStripContentWidth,
+            totalStripWidth: proxy.size.width
+          )
+          let tabViewportWidth = TabOverflowPresentation.tabViewportWidth(
+            totalStripWidth: proxy.size.width,
+            showsOverflow: hasOverflow
+          )
         HStack(spacing: 0) {
           ZStack(alignment: .trailing) {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -1831,6 +1851,14 @@
                 }
               }
               .padding(.horizontal, 12)
+              .background {
+                GeometryReader { content in
+                  Color.clear.preference(
+                    key: TabStripContentWidthKey.self,
+                    value: content.size.width
+                  )
+                }
+              }
               .frame(height: 37, alignment: .center)
               .animation(motion.spatial, value: visibleNotes.map(\.id))
               .fixedSize(horizontal: true, vertical: false)
@@ -1844,36 +1872,52 @@
           }
           .frame(width: tabViewportWidth, alignment: .leading)
 
-          HStack(spacing: 0) {
-            Button {
-              scrollProxy.scrollTo(TabScrollTarget.leading, anchor: .leading)
-            } label: {
-              Image(systemName: "chevron.left")
-                .font(.caption)
-                .frame(width: 28, height: 28)
-                .frame(width: 28, height: 37)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Reveal earlier tabs")
-            .help("Show earlier tabs")
-            .disabled(visibleNotes.isEmpty)
+          if hasOverflow {
+            HStack(spacing: 0) {
+              Button {
+                scrollProxy.scrollTo(TabScrollTarget.leading, anchor: .leading)
+              } label: {
+                Image(systemName: "chevron.left")
+                  .font(.caption)
+                  .frame(width: 28, height: 28)
+                  .frame(width: 28, height: 37)
+                  .contentShape(Rectangle())
+              }
+              .buttonStyle(.plain)
+              .accessibilityLabel("Reveal earlier tabs")
+              .accessibilityIdentifier("note-tab-overflow-earlier")
+              .help("Show earlier tabs")
+              .disabled(visibleNotes.isEmpty)
 
-            Button {
-              scrollProxy.scrollTo(TabScrollTarget.trailing, anchor: .trailing)
-            } label: {
-              Image(systemName: "chevron.right")
-                .font(.caption)
-                .frame(width: 28, height: 28)
-                .frame(width: 28, height: 37)
-                .contentShape(Rectangle())
+              Button {
+                scrollProxy.scrollTo(TabScrollTarget.trailing, anchor: .trailing)
+              } label: {
+                Image(systemName: "chevron.right")
+                  .font(.caption)
+                  .frame(width: 28, height: 28)
+                  .frame(width: 28, height: 37)
+                  .contentShape(Rectangle())
+              }
+              .buttonStyle(.plain)
+              .accessibilityLabel("Reveal later tabs")
+              .accessibilityIdentifier("note-tab-overflow-later")
+              .help("Show later tabs")
+              .disabled(visibleNotes.isEmpty)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Reveal later tabs")
-            .help("Show later tabs")
-            .disabled(visibleNotes.isEmpty)
+            .frame(
+              width: TabOverflowPresentation.tabOverflowRailWidth,
+              height: 37,
+              alignment: .center
+            )
           }
-          .frame(width: 56, height: 37, alignment: .center)
+        }
+        .onChange(of: hasOverflow) { wasOverflowing, isOverflowing in
+          if wasOverflowing && !isOverflowing {
+            scrollProxy.scrollTo(TabScrollTarget.leading, anchor: .leading)
+          }
+        }
+        .onPreferenceChange(TabStripContentWidthKey.self) {
+          tabStripContentWidth = $0
         }
         }
         .frame(height: 37)
