@@ -80,13 +80,24 @@
         in: screen.visibleFrame
       )
     }
+    let nativeFrameControl = NSPanel(contentRect: .zero, styleMask: controller.panel.styleMask,
+      backing: .buffered, defer: true, screen: screen)
+    nativeFrameControl.isReleasedWhenClosed = false
+    defer { nativeFrameControl.close() }
+    nativeFrameControl.setFrame(expectedFrame, display: false)
+    let nativeExpectedFrame = nativeFrameControl.frame
     let panelFrame = controller.panel.frame
-    #expect(abs(panelFrame.minX - expectedFrame.minX) <= 0.5)
-    #expect(abs(panelFrame.minY - expectedFrame.minY) <= 0.5)
-    #expect(abs(panelFrame.width - expectedFrame.width) <= 0.5)
-    #expect(abs(panelFrame.height - expectedFrame.height) <= 0.5)
+    #expect(abs(panelFrame.minX - nativeExpectedFrame.minX) <= 0.5)
+    #expect(abs(panelFrame.minY - nativeExpectedFrame.minY) <= 0.5)
+    #expect(abs(panelFrame.width - nativeExpectedFrame.width) <= 0.5)
+    #expect(abs(panelFrame.height - nativeExpectedFrame.height) <= 0.5)
     if let size { #expect(panelFrame.size == size) }
     #expect(host.bounds.size == panelFrame.size)
+    #expect(host.bounds == CGRect(origin: .zero, size: panelFrame.size))
+    #expect(nativeFrameControl.screen === screen)
+    #expect(controller.panel.backingScaleFactor == nativeFrameControl.backingScaleFactor)
+    #expect(host.convertToBacking(host.bounds).size
+      == nativeFrameControl.convertToBacking(CGRect(origin: .zero, size: nativeExpectedFrame.size)).size)
     host.layoutSubtreeIfNeeded()
 
     if controller.fleckPillModel.isVisible,

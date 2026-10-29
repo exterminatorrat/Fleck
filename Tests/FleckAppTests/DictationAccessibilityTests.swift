@@ -1128,7 +1128,14 @@ private func renderedPixels(with identifier: String, in host: NSView) throws -> 
   let visibleFrame = CGRect(x: 100, y: 200, width: 1_000, height: 800)
   let mark = try #require(canonicalFleckMarkImage())
   let panel = DictationCapsulePanel()
-  let controller = DictationCapsuleController(panel: panel, markLoader: { mark })
+  let controller = DictationCapsuleController(panel: panel, automaticallyAdvancesLivePill: false,
+    markLoader: { mark })
+  controller.setPanelVisibilitySuppressedForTesting(true)
+  controller.setReduceMotionOverrideForTesting(true)
+  let nativeFrameControl = NSPanel(contentRect: .zero, styleMask: panel.styleMask,
+    backing: .buffered, defer: true)
+  nativeFrameControl.isReleasedWhenClosed = false
+  defer { nativeFrameControl.close() }
 
   controller.presentIdle(
     dock: .bottom,
@@ -1137,29 +1144,38 @@ private func renderedPixels(with identifier: String, in host: NSView) throws -> 
   )
 
   func assertActionFits(
-    status: DictationCapsuleStatus,
-    action: DictationCapsuleAction
+    context: DictationCapsuleContext,
+    action: DictationCapsuleAction,
+    chooser: DictationCapsuleChooser
   ) {
     panel.orderOut(nil)
-    controller.render(status, action: action)
-    let presentation = DictationCapsulePresentation(status: status, action: action)
+    controller.render(context, action: action, chooser: chooser)
+    let presentation = DictationCapsulePresentation(status: context.status, action: action,
+      chooser: chooser, context: context)
     let frame = DictationCapsuleController.frame(
       for: .bottom,
-      status: status,
+      status: context.status,
       measuredWidth: presentation.measuredWidth,
       in: visibleFrame
     )
-    panel.setFrame(CGRect(origin: .zero, size: frame.size), display: false)
-    panel.contentView?.frame = CGRect(origin: .zero, size: frame.size)
+    let requestedFrame = CGRect(origin: .zero, size: frame.size)
+    nativeFrameControl.setFrame(requestedFrame, display: false)
+    panel.setFrame(requestedFrame, display: false)
+    panel.contentView?.frame = CGRect(origin: .zero, size: panel.frame.size)
     panel.contentView?.layoutSubtreeIfNeeded()
     guard let host = panel.contentView, let actionButton = renderedActionButton(in: host) else {
-      Issue.record("Expected the rendered action button in the hosted \(status) result")
+      Issue.record("Expected the rendered action button in the hosted \(context.status) result")
       return
     }
     #expect(controller.errorPresentationModel.presentation == nil)
     #expect(controller.presentationModel.action?.accessibilityLabel == action.title)
+    #expect(controller.currentChooser?.captureID == context.sessionID)
     let actionFrame = actionButton.convert(actionButton.bounds, to: host)
-    #expect(frame.width == controller.panel.frame.width)
+    #expect(panel.frame == nativeFrameControl.frame)
+    #expect(host.bounds.size == panel.frame.size)
+    #expect(panel.backingScaleFactor == nativeFrameControl.backingScaleFactor)
+    #expect(host.convertToBacking(host.bounds).size
+      == nativeFrameControl.convertToBacking(CGRect(origin: .zero, size: nativeFrameControl.frame.size)).size)
     #expect(actionFrame.width > 0)
     #expect(actionFrame.width <= DictationCapsulePresentation.actionWidth(for: action))
     #expect(actionFrame.minX >= host.bounds.minX)
@@ -1168,14 +1184,27 @@ private func renderedPixels(with identifier: String, in host: NSView) throws -> 
     #expect(actionFrame.maxY <= host.bounds.maxY)
   }
 
-  assertActionFits(
-    status: .failed("technical failure detail"),
-    action: .copy
-  )
-  assertActionFits(
-    status: .saved(destination: String(repeating: "Long destination ", count: 20)),
-    action: .undo
-  )
+  let captureID = UUID()
+  assertActionFits(context: .init(
+    status: .routingFailure(status: "Needs attention", message: "Synthetic routing failure"),
+    sessionID: captureID
+  ), action: .copy, chooser: DictationCapsuleChooser(
+    ambiguity: .init(captureID: captureID, choices: []), allowsKeepInInbox: true
+  ))
+  controller.render(.saved(destination: String(repeating: "Long destination ", count: 20)),
+    action: .undo)
+  let host = try #require(panel.contentView)
+  host.layoutSubtreeIfNeeded()
+  #expect(controller.currentContext.status == .idle)
+  #expect(controller.fleckPillModel.state == .standby)
+  #expect(controller.errorPresentationModel.presentation == nil)
+  #expect(controller.presentationModel.action == nil)
+  #expect(controller.currentChooser == nil)
+  #expect(panel.frame.size == DictationCapsuleController.livePillHostSize)
+  #expect(host.bounds.size == panel.frame.size)
+  #expect(renderedActionButton(in: host) == nil)
+  #expect(renderedView(with: "fleck-rail-recovery", in: host) == nil)
+  #expect(panel.contentView?.menu?.items.contains(where: { $0.title == "Undo" }) == false)
   controller.dismiss()
 }
 
@@ -1183,7 +1212,14 @@ private func renderedPixels(with identifier: String, in host: NSView) throws -> 
   let visibleFrame = CGRect(x: 100, y: 200, width: 1_000, height: 800)
   let mark = try #require(canonicalFleckMarkImage())
   let panel = DictationCapsulePanel()
-  let controller = DictationCapsuleController(panel: panel, markLoader: { mark })
+  let controller = DictationCapsuleController(panel: panel, automaticallyAdvancesLivePill: false,
+    markLoader: { mark })
+  controller.setPanelVisibilitySuppressedForTesting(true)
+  controller.setReduceMotionOverrideForTesting(true)
+  let nativeFrameControl = NSPanel(contentRect: .zero, styleMask: panel.styleMask,
+    backing: .buffered, defer: true)
+  nativeFrameControl.isReleasedWhenClosed = false
+  defer { nativeFrameControl.close() }
 
   controller.presentIdle(
     dock: .bottom,
@@ -1226,26 +1262,36 @@ private func renderedPixels(with identifier: String, in host: NSView) throws -> 
         action: action,
         context: failureContext
       )
-      let frame = DictationCapsuleController.frame(
-        for: dock,
-        status: failureContext.status,
-        measuredWidth: presentation.measuredWidth,
+      let frame = DictationCapsuleController.errorSurfaceFrame(
+        for: .bottom,
         in: visibleFrame
       )
-      panel.setFrame(CGRect(origin: .zero, size: frame.size), display: false)
-      panel.contentView?.frame = CGRect(origin: .zero, size: frame.size)
+      nativeFrameControl.setFrame(frame, display: false)
+      panel.setFrame(frame, display: false)
+      panel.contentView?.frame = CGRect(origin: .zero, size: panel.frame.size)
       panel.contentView?.layoutSubtreeIfNeeded()
       guard let host = panel.contentView else {
         Issue.record("Expected the persistent hosted failure frame")
         continue
       }
+      let error = try #require(controller.errorPresentationModel.presentation)
+      #expect(controller.currentDock == .bottom)
+      #expect(error.message == presentation.visibleText)
+      #expect(error.recoveryAction == action)
+      #expect(error.actionTitle == action.buttonTitle)
+      #expect(controller.errorPresentationModel.canBeginAction)
+      #expect(panel.frame == nativeFrameControl.frame)
+      #expect(host.bounds.size == panel.frame.size)
+      #expect(panel.backingScaleFactor == nativeFrameControl.backingScaleFactor)
+      #expect(host.convertToBacking(host.bounds).size
+        == nativeFrameControl.convertToBacking(CGRect(origin: .zero, size: nativeFrameControl.frame.size)).size)
       for identifier in [
-        "fleck-rail-mark",
-        "fleck-terminal-glyph",
-        "fleck-terminal-text",
-        "fleck-terminal-divider",
+        "fleck-error-surface",
+        "fleck-error-message",
         "fleck-rail-recovery",
+        "fleck-error-action-label",
       ] {
+        #expect(descendants(of: host).filter { $0.identifier?.rawValue == identifier }.count == 1)
         guard let rendered = renderedView(with: identifier, in: host) else {
           Issue.record("Expected rendered \(identifier) for \(action) at \(dock)")
           continue
@@ -1270,16 +1316,32 @@ private func renderedPixels(with identifier: String, in host: NSView) throws -> 
 @Test @MainActor func DictationAccessibilityNoSpeechWithoutActionFitsHostedFrame() throws {
   let mark = try #require(canonicalFleckMarkImage())
   let panel = DictationCapsulePanel()
-  let controller = DictationCapsuleController(panel: panel, markLoader: { mark })
+  let controller = DictationCapsuleController(panel: panel, automaticallyAdvancesLivePill: false,
+    markLoader: { mark })
+  controller.setPanelVisibilitySuppressedForTesting(true)
+  controller.setReduceMotionOverrideForTesting(true)
+  let nativeFrameControl = NSPanel(contentRect: .zero, styleMask: panel.styleMask,
+    backing: .buffered, defer: true)
+  nativeFrameControl.isReleasedWhenClosed = false
+  defer { nativeFrameControl.close() }
 
   controller.render(.noSpeech, action: nil)
-  let presentation = DictationCapsulePresentation(status: .noSpeech, action: nil)
-  let expectedSize = DictationCapsuleController.size(
-    for: .noSpeech,
-    measuredWidth: presentation.measuredWidth
-  )
-  #expect(abs(panel.frame.width - expectedSize.width) < 0.1)
-  #expect(panel.frame.width <= DictationCapsuleController.noSpeechSize.width)
+  let screen = try #require(panel.screen ?? NSScreen.main ?? NSScreen.screens.first)
+  let logicalFrame = DictationCapsuleController.errorSurfaceFrame(for: .bottom,
+    in: screen.visibleFrame)
+  nativeFrameControl.setFrame(logicalFrame, display: false)
+  #expect(panel.frame == nativeFrameControl.frame)
+  #expect(panel.frame.width <= nativeFrameControl.frame.width)
+  let error = try #require(controller.errorPresentationModel.presentation)
+  #expect(controller.currentContext.status == .noSpeech)
+  #expect(controller.presentationModel.action == nil)
+  #expect(controller.currentChooser == nil)
+  #expect(error.kind == .noSpeech)
+  #expect(error.message == "No speech heard")
+  #expect(error.actionTitle == "Try again")
+  #expect(error.phase == .default)
+  #expect(error.dismissal == 0)
+  #expect(controller.errorPresentationModel.canBeginAction)
 
   guard let host = panel.contentView else {
     Issue.record("Expected the persistent no-speech host")
@@ -1288,13 +1350,19 @@ private func renderedPixels(with identifier: String, in host: NSView) throws -> 
   }
   host.frame = CGRect(origin: .zero, size: panel.frame.size)
   host.layoutSubtreeIfNeeded()
+  #expect(host.bounds.size == panel.frame.size)
+  #expect(panel.backingScaleFactor == nativeFrameControl.backingScaleFactor)
+  #expect(host.convertToBacking(host.bounds).size
+    == nativeFrameControl.convertToBacking(CGRect(origin: .zero, size: nativeFrameControl.frame.size)).size)
 
   let identifiers = [
-    "fleck-rail-mark",
-    "fleck-terminal-glyph",
-    "fleck-terminal-text",
+    "fleck-error-surface",
+    "fleck-error-message",
+    "fleck-rail-recovery",
+    "fleck-error-action-label",
   ]
   for identifier in identifiers {
+    #expect(descendants(of: host).filter { $0.identifier?.rawValue == identifier }.count == 1)
     guard let rendered = renderedView(with: identifier, in: host) else {
       Issue.record("Expected rendered no-speech view with identifier \(identifier)")
       continue
@@ -1308,6 +1376,19 @@ private func renderedPixels(with identifier: String, in host: NSView) throws -> 
     #expect(frame.maxY <= host.bounds.maxY)
     #expect(rendered.hitTest(NSPoint(x: rendered.bounds.midX, y: rendered.bounds.midY)) == nil)
   }
+  let recovery = try #require(renderedView(with: "fleck-rail-recovery", in: host))
+  let actionButton = try #require(renderedActionButton(in: host))
+  let recoveryCenter = recovery.convert(
+    NSPoint(x: recovery.bounds.midX, y: recovery.bounds.midY), to: host
+  )
+  #expect(actionButton.convert(actionButton.bounds, to: host).contains(recoveryCenter))
+  let actionHit = try #require(host.hitTest(host.convert(recoveryCenter, to: host.superview)))
+  #expect(actionHit !== host)
+  #expect(
+    actionHit === actionButton
+      || actionHit.isDescendant(of: actionButton)
+      || actionButton.isDescendant(of: actionHit)
+  )
   controller.dismiss()
 }
 

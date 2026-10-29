@@ -87,6 +87,10 @@ import Testing
       let reducedMotion = profile == "reduced-motion"
       let opaque = profile == "contrast-and-opaque"
       let panel = DictationCapsulePanel()
+      let nativeFrameControl = NSPanel(contentRect: .zero, styleMask: panel.styleMask,
+        backing: .buffered, defer: true)
+      nativeFrameControl.isReleasedWhenClosed = false
+      defer { nativeFrameControl.close() }
       panel.appearance = NSAppearance(named: appearance == .dark ? .darkAqua : .aqua)
       let theme = FleckThemeSnapshot.resolve(colorTheme: .monochrome, mode: .system,
         systemAppearance: appearance, reduceTransparency: opaque, increasedContrast: opaque)
@@ -167,8 +171,14 @@ import Testing
             size: DictationCapsuleController.size(for: status, measuredWidth: presentation.measuredWidth,
               widthCeiling: presentation.widthCeiling), in: screen.visibleFrame)
         }
-        #expect(panel.frame == expected)
-        #expect(host.bounds.size == expected.size)
+        nativeFrameControl.setFrame(expected, display: false)
+        let nativeExpected = nativeFrameControl.frame
+        let nativeBounds = CGRect(origin: .zero, size: nativeExpected.size)
+        #expect(panel.frame == nativeExpected)
+        #expect(host.bounds == nativeBounds)
+        #expect(panel.backingScaleFactor == nativeFrameControl.backingScaleFactor)
+        #expect(host.convertToBacking(host.bounds).size
+          == nativeFrameControl.convertToBacking(nativeBounds).size)
         #expect(controller.currentDock == .bottom)
         if case .saved = status {
           #expect(controller.currentContext.status == .idle)

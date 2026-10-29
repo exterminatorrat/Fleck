@@ -267,7 +267,8 @@ import Testing
       )
       let bounds = try #require(FleckPillPixelChecks.brightHorizontalBounds(image))
       #expect(bounds.lowerBound >= sample.left.lowerBound && bounds.lowerBound <= sample.left.upperBound)
-      #expect(bounds.upperBound >= sample.right.lowerBound && bounds.upperBound <= sample.right.upperBound)
+      let brightRightEdge = bounds.upperBound + 1
+      #expect(brightRightEdge >= sample.right.lowerBound && brightRightEdge <= sample.right.upperBound)
     }
   }
 
