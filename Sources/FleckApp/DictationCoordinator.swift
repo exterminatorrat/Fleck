@@ -1520,28 +1520,46 @@ final class DictationCoordinator {
     recordMeasurement(.routingDecision, at: clock.now(), captureID: id)
     let suggestedChoices: [DictationRoutingChoice]?
     let destinationID: UUID?
+    let filingPlan: DictationFilingPlan?
     switch routingDecision {
+    case .filing(let plan)
+      where plan.text.utf8.elementsEqual(text.utf8) && plan.isValid(against: candidates):
+      filingPlan = plan
+      destinationID = plan.outputs.first?.destinationID
+      suggestedChoices = nil
     case .resolved(let routedID)
       where routedID != inbox?.destination.noteID
         && candidates.contains(where: { $0.destination.noteID == routedID }):
       destinationID = routedID
       suggestedChoices = nil
+      filingPlan = nil
+    case .inbox:
+      destinationID = inbox?.destination.noteID
+      suggestedChoices = nil
+      filingPlan = nil
     case .ambiguous(let choices):
       destinationID = inbox?.destination.noteID
       suggestedChoices = choices
+      filingPlan = nil
     default:
       destinationID = inbox?.destination.noteID
       suggestedChoices = []
+      filingPlan = nil
     }
 
     do {
       // A receipt is the save commit boundary: a later cancellation must compensate it.
       publishSaveContext(captureID: id)
-      let receipt = try await saver.saveSmartCapture(
-        text: text,
-        captureID: id,
-        destinationID: destinationID
-      )
+      let receipt: DictationInsertionReceipt
+      if let filingPlan {
+        receipt = try await saver.saveSmartFiling(filingPlan, captureID: id)
+      } else {
+        receipt = try await saver.saveSmartCapture(
+          text: text,
+          captureID: id,
+          destinationID: destinationID
+        )
+      }
       let saveCompletedAt = clock.now()
       recordMeasurement(.insertionCommitted, at: saveCompletedAt, captureID: id)
       recordMeasurement(.persistenceCompleted, at: saveCompletedAt, captureID: id)

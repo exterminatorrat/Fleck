@@ -87,6 +87,8 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
     var rtfSHA256: [String: String]?
     var preferencesSHA256: String?
     var agentCommitProofs: [AgentWorkspaceCommitProof]?
+    var dictationFilingLedger: DictationFilingLedger?
+    var dictationFilingLedgerSHA256: String?
 
     init(
       formatVersion: Int?,
@@ -99,7 +101,9 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
       markdownSHA256: [String: String]?,
       rtfSHA256: [String: String]?,
       preferencesSHA256: String?,
-      agentCommitProofs: [AgentWorkspaceCommitProof]?
+      agentCommitProofs: [AgentWorkspaceCommitProof]?,
+      dictationFilingLedger: DictationFilingLedger,
+      dictationFilingLedgerSHA256: String
     ) {
       self.formatVersion = formatVersion
       self.noteOrder = noteOrder
@@ -112,6 +116,8 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
       self.rtfSHA256 = rtfSHA256
       self.preferencesSHA256 = preferencesSHA256
       self.agentCommitProofs = agentCommitProofs
+      self.dictationFilingLedger = dictationFilingLedger
+      self.dictationFilingLedgerSHA256 = dictationFilingLedgerSHA256
     }
 
     init(from decoder: Decoder) throws {
@@ -142,6 +148,16 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
         [AgentWorkspaceCommitProof].self,
         forKey: .agentCommitProofs
       )
+      if container.contains(.dictationFilingLedger)
+        || container.contains(.dictationFilingLedgerSHA256)
+      {
+        dictationFilingLedger = try container.decode(
+          DictationFilingLedger.self, forKey: .dictationFilingLedger
+        )
+        dictationFilingLedgerSHA256 = try container.decode(
+          String.self, forKey: .dictationFilingLedgerSHA256
+        )
+      }
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -156,6 +172,8 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
       case rtfSHA256
       case preferencesSHA256
       case agentCommitProofs
+      case dictationFilingLedger
+      case dictationFilingLedgerSHA256
     }
   }
 
@@ -316,6 +334,7 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
 
   private static let formatVersion = 2
   private static let integrityVersion = 1
+  private static let filingIntegrityVersion = 2
   private static let maximumCommitProofs = 256
   private static let trashLifetime: TimeInterval = 30 * 24 * 60 * 60
 
@@ -363,6 +382,9 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
     trashedNotes: [Note] = []
   ) throws -> LocalStoreSnapshotWriteResult {
     try lock.withLock {
+      guard workspace.dictationFilingLedger.isValid else {
+        throw LocalStore.StoreError.invalidSnapshot
+      }
       initializeWatermarkIfNeeded()
       if let highestAdmittedGeneration,
         generation < highestAdmittedGeneration
@@ -377,14 +399,21 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
         at: rootURL,
         withIntermediateDirectories: true
       )
+      let validRoot = loadCandidate(in: rootURL, source: .root)
+      let validRecovery = validRoot == nil
+        ? loadCandidate(in: recoveryURL, source: .recovery)
+        : nil
+      let priorLedger = (validRoot ?? validRecovery)?.snapshot.workspace.dictationFilingLedger
+        ?? .init()
+      guard workspace.dictationFilingLedger.preserves(priorLedger) else {
+        throw LocalStore.StoreError.invalidSnapshot
+      }
       if !trashedNotes.isEmpty {
         for note in trashedNotes {
           try archiveInTrash(note)
         }
         try purgeExpiredTrashLocked()
       }
-
-      let validRoot = loadCandidate(in: rootURL, source: .root)
       if let validRoot {
         try createRecovery(from: validRoot)
       }
@@ -491,11 +520,16 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
           records: workspace.folders.map { FolderRecord(id: $0.id, name: $0.name) }
         ),
         snapshotGeneration: generation,
-        snapshotIntegrityVersion: Self.integrityVersion,
+        snapshotIntegrityVersion: workspace.dictationFilingLedger.commits.isEmpty
+          ? Self.integrityVersion : Self.filingIntegrityVersion,
         markdownSHA256: markdownHashes,
         rtfSHA256: rtfHashes,
         preferencesSHA256: manifestPreferencesHash,
-        agentCommitProofs: proofs
+        agentCommitProofs: proofs,
+        dictationFilingLedger: workspace.dictationFilingLedger,
+        dictationFilingLedgerSHA256: sha256(
+          try workspace.dictationFilingLedger.canonicalData()
+        )
       )
       try hooks.beforeManifestCommit(generation)
       try encoder().encode(manifest).write(
@@ -658,7 +692,7 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
       return nil
     }
     if manifest.formatVersion == Self.formatVersion,
-      manifest.snapshotIntegrityVersion != Self.integrityVersion
+      !Self.supportsIntegrity(manifest.snapshotIntegrityVersion)
     {
       return nil
     }
@@ -676,7 +710,7 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
       return nil
     }
 
-    if manifest.snapshotIntegrityVersion == Self.integrityVersion {
+    if Self.supportsIntegrity(manifest.snapshotIntegrityVersion) {
       guard
         let preferencesData,
         let preferencesSHA256 = manifest.preferencesSHA256,
@@ -706,6 +740,19 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
       }
     } else if manifest.snapshotIntegrityVersion != nil {
       return nil
+    }
+
+    if manifest.snapshotIntegrityVersion == Self.filingIntegrityVersion,
+      manifest.dictationFilingLedger == nil
+    { return nil }
+    if let ledger = manifest.dictationFilingLedger {
+      guard ledger.isValid,
+        let expectedHash = manifest.dictationFilingLedgerSHA256,
+        let ledgerData = try? ledger.canonicalData(),
+        sha256(ledgerData) == expectedHash,
+        ledger.commits.isEmpty
+          || manifest.snapshotIntegrityVersion == Self.filingIntegrityVersion
+      else { return nil }
     }
 
     let folderRepair = repairFolders(manifest.folders)
@@ -768,7 +815,8 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
     var workspace = Workspace(
       notes: notes,
       selectedNoteID: manifest.selectedNoteID,
-      folders: folderRepair.folders
+      folders: folderRepair.folders,
+      dictationFilingLedger: manifest.dictationFilingLedger ?? .init()
     )
     workspace.ensureNoteExists()
     return LoadedCandidate(
@@ -982,13 +1030,17 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
       .joined()
   }
 
+  private static func supportsIntegrity(_ version: Int?) -> Bool {
+    version == integrityVersion || version == filingIntegrityVersion
+  }
+
   private func canReuse(
     hash: String,
     expectedHash: String?,
     root: LoadedCandidate?
   ) -> Bool {
     // loadCandidate has already validated the root bytes against expectedHash.
-    root?.manifest.snapshotIntegrityVersion == Self.integrityVersion
+    Self.supportsIntegrity(root?.manifest.snapshotIntegrityVersion)
       && expectedHash == hash
   }
 

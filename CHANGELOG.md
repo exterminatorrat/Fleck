@@ -3,6 +3,21 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.7-beta.1] - 2026-10-27
+
+### Fixed
+
+- Inherit the explicit interface-font correction while preserving transactional multi-note
+  and semantic-section filing, durable receipts, guarded undo and filing regression coverage.
+- Keep mixed-marker fence closers from exposing code-block headings as filing destinations.
+- Reject backtick fence openers whose info contains a backtick while preserving valid
+  backtick and tilde fences, including indented longer matching closers.
+- 2026-10-29: Honor explicit Inbox routing without unrelated destination suggestions while
+  preserving ambiguous/invalid-route fallback, durable receipts, history and undo.
+
+Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
+and native behavior remain unverified; hosted verification is pending.
+
 ## [1.5.6-beta.1] - 2026-10-27
 
 ### Fixed
@@ -13,6 +28,28 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 Source-only review correction. Compilation, tests, visual/accessibility inspection and native
 behavior remain unverified locally.
+
+## [1.5.3-beta.1] - 2026-10-27
+
+### Fixed
+
+- Include the existing bounded rich-text codec required by semantic-section filing without
+  replacing ordinary note-appending behavior.
+- Add codec round-trip and invalid-metadata regression source.
+
+Source-only compiler repair checkpoint. Local compilation, tests and native behavior remain
+unrun; hosted verification is pending.
+
+## [1.5.0-beta.1] - 2026-10-27
+
+### Added
+
+- File smart captures into validated note and semantic-section destinations with bounded,
+  lossless chunks while preserving focused-caret insertion.
+- Persist atomic filing receipts for retry/restart recovery and guarded whole-capture undo.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests and native behavior remain unverified.
 
 ## [1.4.15-beta.1] - 2026-10-29
 
