@@ -1460,7 +1460,13 @@
     private var dictationReadinessButton: some View {
       let isReady = isDictationReady
       return Button {
+        #if DEBUG
+          traceReadinessPresentation("action.before-toggle")
+        #endif
         isReadinessPopoverPresented.toggle()
+        #if DEBUG
+          traceReadinessPresentation("action.after-toggle")
+        #endif
       } label: {
         Label(
           isReady ? "Ready" : "Needs attention",
@@ -1473,13 +1479,31 @@
       .popover(isPresented: $isReadinessPopoverPresented, arrowEdge: .top) {
         dictationReadinessPopover
           .fleckPopoverTheme(theme)
+          #if DEBUG
+            .onAppear { traceReadinessPresentation("popover.appear") }
+            .onDisappear { traceReadinessPresentation("popover.disappear") }
+          #endif
       }
+      #if DEBUG
+        .onChange(of: isReadinessPopoverPresented) { oldValue, newValue in
+          traceReadinessPresentation("presentation.changed \(oldValue)->\(newValue)")
+        }
+      #endif
       .settingsSearchAnchor(.dictationStatus, request: searchRequest)
       .accessibilityLabel("Dictation readiness")
       .accessibilityValue(isReady ? "Ready" : "Needs attention")
       .accessibilityHint("Show dictation readiness and recovery actions.")
       .accessibilityIdentifier("settings-dictation-readiness-button")
     }
+
+    #if DEBUG
+      @MainActor
+      private func traceReadinessPresentation(_ phase: String) {
+        SettingsReadinessFocusTrace.record(
+          "Readiness trace \(phase): presented=\(isReadinessPopoverPresented), searchReveal=\(searchRequest?.anchor == .dictationStatus), active=\(NSApp.isActive), fullKeyboardAccess=\(NSApp.isFullKeyboardAccessEnabled), keyWindowPresent=\(NSApp.keyWindow != nil), responder=\(NSApp.keyWindow?.firstResponder.map { String(reflecting: type(of: $0)) } ?? "nil")"
+        )
+      }
+    #endif
 
     @ViewBuilder
     private var dictationModifierRecoveryButton: some View {

@@ -919,7 +919,7 @@
     }
 
     func body(content: Content) -> some View {
-      content
+      let anchoredContent = content
         .id(target)
         .accessibilityIdentifier(target.accessibilityIdentifier)
         .accessibilityLabel(target.focusLabel)
@@ -963,6 +963,9 @@
           }
         }
         .onChange(of: request?.id, initial: true) { _, _ in
+          #if DEBUG
+            traceReadinessFocus("anchor.request.changed")
+          #endif
           if target.usesVocabularyFocusLifecycle {
             if !isRevealed {
               isKeyboardFocused = false
@@ -988,12 +991,68 @@
           isFocused = true
         }
         .onDisappear {
+          #if DEBUG
+            traceReadinessFocus("anchor.disappear")
+          #endif
           guard target.usesVocabularyFocusLifecycle else { return }
           isKeyboardFocused = false
           isFocused = false
         }
+
+      #if DEBUG
+        return tracedReadinessAnchor(anchoredContent)
+      #else
+        return anchoredContent
+      #endif
     }
+
+    #if DEBUG
+      @MainActor
+      @ViewBuilder
+      private func tracedReadinessAnchor<Anchor: View>(_ anchor: Anchor) -> some View {
+        if target == .dictationStatus && SettingsReadinessFocusTrace.isEnabled {
+          anchor
+            .onAppear { traceReadinessFocus("anchor.appear") }
+            .onChange(of: isKeyboardFocused) { oldValue, newValue in
+              traceReadinessFocus("anchor.focus.changed \(oldValue)->\(newValue)")
+            }
+            .onChange(of: isFocused) { oldValue, newValue in
+              traceReadinessFocus("anchor.accessibility-focus.changed \(oldValue)->\(newValue)")
+            }
+        } else {
+          anchor
+        }
+      }
+
+      @MainActor
+      private func traceReadinessFocus(_ phase: String) {
+        guard target == .dictationStatus else { return }
+        SettingsReadinessFocusTrace.record(
+          "Readiness trace \(phase): focus=\(isKeyboardFocused), accessibilityFocus=\(isFocused), revealed=\(isRevealed), keyboardCue=\(isKeyboardFocusCueVisible), active=\(NSApp.isActive), keyWindowPresent=\(NSApp.keyWindow != nil), responder=\(NSApp.keyWindow?.firstResponder.map { String(reflecting: type(of: $0)) } ?? "nil")"
+        )
+      }
+    #endif
   }
+
+  #if DEBUG
+    @MainActor
+    enum SettingsReadinessFocusTrace {
+      static let isEnabled =
+        ProcessInfo.processInfo.environment["FLECK_READINESS_FOCUS_TRACE"] == "1"
+      private static var recordCount = 0
+      private static var byteCount = 0
+
+      static func record(_ message: @autoclosure () -> String) {
+        guard isEnabled, recordCount < 24 else { return }
+        let entry = message() + "\n"
+        let bytes = entry.utf8.count
+        guard bytes <= 16_384 - byteCount else { return }
+        recordCount += 1
+        byteCount += bytes
+        print(entry, terminator: "")
+      }
+    }
+  #endif
 
   struct SettingsSearchProbe: NSViewRepresentable {
     let identifier: String
