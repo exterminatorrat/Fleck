@@ -182,7 +182,10 @@
           .fleckTheme(appState)
       }
       label: {
-        DictationSettingsEnvironmentBridge(runtime: dictationRuntime) {
+        DictationSettingsEnvironmentBridge(
+          runtime: dictationRuntime,
+          statusItemContextMenuController: statusItemContextMenuController
+        ) {
           Group {
             switch FleckMark.load(template: true) {
             case .image(let mark):
@@ -2102,30 +2105,52 @@
 
   struct DictationSettingsEnvironmentBridge<Content: View>: View {
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
     @ObservedObject var runtime: DictationRuntime
+    let statusItemContextMenuController: StatusItemContextMenuController?
     let content: Content
     private let openSettingsAction: (@MainActor () -> Void)?
 
     init(
       runtime: DictationRuntime,
       openSettingsAction: (@MainActor () -> Void)? = nil,
+      statusItemContextMenuController: StatusItemContextMenuController? = nil,
       @ViewBuilder content: () -> Content
     ) {
       self.runtime = runtime
       self.openSettingsAction = openSettingsAction
+      self.statusItemContextMenuController = statusItemContextMenuController
       self.content = content()
     }
 
     var body: some View {
       content
         .onAppear {
+          let requestOpenSettings = openSettings
+          let openPinnedWindow = openWindow
+          let runtime = self.runtime
+          let explicitOpenSettingsAction = openSettingsAction
           runtime.installOpenSettingsBridge {
-            if let openSettingsAction {
-              openSettingsAction()
+            if let explicitOpenSettingsAction {
+              explicitOpenSettingsAction()
             } else {
-              openSettings()
+              requestOpenSettings()
             }
           }
+          statusItemContextMenuController?.installActions(
+            showNotes: { [openPinnedWindow] in
+              NSApp.activate()
+              openPinnedWindow(id: OnboardingWindowPresenter.windowIdentifier)
+            },
+            openSettings: { [runtime] in
+              NSApp.activate()
+              runtime.requestSettings(.editing)
+            },
+            openAbout: { [runtime] in
+              NSApp.activate()
+              runtime.requestSettings(.about)
+            }
+          )
         }
     }
   }
