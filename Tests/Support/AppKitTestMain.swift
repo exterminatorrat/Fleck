@@ -704,7 +704,7 @@ private struct ExitCaptureProcessSnapshot: Equatable {
   }
 
   private static func canonicalProcessPath(pid: pid_t) -> String? {
-    var bytes = [CChar](repeating: 0, count: Int(PROC_PIDPATHINFO_MAXSIZE))
+    var bytes = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
     let count = bytes.withUnsafeMutableBufferPointer {
       proc_pidpath(pid, $0.baseAddress, UInt32($0.count))
     }
@@ -915,7 +915,7 @@ private enum ExitCaptureObserver {
     change.ident = identity.pid
     change.filter = Int16(EVFILT_PROC)
     change.flags = UInt16(EV_ADD | EV_ENABLE | EV_RECEIPT)
-    change.fflags = UInt32(NOTE_EXIT | NOTE_EXITSTATUS)
+    change.fflags = UInt32(NOTE_EXIT) | UInt32(NOTE_EXITSTATUS)
     change.data = 0
     change.udata = cookie
     var receipt = kevent64_s()
