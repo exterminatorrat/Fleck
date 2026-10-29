@@ -3,6 +3,19 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.9-beta.1] - 2026-10-29
+
+### Fixed
+
+- Balance native Settings traffic lights against measured sidebar search and header frames,
+  retaining calibrated placement while the header is hidden.
+- Add geometry/cache regression coverage and encode the Models reverse-Tab fixture with
+  AppKit's backtab character.
+
+Source-only repair checkpoint. Compilation, tests and native/visual/accessibility validation
+remain unrun for this change; hosted CI has not run for this checkpoint. Readiness focus
+ownership remains unresolved.
+
 ## [1.5.8-beta.1] - 2026-10-27
 
 ### Fixed
