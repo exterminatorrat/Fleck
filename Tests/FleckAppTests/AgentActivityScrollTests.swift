@@ -139,6 +139,48 @@ struct AgentActivityScrollTests {
     )
     let scroller = try #require(scrollView.verticalScroller as? AgentActivityScroller)
 
+    enum ObservationKind: String {
+      case containmentFailure
+      case nonQuarterDiscriminator
+    }
+    var observationCount = 0
+    var observationBytes = 0
+
+    func recordGeometry(_ kind: ObservationKind, visual: NSRect, native: NSRect) {
+      guard observationCount < 21 else { return }
+      let bounds = scroller.bounds
+      let slot = scroller.rect(for: .knobSlot)
+      let backingZero = scroller.convertToBacking(NSPoint.zero)
+      let backingUnit = scroller.convertToBacking(NSPoint(x: 1, y: 1))
+      let fields: [(String, CGFloat?)] = [
+        ("boundsX", bounds.origin.x), ("boundsY", bounds.origin.y),
+        ("boundsWidth", bounds.width), ("boundsHeight", bounds.height),
+        ("slotX", slot.origin.x), ("slotY", slot.origin.y),
+        ("slotWidth", slot.width), ("slotHeight", slot.height),
+        ("nativeX", native.origin.x), ("nativeY", native.origin.y),
+        ("nativeWidth", native.width), ("nativeHeight", native.height),
+        ("visualX", visual.origin.x), ("visualY", visual.origin.y),
+        ("visualWidth", visual.width), ("visualHeight", visual.height),
+        ("isFlipped", scroller.isFlipped ? 1 : 0),
+        ("proportion", scroller.knobProportion), ("value", CGFloat(scroller.doubleValue)),
+        ("windowPresent", scroller.window == nil ? 0 : 1),
+        ("mainBackingFactor", NSScreen.main?.backingScaleFactor),
+        ("windowBackingFactor", scroller.window?.backingScaleFactor),
+        ("backingZeroX", backingZero.x), ("backingZeroY", backingZero.y),
+        ("backingUnitX", backingUnit.x), ("backingUnitY", backingUnit.y),
+      ]
+      let payload = fields.map { key, value in
+        let scalar = value.flatMap { $0.isFinite ? String(Double($0)) : nil } ?? "unknown"
+        return "\(key)=\(scalar)"
+      }.joined(separator: " ")
+      let record = "FLECK_SCROLLER_GEOMETRY_V1 kind=\(kind.rawValue) \(payload)\n"
+      let byteCount = record.utf8.count
+      guard byteCount <= 2_048, observationBytes + byteCount <= 43_008 else { return }
+      observationCount += 1
+      observationBytes += byteCount
+      print(record, terminator: "")
+    }
+
     for proportion in [CGFloat(0.0001), 0.125, 0.25, 0.5] {
       scroller.knobProportion = proportion
       var visualSize: NSSize?
@@ -157,6 +199,9 @@ struct AgentActivityScrollTests {
           : track.maxY - visual.height - travel * position
 
         #expect(visualSize == nil || visual.size == visualSize)
+        if !native.contains(visual) {
+          recordGeometry(.containmentFailure, visual: visual, native: native)
+        }
         #expect(native.contains(visual))
         #expect(visual.width == AgentActivityScroller.visualKnobWidth)
         #expect(abs(visual.minY - expectedY) < 0.001)
@@ -173,6 +218,14 @@ struct AgentActivityScrollTests {
         #expect((visualSize?.height ?? 0) > AgentActivityScroller.visualMinimumKnobLength)
       }
     }
+
+    scroller.knobProportion = 0.125
+    scroller.doubleValue = scroller.isFlipped ? 0.123 : 0.877
+    recordGeometry(
+      .nonQuarterDiscriminator,
+      visual: scroller.visualKnobRect,
+      native: scroller.rect(for: .knob)
+    )
   }
 
   @Test @MainActor
