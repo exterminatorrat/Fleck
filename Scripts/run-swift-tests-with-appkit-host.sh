@@ -86,6 +86,14 @@ readonly open_path="${FLECK_TEST_APPKIT_OPEN_PATH:-/usr/bin/open}"
 readonly sample_path="${FLECK_TEST_APPKIT_SAMPLE_PATH:-/usr/bin/sample}"
 readonly codesign_path="${FLECK_TEST_APPKIT_CODESIGN_PATH:-/usr/bin/codesign}"
 readonly host_watchdog_seconds="${FLECK_TEST_APPKIT_WATCHDOG_SECONDS:-2700}"
+readonly exit_capture_requested="${FLECK_TEST_APPKIT_EXIT_CAPTURE:-0}"
+case "$exit_capture_requested" in
+  0|1) ;;
+  *)
+    printf '%s\n' 'error: FLECK_TEST_APPKIT_EXIT_CAPTURE must be unset, 0, or 1' >&2
+    exit 2
+    ;;
+esac
 if [[ ! -x "$open_path" || ! -x "$sample_path" || ! -x "$codesign_path" ]]; then
   printf '%s\n' 'error: LaunchServices, process sampling, and code-signing tools are required' >&2
   exit 1
@@ -142,6 +150,135 @@ active_host_log_path=''
 active_host_pid_path=''
 active_host_phase_path=''
 active_host_nonce=''
+active_capture_pid=''
+active_capture_producer_binding=''
+active_capture_configuration=''
+active_capture_deadline=0
+active_capture_valid=0
+active_capture_aux_failure=0
+active_capture_watchdog_settled=0
+active_capture_starting=0
+active_capture_settling=0
+active_capture_wait_interrupted=0
+active_capture_pending_signal=''
+
+capture_tick_is_valid() {
+  [[ "$1" =~ ^[1-9][0-9]{0,18}$ ]] || return 1
+  (( ${#1} < 19 )) || [[ "$1" < 9223372036854775808 ]]
+}
+
+capture_producer_binding_is_valid() {
+  local binding="$1" expected_pid="$2"
+  [[ "$binding" =~ ^[0123456789]{1,20}(:[0123456789]{1,20}){5}$ ]] || return 1
+  [[ "${binding%%:*}" = "$expected_pid" ]]
+}
+
+mark_capture_boundary() {
+  if (( active_capture_aux_failure )); then
+    active_capture_valid=0
+    return 1
+  fi
+  [[ -n "$active_capture_configuration" ]] || return 0
+  if [[ "${1:-}" != watchdog ]] && (( ! active_capture_watchdog_settled )); then
+    active_capture_valid=0
+    active_capture_aux_failure=1
+    return 1
+  fi
+  if ! "$host_binary" --fleck-exit-observer boundary "$active_capture_configuration" \
+    >/dev/null 2>&1; then
+    active_capture_valid=0
+    active_capture_aux_failure=1
+    return 1
+  fi
+  return 0
+}
+
+settle_capture() {
+  [[ -n "$active_capture_pid" ]] || return 0
+  active_capture_settling=1
+  local observer_status=1 reaped_at=0 drained_at=0 capture_ok=1
+  "$host_binary" --fleck-exit-observer stop "$active_capture_configuration" \
+    >/dev/null 2>&1 || capture_ok=0
+  while true; do
+    active_capture_wait_interrupted=0
+    if wait "$active_capture_pid" 2>/dev/null; then
+      observer_status=0
+    else
+      observer_status=$?
+    fi
+    if (( active_capture_wait_interrupted && observer_status >= 128 )); then
+      continue
+    fi
+    break
+  done
+  active_capture_pid=''
+  if ! reaped_at="$("$host_binary" --fleck-exit-observer clock 2>/dev/null)" ||
+    ! capture_tick_is_valid "$reaped_at"; then
+    reaped_at=0
+    capture_ok=0
+  fi
+  if mark_capture_boundary; then
+    :
+  else
+    capture_ok=0
+  fi
+  (( active_capture_aux_failure == 0 )) || capture_ok=0
+  "$host_binary" --fleck-exit-observer drain \
+    "$active_capture_configuration" "$observer_status" "$reaped_at" \
+    "$active_capture_deadline" "$active_capture_producer_binding" \
+    1>&8 2>/dev/null || capture_ok=0
+  if ! drained_at="$("$host_binary" --fleck-exit-observer clock 2>/dev/null)" ||
+    ! capture_tick_is_valid "$drained_at"; then
+    drained_at=0
+    capture_ok=0
+  fi
+  active_capture_valid=0
+  if (( capture_ok && observer_status == 0 && reaped_at > 0 && drained_at > 0 &&
+    reaped_at < active_capture_deadline && drained_at < active_capture_deadline )); then
+    active_capture_valid=1
+  fi
+  printf 'AppKit capture settlement: observerStatus=%s reapedAt=%s drainedAt=%s deadline=%s valid=%s auxFailure=%s\n' \
+    "$observer_status" "$reaped_at" "$drained_at" "$active_capture_deadline" \
+    "$active_capture_valid" "$active_capture_aux_failure" >&8 || active_capture_valid=0
+  active_capture_settling=0
+  active_capture_producer_binding=''
+}
+
+start_capture() {
+  active_capture_configuration="$1"
+  active_capture_producer_binding=''
+  active_capture_deadline=0
+  active_capture_valid=0
+  active_capture_aux_failure=0
+  active_capture_watchdog_settled=0
+  active_capture_starting=1
+  "$host_binary" --fleck-exit-observer run "$active_capture_configuration" \
+    "$host_binary" "$host_watchdog_seconds" 8>&- >/dev/null 2>&1 &
+  active_capture_pid=$!
+  active_capture_starting=0
+  if [[ -n "$active_capture_pending_signal" ]]; then
+    handle_signal "$active_capture_pending_signal"
+  fi
+  local ready_output='' label='' deadline='' producer_binding='' extra=''
+  if ready_output="$("$host_binary" --fleck-exit-observer ready \
+    "$active_capture_configuration" "$active_capture_pid" "$host_binary" \
+    2>/dev/null)"; then
+    read -r label deadline producer_binding extra <<< "$ready_output" || true
+    if [[ "$ready_output" != *$'\n'* && "$label" = FLECK_CAPTURE_READY && -z "$extra" ]] &&
+      capture_tick_is_valid "$deadline" &&
+      capture_producer_binding_is_valid "$producer_binding" "$active_capture_pid"; then
+      active_capture_deadline="$deadline"
+      active_capture_producer_binding="$producer_binding"
+      return 0
+    fi
+  fi
+  settle_capture
+  if [[ -n "$active_capture_pending_signal" ]]; then
+    handle_signal "$active_capture_pending_signal"
+  fi
+  printf '%s\n' 'error: AppKit exit capture admission is unavailable' >&8
+  return 1
+}
 
 directory_entry_count() {
   local directory="$1" entry count=0
@@ -263,6 +400,7 @@ terminate_open_child() {
 watch_host() {
   local open_pid="$1"
   local started_seconds="$SECONDS"
+  local boundary_status=0 terminate_status=0
   trap '' HUP INT TERM
   while (( SECONDS - started_seconds < host_watchdog_seconds )); do
     [[ -e "$active_completion_path" ]] && return 0
@@ -271,8 +409,18 @@ watch_host() {
   done
   [[ -e "$active_completion_path" ]] && return 0
   : > "$active_claim_path/timeout"
+  if mark_capture_boundary watchdog; then
+    boundary_status=0
+  else
+    boundary_status=$?
+  fi
   capture_and_terminate_owned_host "exceeded the ${host_watchdog_seconds}s watchdog" || true
   terminate_open_child "$open_pid"
+  terminate_status=$?
+  if (( boundary_status != 0 )); then
+    return 70
+  fi
+  return "$terminate_status"
 }
 
 finish_active_run() {
@@ -300,6 +448,15 @@ finish_active_run() {
 
 cleanup() {
   local status=$?
+  if [[ -n "$active_capture_pid" ]]; then
+    active_capture_settling=1
+    if mark_capture_boundary; then
+      :
+    else
+      active_capture_valid=0
+    fi
+    settle_capture
+  fi
   trap - EXIT HUP INT TERM
   set +e
   finish_active_run
@@ -310,7 +467,23 @@ cleanup() {
 
 handle_signal() {
   local status="$1"
+  if (( active_capture_starting || active_capture_settling )); then
+    if [[ -z "$active_capture_pending_signal" ]]; then
+      active_capture_pending_signal="$status"
+    fi
+    active_capture_wait_interrupted=1
+    return 0
+  fi
   {
+    if [[ -n "$active_capture_pid" ]]; then
+      active_capture_settling=1
+    fi
+    if mark_capture_boundary; then
+      :
+    else
+      active_capture_valid=0
+    fi
+    settle_capture
     printf 'error: interrupted while running the AppKit test host (status %s)\n' \
       "$status" >&2
     finish_active_run
@@ -353,6 +526,9 @@ launch_host() {
   {
     printf '%s\0' "$stage_nonce" "$receipt_path" "$pid_path" "$phase_path" \
       "$host_log_path"
+    if [[ "$mode" = run && "$exit_capture_requested" = 1 ]]; then
+      printf '%s\0' exit-observer-v1
+    fi
   } > "$configuration_path"
 
   active_completion_path="$completion_path"
@@ -361,6 +537,9 @@ launch_host() {
   active_host_pid_path="$pid_path"
   active_host_phase_path="$phase_path"
   active_host_nonce="$stage_nonce"
+  if [[ "$mode" = run && "$exit_capture_requested" = 1 ]]; then
+    start_capture "$configuration_path" || return 1
+  fi
 
   local open_arguments=(-n -W)
   if [[ "$mode" = list ]]; then
@@ -391,6 +570,15 @@ launch_host() {
   watchdog_status=$?
   set -e
   active_watchdog_pid=''
+  if [[ -n "$active_capture_configuration" ]] && (( watchdog_status != 0 )); then
+    active_capture_aux_failure=1
+    active_capture_valid=0
+  fi
+  active_capture_watchdog_settled=1
+  settle_capture
+  if [[ -n "$active_capture_pending_signal" ]]; then
+    handle_signal "$active_capture_pending_signal"
+  fi
 
   if [[ -s "$open_log_path" ]]; then
     /bin/cat "$open_log_path" >&2 || return 1
@@ -461,11 +649,18 @@ launch_host() {
     printf 'error: Swift Testing returned status %s\n' "$receipt_status" >&2
     return "$receipt_status"
   fi
+  if [[ -n "$active_capture_configuration" ]] && (( ! active_capture_valid )); then
+    printf '%s\n' 'error: AppKit exit capture is unavailable or invalid' >&8
+    return 1
+  fi
 
   active_host_log_path=''
   active_host_pid_path=''
   active_host_phase_path=''
   active_host_nonce=''
+  active_capture_configuration=''
+  active_capture_deadline=0
+  active_capture_producer_binding=''
 }
 
 build_arguments=(build --build-tests --disable-automatic-resolution)
