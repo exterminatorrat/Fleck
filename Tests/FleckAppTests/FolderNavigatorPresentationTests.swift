@@ -1759,7 +1759,7 @@ private final class FolderNavigatorFixture {
       let hitView = host.hitTest(pointInHostSuperview)
       print(
         "FLECK_FOLDER_CLICK screenPoint=\(screenPoint) " +
-          "hit=\(hitView.map { String(describing: type(of: $0)) } ?? "nil") " +
+          "hit=\(hitView.map { String(describing: Swift.type(of: $0)) } ?? "nil") " +
           "applicationIsActive=\(NSApp.isActive) windowIsKey=\(window.isKeyWindow) " +
           "applicationKeyMatches=\(NSApp.keyWindow === window)"
       )
