@@ -3,6 +3,50 @@
   import SwiftUI
   import FleckCore
   import UniformTypeIdentifiers
+#if DEBUG
+  @MainActor
+  enum BacklinksDisclosureObservation {
+    enum Phase: String {
+      case pointer
+      case headerEntry = "header_entry"
+      case headerReturn = "header_return"
+      case bindingEntry = "binding_entry"
+      case bindingApplied = "binding_applied"
+      case settled
+    }
+
+    struct Event {
+      let phase: Phase
+      let expanded: Bool
+      let requested: Bool?
+    }
+
+    private static weak var owner: BacklinkController?
+    private static var sink: ((Event) -> Void)?
+    private static var captureUsed = false
+
+    static func install(for controller: BacklinkController, sink: @escaping (Event) -> Void) -> Bool {
+      guard ProcessInfo.processInfo.environment["FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC"] == "1",
+        !captureUsed, self.sink == nil
+      else { return false }
+      captureUsed = true
+      owner = controller
+      self.sink = sink
+      return true
+    }
+
+    static func remove(for controller: BacklinkController) {
+      guard owner === controller else { return }
+      sink = nil
+      owner = nil
+    }
+
+    static func record(_ phase: Phase, for controller: BacklinkController, requested: Bool? = nil) {
+      guard owner === controller, let sink else { return }
+      sink(Event(phase: phase, expanded: controller.isExpanded, requested: requested))
+    }
+  }
+#endif
 
   enum NoteTabInk {
     static let selectedCapsuleOpacity = 0.22
@@ -1443,7 +1487,13 @@
         Spacer()
         SaveFeedbackView(status: appState.saveStatus, motion: motion)
         Button {
+#if DEBUG
+          BacklinksDisclosureObservation.record(.headerEntry, for: backlinkController)
+#endif
           backlinkController.toggleDisclosure()
+#if DEBUG
+          BacklinksDisclosureObservation.record(.headerReturn, for: backlinkController)
+#endif
         } label: {
           Image(systemName: "link")
             .frame(width: 22, height: 22)
@@ -1930,8 +1980,18 @@
       Binding(
         get: { backlinkController.isExpanded },
         set: { isPresented in
+#if DEBUG
+          BacklinksDisclosureObservation.record(
+            .bindingEntry, for: backlinkController, requested: isPresented
+          )
+#endif
           guard backlinkController.isExpanded != isPresented else { return }
           backlinkController.toggleDisclosure()
+#if DEBUG
+          BacklinksDisclosureObservation.record(
+            .bindingApplied, for: backlinkController, requested: isPresented
+          )
+#endif
         }
       )
     }

@@ -53,8 +53,17 @@ func NotesPanelBacklinksPopoverReclaimsEditorSpace() async throws {
   let originalEditor = editor
   let originalString = editor.string
   let backlinksControl = try #require(toolbarControls.first)
+#if DEBUG
+  let disclosureTrace = BacklinksPointerTrace.begin(
+    controller: backlinks, host: host, window: window, chosen: backlinksControl
+  )
+  defer { disclosureTrace?.disarm() }
+#endif
   clickHostedBacklinksControl(backlinksControl, in: window)
   await settleBacklinksHost(host)
+#if DEBUG
+  disclosureTrace?.finish(expanded: backlinks.isExpanded)
+#endif
 
   #expect(backlinks.isExpanded)
   #expect(hostedBacklinksDescendant(in: host, as: ListAwareTextView.self) === originalEditor)
@@ -875,6 +884,9 @@ private func clickHostedBacklinksControl(_ control: NSView, in window: NSWindow)
     NSPoint(x: control.bounds.midX, y: control.bounds.midY),
     to: nil
   )
+#if DEBUG
+  BacklinksPointerTrace.active?.capturePointer(control, point: point, in: window)
+#endif
   for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
     guard let event = NSEvent.mouseEvent(
       with: eventType,
@@ -898,6 +910,217 @@ private func settleBacklinksHost(_ view: NSView) async {
     await Task.yield()
   }
 }
+#if DEBUG
+
+@MainActor
+private final class BacklinksPointerTrace {
+  enum Association: String {
+    case identity
+    case axChain = "ax_chain"
+    case unproved
+    case unknown
+  }
+
+  enum AXStatus: String {
+    case available
+    case unavailable
+    case duplicate
+    case incomplete
+  }
+
+  enum OwnerCount: String {
+    case zero = "0"
+    case one = "1"
+    case many
+    case unknown
+  }
+
+  static weak var active: BacklinksPointerTrace?
+  private weak var controller: BacklinkController?
+  private weak var host: NSView?
+  private weak var window: NSWindow?
+  private weak var chosen: NSView?
+  private var events: [BacklinksDisclosureObservation.Event?] = Array(repeating: nil, count: 7)
+  private var eventCount = 0
+  private var armed = false
+  private var pointerCaptured = false
+  private var truncated = false
+  private var associationComplete = false
+  private var chosenAssociation = Association.unknown
+  private var hitAssociation = Association.unknown
+  private var axStatus = AXStatus.unavailable
+  private var ownerCount = OwnerCount.unknown
+  private var applicationActive: Bool?
+  private var windowKey: Bool?
+  private var windowMatches: Bool?
+  private var emittedRecords = 0
+  private var emittedBytes = 0
+
+  static func begin(
+    controller: BacklinkController, host: NSView, window: NSWindow, chosen: NSView
+  ) -> BacklinksPointerTrace? {
+    guard ProcessInfo.processInfo.environment["FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC"] == "1" else { return nil }
+    let trace = BacklinksPointerTrace()
+    guard BacklinksDisclosureObservation.install(for: controller, sink: { [weak trace] event in
+      trace?.record(event)
+    }) else { return nil }
+    trace.controller = controller
+    trace.host = host
+    trace.window = window
+    trace.chosen = chosen
+    trace.armed = true
+    active = trace
+    return trace
+  }
+
+  private func record(_ event: BacklinksDisclosureObservation.Event) {
+    guard armed else { return }
+    guard eventCount < events.count else {
+      truncated = true
+      return
+    }
+    events[eventCount] = event
+    eventCount += 1
+  }
+
+  func disarm() {
+    guard armed else { return }
+    if let controller { BacklinksDisclosureObservation.remove(for: controller) }
+    if Self.active === self { Self.active = nil }
+    armed = false
+  }
+
+  func capturePointer(_ control: NSView, point: NSPoint, in window: NSWindow) {
+    guard armed, control === chosen, window === self.window, let controller, let host else { return }
+    guard !pointerCaptured else {
+      truncated = true
+      return
+    }
+    pointerCaptured = true
+    defer { record(.init(phase: .pointer, expanded: controller.isExpanded, requested: nil)) }
+    applicationActive = NSApp.isActive
+    windowKey = window.isKeyWindow
+    windowMatches = control.window === window && host.window === window
+    let hostPoint = host.convert(point, from: nil)
+    let hit = host.hitTest(host.convert(hostPoint, to: host.superview))
+    guard windowMatches == true,
+      NSApp.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")) as? Bool == true
+    else { return }
+    let identifier = NSSelectorFromString("accessibilityIdentifier")
+    let childrenSelector = NSSelectorFromString("accessibilityChildren")
+    var pending: [(NSObject, Int)] = [(host, 0)]
+    var seen: Set<ObjectIdentifier> = [ObjectIdentifier(host)]
+    var owners: [NSObject] = []
+    var complete = true
+    var cursor = 0
+    while cursor < pending.count {
+      let (element, depth) = pending[cursor]
+      cursor += 1
+      if element.responds(to: identifier),
+        element.perform(identifier)?.takeUnretainedValue() as? String == "backlinks-toolbar-button",
+        owners.count < 2
+      {
+        owners.append(element)
+      }
+      guard element.responds(to: childrenSelector) else {
+        complete = false
+        continue
+      }
+      guard let value = element.perform(childrenSelector)?.takeUnretainedValue() else { continue }
+      guard let children = value as? NSArray else { complete = false; continue }
+      guard depth < 16 else {
+        if children.count > 0 { complete = false }
+        continue
+      }
+      let remaining = 128 - pending.count
+      if children.count > remaining { complete = false }
+      for index in 0..<min(children.count, remaining) {
+        guard let child = children[index] as? NSObject else {
+          complete = false
+          continue
+        }
+        guard seen.insert(ObjectIdentifier(child)).inserted else { continue }
+        pending.append((child, depth + 1))
+      }
+    }
+    ownerCount = owners.isEmpty ? .zero : (owners.count == 1 ? .one : .many)
+    guard complete else { axStatus = .incomplete; ownerCount = .unknown; return }
+    guard owners.count == 1, let owner = owners.first else {
+      axStatus = owners.isEmpty ? .available : .duplicate
+      return
+    }
+    axStatus = .available
+    guard owner !== host,
+      owner.responds(to: NSSelectorFromString("accessibilityFrame")),
+      let frame = (owner.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue,
+      frame.origin.x.isFinite, frame.origin.y.isFinite,
+      frame.width.isFinite, frame.height.isFinite, frame.width > 0, frame.height > 0
+    else { return }
+    guard frame.contains(window.convertPoint(toScreen: point)) else {
+      chosenAssociation = .unproved
+      hitAssociation = .unproved
+      associationComplete = true
+      return
+    }
+    var chosenLink: Association = owner === control ? .identity : .unknown
+    var hitLink: Association = owner === hit ? .identity : .unknown
+    let parentSelector = NSSelectorFromString("accessibilityParent")
+    let hitIsProxy = hit.map { String(describing: Swift.type(of: $0)) == "KeyViewProxy" } ?? false
+    var element = owner
+    var parents: Set<ObjectIdentifier> = [ObjectIdentifier(owner)]
+    for index in 0..<8 {
+      guard element !== host else { break }
+      guard element.responds(to: parentSelector) else { complete = false; break }
+      guard let value = element.perform(parentSelector)?.takeUnretainedValue() else { break }
+      guard let parent = value as? NSObject else { complete = false; break }
+      guard parent !== host else { break }
+      guard parents.insert(ObjectIdentifier(parent)).inserted else { complete = false; break }
+      if parent === control, chosenLink == .unknown { chosenLink = .axChain }
+      if parent === hit, hitIsProxy, hitLink == .unknown { hitLink = .axChain }
+      element = parent
+      if index == 7 && element !== host { complete = false }
+    }
+    guard complete else { axStatus = .incomplete; return }
+    chosenAssociation = chosenLink
+    hitAssociation = hitLink
+    associationComplete = chosenLink != .unknown && hitLink != .unknown
+  }
+
+  func finish(expanded: Bool) {
+    guard armed else { return }
+    record(.init(phase: .settled, expanded: expanded, requested: nil))
+    disarm()
+    guard !expanded else { return }
+    for index in 0..<eventCount {
+      guard let event = events[index] else { truncated = true; continue }
+      write(
+        "FLECK_BACKLINK_TRACE seq=\(index) phase=\(event.phase.rawValue) "
+          + "expanded=\(event.expanded ? 1 : 0) requested=\(flag(event.requested))\n"
+      )
+    }
+    write(
+      "FLECK_BACKLINK_TRACE seq=\(eventCount) phase=summary ax=\(axStatus.rawValue) "
+        + "owners=\(ownerCount.rawValue) chosen=\(chosenAssociation.rawValue) hit=\(hitAssociation.rawValue) "
+        + "active=\(flag(applicationActive)) key=\(flag(windowKey)) window_match=\(flag(windowMatches)) "
+        + "trace_complete=\(pointerCaptured && !truncated ? 1 : 0) "
+        + "association_complete=\(associationComplete ? 1 : 0) truncated=\(truncated ? 1 : 0)\n"
+    )
+  }
+
+  private func flag(_ value: Bool?) -> String {
+    value.map { $0 ? "1" : "0" } ?? "u"
+  }
+
+  private func write(_ line: String) {
+    guard emittedRecords < 8, let data = line.data(using: .ascii), data.last == 10,
+      data.count <= 384, emittedBytes <= 3072, data.count <= 3072 - emittedBytes
+    else { truncated = true; return }
+    emittedRecords += 1
+    emittedBytes += data.count
+    FileHandle.standardOutput.write(data)
+  }
+}
+#endif
 
 @MainActor
 private func requireBacklinksPickerReady(
