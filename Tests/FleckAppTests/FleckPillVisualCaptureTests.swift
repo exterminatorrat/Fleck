@@ -251,23 +251,44 @@ import Testing
     opening.activationMix = 0
     opening.processingMix = 0
     opening.signalOpacity = 1
-    let frames: [(frame: FleckPillMotionFrame, left: ClosedRange<Int>, right: ClosedRange<Int>)] = [
+    let frames: [(
+      name: String,
+      frame: FleckPillMotionFrame,
+      left: ClosedRange<Int>,
+      right: ClosedRange<Int>
+    )] = [
       (
-        FleckPillMotion.sample(FleckPillMotion.anchors[.listening]!),
-        135...165,
-        375...420
+        name: "listening-anchor",
+        frame: FleckPillMotion.sample(FleckPillMotion.anchors[.listening]!),
+        left: 135...165,
+        right: 375...420
       ),
-      (opening, 175...230, 310...365),
+      (name: "opening-sample", frame: opening, left: 175...230, right: 310...365),
     ]
     let layers = FleckPillCanvasLayers(rim: false, shoulders: false, signal: true, halo: false)
-    for sample in frames {
+    let scale = 3
+    for (sampleIndex, sample) in frames.enumerated() {
       let image = try FleckPillPixelChecks.image(
         FleckPillCanvas(frame: sample.frame, layers: layers, backdrop: .dark),
-        scale: 3
+        scale: scale
       )
       let bounds = try #require(FleckPillPixelChecks.brightHorizontalBounds(image))
-      #expect(bounds.lowerBound >= sample.left.lowerBound && bounds.lowerBound <= sample.left.upperBound)
-      #expect(bounds.upperBound >= sample.right.lowerBound && bounds.upperBound <= sample.right.upperBound)
+      let pixelDiagnostic = [
+        "sample=\(sample.name)[\(sampleIndex)]",
+        "brightBounds=\(bounds)",
+        "image=\(image.pixelsWide)x\(image.pixelsHigh)",
+        "scale=\(scale)",
+        "expectedLeft=\(sample.left)",
+        "expectedRight=\(sample.right)",
+      ].joined(separator: " ")
+      #expect(
+        bounds.lowerBound >= sample.left.lowerBound && bounds.lowerBound <= sample.left.upperBound,
+        Comment(rawValue: pixelDiagnostic)
+      )
+      #expect(
+        bounds.upperBound >= sample.right.lowerBound && bounds.upperBound <= sample.right.upperBound,
+        Comment(rawValue: pixelDiagnostic)
+      )
     }
   }
 

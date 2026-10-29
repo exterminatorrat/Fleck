@@ -48,7 +48,7 @@
     controller: DictationCapsuleController,
     size: CGSize? = nil,
     directory: URL?
-  ) throws {
+  ) async throws {
     guard let host = controller.panel.contentView else {
       Issue.record("Expected a hosted Fleck rail for \(name)")
       return
@@ -88,6 +88,29 @@
     if let size { #expect(panelFrame.size == size) }
     #expect(host.bounds.size == panelFrame.size)
     host.layoutSubtreeIfNeeded()
+
+    if controller.fleckPillModel.isVisible,
+      let sessionID = controller.fleckPillModel.sessionID
+    {
+      let clock = ContinuousClock()
+      let deadline = clock.now.advanced(by: .seconds(2))
+      var matchingSnapshot: FleckPillRenderSnapshot?
+      while matchingSnapshot == nil && clock.now < deadline {
+        host.layoutSubtreeIfNeeded()
+        host.displayIfNeeded()
+        if let snapshot = controller.fleckPillModel.renderReceipt.snapshot(for: sessionID),
+          controller.fleckPillModel.sessionID == sessionID,
+          snapshot.sessionID == sessionID,
+          snapshot.generation == controller.fleckPillModel.renderGeneration,
+          snapshot.frame == controller.fleckPillModel.frame
+        {
+          matchingSnapshot = snapshot
+          break
+        }
+        try await Task.sleep(for: .milliseconds(16))
+      }
+      _ = try #require(matchingSnapshot)
+    }
 
     let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
     host.cacheDisplay(in: host.bounds, to: imageRep)
@@ -296,7 +319,7 @@
       .map { URL(fileURLWithPath: $0, isDirectory: true) }
 
     #expect(controller.fleckPillModel.state == .standby)
-    try captureVisualState(
+    try await captureVisualState(
       "live-pill-bottom-standby",
       controller: controller,
       size: DictationCapsuleController.livePillHostSize,
@@ -328,7 +351,7 @@
     #expect(controller.fleckPillModel.state == .opening)
     #expect(controller.fleckPillModel.frame.energy == 0)
     #expect(controller.fleckPillModel.frame.activationMix == 0)
-    try captureVisualState(
+    try await captureVisualState(
       "live-pill-bottom-arming",
       controller: controller,
       size: DictationCapsuleController.livePillHostSize,
@@ -356,7 +379,7 @@
     #expect(controller.fleckPillModel.state == .listening)
     #expect(controller.fleckPillModel.frame.energy == 0)
     #expect(controller.fleckPillModel.frame.activationMix == 1)
-    try captureVisualState(
+    try await captureVisualState(
       "live-pill-bottom-listening-quiet",
       controller: controller,
       size: DictationCapsuleController.livePillHostSize,
@@ -375,7 +398,7 @@
       at: clock.now,
       displayedEnergy: controller.fleckPillModel.frame.energy
     )
-    try captureVisualState(
+    try await captureVisualState(
       "live-pill-bottom-listening-active",
       controller: controller,
       size: DictationCapsuleController.livePillHostSize,
@@ -412,7 +435,7 @@
     #expect(controller.fleckPillModel.frame.phase == consumedListeningFrame.phase)
     clock.now += 0.16
     controller.fleckPillModel.tick(at: clock.now, displayedEnergy: consumedListeningFrame.energy)
-    try captureVisualState(
+    try await captureVisualState(
       "live-pill-bottom-processing",
       controller: controller,
       size: DictationCapsuleController.livePillHostSize,
@@ -1243,7 +1266,7 @@
       action: DictationCapsuleAction? = nil,
       chooser: DictationCapsuleChooser? = nil,
       seedSyntheticWaveform: Bool = false
-    ) throws {
+    ) async throws {
       controller.panel.orderOut(nil)
       controller.render(context, action: action, chooser: chooser)
       if seedSyntheticWaveform {
@@ -1273,7 +1296,7 @@
           widthCeiling: presentation.widthCeiling
         )
       }
-      try captureVisualState(
+      try await captureVisualState(
         "synthetic-offscreen-\(name)",
         controller: controller,
         size: captureSize,
@@ -1291,12 +1314,12 @@
       }
     }
 
-    try render(
+    try await render(
       "idle-bottom",
       context: DictationCapsuleContext(status: .idle)
     )
 
-    func renderStarting(_ dock: DictationCapsuleDock) throws {
+    func renderStarting(_ dock: DictationCapsuleDock) async throws {
       let startingPanel = DictationCapsulePanel()
       startingPanel.appearance = NSAppearance(named: .darkAqua)
       let startingController = DictationCapsuleController(
@@ -1307,7 +1330,7 @@
       startingController.presentIdle(dock: dock, onOpenFleck: {}, onDockChanged: { _ in })
       startingController.render(.arming)
       startingController.panel.contentView?.appearance = NSAppearance(named: .darkAqua)
-      try captureVisualState(
+      try await captureVisualState(
         "arming-\(dock.rawValue)",
         controller: startingController,
         size: DictationCapsuleController.size(for: .arming),
@@ -1316,7 +1339,7 @@
     }
 
     for dock in DictationCapsuleDock.allCases {
-      try renderStarting(dock)
+      try await renderStarting(dock)
     }
 
     func renderCaptureFeedbackMatrix(
@@ -1338,7 +1361,7 @@
         )
         feedbackController.render(.arming)
         feedbackController.panel.contentView?.appearance = NSAppearance(named: appearance)
-        try captureVisualState(
+        try await captureVisualState(
           "capture-feedback-starting-\(appearanceName)-\(dock.rawValue)",
           controller: feedbackController,
           size: DictationCapsuleController.size(for: .arming),
@@ -1350,14 +1373,14 @@
           stage: .capture
         ))
         feedbackController.panel.contentView?.appearance = NSAppearance(named: appearance)
-        try captureVisualState(
+        try await captureVisualState(
           "capture-feedback-listening-quiet-\(appearanceName)-\(dock.rawValue)",
           controller: feedbackController,
           size: DictationCapsuleController.listeningSize,
           directory: captureDirectory
         )
         prepareSyntheticWaveformFixture(for: feedbackController)
-        try captureVisualState(
+        try await captureVisualState(
           "capture-feedback-listening-synthetic-live-\(appearanceName)-\(dock.rawValue)",
           controller: feedbackController,
           size: DictationCapsuleController.listeningSize,
@@ -1376,14 +1399,14 @@
         feedbackController.waveformModel.reset()
         feedbackController.waveformModel.beginListening(monotonicNow: ProcessInfo.processInfo.systemUptime)
         feedbackController.panel.contentView?.appearance = NSAppearance(named: appearance)
-        try captureVisualState(
+        try await captureVisualState(
           "single-row-smart-capture-listening-quiet-\(appearanceName)-\(dock.rawValue)",
           controller: feedbackController,
           size: DictationCapsuleController.size(for: smartCapture.status),
           directory: captureDirectory
         )
         prepareSyntheticWaveformFixture(for: feedbackController)
-        try captureVisualState(
+        try await captureVisualState(
           "single-row-smart-capture-listening-live-\(appearanceName)-\(dock.rawValue)",
           controller: feedbackController,
           size: DictationCapsuleController.size(for: smartCapture.status),
@@ -1392,7 +1415,7 @@
         feedbackController.presentationModel.setListeningHover(true)
         for _ in 0..<5 { await Task.yield() }
         feedbackController.panel.contentView?.layoutSubtreeIfNeeded()
-        try captureVisualState(
+        try await captureVisualState(
           "single-row-smart-capture-listening-hover-\(appearanceName)-\(dock.rawValue)",
           controller: feedbackController,
           size: DictationCapsuleController.size(for: smartCapture.status),
@@ -1413,7 +1436,7 @@
         feedbackController.waveformModel.reset()
         feedbackController.waveformModel.beginListening(monotonicNow: ProcessInfo.processInfo.systemUptime)
         feedbackController.panel.contentView?.appearance = NSAppearance(named: appearance)
-        try captureVisualState(
+        try await captureVisualState(
           "focused-long-title-header-free-\(appearanceName)-\(dock.rawValue)",
           controller: feedbackController,
           size: DictationCapsuleController.size(for: longTitleContext.status),
@@ -1430,13 +1453,13 @@
       isHandsFree: false,
       stage: .capture
     )
-    try render(
+    try await render(
       "listening-right-option-held-bottom",
       context: heldListening,
       size: DictationCapsuleController.listeningSize
     )
     prepareSyntheticWaveformFixture(for: controller)
-    try captureVisualState(
+    try await captureVisualState(
       "listening-right-option-held-bottom-seeded",
       controller: controller,
       size: DictationCapsuleController.listeningSize,
@@ -1454,7 +1477,7 @@
     )
     for dock in [DictationCapsuleDock.bottom, .left, .right] {
       controller.setDock(dock)
-      try render(
+      try await render(
         "listening-focused-destination-\(dock.rawValue)",
         context: focusedListening,
         seedSyntheticWaveform: true
@@ -1469,20 +1492,20 @@
     )
     controller.waveformModel.reset()
     controller.waveformModel.beginListening(monotonicNow: ProcessInfo.processInfo.systemUptime)
-    try render(
+    try await render(
       "listening-hands-free-bottom",
       context: handsFreeListening,
       size: DictationCapsuleController.listeningSize
     )
     prepareSyntheticWaveformFixture(for: controller)
-    try captureVisualState(
+    try await captureVisualState(
       "listening-hands-free-bottom-seeded",
       controller: controller,
       size: DictationCapsuleController.listeningSize,
       directory: captureDirectory
     )
     controller.presentationModel.setListeningHover(true)
-    try captureVisualState(
+    try await captureVisualState(
       "listening-hands-free-hover-stop-cancel-bottom",
       controller: controller,
       size: DictationCapsuleController.listeningSize,
@@ -1495,14 +1518,14 @@
       compactDetailText: "Smart Capture",
       stage: .polish
     )
-    try render(
+    try await render(
       "polishing-after-label-delay-bottom",
       context: polishing
     )
     try await Task.sleep(for: .milliseconds(500))
     for _ in 0..<5 { await Task.yield() }
     controller.presentationModel.setListeningHover(false)
-    try captureVisualState(
+    try await captureVisualState(
       "polishing-after-label-delay-bottom-visible",
       controller: controller,
       size: DictationCapsuleController.size(for: polishing.status),
@@ -1516,29 +1539,29 @@
       mode: .smartCapture,
       pipelineStage: .polish
     )
-    try render(
+    try await render(
       "polishing-smart-capture-bottom",
       context: smartPolishing
     )
-    try render(
+    try await render(
       "finalizing-bottom",
       context: visualCaptureContext(.finalizing, stage: .capture)
     )
-    try render(
+    try await render(
       "routing-bottom",
       context: visualCaptureContext(.routing, stage: .organize)
     )
-    try render(
+    try await render(
       "saving-bottom",
       context: visualCaptureContext(.saving, stage: .save)
     )
 
-    try render(
+    try await render(
       "saved-undo-bottom",
       context: visualCaptureContext(.saved(destination: "Inbox")),
       action: .undo
     )
-    try render(
+    try await render(
       "saved-original-bottom",
       context: visualCaptureContext(
         .savedWithoutCleanup(destination: "Inbox"),
@@ -1546,7 +1569,7 @@
         cleanup: .usedRaw
       )
     )
-    try render(
+    try await render(
       "saved-service-fallback-bottom",
       context: visualCaptureContext(
         .savedWithoutCleanup(destination: "Inbox"),
@@ -1555,7 +1578,7 @@
         cleanupFallbackProvenance: .serviceFallback
       )
     )
-    try render(
+    try await render(
       "saved-raw-without-service-fallback-bottom",
       context: visualCaptureContext(
         .saved(destination: "Inbox"),
@@ -1563,7 +1586,7 @@
         cleanup: .usedRaw
       )
     )
-    try render(
+    try await render(
       "save-failure-recovery-bottom",
       context: visualCaptureContext(
         .failed("save failed"),
@@ -1573,7 +1596,7 @@
       ),
       action: .openDestination
     )
-    try render(
+    try await render(
       "routing-failure-recovery-bottom",
       context: visualCaptureContext(
         .routingFailure(status: "Destination unavailable", message: "Could not route dictation."),
@@ -1583,15 +1606,15 @@
       ),
       action: .openDestination
     )
-    try render(
+    try await render(
       "model-repairing-bottom",
       context: visualCaptureContext(.repairingModel, stage: .capture)
     )
-    try render(
+    try await render(
       "no-speech-bottom",
       context: visualCaptureContext(.noSpeech)
     )
-    try render(
+    try await render(
       "dictation-failure-bottom",
       context: visualCaptureContext(
         .failed("Recognition failed"),
@@ -1600,7 +1623,7 @@
         failureKind: .speechRecognitionAccess
       )
     )
-    try render(
+    try await render(
       "quiet-saved-undo-bottom",
       context: visualCaptureContext(
         .idle,
@@ -1620,7 +1643,7 @@
         ]
       )
     )
-    try render(
+    try await render(
       "quiet-saved-undo-and-routing-choice-bottom",
       context: visualCaptureContext(
         .idle,
@@ -1650,7 +1673,7 @@
     for (index, level) in levels.enumerated() {
       controller.waveformModel.receive(level: level, monotonicNow: ProcessInfo.processInfo.systemUptime)
       try await Task.sleep(for: .milliseconds(80))
-      try captureVisualState(
+      try await captureVisualState(
         String(format: "frame-%03d", index), controller: controller,
         size: DictationCapsuleController.listeningSize, directory: directory
       )
@@ -1660,12 +1683,12 @@
       controller.waveformModel.receive(level: 0.20, monotonicNow: ProcessInfo.processInfo.systemUptime)
       controller.presentationModel.setListeningHover(true)
       try await Task.sleep(for: .milliseconds(80))
-      try captureVisualState("listening-\(dock.rawValue)-controls", controller: controller,
+      try await captureVisualState("listening-\(dock.rawValue)-controls", controller: controller,
         size: DictationCapsuleController.listeningSize, directory: directory)
     }
     controller.render(visualCaptureContext(.cleaning, stage: .polish))
     #expect(controller.waveformModel.energy == 0)
-    try captureVisualState("processing", controller: controller,
+    try await captureVisualState("processing", controller: controller,
       size: DictationCapsuleController.activeSize, directory: directory)
     controller.dismiss()
     #expect(controller.waveformModel.energy == 0)
@@ -2240,7 +2263,7 @@
   }
 
   @Test @MainActor
-  func DictationCapsuleLiveArtworkRequiresMatchingNonterminalCoordinatorEvents() throws {
+  func DictationCapsuleLiveArtworkRequiresMatchingNonterminalCoordinatorEvents() async throws {
     let panel = DictationCapsulePanel()
     let controller = DictationCapsuleController(panel: panel)
     defer { controller.dismiss() }
@@ -2257,7 +2280,7 @@
     controller.render(listening, coordinatorEvent: matchingEvent)
     #expect(controller.fleckPillModel.state == .listening)
     #expect(controller.fleckPillModel.sessionID == sessionID)
-    try captureVisualState(
+    try await captureVisualState(
       "matching-session-live-pill",
       controller: controller,
       size: DictationCapsuleController.livePillHostSize,

@@ -99,7 +99,16 @@ private struct RetryPostedEvent: @unchecked Sendable {
 @Test @MainActor func DictationCapsulePostedEventRetryQualification() async throws {
   let application = try #require(NSApp)
   try #require(application.isRunning, "Requires the existing AppKit test host's live NSApplication.run loop")
-  try #require(application.isActive)
+  let currentPID = ProcessInfo.processInfo.processIdentifier
+  let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+  let activationDiagnostic = [
+    "isActive=\(application.isActive)",
+    "policy=\(String(describing: application.activationPolicy()))",
+    "currentPID=\(currentPID)",
+    "frontmostIsCurrent=\(frontmostPID.map { $0 == currentPID } ?? false)",
+    "frontmostPID=\(String(describing: frontmostPID))",
+  ].joined(separator: ", ")
+  try #require(application.isActive, Comment(rawValue: activationDiagnostic))
   try #require(application.activationPolicy() == .regular)
   let controller = DictationCapsuleController(automaticallyAdvancesLivePill: false,
     reduceMotionProvider: { true })

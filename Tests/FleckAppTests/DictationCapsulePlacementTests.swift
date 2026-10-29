@@ -81,6 +81,25 @@ import Testing
   if let directory {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
   }
+  let errorProbeIdentifiers = [
+    "fleck-error-surface",
+    "fleck-error-message",
+    "fleck-rail-recovery",
+    "fleck-error-action-label",
+  ]
+  func collectErrorProbeFrames(in root: NSView) -> [(identifier: String, frame: CGRect)] {
+    var frames: [(identifier: String, frame: CGRect)] = []
+    func collect(from view: NSView) {
+      if let identifier = view.identifier?.rawValue,
+        errorProbeIdentifiers.contains(identifier)
+      {
+        frames.append((identifier, view.convert(view.bounds, to: root)))
+      }
+      for child in view.subviews { collect(from: child) }
+    }
+    collect(from: root)
+    return frames
+  }
   var observations: [[String: Any]] = []
   for appearance in [FleckThemeAppearance.light, .dark] {
     for profile in ["standard", "reduced-motion", "contrast-and-opaque"] {
@@ -167,8 +186,27 @@ import Testing
             size: DictationCapsuleController.size(for: status, measuredWidth: presentation.measuredWidth,
               widthCeiling: presentation.widthCeiling), in: screen.visibleFrame)
         }
-        #expect(panel.frame == expected)
-        #expect(host.bounds.size == expected.size)
+        let errorProbes = collectErrorProbeFrames(in: host)
+        let errorProbeCountMetadata = errorProbeIdentifiers.map { identifier in
+          "\(identifier)=\(errorProbes.filter { $0.identifier == identifier }.count)"
+        }.joined(separator: ", ")
+        let errorProbeFrameMetadata = errorProbes
+          .map { "\($0.identifier)=\($0.frame)" }
+          .joined(separator: ", ")
+        let placementDiagnostic = [
+          "state=\(name)",
+          "appearance=\(appearance)",
+          "profile=\(profile)",
+          "scale=\(screen.backingScaleFactor)",
+          "logicalExpected=\(expected)",
+          "panelFrame=\(panel.frame)",
+          "hostFrame=\(host.frame)",
+          "hostBounds=\(host.bounds)",
+          "errorProbeCounts={\(errorProbeCountMetadata)}",
+          "errorProbeFrames={\(errorProbeFrameMetadata)}",
+        ].joined(separator: " ")
+        #expect(panel.frame == expected, Comment(rawValue: placementDiagnostic))
+        #expect(host.bounds.size == expected.size, Comment(rawValue: placementDiagnostic))
         #expect(controller.currentDock == .bottom)
         if case .saved = status {
           #expect(controller.currentContext.status == .idle)
@@ -181,7 +219,14 @@ import Testing
         observations.append(["name": name, "appearance": String(describing: appearance),
           "profile": profile, "x": panel.frame.minX, "y": panel.frame.minY,
           "width": panel.frame.width, "height": panel.frame.height,
-          "screenMidX": screen.visibleFrame.midX, "screenMinY": screen.visibleFrame.minY])
+          "screenMidX": screen.visibleFrame.midX, "screenMinY": screen.visibleFrame.minY,
+          "backingScale": screen.backingScaleFactor,
+          "logicalExpectedFrame": String(describing: expected),
+          "panelFrame": String(describing: panel.frame),
+          "hostFrame": String(describing: host.frame),
+          "hostBounds": String(describing: host.bounds),
+          "errorProbeCounts": errorProbeCountMetadata,
+          "errorProbeFrames": errorProbeFrameMetadata])
         if let directory {
           let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
           host.cacheDisplay(in: host.bounds, to: bitmap)
