@@ -11,6 +11,7 @@ struct IncrementalCleanupRequest: Equatable, Sendable {
 enum IncrementalCleanupFallbackReason: Equatable, Sendable {
   case targetTooLarge
   case deadlineExpired
+  case backendUnavailable
   case requestCancelled
   case generationFailed
   case malformedOutput
@@ -18,13 +19,31 @@ enum IncrementalCleanupFallbackReason: Equatable, Sendable {
   case validationRejected
 }
 
+enum CleanupServiceUnavailableReason: Equatable, Sendable {
+  case operatingSystem
+  case backend
+}
+
 enum IncrementalCleanupDecision: Equatable, Sendable {
   case accepted(String)
   case baseline(reason: IncrementalCleanupFallbackReason)
+  case serviceFallback
 }
 
 struct GeneratedCleanupCandidate: Equatable, Sendable {
   let cleaned: String
+  let cleanupFallbackProvenance: DictationCleanupFallbackProvenance?
+  let cleanupServiceUnavailableReason: CleanupServiceUnavailableReason?
+
+  init(
+    cleaned: String,
+    cleanupFallbackProvenance: DictationCleanupFallbackProvenance? = nil,
+    cleanupServiceUnavailableReason: CleanupServiceUnavailableReason? = nil
+  ) {
+    self.cleaned = cleaned
+    self.cleanupFallbackProvenance = cleanupFallbackProvenance
+    self.cleanupServiceUnavailableReason = cleanupServiceUnavailableReason
+  }
 }
 
 enum CleanupGenerationError: Error, Equatable, Sendable {
@@ -170,14 +189,26 @@ actor IncrementalTranscriptCleaner {
 
       switch event {
       case .deadline:
-        return deterministicFallbackOrBaseline(for: request, reason: .deadlineExpired)
+        return deterministicFallbackOrBaseline(
+          for: request,
+          reason: .deadlineExpired
+        )
       case .requestCancelled, .terminated:
         return .baseline(reason: .requestCancelled)
       case .callerCancelled:
         throw CancellationError()
       case .generationFailed:
-        return deterministicFallbackOrBaseline(for: request, reason: .generationFailed)
+        guard request.deadline > clock.now() else {
+          return deterministicFallbackOrBaseline(for: request, reason: .deadlineExpired)
+        }
+        return deterministicFallbackOrBaseline(
+          for: request,
+          reason: .generationFailed,
+          serviceFallback: box.resultRequestAdmitted
+        )
       case .candidate(let candidate):
+        let serviceFallback = box.resultRequestAdmitted
+          && candidate.cleanupServiceUnavailableReason == nil
         guard request.deadline > clock.now() else {
           box.requestCancellation()
           _ = await awaitTermination(
@@ -187,14 +218,25 @@ actor IncrementalTranscriptCleaner {
             cancellationBudget: cancellationBudget
           )
           try Task.checkCancellation()
-          return deterministicFallbackOrBaseline(for: request, reason: .deadlineExpired)
+          return deterministicFallbackOrBaseline(
+            for: request,
+            reason: .deadlineExpired
+          )
         }
         guard !candidate.cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-          return deterministicFallbackOrBaseline(for: request, reason: .malformedOutput)
+          return deterministicFallbackOrBaseline(
+            for: request,
+            reason: .malformedOutput,
+            serviceFallback: serviceFallback
+          )
         }
         let normalizedCandidate = Self.addMissingTerminalPeriod(to: candidate.cleaned)
         guard CleanupLexeme.tokenCount(normalizedCandidate) <= inputCount + 32 else {
-          return deterministicFallbackOrBaseline(for: request, reason: .outputTooLarge)
+          return deterministicFallbackOrBaseline(
+            for: request,
+            reason: .outputTooLarge,
+            serviceFallback: serviceFallback
+          )
         }
         let validation = validator.validate(candidate: normalizedCandidate, against: resolution)
         try Task.checkCancellation()
@@ -204,9 +246,22 @@ actor IncrementalTranscriptCleaner {
              let fallback = deterministicFallback {
             return .accepted(fallback)
           }
+          if candidate.cleaned == request.baseline,
+             text == request.baseline {
+            if candidate.cleanupServiceUnavailableReason != nil {
+              return .baseline(reason: .backendUnavailable)
+            }
+            if candidate.cleanupFallbackProvenance == .serviceFallback {
+              return .serviceFallback
+            }
+          }
           return .accepted(text)
         case .rejected:
-          return deterministicFallbackOrBaseline(for: request, reason: .validationRejected)
+          return deterministicFallbackOrBaseline(
+            for: request,
+            reason: .validationRejected,
+            serviceFallback: serviceFallback
+          )
         }
       }
     } catch is CancellationError {
@@ -235,18 +290,34 @@ actor IncrementalTranscriptCleaner {
         }
         throw CancellationError()
       }
-      return deterministicFallbackOrBaseline(for: request, reason: .generationFailed)
+      if let error = error as? DynamicCleanupGeneratorError,
+         error == .gemmaUnavailable {
+        return deterministicFallbackOrBaseline(
+          for: request,
+          reason: .backendUnavailable,
+          serviceFallback: false
+        )
+      }
+      return deterministicFallbackOrBaseline(
+        for: request,
+        reason: .generationFailed,
+        serviceFallback: box.resultRequestAdmitted
+      )
     }
   }
 
   private func deterministicFallbackOrBaseline(
     for request: IncrementalCleanupRequest,
-    reason: IncrementalCleanupFallbackReason
+    reason: IncrementalCleanupFallbackReason,
+    serviceFallback: Bool = false
   ) -> IncrementalCleanupDecision {
     if let fallback = deterministicFillerFallback(for: request) {
+      if serviceFallback, fallback == request.baseline {
+        return .serviceFallback
+      }
       return .accepted(fallback)
     }
-    return .baseline(reason: reason)
+    return serviceFallback ? .serviceFallback : .baseline(reason: reason)
   }
 
   private func deterministicFillerFallback(
@@ -279,6 +350,7 @@ private final class CleanupSessionBox: @unchecked Sendable {
   private let lock = NSLock()
   private var session: (any CleanupGenerationSession)?
   private var cancellationRequested = false
+  private var resultRequestAdmittedStorage = false
   private var forceRequested = false
   private var terminationDisposition: CleanupTerminationDisposition?
 
@@ -293,6 +365,22 @@ private final class CleanupSessionBox: @unchecked Sendable {
 
   func currentSession() -> (any CleanupGenerationSession)? {
     lock.withLock { session }
+  }
+
+  func admitResultRequest(
+    before deadline: ContinuousClock.Instant,
+    now: @Sendable () -> ContinuousClock.Instant
+  ) -> Bool? {
+    lock.withLock {
+      guard !cancellationRequested else { return nil }
+      guard deadline > now() else { return false }
+      resultRequestAdmittedStorage = true
+      return true
+    }
+  }
+
+  var resultRequestAdmitted: Bool {
+    lock.withLock { resultRequestAdmittedStorage }
   }
 
   func requestCancellation() {
@@ -355,7 +443,17 @@ private func race(
 ) async -> CleanupRaceEvent {
   return await withTaskGroup(of: CleanupRaceEvent.self) { group in
     group.addTask {
-      do { return .candidate(try await session.result()) }
+      do {
+        try Task.checkCancellation()
+        switch box.admitResultRequest(before: deadline, now: clock.now) {
+        case .some(true):
+          return .candidate(try await session.result())
+        case .some(false):
+          return .deadline
+        case nil:
+          return .callerCancelled
+        }
+      }
       catch let error as CleanupGenerationError {
         switch error {
         case .requestCancelled: return .requestCancelled

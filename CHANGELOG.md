@@ -3,6 +3,19 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.0-beta.1] - 2026-10-27
+
+### Fixed
+
+- Keep raw fallback outcomes honest across cleanup service failure, OS/backend
+  unavailability, deadlines and cancellation while preserving dictionary-protected forms.
+- Carry insertion-versus-persistence failure provenance through dictation contexts
+  without changing receipt-backed recovery or successful-save standby.
+
+Part of the shared retained-feature 1.7.0 cohort, not a separate release.
+Source-only preparation. Local compilation, tests, native/visual/accessibility behavior
+and packaging remain unverified; hosted verification is pending.
+
 ## [1.5.10-beta.1] - 2026-10-29
 
 ### Fixed

@@ -92,6 +92,73 @@ private actor FoundationModelResponderProbe {
 
   #expect(result.text == raw)
   #expect(result.outcome == .usedRaw)
+  #expect(result.cleanupFallbackProvenance == .serviceFallback)
+}
+
+@Test func FoundationModelDictationFaithfulUnchangedInputDoesNotProveOriginalFallback() async {
+  let raw = "Send the report."
+  let result = await cleanupResult(raw: raw, modelOutput: raw)
+
+  #expect(result.text == raw)
+  #expect(result.outcome == .cleaned)
+  #expect(result.cleanupFallbackProvenance == nil)
+}
+
+@Test func FoundationModelDictationEligibleGenerationFailureProvesFallbackWhenRawSurvives() async {
+  let raw = "Send the report."
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    cleanupGenerator: { _, _ in throw FixtureError.missingOutput },
+    routingGenerator: { _, _ in .inbox }
+  )
+
+  let result = await dictation.cleanupResult(raw)
+
+  #expect(result.text == raw)
+  #expect(result.outcome == .usedRaw)
+  #expect(result.cleanupFallbackProvenance == .serviceFallback)
+}
+
+@Test func FoundationModelDictationUnavailableBackendDoesNotProveServiceFallback() async {
+  let raw = "Send the report."
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    cleanupGenerator: { _, _ in throw FoundationModelCleanupError.unavailable },
+    routingGenerator: { _, _ in .inbox }
+  )
+
+  let result = await dictation.cleanupResult(raw)
+
+  #expect(result.text == raw)
+  #expect(result.outcome == .usedRaw)
+  #expect(result.cleanupFallbackProvenance == nil)
+}
+
+@Test func FoundationModelDictationChangedLocalFallbackDoesNotProveOriginalTextWasUsed() async {
+  let raw = "Um, send the report."
+  let result = await cleanupResult(raw: raw, modelOutput: "Cancel the report.")
+
+  #expect(result.text == "send the report.")
+  #expect(result.outcome == .cleaned)
+  #expect(result.cleanupFallbackProvenance == nil)
+}
+
+@Test func FoundationModelDictationCleanAttachesFallbackProvenanceToUsedRawError() async {
+  let raw = "Send the report."
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    cleanupGenerator: { _, _ in "Cancel the report." },
+    routingGenerator: { _, _ in .inbox }
+  )
+
+  do {
+    _ = try await dictation.clean(raw)
+    Issue.record("Expected the preserved original text error.")
+  } catch let error as FoundationModelCleanupError {
+    #expect(error == .usedRaw(cleanupFallbackProvenance: .serviceFallback))
+  } catch {
+    Issue.record("Unexpected cleanup error: \(error)")
+  }
 }
 
 @Test func FoundationModelDictationLocallyRemovesAdjacentRepeatedPhraseWhenModelIsUnavailable() async {
@@ -135,6 +202,7 @@ private actor FoundationModelResponderProbe {
 
   #expect(result.text == raw)
   #expect(result.outcome == .usedRaw)
+  #expect(result.cleanupFallbackProvenance == nil)
 }
 
 @Test func FoundationModelDictationLocallyRemovesExplicitFillerAndAdjacentIStutter() async {
