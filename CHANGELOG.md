@@ -3,6 +3,18 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.2-beta.1] - 2026-10-29
+
+### Fixed
+
+- Ignore earlier and later folder overflow actions while a new folder is being composed,
+  including actions sent through retained accessibility controls.
+- Cover retained overflow actions from both scroll endpoints while preserving existing
+  pointer-path geometry and mounted scroll/document identity checks.
+
+Source-only repair checkpoint. Compilation, native behavior and full CI for this combined
+candidate remain unverified.
+
 ## [1.7.0-beta.1] - 2026-10-27
 
 ### Fixed
@@ -15,6 +27,29 @@ public release log. Packaging unchanged source does not add a changelog entry.
 This focused change is part of the shared 1.7.0-beta.1 retained-feature release cohort,
 not a separate release. Source-only checkpoint: local compilation, tests and native
 keyboard, focus, IME, visual and accessibility behavior remain unverified.
+
+## [1.5.10-beta.1] - 2026-10-29
+
+### Fixed
+
+- Inherit the explicit interface-font correction while preserving theme/hover surfaces,
+  bottom-only live-pill standby and the reviewed dictation regression guards.
+
+Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
+and native behavior remain unverified; hosted verification is pending.
+
+## [1.5.9-beta.1] - 2026-10-29
+
+### Fixed
+
+- Balance native Settings traffic lights against measured sidebar search and header frames,
+  retaining calibrated placement while the header is hidden.
+- Add geometry/cache regression coverage and encode the Models reverse-Tab fixture with
+  AppKit's backtab character.
+
+Source-only repair checkpoint. Compilation, tests and native/visual/accessibility validation
+remain unrun for this change; hosted CI has not run for this checkpoint. Readiness focus
+ownership remains unresolved.
 
 ## [1.5.9-beta.1] - 2026-10-27
 
