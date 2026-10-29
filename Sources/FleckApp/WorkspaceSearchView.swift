@@ -145,6 +145,33 @@
     private var focusRestoreTask: Task<Void, Never>?
     private var hasActivatedCurrentPresentation = false
 
+    #if DEBUG
+      var returnDiagnosticsArmed = false {
+        didSet {
+          returnDiagnosticOrigin?.returnDiagnosticsArmed = false
+          returnDiagnosticOrigin?.returnDiagnosticEligibleResponderSeen = false
+          returnDiagnosticOrigin = returnDiagnosticsArmed ? focusOrigin : nil
+          returnDiagnosticOrigin?.returnDiagnosticEligibleResponderSeen = false
+          returnDiagnosticOrigin?.returnDiagnosticsArmed = returnDiagnosticsArmed
+          returnDiagnosticEntered = false
+          returnDiagnosticAdmissionAttempted = false
+          returnDiagnosticAdmitted = false
+          returnDiagnosticRestoreAttempts = 0
+          returnDiagnosticLastRestore = false
+          returnDiagnosticEligibleResponderSeen = false
+          returnDiagnosticOriginCaptured = returnDiagnosticOrigin != nil
+        }
+      }
+      var returnDiagnosticEntered = false
+      private(set) var returnDiagnosticAdmissionAttempted = false
+      private(set) var returnDiagnosticAdmitted = false
+      private(set) var returnDiagnosticRestoreAttempts = 0
+      private(set) var returnDiagnosticLastRestore = false
+      private(set) var returnDiagnosticEligibleResponderSeen = false
+      private(set) var returnDiagnosticOriginCaptured = false
+      private weak var returnDiagnosticOrigin: WorkspaceSearchFocusOrigin?
+    #endif
+
     init(
       searchOperation: @escaping SearchOperation = { query, notes, limit in
         await WorkspaceSearchEngine().search(query: query, in: notes, limit: limit)
@@ -209,7 +236,15 @@
       hasActivatedCurrentPresentation = false
       let origin = focusOrigin
       focusOrigin = nil
-      origin?.restore()
+      let initiallyRestored = origin?.restore()
+      #if DEBUG
+        if returnDiagnosticsArmed, returnDiagnosticAdmitted, let origin {
+          returnDiagnosticRestoreAttempts += 1
+          returnDiagnosticLastRestore = initiallyRestored ?? false
+          returnDiagnosticEligibleResponderSeen = origin.returnDiagnosticEligibleResponderSeen
+        }
+      #endif
+      _ = initiallyRestored
       if let origin {
         focusRestoreTask = Task { @MainActor [weak self] in
           for _ in 0..<12 {
@@ -221,7 +256,15 @@
             else {
               return
             }
-            if origin.restore() { break }
+            let restored = origin.restore()
+            #if DEBUG
+              if self.returnDiagnosticsArmed, self.returnDiagnosticAdmitted {
+                self.returnDiagnosticRestoreAttempts += 1
+                self.returnDiagnosticLastRestore = restored
+                self.returnDiagnosticEligibleResponderSeen = origin.returnDiagnosticEligibleResponderSeen
+              }
+            #endif
+            if restored { break }
           }
           guard let self, self.searchGeneration == restoreGeneration else { return }
           self.focusRestoreTask = nil
@@ -323,6 +366,11 @@
       activate: (UUID) -> Void,
       onDismiss: (() -> Void)? = nil
     ) -> Bool {
+      #if DEBUG
+        let observeAdmission = returnDiagnosticsArmed && returnDiagnosticEntered
+          && !returnDiagnosticAdmissionAttempted
+        if observeAdmission { returnDiagnosticAdmissionAttempted = true }
+      #endif
       guard isPresented,
         !hasActivatedCurrentPresentation,
         resultGeneration == searchGeneration,
@@ -333,6 +381,9 @@
         return false
       }
 
+      #if DEBUG
+        if observeAdmission { returnDiagnosticAdmitted = true }
+      #endif
       hasActivatedCurrentPresentation = true
       focusOrigin?.markActivated(noteID)
       activate(noteID)
@@ -423,6 +474,11 @@
     private let surface: Surface
     let noteID: UUID?
     private var activatedNoteID: UUID?
+
+    #if DEBUG
+      var returnDiagnosticsArmed = false
+      var returnDiagnosticEligibleResponderSeen = false
+    #endif
 
     private init(
       window: NSWindow,
@@ -561,6 +617,11 @@
       case .unknown:
         responder = nil
       }
+      #if DEBUG
+        if returnDiagnosticsArmed, responder != nil {
+          returnDiagnosticEligibleResponderSeen = true
+        }
+      #endif
       guard let responder else { return false }
       guard window.makeFirstResponder(responder) else { return false }
       if let control = responder as? NSControl {
@@ -685,6 +746,11 @@
                 return .handled
               }
               .onKeyPress(.return) {
+                #if DEBUG
+                  if controller.returnDiagnosticsArmed {
+                    controller.returnDiagnosticEntered = true
+                  }
+                #endif
                 _ = controller.handleKey(
                   .return,
                   currentNoteIDs: currentNoteIDs(),

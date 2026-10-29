@@ -1300,21 +1300,64 @@ func WorkspaceSearchHostingActivatesNamedFolderResultThroughProductionScope()
       keyCode: 36
     )
   )
+  func reportReturnState(_ phase: String, waitSucceeded: Bool = false) {
+    let queryEditor = queryField.currentEditor()
+    let targetEditors = hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+      .filter { $0.string == target.body }
+    let targetEditor = targetEditors.first
+    let queryOwnsResponder = queryEditor != nil && queryEditor === window.firstResponder
+    let hasSingleTargetResult = searchController.results.map(\.noteID) == [target.id]
+    let targetIsSelected = state.workspace.selectedNoteID == target.id
+    let editorIsAttached = targetEditor != nil && targetEditor?.window === window
+    let commandsMatch = targetEditor != nil && commands.textView === targetEditor
+    let responderMatches = targetEditor != nil && window.firstResponder === targetEditor
+    #if DEBUG
+      let witnesses = " entry=\(searchController.returnDiagnosticEntered)" +
+        " attempted=\(searchController.returnDiagnosticAdmissionAttempted)" +
+        " admitted=\(searchController.returnDiagnosticAdmitted)" +
+        " origin=\(searchController.returnDiagnosticOriginCaptured)" +
+        " tries=\(searchController.returnDiagnosticRestoreAttempts)" +
+        " restored=\(searchController.returnDiagnosticLastRestore)" +
+        " eligible=\(searchController.returnDiagnosticEligibleResponderSeen)"
+    #else
+      let witnesses = ""
+    #endif
+    print(
+      "FLECK_SEARCH_RETURN phase=\(phase) qOwn=\(queryOwnsResponder) " +
+        "key=\(NSApp.keyWindow === window && window.isKeyWindow) active=\(NSApp.isActive) " +
+        "oneResult=\(hasSingleTargetResult) current=\(searchController.resultsAreCurrent) " +
+        "highlight=\(searchController.highlightedNoteID == target.id) selected=\(targetIsSelected) " +
+        "closed=\(!searchController.isPresented) editor=\(targetEditors.count == 1) " +
+        "attached=\(editorIsAttached) commands=\(commandsMatch) responder=\(responderMatches) " +
+        "finished=\(phase == "final") ready=\(waitSucceeded)" + witnesses
+    )
+  }
+  #if DEBUG
+    searchController.returnDiagnosticsArmed = true
+    defer { searchController.returnDiagnosticsArmed = false }
+  #endif
+  reportReturnState("before")
   window.sendEvent(returnEvent)
+  reportReturnState("after")
+  let returnRestored = try await waitForWorkspaceSearchHostState(host) {
+    guard state.workspace.selectedNoteID == target.id,
+      !searchController.isPresented,
+      let targetEditor = hostedWorkspaceSearchDescendants(
+        in: host,
+        as: ListAwareTextView.self
+      ).first(where: { $0.string == target.body })
+    else {
+      return false
+    }
+    return commands.textView === targetEditor
+      && window.firstResponder === targetEditor
+  }
+  reportReturnState("final", waitSucceeded: returnRestored)
+  #if DEBUG
+    searchController.returnDiagnosticsArmed = false
+  #endif
   try #require(
-    await waitForWorkspaceSearchHostState(host) {
-      guard state.workspace.selectedNoteID == target.id,
-        !searchController.isPresented,
-        let targetEditor = hostedWorkspaceSearchDescendants(
-          in: host,
-          as: ListAwareTextView.self
-        ).first(where: { $0.string == target.body })
-      else {
-        return false
-      }
-      return commands.textView === targetEditor
-        && window.firstResponder === targetEditor
-    },
+    returnRestored,
     "Timed out waiting for Return activation to restore the target editor"
   )
 

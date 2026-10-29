@@ -6251,7 +6251,12 @@ private func hostedNavigatorKeyViewFrames(in view: NSView) -> [CGRect] {
 
 @MainActor
 private func hostedSchoolFolderFrame(in view: NSView) -> CGRect? {
-  hostedNavigatorKeyViewFrames(in: view).first { abs($0.width - 108) < 0.5 }
+  let frames = hostedNavigatorKeyViewFrames(in: view)
+  let frame = frames.first { abs($0.width - 108) < 0.5 }
+  if frame == nil {
+    print("FLECK_FOLDER_FRAME expectedWidth=108 candidates=\(frames) hostBounds=\(view.bounds)")
+  }
+  return frame
 }
 
 @MainActor
@@ -6319,6 +6324,31 @@ private func hostedNavigatorKeyView(
   guard let matchingKeyView = matchingKeyViews.first else { return nil }
   let matchingFrames = matchingKeyViews.map { $0.convert($0.bounds, to: view) }
   let matchingFrame = matchingKeyView.convert(matchingKeyView.bounds, to: view)
+  if !matchingFrames.allSatisfy({ $0 == matchingFrame }) {
+    let firstResponder = window.firstResponder
+    print(
+      "FLECK_FOLDER_KEY_VIEW identifier=\(identifier) axFrame=\(screenFrame) " +
+        "chosen=\(ObjectIdentifier(matchingKeyView)) hostBounds=\(view.bounds) " +
+        "windowBounds=\(window.contentView?.bounds ?? .zero) scale=\(window.backingScaleFactor) " +
+        "firstResponder=\(firstResponder.map { String(describing: ObjectIdentifier($0)) } ?? "nil")"
+    )
+    for (candidate, candidateScreenFrame) in zip(keyViews, candidateScreenFrames) {
+      let ancestors = sequence(first: candidate) { $0 === view ? nil : $0.superview }
+        .map { "\(ObjectIdentifier($0)):\(type(of: $0))" }
+      print(
+        "FLECK_FOLDER_KEY_VIEW_CANDIDATE id=\(ObjectIdentifier(candidate)) " +
+          "hostFrame=\(candidate.convert(candidate.bounds, to: view)) " +
+          "screenFrame=\(candidateScreenFrame) " +
+          "containsAXCenter=\(candidateScreenFrame.contains(accessibilityCenter)) " +
+          "hidden=\(candidate.isHiddenOrHasHiddenAncestor) " +
+          "windowMatches=\(candidate.window === window) " +
+          "acceptsFirstResponder=\(candidate.acceptsFirstResponder) " +
+          "canBecomeKeyView=\(candidate.canBecomeKeyView) " +
+          "ownsResponder=\((firstResponder as? NSView)?.isDescendant(of: candidate) == true) " +
+          "ancestors=\(ancestors)"
+      )
+    }
+  }
   #expect(matchingFrames.allSatisfy { $0 == matchingFrame })
   return matchingKeyView
 }

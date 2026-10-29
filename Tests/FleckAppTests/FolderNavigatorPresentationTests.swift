@@ -981,22 +981,44 @@ private func folderComposerIsInactive(
 private func formerFolderComposerRegionIsInert(
   _ region: NSRect,
   in host: NSView,
-  rawFields: [NSTextField]
+  rawFields: [NSTextField],
+  reportState: Bool = false
 ) -> Bool {
-  guard !region.isEmpty, host.bounds.contains(region) else { return false }
+  guard !region.isEmpty, host.bounds.contains(region) else {
+    if reportState {
+      print(
+        "FLECK_FOLDER_FORMER_REGION region=\(region) hostBounds=\(host.bounds) " +
+          "nonempty=\(!region.isEmpty) contained=\(host.bounds.contains(region))"
+      )
+    }
+    return false
+  }
   let coordinates: [CGFloat] = [0.25, 0.5, 0.75]
   let points = coordinates.flatMap { x in
     coordinates.map { y in
       NSPoint(x: region.minX + region.width * x, y: region.minY + region.height * y)
     }
   }
-  return points.allSatisfy { point in
+  var allPointsAreInert = true
+  for point in points {
     let pointInSuperview = host.convert(point, to: host.superview)
-    guard let hitView = host.hitTest(pointInSuperview) else { return true }
-    return rawFields.allSatisfy { field in
-      hitView !== field && !hitView.isDescendant(of: field)
+    let hitView = host.hitTest(pointInSuperview)
+    let inert = rawFields.allSatisfy { field in
+      hitView !== field && hitView?.isDescendant(of: field) != true
+    }
+    if reportState {
+      print(
+        "FLECK_FOLDER_FORMER_REGION point=\(point) " +
+          "hit=\(hitView.map { String(describing: ObjectIdentifier($0)) } ?? "nil") " +
+          "inert=\(inert) region=\(region) hostBounds=\(host.bounds)"
+      )
+    }
+    if !inert {
+      if !reportState { return false }
+      allPointsAreInert = false
     }
   }
+  return allPointsAreInert
 }
 
 @MainActor
@@ -1732,6 +1754,16 @@ private final class FolderNavigatorFixture {
 
   func click(screenPoint: NSPoint) throws {
     let location = window.convertPoint(fromScreen: screenPoint)
+    if ProcessInfo.processInfo.environment["FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC"] == "1" {
+      let pointInHostSuperview = host.superview?.convert(location, from: nil) ?? location
+      let hitView = host.hitTest(pointInHostSuperview)
+      print(
+        "FLECK_FOLDER_CLICK screenPoint=\(screenPoint) " +
+          "hit=\(hitView.map { String(describing: type(of: $0)) } ?? "nil") " +
+          "applicationIsActive=\(NSApp.isActive) windowIsKey=\(window.isKeyWindow) " +
+          "applicationKeyMatches=\(NSApp.keyWindow === window)"
+      )
+    }
     let timestamp = ProcessInfo.processInfo.systemUptime
     let mouseDownEventNumber = Self.nextMouseEventNumber
     Self.nextMouseEventNumber += 1
@@ -1846,6 +1878,12 @@ private final class FolderNavigatorFixture {
           "isHidden": field.isHidden,
           "hiddenAncestorIdentity": hiddenAncestor.map { identity($0) as Any } ?? NSNull(),
           "nativeString": field.stringValue,
+          "fieldBounds": NSStringFromRect(field.bounds),
+          "fieldFrameInHost": NSStringFromRect(field.convert(field.bounds, to: host)),
+          "hostBounds": NSStringFromRect(host.bounds),
+          "firstResponderIsField": window.firstResponder === field,
+          "firstResponderDescendsFromField": (window.firstResponder as? NSView)?
+            .isDescendant(of: field) == true,
           "editorIdentity": editor.map { identity($0) as Any } ?? NSNull(),
           "editorString": editorString.map { $0 as Any } ?? NSNull(),
           "editorHasMarkedText": editorView.map { $0.hasMarkedText() as Any } ?? NSNull(),
@@ -1897,38 +1935,71 @@ private final class FolderNavigatorFixture {
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: .seconds(2))
 
-    func stateMatches() throws -> Bool {
+    func stateMatches(reportFailure: Bool = false) throws -> Bool {
       let field = try liveNewFolderFieldIfPresent()
       guard isPresent else {
-        guard field == nil,
-          matchingElements(host, matching: "accessibilityIdentifier", value: "folder-new-name")
-            .isEmpty,
-          matchingElements(host, matching: "accessibilityLabel", value: "Create folder").isEmpty,
-          matchingElements(
-            host,
-            matching: "accessibilityLabel",
-            value: "Cancel new folder"
-          ).isEmpty,
-          rawNewFolderComposersAreInactive(),
-          let formerInteractionRegion,
+        if !reportFailure {
+          guard field == nil,
+            matchingElements(host, matching: "accessibilityIdentifier", value: "folder-new-name")
+              .isEmpty,
+            matchingElements(host, matching: "accessibilityLabel", value: "Create folder").isEmpty,
+            matchingElements(
+              host,
+              matching: "accessibilityLabel",
+              value: "Cancel new folder"
+            ).isEmpty,
+            rawNewFolderComposersAreInactive(),
+            let formerInteractionRegion,
+            formerFolderComposerRegionIsInert(
+              formerInteractionRegion,
+              in: host,
+              rawFields: rawNewFolderFields()
+            )
+          else { return false }
+          return true
+        }
+        let nameCount = matchingElements(
+          host, matching: "accessibilityIdentifier", value: "folder-new-name"
+        ).count
+        let createCount = matchingElements(
+          host, matching: "accessibilityLabel", value: "Create folder"
+        ).count
+        let cancelCount = matchingElements(
+          host, matching: "accessibilityLabel", value: "Cancel new folder"
+        ).count
+        let rawFieldsAreInactive = rawNewFolderComposersAreInactive()
+        let formerRegionIsInert = formerInteractionRegion.map {
           formerFolderComposerRegionIsInert(
-            formerInteractionRegion,
+            $0,
             in: host,
-            rawFields: rawNewFolderFields()
+            rawFields: rawNewFolderFields(),
+            reportState: reportFailure
           )
-        else { return false }
-        return true
+        } ?? false
+        let matches = field == nil && nameCount == 0 && createCount == 0 && cancelCount == 0
+          && rawFieldsAreInactive && formerRegionIsInert
+        if reportFailure && !matches {
+          print(
+            "FLECK_FOLDER_DISMISSAL liveField=\(field != nil) axNameCount=\(nameCount) " +
+              "axCreateCount=\(createCount) axCancelCount=\(cancelCount) " +
+              "rawFieldsAreInactive=\(rawFieldsAreInactive) formerRegionIsInert=\(formerRegionIsInert)"
+          )
+        }
+        return matches
       }
-      guard let field else { return false }
-      guard
-        field.window === window,
-        let editor = field.currentEditor(),
-        editor === window.firstResponder,
-        window.isKeyWindow,
-        NSApp.keyWindow === window,
-        NSApp.isActive
-      else { return false }
-      return true
+      let editor = field?.currentEditor()
+      let matches = field != nil && field?.window === window && editor != nil
+        && editor === window.firstResponder && window.isKeyWindow
+        && NSApp.keyWindow === window && NSApp.isActive
+      if reportFailure && !matches {
+        print(
+          "FLECK_FOLDER_PRESENT liveField=\(field != nil) windowMatches=\(field?.window === window) " +
+            "editorPresent=\(editor != nil) editorIsResponder=\(editor === window.firstResponder) " +
+            "windowIsKey=\(window.isKeyWindow) applicationKeyMatches=\(NSApp.keyWindow === window) " +
+            "applicationIsActive=\(NSApp.isActive)"
+        )
+      }
+      return matches
     }
 
     while clock.now < deadline {
@@ -1941,7 +2012,14 @@ private final class FolderNavigatorFixture {
     }
 
     try Task.checkCancellation()
-    return try stateMatches()
+    let matches = try stateMatches(reportFailure: true)
+    if !matches {
+      printCreationFailureSnapshot(
+        testName: "waitForNewFolderComposer(isPresent: \(isPresent))",
+        expectedName: ""
+      )
+    }
+    return matches
   }
 
   func liveNewFolderField() throws -> NSTextField {
@@ -1992,6 +2070,21 @@ private final class FolderNavigatorFixture {
       try await Task.sleep(for: min(.milliseconds(25), remaining))
     }
     try Task.checkCancellation()
+    let fields = textFields.filter { $0.accessibilityIdentifier() == identifier }
+    print(
+      "FLECK_FOLDER_RENAME identifier=\(identifier) candidateCount=\(fields.count) " +
+        "applicationIsActive=\(NSApp.isActive) windowIsKey=\(window.isKeyWindow) " +
+        "applicationKeyMatches=\(NSApp.keyWindow === window)"
+    )
+    for field in fields {
+      print(
+        "FLECK_FOLDER_RENAME_FIELD id=\(ObjectIdentifier(field)) " +
+          "hostFrame=\(field.convert(field.bounds, to: host)) " +
+          "windowMatches=\(field.window === window) hidden=\(field.isHiddenOrHasHiddenAncestor) " +
+          "editorPresent=\(field.currentEditor() != nil) " +
+          "editorIsResponder=\(field.currentEditor() === window.firstResponder)"
+      )
+    }
     return false
   }
 

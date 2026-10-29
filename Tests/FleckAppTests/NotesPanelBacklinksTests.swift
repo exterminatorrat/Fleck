@@ -56,6 +56,47 @@ func NotesPanelBacklinksPopoverReclaimsEditorSpace() async throws {
   clickHostedBacklinksControl(backlinksControl, in: window)
   await settleBacklinksHost(host)
 
+  if !backlinks.isExpanded {
+    func matchingBacklinkTargets(in value: Any?) -> [NSObject] {
+      guard let element = value as? NSObject else { return [] }
+      let identifier = NSSelectorFromString("accessibilityIdentifier")
+      var matches: [NSObject] = []
+      if element.responds(to: identifier),
+        element.perform(identifier)?.takeUnretainedValue() as? String == "backlinks-toolbar-button"
+      {
+        matches.append(element)
+      }
+      let childrenSelector = NSSelectorFromString("accessibilityChildren")
+      let children = element.responds(to: childrenSelector)
+        ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+      for child in NSAccessibility.unignoredChildren(from: children ?? []) {
+        matches.append(contentsOf: matchingBacklinkTargets(in: child))
+      }
+      return matches
+    }
+    let targets = matchingBacklinkTargets(in: host)
+    let controlFrame = backlinksControl.convert(backlinksControl.bounds, to: host)
+    let point = NSPoint(x: controlFrame.midX, y: controlFrame.midY)
+    let hit = host.hitTest(host.convert(point, to: host.superview))
+    print(
+      "FLECK_BACKLINK_DISCLOSURE chosen=\(ObjectIdentifier(backlinksControl)) " +
+        "chosenFrame=\(controlFrame) windowMatches=\(backlinksControl.window === window) " +
+        "chosenScreenFrame=\(window.convertToScreen(backlinksControl.convert(backlinksControl.bounds, to: nil))) " +
+        "hit=\(hit.map { String(describing: type(of: $0)) } ?? "nil") " +
+        "applicationIsActive=\(NSApp.isActive) windowIsKey=\(window.isKeyWindow) " +
+        "applicationKeyMatches=\(NSApp.keyWindow === window) axTargetCount=\(targets.count) " +
+        "axEnhanced=\(NSApp.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")) as? Bool == true) " +
+        "candidateFrames=\(toolbarControls.map { $0.convert($0.bounds, to: host) })"
+    )
+    for target in targets {
+      let screenFrame = target.responds(to: NSSelectorFromString("accessibilityFrame"))
+        ? (target.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue : nil
+      print(
+        "FLECK_BACKLINK_AX_TARGET id=\(ObjectIdentifier(target)) " +
+          "screenFrame=\(String(describing: screenFrame))"
+      )
+    }
+  }
   #expect(backlinks.isExpanded)
   #expect(hostedBacklinksDescendant(in: host, as: ListAwareTextView.self) === originalEditor)
   #expect(editor.string == originalString)
