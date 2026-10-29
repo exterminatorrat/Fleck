@@ -12,6 +12,7 @@ public enum OwnedMCPFixtureKind: String {
   case eventMonitoringFlow
   case eventCallbackVerification
   case eventCommandService
+  case eventIPCSocket
   case eventDeliverySender
   case eventDeliveryLedger
   case inlineImage
@@ -19,7 +20,8 @@ public enum OwnedMCPFixtureKind: String {
   case nativeVisualEvidence
 
   func basename(for id: UUID) -> String {
-    "fleck-mcp-\(rawValue)-\(id.uuidString.lowercased())"
+    if self == .eventIPCSocket { return "fe-\(id.uuidString.lowercased())" }
+    return "fleck-mcp-\(rawValue)-\(id.uuidString.lowercased())"
   }
 }
 
@@ -177,6 +179,36 @@ public final class OwnedMCPFixtureRoot: @unchecked Sendable {
     )
   }
 
+  public static func createSocketRoot() throws -> OwnedMCPFixtureRoot {
+    try createSocketRoot(
+      environment: ProcessInfo.processInfo.environment,
+      guardedBuild: Self.compiledForGuardedFixtures
+    )
+  }
+
+  static func createSocketRoot(
+    environment: [String: String],
+    guardedBuild: Bool,
+    ordinaryTemporaryDirectory: URL = URL(fileURLWithPath: "/private/tmp", isDirectory: true),
+    id: UUID = UUID()
+  ) throws -> OwnedMCPFixtureRoot {
+    guard environment["FLECK_IPC_PACKET_MODE"] == nil,
+      environment["FLECK_IPC_PACKET_TMPDIR"] == nil
+    else {
+      throw OwnedMCPFixtureRootError.bindingMismatch
+    }
+    let rootSelection: FixtureRootSelection = environment[Self.bindingEnvironmentKey] == nil
+      ? .foundation(ordinaryTemporaryDirectory) : .configuredBinding
+    return try createInternal(
+      kind: .eventIPCSocket,
+      environment: environment,
+      rootSelection: rootSelection,
+      guardedBuild: guardedBuild,
+      id: id,
+      afterChildCreated: nil
+    )
+  }
+
   static func createForTesting(
     kind: OwnedMCPFixtureKind,
     environment: [String: String],
@@ -230,7 +262,8 @@ public final class OwnedMCPFixtureRoot: @unchecked Sendable {
           root: root,
           childFD: childFD,
           name: basename,
-          identity: childIdentity
+          identity: childIdentity,
+          emptyOnly: kind == .eventIPCSocket
         )
         if root.logsRecords {
           Self.emit("cleanup", "ok", kind: kind, basename: basename, child: childIdentity)
@@ -304,7 +337,10 @@ public final class OwnedMCPFixtureRoot: @unchecked Sendable {
     } catch {
       if childFD >= 0, let childIdentity {
         do {
-          try removeOwnedChild(root: root, childFD: childFD, name: basename, identity: childIdentity)
+          try removeOwnedChild(
+            root: root, childFD: childFD, name: basename, identity: childIdentity,
+            emptyOnly: kind == .eventIPCSocket
+          )
           if logs {
             emit(
               "cleanup", "ok", kind: kind, basename: basename, reason: "constructor-failure",
@@ -514,11 +550,14 @@ public final class OwnedMCPFixtureRoot: @unchecked Sendable {
     root: OpenedRoot,
     childFD: Int32,
     name: String,
-    identity: DirectoryIdentity
+    identity: DirectoryIdentity,
+    emptyOnly: Bool = false
   ) throws {
     try verifyOwnedPaths(root, childFD, name, identity, requireChild: true)
-    var entries = 0
-    try removeContents(of: childFD, depth: 0, entries: &entries)
+    if !emptyOnly {
+      var entries = 0
+      try removeContents(of: childFD, depth: 0, entries: &entries)
+    }
     try verifyOwnedPaths(root, childFD, name, identity, requireChild: true)
     guard name.withCString({ unlinkat(root.parentFD, $0, AT_REMOVEDIR) }) == 0 else {
       throw OwnedMCPFixtureRootError.cleanupFailed

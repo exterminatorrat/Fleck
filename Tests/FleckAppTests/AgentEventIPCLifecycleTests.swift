@@ -1,6 +1,7 @@
 import Darwin
 import FleckAgentProtocol
 import FleckCore
+import FleckMCPFixtureSupport
 import Foundation
 import Testing
 
@@ -145,17 +146,30 @@ struct AgentEventIPCSocketFixture {
   private let inode: ino_t
   private let uid: uid_t
   private let mode: mode_t
+  private let ownedRoot: OwnedMCPFixtureRoot?
 
-  init(endpointURL: URL, directoryURL: URL, status: stat) {
+  init(
+    endpointURL: URL, directoryURL: URL, status: stat,
+    ownedRoot: OwnedMCPFixtureRoot? = nil
+  ) {
     self.endpointURL = endpointURL
     self.directoryURL = directoryURL
     device = status.st_dev
     inode = status.st_ino
     uid = status.st_uid
     mode = status.st_mode & 0o7777
+    self.ownedRoot = ownedRoot
   }
 
   func removeDirectoryIfUnchanged() {
+    if let ownedRoot {
+      do {
+        try ownedRoot.cleanup()
+      } catch {
+        Issue.record("IPC fixture directory cleanup failed: \(error)")
+      }
+      return
+    }
     var currentStatus = stat()
     guard
       directoryURL.path.withCString({ Darwin.lstat($0, &currentStatus) }) == 0,
@@ -228,6 +242,37 @@ func packetConfiguredTemporaryDirectoryIsPrivate(
 
 func makeAgentEventIPCSocketFixture() throws -> AgentEventIPCSocketFixture {
   let environment = ProcessInfo.processInfo.environment
+  if environment["FLECK_IPC_PACKET_MODE"] == nil,
+    environment["FLECK_IPC_PACKET_TMPDIR"] == nil
+  {
+    let ownedRoot = try OwnedMCPFixtureRoot.createSocketRoot()
+    do {
+      let directoryURL = ownedRoot.url
+      var status = stat()
+      guard directoryURL.path.withCString({ Darwin.lstat($0, &status) }) == 0,
+        status.st_mode & S_IFMT == S_IFDIR,
+        status.st_mode & 0o7777 == 0o700,
+        status.st_uid == geteuid(), status.st_dev != 0, status.st_ino != 0
+      else {
+        throw AgentEventSocketTestError.unsafeFixtureDirectory
+      }
+      let endpointURL = directoryURL.appendingPathComponent("e.sock")
+      guard endpointURL.path.utf8.count + 1 <= 104 else {
+        throw AgentEventSocketTestError.socketPathTooLong
+      }
+      return AgentEventIPCSocketFixture(
+        endpointURL: endpointURL, directoryURL: directoryURL, status: status,
+        ownedRoot: ownedRoot
+      )
+    } catch {
+      do {
+        try ownedRoot.cleanup()
+      } catch {
+        Issue.record("IPC fixture directory cleanup failed: \(error)")
+      }
+      throw error
+    }
+  }
   guard
     environment["FLECK_IPC_PACKET_MODE"]
       == "current-source-35-body-packet-tmpdir-xctest-host-20261005",

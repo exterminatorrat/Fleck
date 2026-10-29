@@ -492,7 +492,7 @@ struct AgentEventSubscriptionTests {
     }
 
     let refreshedRows = try await AgentEventSubscriptionStore(fileURL: fixture.subscriptionURL)
-      .pendingSubscriptions(profileID: profileID, now: now)
+      .pendingSubscriptions(profileID: profileID, now: now.addingTimeInterval(30))
     #expect(refreshedRows.count == 1)
     let newKeyReference = try #require(refreshedRows.first?.signingKeyReference)
     #expect(newKeyReference != oldKeyReference)
@@ -517,7 +517,7 @@ struct AgentEventSubscriptionTests {
     #expect(json.contains("pending"))
 
     let afterRestart = try await AgentEventSubscriptionStore(fileURL: fixture.subscriptionURL)
-      .pendingSubscriptions(profileID: profileID, now: now)
+      .pendingSubscriptions(profileID: profileID, now: now.addingTimeInterval(30))
     #expect(afterRestart == refreshedRows)
   }
 
@@ -1017,7 +1017,8 @@ struct AgentEventSubscriptionTests {
     }
 
     #expect(unexpectedErrors.isEmpty)
-    let rows = try await fixture.pendingStore.pendingSubscriptions(profileID: profileID, now: now)
+    let rows = try await fixture.pendingStore.pendingSubscriptions(
+      profileID: profileID, now: now.addingTimeInterval(30))
     if let row = rows.first {
       #expect(rows.count == 1)
       #expect(fixture.secrets.values().count == 1)
@@ -1226,7 +1227,8 @@ struct AgentEventSubscriptionTests {
     await #expect(throws: AgentWorkspaceError(code: .capabilityDenied)) {
       _ = try await refresh.value
     }
-    let rows = try await fixture.pendingStore.pendingSubscriptions(profileID: profileID, now: now)
+    let rows = try await fixture.pendingStore.pendingSubscriptions(
+      profileID: profileID, now: now.addingTimeInterval(30))
     #expect(rows.count == 1)
     #expect(rows.first?.subscriptionID == original.subscriptionID)
     #expect(rows.first?.revision == original.revision)
@@ -1673,6 +1675,7 @@ struct AgentEventSubscriptionTests {
       signingKeyStore: AgentEventSigningKeyStore(secretStore: fixture.secrets)
     )
     fixture.secrets.failNextDelete()
+    fixture.secrets.failNextDelete()
 
     await #expect(throws: AgentEventSubscriptionError.storageFailure) {
       _ = try await service.createPending(
@@ -1935,6 +1938,17 @@ struct AgentEventSubscriptionTests {
       await fixture.pendingStore.currentSubscription(id: original.subscriptionID))
     #expect(finalRow.revision == originalRow.revision + 1)
     #expect(finalRow.signingKeyReference != originalRow.signingKeyReference)
+    let finalOverlap = try #require(finalRow.previousSigningKey)
+    #expect(finalOverlap.reference == originalRow.signingKeyReference)
+    #expect(finalOverlap.startedAt == now.addingTimeInterval(60))
+    #expect(finalOverlap.expiresAt == now.addingTimeInterval(120))
+    #expect(keyStore.value(account: originalRow.signingKeyReference) == originalKey)
+    #expect(keyStore.value(account: finalRow.signingKeyReference) != nil)
+    #expect(keyStore.values().count == 2)
+    try await service.maintainSigningKeyLifecycle(now: finalOverlap.expiresAt)
+    #expect(
+      try await fixture.pendingStore.currentSubscription(id: original.subscriptionID)?
+        .previousSigningKey == nil)
     #expect(keyStore.value(account: originalRow.signingKeyReference) == nil)
     #expect(keyStore.value(account: finalRow.signingKeyReference) != nil)
     #expect(keyStore.values().count == 1)
