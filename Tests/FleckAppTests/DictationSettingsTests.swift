@@ -1171,6 +1171,8 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
       ) == nil
     )
 
+    SettingsReadinessFailureWitness.capture(host: host, window: window)
+
     let popoverWindow = try #require(
       NSApplication.shared.windows.first {
         $0 !== window
@@ -1935,6 +1937,138 @@ private func settingsSidebarSurface(of view: NSView) -> NSView? {
   }
   return settingsSidebarDescendants(of: view)
     .first { $0.accessibilityIdentifier() == "settings-sidebar-surface" }
+}
+
+@MainActor
+private enum SettingsReadinessFailureWitness {
+  private static var didRecord = false
+
+  static func capture(host: NSView, window: NSWindow) {
+    guard !didRecord,
+      ProcessInfo.processInfo.environment["FLECK_READINESS_FOCUS_TRACE"] == "1"
+    else { return }
+    let focusIdentifier = "settings-keyboard-focus-dictation-status"
+    let roles = [
+      ("button", "settings-dictation-readiness-button"),
+      ("readinessProbe", SettingsSearchTarget.dictationStatus.accessibilityIdentifier),
+      ("headerProbe", SettingsSearchTarget.section(.dictation).accessibilityIdentifier),
+      ("popoverProbe", "settings-dictation-readiness-popover"),
+    ]
+    let identifiers = Set(roles.map { $0.1 } + [focusIdentifier])
+
+    @MainActor
+    func scan(_ root: NSView?) -> (matches: [String: [NSView]], complete: Bool) {
+      var pending = root.map { [$0] } ?? []
+      var matches: [String: [NSView]] = [:]
+      var visited = 0
+      var complete = true
+      while !pending.isEmpty, visited < 1_024 {
+        let view = pending.removeLast()
+        visited += 1
+        if let identifier = view.accessibilityIdentifier(), identifiers.contains(identifier) {
+          matches[identifier, default: []].append(view)
+        }
+        let children = view.subviews
+        let capacity = max(0, 1_024 - visited - pending.count)
+        if children.count > capacity { complete = false }
+        pending.append(contentsOf: children.prefix(capacity))
+      }
+      return (matches, complete && pending.isEmpty)
+    }
+
+    let parent = scan(host)
+    guard parent.complete, parent.matches[focusIdentifier, default: []].isEmpty else { return }
+    didRecord = true
+    var records = 0
+    var bytes = 0
+    func emit(_ message: String) {
+      let entry = message + "\n"
+      guard records < 24, entry.utf8.count <= 16_384 - bytes else { return }
+      records += 1
+      bytes += entry.utf8.count
+      print(entry, terminator: "")
+    }
+    func className(_ value: NSResponder) -> String {
+      let name = String(describing: type(of: value)).split(separator: "<", maxSplits: 1).first
+        .map(String.init) ?? "unknown"
+      guard name.utf8.count <= 128, !name.contains("0x"),
+        name.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0)
+          || (97...122).contains($0) || $0 == 46 || $0 == 95 })
+      else { return "redacted" }
+      return name
+    }
+    func flag(_ value: Bool?) -> String {
+      value.map { String($0) } ?? "unknown"
+    }
+    @MainActor
+    func within(_ responder: NSResponder, _ probe: NSView?) -> Bool? {
+      guard let probe, var view = responder as? NSView else { return nil }
+      for _ in 0..<32 {
+        if view === probe { return true }
+        guard let parent = view.superview else { return false }
+        view = parent
+      }
+      return nil
+    }
+
+    let applicationWindows = NSApp.windows
+    var windows = [window]
+    for candidate in applicationWindows.prefix(8) where candidate !== window {
+      guard windows.count < 8 else { break }
+      windows.append(candidate)
+    }
+    let windowsComplete = applicationWindows.count <= 8
+      && applicationWindows.contains { $0 === window }
+    let scans = windows.map { candidate in
+      candidate === window ? parent : scan(candidate.contentView)
+    }
+    let popoverIndices = windows.indices.filter {
+      windows[$0] !== window && !scans[$0].matches[roles[3].1, default: []].isEmpty
+    }
+    let popoverIndex = windowsComplete && scans.allSatisfy(\.complete) && popoverIndices.count == 1
+      ? popoverIndices.first : nil
+    let probes = roles.indices.map { index -> NSView? in
+      let role = roles[index]
+      guard let source = index == 3 ? popoverIndex : 0 else { return nil }
+      let matches = scans[source].matches[role.1, default: []]
+      return matches.count == 1 ? matches.first : nil
+    }
+    emit("Readiness failure witness: postClickMarkerMissing=true, hostWindowMatchesParent=\(host.window === window), parentContentIsHost=\(window.contentView === host), windowsComplete=\(windowsComplete), popoverResolved=\(popoverIndex != nil)")
+    for index in windows.indices {
+      let candidate = windows[index]
+      let counts = roles.map { "\($0.0)Matches=\(scans[index].matches[$0.1, default: []].count)" }
+        .joined(separator: ", ")
+      emit("Readiness failure window: parent=\(candidate === window), key=\(candidate === NSApp.keyWindow), class=\(className(candidate)), scanComplete=\(scans[index].complete), \(counts)")
+    }
+    let roots: [(String, NSResponder?)] = [
+      ("parent", window.firstResponder),
+      ("key", NSApp.keyWindow?.firstResponder),
+      ("popover", popoverIndex.flatMap { windows[$0].firstResponder }),
+    ]
+    for (name, root) in roots {
+      var responder = root
+      var seen: Set<ObjectIdentifier> = []
+      var repeated = false
+      for depth in 0..<4 {
+        guard let node = responder else { break }
+        guard seen.insert(ObjectIdentifier(node)).inserted else {
+          repeated = true
+          break
+        }
+        let associations = roles.indices.map { index in
+          "\(roles[index].0)Same=\(flag(probes[index].map { node === $0 })), nodeWithin\(roles[index].0)=\(flag(within(node, probes[index]))), \(roles[index].0)WithinNode=\(flag(probes[index].flatMap { within($0, node as? NSView) }))"
+        }.joined(separator: ", ")
+        let next = node.nextResponder
+        let viewInParent = (node as? NSView).map { $0.window === window }
+        let viewInPopover = popoverIndex.flatMap { index in
+          (node as? NSView).map { $0.window === windows[index] }
+        }
+        emit("Readiness failure responder: chain=\(name), depth=\(depth), class=\(className(node)), sameParentWindow=\(node === window), viewInParent=\(flag(viewInParent)), viewInPopover=\(flag(viewInPopover)), nextPresent=\(next != nil), \(associations)")
+        responder = next
+      }
+      emit("Readiness failure chain: source=\(name), rootPresent=\(root != nil), ended=\(responder == nil), repeated=\(repeated)")
+    }
+  }
 }
 
 @MainActor
