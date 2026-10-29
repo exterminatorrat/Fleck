@@ -8,8 +8,8 @@ on:
     inputs:
       native_readiness_probe_only:
         description: >-
-          Run only the fixed supplemental Enhanced readiness selector; required CI
-          remains independent and fail-closed.
+          Run only the prepared fixed supplemental diagnostic cohorts;
+          required CI remains independent and fail-closed.
         required: false
         type: boolean
         default: false
@@ -456,44 +456,190 @@ jobs:
           git diff --exit-code -- Package.resolved
 
   native-readiness-probe:
-    name: Supplemental single-selector native readiness probe
+    name: Supplemental fixed diagnostic cohort (${{ matrix.lane }})
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.native_readiness_probe_only }}
     runs-on: namespace-profile-fleck
     timeout-minutes: 60
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include:
+          - source: 52f0338b8808ef4eb5b086eee67cff2eae3c7367
+            lane: settings-models
+            graph: enhanced
+            expected_count: 7
+            selector: '^FleckAppTests\.(DictationSettingsHostedSidebarSelectionUsesPaletteInKeyWindow|DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations|DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize|DictationSettingsHostedSidebarSearchFitsBetweenTrafficLightsAndFleckHeaderAtMinimumSizes|modelSearchBlursWithoutSwallowingActionsAcrossThemesAndSizes|settingsGlassOpacitySliderRespondsToThumbDragAndTrackClickAtAnchoredSettingsRow|settingsSearchAnchorFocusCueDistinguishesTabFromPointer)\(\)$'
+            expected_match_ids: |
+              FleckAppTests.DictationSettingsHostedSidebarSelectionUsesPaletteInKeyWindow()
+              FleckAppTests.DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
+              FleckAppTests.DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize()
+              FleckAppTests.DictationSettingsHostedSidebarSearchFitsBetweenTrafficLightsAndFleckHeaderAtMinimumSizes()
+              FleckAppTests.modelSearchBlursWithoutSwallowingActionsAcrossThemesAndSizes()
+              FleckAppTests.settingsGlassOpacitySliderRespondsToThumbDragAndTrackClickAtAnchoredSettingsRow()
+              FleckAppTests.settingsSearchAnchorFocusCueDistinguishesTabFromPointer()
+            expected_blob_pins: |
+              Scripts/run-nonempty-enhanced-tests.sh bd0e9706b5e2536ac356dac7b92f5eae2b3e6f8d
+              Scripts/test-enhanced-candidate-pin.sh 3cf05fe69df708afc82df3cf5fc277048d00922d
+              Scripts/run-swift-tests-with-appkit-host.sh 0d57f35dd07041479608354390c9db85d9f81d41
+              Tests/Support/AppKitTestMain.swift 990dd974967dc472bc1d09f9c8705a52db53a058
+              Tests/FleckAppTests/DictationSettingsTests.swift 02528a5f15e9dea6c50a4b5146659d1b13b3cac1
+              Tests/FleckAppTests/ModelsCatalogTests.swift 9bcea4c768fc03be5d8422b6ece0bb8490683902
+              Tests/FleckAppTests/SettingsAppearanceTests.swift 29edbfbf2ec85a9e80b9d7c91486ce6198987d33
+          - source: 294f3b0063cc0adcc35146df903bdb727da46641
+            lane: resize-baseline
+            graph: enhanced
+            expected_count: 7
+            selector: '^FleckAppTests\.(AgentActivityScrollTests/(scrollerStaysFivePointsInsidePanelAcrossResizeAndAppearances|scrollerDrawsFourPointCapsuleAndNoTrackAcrossAppearancesAndScales|visualKnobUsesStableProportionalGeometryAtBothEndpoints|publicHoverEventsDoNotMorphVisualKnob|nativeKnobHitAreaContainsPaintAndDraggingMovesDocument|heldNativeDragFreezesVisualLengthUntilMouseUp)|menuPanelHostedFractionalResizeAdoptsNativeGeometryOnceAndStaysStable)\(\)$'
+            expected_match_ids: |
+              FleckAppTests.AgentActivityScrollTests/scrollerStaysFivePointsInsidePanelAcrossResizeAndAppearances()
+              FleckAppTests.AgentActivityScrollTests/scrollerDrawsFourPointCapsuleAndNoTrackAcrossAppearancesAndScales()
+              FleckAppTests.AgentActivityScrollTests/visualKnobUsesStableProportionalGeometryAtBothEndpoints()
+              FleckAppTests.AgentActivityScrollTests/publicHoverEventsDoNotMorphVisualKnob()
+              FleckAppTests.AgentActivityScrollTests/nativeKnobHitAreaContainsPaintAndDraggingMovesDocument()
+              FleckAppTests.AgentActivityScrollTests/heldNativeDragFreezesVisualLengthUntilMouseUp()
+              FleckAppTests.menuPanelHostedFractionalResizeAdoptsNativeGeometryOnceAndStaysStable()
+            expected_blob_pins: |
+              Scripts/run-nonempty-enhanced-tests.sh bd0e9706b5e2536ac356dac7b92f5eae2b3e6f8d
+              Scripts/test-enhanced-candidate-pin.sh 3cf05fe69df708afc82df3cf5fc277048d00922d
+              Scripts/run-swift-tests-with-appkit-host.sh 0d57f35dd07041479608354390c9db85d9f81d41
+              Tests/Support/AppKitTestMain.swift 990dd974967dc472bc1d09f9c8705a52db53a058
+              Sources/FleckApp/MenuPanelResize.swift 94b7c0708b3145fb8599f0380276d1874162cc32
+              Tests/FleckAppTests/MenuPanelResizeTests.swift 9b0e2fe7009bc61285cb9b4c50be7c2dd7cdef71
+          - source: df73ac143241bc6211d8b5414ea4504120b86b5e
+            lane: host-receipt
+            graph: enhanced
+            expected_count: 1
+            selector: '^FleckAppTests\.notesPanelConstrainedNoOpResizePreservesStoredPreferenceAndRealResizeSavesOnce\(\)$'
+            expected_match_ids: |
+              FleckAppTests.notesPanelConstrainedNoOpResizePreservesStoredPreferenceAndRealResizeSavesOnce()
+            expected_blob_pins: |
+              Scripts/run-nonempty-enhanced-tests.sh bd0e9706b5e2536ac356dac7b92f5eae2b3e6f8d
+              Scripts/test-enhanced-candidate-pin.sh 3cf05fe69df708afc82df3cf5fc277048d00922d
+              Scripts/run-swift-tests-with-appkit-host.sh a1916c2273350a47e7a1adac157622b625e1396c
+              Tests/Support/AppKitTestMain.swift 990dd974967dc472bc1d09f9c8705a52db53a058
+              Tests/FleckAppTests/MenuPanelResizeTests.swift 1b58fab7194dbaa0c95ba42d4b5062b76585d67f
+          - source: a5962cefbeba0fccd29dafd7bc9ae5a47dab4488
+            lane: capsule-runtime
+            graph: enhanced
+            selector: '^FleckAppTests\.(supportedPillStatesKeepActualAnchorAndCaptureWhenRequested|FleckPillUnblurredWaveCoreUsesRootAndLightTransform|DictationCapsulePostedEventRetryQualification|DictationAccessibilityPersistentHostLeavesGestureRoutingToDescendants|DictationAccessibilityIdleShellRoutesOnePrimaryClick|DictationCapsuleLivePillRendersBottomStandbyArmingListeningAndProcessing|DictationCapsuleLiveArtworkRequiresMatchingNonterminalCoordinatorEvents|criticalSignalWaitsForPreparationUpgradeAndLeavesRuntimeCold)\(\)$'
+            expected_count: 8
+            expected_match_ids: |
+              FleckAppTests.supportedPillStatesKeepActualAnchorAndCaptureWhenRequested()
+              FleckAppTests.FleckPillUnblurredWaveCoreUsesRootAndLightTransform()
+              FleckAppTests.DictationCapsulePostedEventRetryQualification()
+              FleckAppTests.DictationAccessibilityPersistentHostLeavesGestureRoutingToDescendants()
+              FleckAppTests.DictationAccessibilityIdleShellRoutesOnePrimaryClick()
+              FleckAppTests.DictationCapsuleLivePillRendersBottomStandbyArmingListeningAndProcessing()
+              FleckAppTests.DictationCapsuleLiveArtworkRequiresMatchingNonterminalCoordinatorEvents()
+              FleckAppTests.criticalSignalWaitsForPreparationUpgradeAndLeavesRuntimeCold()
+            expected_blob_pins: |
+              Scripts/run-nonempty-enhanced-tests.sh bd0e9706b5e2536ac356dac7b92f5eae2b3e6f8d
+              Scripts/test-enhanced-candidate-pin.sh 3cf05fe69df708afc82df3cf5fc277048d00922d
+              Scripts/run-swift-tests-with-appkit-host.sh 0d57f35dd07041479608354390c9db85d9f81d41
+              Tests/Support/AppKitTestMain.swift 990dd974967dc472bc1d09f9c8705a52db53a058
+              Tests/FleckAppTests/DictationAccessibilityTests.swift 04c329f6bc78a828e571e12eff3e4a3d54555c0c
+              Tests/FleckAppTests/DictationCapsulePlacementTests.swift 5698266ea9f035008f87a10180649eab63e112cb
+              Tests/FleckAppTests/DictationCapsuleRetryInteractionTests.swift de97d0927ffbf24d62258a745d69bc0942a889ba
+              Tests/FleckAppTests/DictationCapsuleVisualCaptureTests.swift b1aae7edb219faebd853f96147d4c4ba9910e341
+              Tests/FleckAppTests/FleckPillVisualCaptureTests.swift 89bef8976db990746dcace89f181e5e6078675b5
+              Tests/FleckAppTests/LocalDictationRuntimeTests.swift 8ce22739664f9de925cfc12e0c21c665ff4da983
+          - source: 4d70546bbc5351507e0a15f635fd31445b67871a
+            lane: folder-editor-return
+            graph: ordinary
+            selector: '^(FleckAppTests\.hostedCompactUnfiledKeepsNamedFolderPillInsideNavigator\(\)|FleckAppTests\.hostedUnfiledDisclosureKeepsFolderToolbarFramesStable\(\)|FleckAppTests\.hostedFolderKeyboardFocusAddsOutlineToUnselectedRow\(\)|FleckAppTests\.FolderNavigatorPresentationTests/folderKeyboardMovementActivationAndRenameStayInOwningHost\(\)|FleckAppTests\.FolderNavigatorPresentationTests/folderRenameKeepsValidationAndSupportsEnterAndEscape\(\)|FleckAppTests\.FolderNavigatorPresentationTests/compactRenameCreateAndDeleteRemeasureIntrinsicContent\(\)|FleckAppTests\.FolderNavigatorPresentationTests/composerFocusValidationCancellationAndCreationStayNative\(\)|FleckAppTests\.NotesPanelBacklinksPopoverReclaimsEditorSpace\(\)|FleckAppTests\.WorkspaceSearchHostingTests/WorkspaceSearchHostingActivatesNamedFolderResultThroughProductionScope\(\))$'
+            expected_count: 9
+            expected_match_ids: |
+              FleckAppTests.hostedCompactUnfiledKeepsNamedFolderPillInsideNavigator()
+              FleckAppTests.hostedUnfiledDisclosureKeepsFolderToolbarFramesStable()
+              FleckAppTests.hostedFolderKeyboardFocusAddsOutlineToUnselectedRow()
+              FleckAppTests.FolderNavigatorPresentationTests/folderKeyboardMovementActivationAndRenameStayInOwningHost()
+              FleckAppTests.FolderNavigatorPresentationTests/folderRenameKeepsValidationAndSupportsEnterAndEscape()
+              FleckAppTests.FolderNavigatorPresentationTests/compactRenameCreateAndDeleteRemeasureIntrinsicContent()
+              FleckAppTests.FolderNavigatorPresentationTests/composerFocusValidationCancellationAndCreationStayNative()
+              FleckAppTests.NotesPanelBacklinksPopoverReclaimsEditorSpace()
+              FleckAppTests.WorkspaceSearchHostingTests/WorkspaceSearchHostingActivatesNamedFolderResultThroughProductionScope()
+            expected_blob_pins: |
+              Scripts/run-nonempty-swift-tests.sh a426615a3bd67136591c505756a1faa4903ca1b5
+              Scripts/run-swift-tests-with-appkit-host.sh 0d57f35dd07041479608354390c9db85d9f81d41
+              Tests/Support/AppKitTestMain.swift 990dd974967dc472bc1d09f9c8705a52db53a058
+              Sources/FleckApp/WorkspaceSearchView.swift d6a3fc511cbaebe2026680567fc4731b51aaeff6
+              Tests/FleckAppTests/AppKitEditorTests.swift 7afba88f990550acacfdfd3f05891647811b0217
+              Tests/FleckAppTests/FolderNavigatorPresentationTests.swift cab7ee4236d5de663b07ec7015cedf5a943b23bd
+              Tests/FleckAppTests/NotesPanelBacklinksTests.swift c60a75ad788240e31495f2c3c19910cdd2cfb7da
+              Tests/FleckAppTests/WorkspaceSearchHostingTests.swift c6d6a021ee52d5a98061d04f3cb78a3d69e01989
+          - source: bddeced4c502a19b1f8ac01ff29da70aa241c3cc
+            lane: mcp-consumer-verification
+            graph: enhanced
+            expected_count: 5
+            selector: '^FleckAppTests\.AgentEventSubscriptionTests/(pendingCreateIsDeterministicDurableAndRefreshRotatesTheKey|concurrentRemovalAndRefreshLeaveNoDanglingKeyOrRow|grantRevocationDuringSecretStagingDeniesRefreshAndDeletesTheStagedKey|promotionWriteFailureKeepsStagingIntentForRestartRecovery|staleRefreshRollbackPreservesPriorRowAndKeyBeforeQueuedRefresh)\(\)$'
+            expected_match_ids: |
+              FleckAppTests.AgentEventSubscriptionTests/pendingCreateIsDeterministicDurableAndRefreshRotatesTheKey()
+              FleckAppTests.AgentEventSubscriptionTests/concurrentRemovalAndRefreshLeaveNoDanglingKeyOrRow()
+              FleckAppTests.AgentEventSubscriptionTests/grantRevocationDuringSecretStagingDeniesRefreshAndDeletesTheStagedKey()
+              FleckAppTests.AgentEventSubscriptionTests/promotionWriteFailureKeepsStagingIntentForRestartRecovery()
+              FleckAppTests.AgentEventSubscriptionTests/staleRefreshRollbackPreservesPriorRowAndKeyBeforeQueuedRefresh()
+            expected_blob_pins: |
+              Scripts/run-nonempty-enhanced-tests.sh bd0e9706b5e2536ac356dac7b92f5eae2b3e6f8d
+              Scripts/test-enhanced-candidate-pin.sh 3cf05fe69df708afc82df3cf5fc277048d00922d
+              Scripts/run-swift-tests-with-appkit-host.sh 0d57f35dd07041479608354390c9db85d9f81d41
+              Tests/Support/AppKitTestMain.swift 990dd974967dc472bc1d09f9c8705a52db53a058
+              Tests/FleckAppTests/AgentEventSubscriptionTests.swift 1a4634bfa27583f647f17e91fc8ab4f31fe61a9d
+              Tests/FleckMCPFixtureSupport/OwnedMCPFixtureRoot.swift d245c6a9ae55d67a0091c69b6a319a7e6c139ef6
+              Tests/FleckAppTests/OwnedMCPFixtureRootTests.swift ea1f20bc8941b649f2e0322dfbcbdc8883a7c421
+    env:
+      TEST_SOURCE_SHA: ${{ matrix.source }}
+      TEST_GRAPH: ${{ matrix.graph }}
+      TEST_SELECTOR: ${{ matrix.selector }}
+      EXPECTED_MATCHED_COUNT: ${{ matrix.expected_count }}
+      EXPECTED_MATCH_IDS: ${{ matrix.expected_match_ids }}
+      EXPECTED_BLOB_PINS: ${{ matrix.expected_blob_pins }}
     steps:
       - name: Check out repository (actions/checkout v6.0.2, without credentials)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
-          ref: ${{ github.sha }}
-      - name: Capture source and workflow, test, and host blob pins
+          ref: ${{ matrix.source }}
+      - name: Capture tested source and verify expected blob pins
         run: |
           set -euo pipefail
-          source_commit="$(git rev-parse --verify 'HEAD^{commit}')"
-          source_tree="$(git rev-parse --verify 'HEAD^{tree}')"
-          test "$source_commit" = "$GITHUB_SHA"
+          tested_source_commit="$(git rev-parse --verify 'HEAD^{commit}')"
+          tested_source_tree="$(git rev-parse --verify 'HEAD^{tree}')"
+          printf 'Hosting workflow SHA: %s\n' "$GITHUB_SHA"
+          printf 'Tested source SHA: %s\n' "$TEST_SOURCE_SHA"
+          test "$tested_source_commit" = "$TEST_SOURCE_SHA"
           test -z "$(git status --porcelain)"
-          printf 'Source commit: %s\n' "$source_commit"
-          printf 'Source tree: %s\n' "$source_tree"
-          printf 'Working tree: clean\n'
-          printf 'Workflow blob: '
-          git rev-parse --verify "$GITHUB_SHA:.github/workflows/ci.yml"
-          printf 'Selector test blob: '
-          git rev-parse --verify "$GITHUB_SHA:Tests/FleckAppTests/DictationSettingsTests.swift"
-          printf 'Enhanced runner blob: '
-          git rev-parse --verify "$GITHUB_SHA:Scripts/run-nonempty-enhanced-tests.sh"
-          printf 'AppKit host runner blob: '
-          git rev-parse --verify "$GITHUB_SHA:Scripts/run-swift-tests-with-appkit-host.sh"
-          printf 'AppKit host source blob: '
-          git rev-parse --verify "$GITHUB_SHA:Tests/Support/AppKitTestMain.swift"
-          printf 'Enhanced pin verifier blob: '
-          git rev-parse --verify "$GITHUB_SHA:Scripts/test-enhanced-candidate-pin.sh"
-          printf 'Enhanced resolver blob: '
-          git rev-parse --verify "$GITHUB_SHA:Scripts/resolve-enhanced-candidate.sh"
-          printf 'Root Package.resolved blob: '
-          git rev-parse --verify "$GITHUB_SHA:Package.resolved"
+          printf 'Tested source tree: %s\n' "$tested_source_tree"
+          printf 'Tested source status: clean\n'
+          printf 'Fixed graph: %s\n' "$TEST_GRAPH"
+          printf 'Fixed selector: %s\n' "$TEST_SELECTOR"
+          printf 'Expected canonical matched count: %s\n' "$EXPECTED_MATCHED_COUNT"
+          blob_pin_count=0
+          while IFS=' ' read -r expected_path expected_blob extra; do
+            [[ -n "$expected_path" ]] || continue
+            if [[ -n "${extra:-}" || -z "${expected_blob:-}" ]]; then
+              printf 'error: malformed expected blob pin for %s\n' "$expected_path" >&2
+              exit 1
+            fi
+            case "$expected_blob" in
+              *[!0-9a-f]*|'')
+                printf 'error: malformed expected blob hash for %s\n' "$expected_path" >&2
+                exit 1
+                ;;
+            esac
+            test "${#expected_blob}" -eq 40
+            actual_blob="$(git rev-parse --verify "$TEST_SOURCE_SHA:$expected_path")"
+            if [[ "$actual_blob" != "$expected_blob" ]]; then
+              printf 'error: blob mismatch for %s: expected %s, got %s\n' \
+                "$expected_path" "$expected_blob" "$actual_blob" >&2
+              exit 1
+            fi
+            printf 'Verified blob %s: %s\n' "$expected_path" "$actual_blob"
+            blob_pin_count=$((blob_pin_count + 1))
+          done <<< "$EXPECTED_BLOB_PINS"
+          test "$blob_pin_count" -gt 0
       - name: Record runner host and toolchain metadata
         run: |
           set -euo pipefail
@@ -518,18 +664,99 @@ jobs:
           fi
           rg --version
       - name: Verify Enhanced Local candidate pin
+        if: ${{ matrix.graph == 'enhanced' }}
         run: Scripts/test-enhanced-candidate-pin.sh
-      - name: Run fixed Enhanced readiness selector
+      - name: Run fixed diagnostic graph; verify post-run exact IDs, count and root lock
         env:
           FLECK_NATIVE_CAPTURE_QA: "0"
         run: |
           set -euo pipefail
           set +e
-          Scripts/run-nonempty-enhanced-tests.sh '^FleckAppTests\.DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize\(\)$'
-          selector_status=$?
-          set -e
+          run_log="$RUNNER_TEMP/fleck-native-diagnostic-${TEST_SOURCE_SHA}.log"
+          case "$TEST_GRAPH" in
+            enhanced)
+              runner_command=(env -u EXPECTED_MATCHED_COUNT -u EXPECTED_MATCH_IDS Scripts/run-nonempty-enhanced-tests.sh "$TEST_SELECTOR")
+              ;;
+            ordinary)
+              runner_command=(env -u EXPECTED_MATCHED_COUNT -u EXPECTED_MATCH_IDS -u FLECK_ENHANCED_CANDIDATE FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC=1 Scripts/run-nonempty-swift-tests.sh "$TEST_SELECTOR")
+              ;;
+            *)
+              printf 'error: unsupported fixed graph %s\n' "$TEST_GRAPH" >&2
+              exit 64
+              ;;
+          esac
+          "${runner_command[@]}" 2>&1 | tee "$run_log"
+          pipeline_statuses=( "${PIPESTATUS[@]}" )
+          runner_status="${pipeline_statuses[0]:-1}"
+          capture_status="${pipeline_statuses[1]:-1}"
+          expected_id_report="$(/usr/bin/awk '
+            BEGIN {
+              expected_line_count = split(ENVIRON["EXPECTED_MATCH_IDS"], expected_lines, "\n")
+              for (line_number = 1; line_number <= expected_line_count; line_number++) {
+                identifier = expected_lines[line_number]
+                if (identifier == "") {
+                  if (line_number < expected_line_count) {
+                    malformed_expected_lines++
+                  }
+                  continue
+                }
+                expected_ids[identifier]++
+                expected_id_count++
+                if (expected_ids[identifier] > 1) {
+                  expected_duplicates++
+                }
+              }
+            }
+            /^matched test: / {
+              identifier = substr($0, 15)
+              matched_count++
+              if (identifier == "") {
+                malformed_actual_lines++
+                next
+              }
+              actual_ids[identifier]++
+            }
+            END {
+              for (identifier in expected_ids) {
+                if (actual_ids[identifier] == 0) {
+                  missing_ids++
+                }
+              }
+              for (identifier in actual_ids) {
+                if (expected_ids[identifier] == 0) {
+                  extra_ids++
+                }
+                if (actual_ids[identifier] > 1) {
+                  duplicate_ids++
+                }
+              }
+              printf "%d %d %d %d %d %d %d %d\n", matched_count, expected_id_count, missing_ids, extra_ids, duplicate_ids, expected_duplicates, malformed_expected_lines, malformed_actual_lines
+              if (missing_ids > 0 || extra_ids > 0 || duplicate_ids > 0 || expected_duplicates > 0 || malformed_expected_lines > 0 || malformed_actual_lines > 0) {
+                exit 1
+              }
+            }
+          ' "$run_log")"
+          identity_status=$?
+          read -r matched_count expected_id_count missing_count extra_count duplicate_count expected_duplicate_count malformed_expected_count malformed_actual_count <<< "$expected_id_report"
           git diff --exit-code -- Package.resolved
-          exit "$selector_status"
+          root_lock_status=$?
+          set -e
+          count_status=1
+          if [[ "${matched_count:-}" == "$EXPECTED_MATCHED_COUNT" && "${expected_id_count:-}" == "$EXPECTED_MATCHED_COUNT" ]]; then
+            count_status=0
+          fi
+          printf 'Diagnostic cohort post-run status: graph=%s runner=%s tee=%s root-lock=%s identity=%s count=%s matched=%s expected=%s expected-ids=%s missing=%s extra=%s duplicates=%s expected-duplicates=%s malformed-expected=%s malformed-actual=%s\n' \
+            "$TEST_GRAPH" "$runner_status" "$capture_status" "$root_lock_status" \
+            "$identity_status" "$count_status" "${matched_count:-none}" "$EXPECTED_MATCHED_COUNT" \
+            "${expected_id_count:-none}" "${missing_count:-none}" "${extra_count:-none}" \
+            "${duplicate_count:-none}" "${expected_duplicate_count:-none}" \
+            "${malformed_expected_count:-none}" "${malformed_actual_count:-none}"
+          if [[ "$runner_status" -ne 0 ]]; then
+            exit "$runner_status"
+          fi
+          if [[ "$capture_status" -ne 0 || "$root_lock_status" -ne 0 || "$identity_status" -ne 0 || "$count_status" -ne 0 ]]; then
+            exit 1
+          fi
 
   own-window-capture-probe:
     name: Supplemental own-window capture probe
