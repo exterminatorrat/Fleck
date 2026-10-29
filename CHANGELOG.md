@@ -51,6 +51,25 @@ unrun; hosted verification is pending.
 Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
 tests and native behavior remain unverified.
 
+## [1.4.15-beta.1] - 2026-10-29
+
+### Fixed
+
+- Cap note-tab title labels with a semantic trailing fade while preserving full accessible titles.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests, visual/accessibility inspection and native behavior remain unverified.
+
+## [1.4.14-beta.1] - 2026-10-29
+
+### Fixed
+
+- Port theme-matched agent-update and capture-failure banner surfaces, plus an inline opt-out
+  wired to the existing agent-banner preference.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests, visual/accessibility inspection and native behavior remain unverified.
+
 ## [1.4.13-beta.1] - 2026-10-26
 
 ### Added
@@ -69,6 +88,18 @@ tests, visual/accessibility inspection and native behavior remain unverified.
 
 Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
 tests, visual/accessibility inspection and native behavior remain unverified.
+
+## [1.4.11-beta.1] - 2026-10-29
+
+### Fixed
+
+- Adopt bounded actual native resize frames while preserving anchor, top, containment and
+  legal-preference checks.
+- Protect resize rollback and completion from newer interactions while preserving deferred
+  size publication during reentry.
+- Reject backing alignment or native adoption that changes an untouched resize axis.
+
+Source-only checkpoint; compilation, tests and native resize validation remain unrun.
 
 ## [1.4.11-beta.1] - 2026-10-26
 
