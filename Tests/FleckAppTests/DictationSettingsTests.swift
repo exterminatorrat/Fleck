@@ -248,6 +248,7 @@ func DictationSettingsSidebarFitsMinimumWindowAtAccessibilitySizes() async throw
 @Test @MainActor
 func DictationSettingsHostedSidebarSelectionUsesPaletteInKeyWindow() async throws {
   let application = NSApplication.shared
+  print("Settings sidebar admission: regular=\(application.activationPolicy() == .regular), active=\(application.isActive)")
   try await withSettingsTestApplicationActivationState(application) {
     for family in [FleckColorTheme.monochrome, .capy] {
       let theme = FleckThemeSnapshot.resolve(
@@ -860,6 +861,7 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
   async throws
 {
   let application = NSApplication.shared
+  print("Settings chrome admission: regular=\(application.activationPolicy() == .regular), active=\(application.isActive)")
   try requireSettingsTestApplicationBaseline(application)
   let previousAccessibility = enableSettingsAccessibility()
   defer { restoreSettingsAccessibility(previousAccessibility) }
@@ -1056,6 +1058,7 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
 @Test @MainActor
 func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async throws {
   let application = NSApplication.shared
+  print("Settings readiness admission: regular=\(application.activationPolicy() == .regular), active=\(application.isActive)")
   try await withSettingsTestApplicationActivationState(application) {
     let fixture = try await RuntimeFixture(
       finalText: nil,
@@ -1131,6 +1134,9 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
         application.isActive && application.keyWindow === window && window.isKeyWindow
       }
     )
+    print(
+      "Settings readiness before click: active=\(application.isActive), key=\(window.isKeyWindow), appKeyMatches=\(application.keyWindow === window), responder=\(window.firstResponder.map { String(reflecting: type(of: $0)) } ?? "nil"), focusProbe=\(settingsView(withAccessibilityIdentifier: "settings-keyboard-focus-dictation-status", in: host) != nil)"
+    )
     let mouseDown = try #require(
       NSEvent.mouseEvent(
         with: .leftMouseDown,
@@ -1159,6 +1165,9 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
     NSApp.sendEvent(mouseUp)
     await settleSettingsHost(host)
 
+    print(
+      "Settings readiness after click: active=\(application.isActive), key=\(window.isKeyWindow), appKeyMatches=\(application.keyWindow === window), responder=\(window.firstResponder.map { String(reflecting: type(of: $0)) } ?? "nil"), focusProbe=\(settingsView(withAccessibilityIdentifier: "settings-keyboard-focus-dictation-status", in: host) != nil), cueProbe=\(settingsView(withAccessibilityIdentifier: "settings-keyboard-focus-cue-dictation-status", in: host) != nil)"
+    )
     #expect(
       settingsView(
         withAccessibilityIdentifier: "settings-keyboard-focus-dictation-status", in: host)
@@ -1185,6 +1194,9 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
     defer { popoverWindow.orderOut(nil) }
     let popover = try #require(popoverWindow.contentView)
     await settleSettingsHost(popover)
+    print(
+      "Settings readiness popover: parentKey=\(window.isKeyWindow), popoverKey=\(popoverWindow.isKeyWindow), appKeyMatchesParent=\(application.keyWindow === window), appKeyMatchesPopover=\(application.keyWindow === popoverWindow), parentResponder=\(window.firstResponder.map { String(reflecting: type(of: $0)) } ?? "nil"), popoverResponder=\(popoverWindow.firstResponder.map { String(reflecting: type(of: $0)) } ?? "nil")"
+    )
     popoverWindow.displayIfNeeded()
     let popoverScrollViews = settingsHostedScrollViews(of: popover)
     let scrollView = try #require(popoverScrollViews.first)
@@ -1420,7 +1432,10 @@ func DictationSettingsHostedSidebarSearchFitsBetweenTrafficLightsAndFleckHeaderA
       #expect(searchFieldFrame.minY >= fleckHeaderTop - 1)
       #expect(gapAboveSearch >= 0)
       #expect(gapBelowSearch >= 0)
-      #expect(abs(gapAboveSearch - gapBelowSearch) <= 1)
+      #expect(
+        abs(gapAboveSearch - gapBelowSearch) <= 1,
+        "Sidebar geometry: size=\(size), dynamicType=\(dynamicTypeSize), scale=\(window.backingScaleFactor), close=\(trafficLightFrames[0]), minimize=\(trafficLightFrames[1]), search=\(searchFieldFrame), heading=\(fleckHeadingFrame), surface=\(sidebarSurfaceFrame)"
+      )
       #expect(searchFieldFrame.minY < size.height - 74)
       #expect(abs(fleckHeaderTop - (size.height - 95)) <= 1)
       #expect(abs(trafficLightFrames[0].midY - trafficLightFrames[1].midY) <= 1)

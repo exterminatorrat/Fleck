@@ -977,7 +977,10 @@ func settingsGlassOpacitySliderRespondsToThumbDragAndTrackClickAtAnchoredSetting
       else { return false }
       return slider.bounds.width > 0 && slider.bounds.height > 0
     }
-    try #require(windowReady)
+    try #require(
+      windowReady,
+      "Slider readiness: active=\(NSApp.isActive), key=\(window.isKeyWindow), appKeyMatches=\(NSApp.keyWindow === window), visible=\(window.isVisible), sliderPresent=\(settingsNativeSlider(in: host) != nil), sliderAttached=\(settingsNativeSlider(in: host)?.window === window), sliderHidden=\(settingsNativeSlider(in: host)?.isHiddenOrHasHiddenAncestor == true), sliderBounds=\(String(describing: settingsNativeSlider(in: host)?.bounds))"
+    )
 
     let slider = try #require(settingsNativeSlider(in: host))
     let sliderRect = slider.convert(slider.bounds, to: host)
@@ -1215,7 +1218,10 @@ func settingsSearchAnchorFocusCueDistinguishesTabFromPointer() async throws {
     else { return false }
     return searchField.bounds.width > 0 && searchField.bounds.height > 0
   }
-  try #require(windowReady)
+  try #require(
+    windowReady,
+    "Focus fixture readiness: active=\(NSApp.isActive), key=\(window.isKeyWindow), appKeyMatches=\(NSApp.keyWindow === window), visible=\(window.isVisible), searchPresent=\(settingsNativeView(withAccessibilityIdentifier: "settings-search-field", in: host) is NSSearchField), searchAttached=\(settingsNativeView(withAccessibilityIdentifier: "settings-search-field", in: host)?.window === window), searchHidden=\(settingsNativeView(withAccessibilityIdentifier: "settings-search-field", in: host)?.isHiddenOrHasHiddenAncestor == true), searchBounds=\(String(describing: settingsNativeView(withAccessibilityIdentifier: "settings-search-field", in: host)?.bounds))"
+  )
 
   let focusIdentifier =
     "settings-keyboard-focus-\(SettingsSearchTarget.appearanceGlassOpacity.identifier)"

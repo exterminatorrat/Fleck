@@ -1180,8 +1180,14 @@ private func modelLibraryDescriptor(
           try await settleModelBrowser(host)
           #expect(window.firstResponder != nil)
           #expect(searchField.currentEditor() == nil)
+          print(
+            "Models focus before reverse Tab: active=\(NSApp.isActive), key=\(window.isKeyWindow), appKeyMatches=\(NSApp.keyWindow === window), fullKeyboardAccess=\(NSApp.isFullKeyboardAccessEnabled), responder=\(window.firstResponder.map { String(reflecting: type(of: $0)) } ?? "nil"), settingsEditorOwnsResponder=\(settingsSearchField.currentEditor() != nil && settingsSearchField.currentEditor() === window.firstResponder)"
+          )
           try sendModelKey(48, characters: "\t", modifierFlags: [.shift], to: window)
           try await settleModelBrowser(host)
+          print(
+            "Models focus after reverse Tab: active=\(NSApp.isActive), key=\(window.isKeyWindow), appKeyMatches=\(NSApp.keyWindow === window), responder=\(window.firstResponder.map { String(reflecting: type(of: $0)) } ?? "nil"), modelEditorOwnsResponder=\(searchField.currentEditor() != nil && searchField.currentEditor() === window.firstResponder), settingsEditorOwnsResponder=\(settingsSearchField.currentEditor() != nil && settingsSearchField.currentEditor() === window.firstResponder)"
+          )
           let returnedEditor = try #require(searchField.currentEditor())
           #expect(window.firstResponder === returnedEditor)
           #expect((returnedEditor as? NSTextView)?.delegate === searchField)
