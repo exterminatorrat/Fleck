@@ -417,7 +417,6 @@
   @MainActor
   final class DictationRuntime: ObservableObject {
     static let usesPeriodicObservation = false
-    static let savedCapsuleDuration = Duration.milliseconds(1_600)
     static let failureCapsuleDuration = Duration.seconds(3)
 
     private enum CapsuleOwner: Equatable {
@@ -428,19 +427,6 @@
     private enum CapsuleUpdate {
       case coordinator(DictationCoordinatorEvent)
       case preflightFailure(String, DictationCapsuleFailureKind?)
-    }
-
-    private struct RoutingChooserSnapshot {
-      let captureID: UUID
-      let inboxNoteID: UUID
-      var destination: DictationDestination
-      let cleanup: DictationCleanupOutcome
-
-      var status: DictationCapsuleStatus {
-        cleanup == .cleaned
-          ? .saved(destination: destination.title)
-          : .savedWithoutCleanup(destination: destination.title)
-      }
     }
 
     private final class ObserverToken: @unchecked Sendable {
@@ -491,13 +477,6 @@
     private var appliedCapsuleEnabled: Bool?
     private var capsuleReturnTask: Task<Void, Never>?
     private var capsuleGeneration: UInt64 = 0
-    private var routingChoiceInFlightCaptureID: UUID?
-    private var routingChooserSnapshot: RoutingChooserSnapshot?
-    private var routingChoiceFailure: (
-      captureID: UUID,
-      status: String,
-      message: String
-    )?
     private var preloadCapsuleUpdate: CapsuleUpdate?
     private var lastCoordinatorEvent: DictationCoordinatorEvent?
     private var activeOwnership: DictationShortcutOwnership?
@@ -1312,12 +1291,6 @@
       lastCoordinatorEvent = event
       activeOwnership = shortcutController.activeOwnership
       phase = event.phase
-      updateRoutingChooserSnapshot(for: event)
-      if let captureID = routingChoiceInFlightCaptureID,
-        coordinator.routingAmbiguity?.captureID != captureID
-      {
-        routingChoiceInFlightCaptureID = nil
-      }
       recoveryAction = capsuleAction(for: coordinator.recoveryAction)
       #if CLEAN_DICTATION_ENHANCED_CANDIDATE
         switch event.phase {
@@ -1461,14 +1434,11 @@
         for: event,
         ownership: activeOwnership
       )
-      let chooserPresentation = activeRoutingChooserPresentation()
       let destinationPresentation = Self.activeDestinationPresentation(for: event)
       let context = DictationCapsuleContext(
-        status: chooserPresentation?.status ?? eventContext.status,
-        detailText: chooserPresentation?.detailText
-          ?? destinationPresentation?.guidance,
-        compactDetailText: chooserPresentation?.detailText
-          ?? destinationPresentation?.compact,
+        status: eventContext.status,
+        detailText: destinationPresentation?.guidance,
+        compactDetailText: destinationPresentation?.compact,
         sessionID: eventContext.sessionID,
         trigger: eventContext.trigger,
         mode: eventContext.mode,
@@ -1478,101 +1448,30 @@
         failureStage: eventContext.failureStage,
         failureKind: eventContext.failureKind
       )
-      let chooser = chooserPresentation?.chooser
+      if event.terminal == nil, case .saved = event.phase {
+        showIdleCapsule(ifOwnedBy: .dictation)
+        return
+      }
       if let terminal = event.terminal {
         switch terminal {
         case .saved:
-          showCapsule(context, owner: .dictation, action: action, chooser: chooser)
-          if chooser == nil {
-            scheduleIdle(after: Self.savedCapsuleDuration, owner: .dictation)
-          }
+          showIdleCapsule(ifOwnedBy: .dictation)
         case .failed(let message):
           showFailureCapsule(
             message,
             action: action,
-            context: context
+            context: context,
+            coordinatorEvent: event
           )
         case .noSpeech:
-          showCapsule(context, owner: .dictation, action: nil, chooser: chooser)
+          showCapsule(context, owner: .dictation, action: nil, coordinatorEvent: event)
           scheduleIdle(after: Self.failureCapsuleDuration, owner: .dictation)
         case .cancelled:
           showIdleCapsule()
         }
       } else {
-        showCapsule(context, owner: .dictation, action: action, chooser: chooser)
+        showCapsule(context, owner: .dictation, action: action, coordinatorEvent: event)
       }
-    }
-
-    private func updateRoutingChooserSnapshot(for event: DictationCoordinatorEvent) {
-      guard let ambiguity = coordinator.routingAmbiguity else {
-        routingChooserSnapshot = nil
-        routingChoiceFailure = nil
-        return
-      }
-      if routingChoiceFailure?.captureID != ambiguity.captureID {
-        routingChoiceFailure = nil
-      }
-      if var snapshot = routingChooserSnapshot,
-        snapshot.captureID == ambiguity.captureID
-      {
-        if case .saved(let destination) = event.phase,
-          coordinator.recoveryReceipt?.captureID == ambiguity.captureID,
-          coordinator.recoveryReceipt?.noteID == destination.noteID
-        {
-          snapshot.destination = destination
-          routingChoiceFailure = nil
-        }
-        routingChooserSnapshot = snapshot
-        return
-      }
-      guard
-        case .saved(_, let cleanup, let destination?) = event.terminal,
-        let receipt = coordinator.recoveryReceipt,
-        receipt.captureID == ambiguity.captureID,
-        receipt.noteID == destination.noteID
-      else { return }
-      routingChooserSnapshot = RoutingChooserSnapshot(
-        captureID: ambiguity.captureID,
-        inboxNoteID: receipt.noteID,
-        destination: destination,
-        cleanup: cleanup
-      )
-    }
-
-    private func activeRoutingChooserPresentation() -> (
-      status: DictationCapsuleStatus,
-      detailText: String?,
-      chooser: DictationCapsuleChooser
-    )? {
-      guard
-        let ambiguity = coordinator.routingAmbiguity,
-        var snapshot = routingChooserSnapshot,
-        snapshot.captureID == ambiguity.captureID,
-        let receipt = coordinator.recoveryReceipt,
-        receipt.captureID == ambiguity.captureID
-      else { return nil }
-      if receipt.noteID != snapshot.destination.noteID,
-        let destination = ambiguity.choices.first(where: {
-          $0.destination.noteID == receipt.noteID
-        })?.destination
-      {
-        snapshot.destination = destination
-        routingChooserSnapshot = snapshot
-      }
-      return (
-        routingChoiceFailure.flatMap { failure in
-          failure.captureID == ambiguity.captureID
-            ? .routingFailure(status: failure.status, message: failure.message)
-            : nil
-        } ?? snapshot.status,
-        receipt.noteID == snapshot.inboxNoteID ? "No clear destination" : nil,
-        DictationCapsuleChooser(
-          ambiguity: ambiguity,
-          currentDestinationID: receipt.noteID,
-          currentDestinationTitle: snapshot.destination.title,
-          allowsKeepInInbox: receipt.noteID == snapshot.inboxNoteID
-        )
-      )
     }
 
     private func publishPreflightFailure(
@@ -1591,14 +1490,20 @@
       _ message: String,
       action: DictationCapsuleAction?,
       context: DictationCapsuleContext? = nil,
-      failureKind: DictationCapsuleFailureKind? = nil
+      failureKind: DictationCapsuleFailureKind? = nil,
+      coordinatorEvent: DictationCoordinatorEvent? = nil
     ) {
       let context = context ?? DictationCapsuleContext(
         status: .failed(message),
         failureStage: nil,
         failureKind: failureKind
       )
-      showCapsule(context, owner: .dictation, action: action)
+      showCapsule(
+        context,
+        owner: .dictation,
+        action: action,
+        coordinatorEvent: coordinatorEvent
+      )
       if action == nil {
         scheduleIdle(after: Self.failureCapsuleDuration, owner: .dictation)
       }
@@ -1821,13 +1726,13 @@
       _ status: DictationCapsuleStatus,
       owner: CapsuleOwner,
       action: DictationCapsuleAction? = nil,
-      chooser: DictationCapsuleChooser? = nil
+      coordinatorEvent: DictationCoordinatorEvent? = nil
     ) {
       showCapsule(
         capsuleContext(for: status),
         owner: owner,
         action: action,
-        chooser: chooser
+        coordinatorEvent: coordinatorEvent
       )
     }
 
@@ -1835,7 +1740,7 @@
       _ context: DictationCapsuleContext,
       owner: CapsuleOwner,
       action: DictationCapsuleAction? = nil,
-      chooser: DictationCapsuleChooser? = nil
+      coordinatorEvent: DictationCoordinatorEvent? = nil
     ) {
       guard appState?.hasFinishedInitialLoad == true else { return }
       invalidateCapsuleReturn()
@@ -1844,15 +1749,10 @@
       capsuleController.render(
         context,
         action: action,
-        chooser: chooser,
+        coordinatorEvent: coordinatorEvent,
         onAction: { [weak self] in
           Task { @MainActor [weak self] in
             await self?.performRecoveryAction()
-          }
-        },
-        onChoice: { [weak self] captureID, noteID in
-          Task { @MainActor [weak self] in
-            await self?.chooseRoutingDestination(captureID: captureID, noteID: noteID)
           }
         }
       )
@@ -1866,11 +1766,6 @@
         return
       }
       invalidateCapsuleReturn()
-      routingChoiceInFlightCaptureID = nil
-      if coordinator.routingAmbiguity == nil {
-        routingChooserSnapshot = nil
-        routingChoiceFailure = nil
-      }
       capsuleOwner = .idle
       currentCapsuleStatus = .idle
       capsuleController.presentIdle(
@@ -1936,19 +1831,6 @@
     }
 
     private func replayLiveCapsuleOrIdle() {
-      if let chooserPresentation = activeRoutingChooserPresentation() {
-        showCapsule(
-          capsuleContext(
-            for: chooserPresentation.status,
-            detailText: chooserPresentation.detailText,
-            compactDetailText: chooserPresentation.detailText
-          ),
-          owner: .dictation,
-          action: capsuleAction(for: coordinator.recoveryAction),
-          chooser: chooserPresentation.chooser
-        )
-        return
-      }
       switch phase {
       case .arming, .listening, .finalizing, .cleaning, .routing:
         if let lastCoordinatorEvent, lastCoordinatorEvent.terminal == nil,
@@ -2010,48 +1892,6 @@
       case .openDestination(let noteID):
         openDestination(noteID)
       }
-    }
-
-    private func chooseRoutingDestination(captureID: UUID, noteID: UUID?) async {
-      guard
-        routingChoiceInFlightCaptureID == nil,
-        let chooser = capsuleController.currentChooser,
-        chooser.captureID == captureID,
-        noteID != nil || chooser.allowsKeepInInbox,
-        coordinator.routingAmbiguity?.captureID == captureID,
-        let snapshot = routingChooserSnapshot,
-        snapshot.captureID == captureID
-      else { return }
-      let selectedTitle = noteID.flatMap { noteID in
-        chooser.choices.first(where: { $0.id == noteID })?.title
-      } ?? "Inbox"
-      let cleanup = snapshot.cleanup
-      routingChoiceInFlightCaptureID = captureID
-      let result = await coordinator.chooseDestination(captureID: captureID, noteID: noteID)
-      if coordinator.routingAmbiguity?.captureID != captureID {
-        routingChooserSnapshot = nil
-      }
-      guard routingChoiceInFlightCaptureID == captureID else { return }
-      routingChoiceInFlightCaptureID = nil
-      guard appState?.preferences.dictationCapsuleEnabled == true else { return }
-
-      guard let result else {
-        replayLiveCapsuleOrIdle()
-        return
-      }
-      if case .failed(let status, let message) = result {
-        routingChoiceFailure = (captureID, status, message)
-        replayLiveCapsuleOrIdle()
-        return
-      }
-      routingChoiceFailure = nil
-
-      let status: DictationCapsuleStatus = cleanup == .cleaned
-        ? .saved(destination: selectedTitle)
-        : .savedWithoutCleanup(destination: selectedTitle)
-      recoveryAction = capsuleAction(for: coordinator.recoveryAction)
-      showCapsule(status, owner: .dictation, action: recoveryAction)
-      scheduleIdle(after: Self.savedCapsuleDuration, owner: .dictation)
     }
 
     private func openDestination(_ noteID: UUID) {
