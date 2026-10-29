@@ -67,9 +67,9 @@
       )
       let position = min(max(CGFloat(doubleValue), 0), 1)
       let travel = track.height - length
-      let y = floor(isFlipped
+      let y = isFlipped
         ? track.minY + travel * position
-        : track.maxY - length - travel * position)
+        : track.maxY - length - travel * position
       let trailingInset = min(Self.visualTrailingInset, bounds.width - width)
       return NSRect(
         x: bounds.maxX - trailingInset - width,

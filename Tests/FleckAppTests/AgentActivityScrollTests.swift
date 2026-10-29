@@ -143,7 +143,7 @@ struct AgentActivityScrollTests {
       scroller.knobProportion = proportion
       var visualSize: NSSize?
 
-      for position in [CGFloat(0), 0.5, 1] {
+      for position in [CGFloat(0), 0.25, 0.5, 0.75, 1] {
         scroller.doubleValue = Double(position)
         let visual = scroller.visualKnobRect
         let native = scroller.rect(for: .knob)
@@ -152,9 +152,9 @@ struct AgentActivityScrollTests {
           dy: AgentActivityScroller.visualTrackInset
         )
         let travel = track.height - visual.height
-        let expectedY = floor(scroller.isFlipped
+        let expectedY = scroller.isFlipped
           ? track.minY + travel * position
-          : track.maxY - visual.height - travel * position)
+          : track.maxY - visual.height - travel * position
 
         #expect(visualSize == nil || visual.size == visualSize)
         #expect(native.contains(visual))
@@ -321,9 +321,9 @@ struct AgentActivityScrollTests {
     let releasedRect = scroller.visualKnobRect
     let position = min(max(CGFloat(scroller.doubleValue), 0), 1)
     let travel = track.height - releasedRect.height
-    let expectedReleasedY = floor(scroller.isFlipped
+    let expectedReleasedY = scroller.isFlipped
       ? track.minY + travel * position
-      : track.maxY - releasedRect.height - travel * position)
+      : track.maxY - releasedRect.height - travel * position
 
     #expect(releasedRect.height == expectedReleasedHeight)
     #expect(releasedRect.height != heldBefore.height)
