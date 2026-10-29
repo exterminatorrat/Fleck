@@ -3,7 +3,7 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
-## [1.4.12-beta.1] - 2026-10-26
+## [1.4.15-beta.1] - 2026-10-29
 
 ### Fixed
 
@@ -12,7 +12,7 @@ public release log. Packaging unchanged source does not add a changelog entry.
 Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
 tests, visual/accessibility inspection and native behavior remain unverified.
 
-## [1.4.11-beta.1] - 2026-10-26
+## [1.4.14-beta.1] - 2026-10-29
 
 ### Fixed
 
@@ -21,6 +21,18 @@ tests, visual/accessibility inspection and native behavior remain unverified.
 
 Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
 tests, visual/accessibility inspection and native behavior remain unverified.
+
+## [1.4.11-beta.1] - 2026-10-29
+
+### Fixed
+
+- Adopt bounded actual native resize frames while preserving anchor, top, containment and
+  legal-preference checks.
+- Protect resize rollback and completion from newer interactions while preserving deferred
+  size publication during reentry.
+- Reject backing alignment or native adoption that changes an untouched resize axis.
+
+Source-only checkpoint; compilation, tests and native resize validation remain unrun.
 
 ## [1.4.10-beta.1] - 2026-10-26
 
