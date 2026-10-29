@@ -1493,13 +1493,35 @@ import Testing
       ) else { return }
       try Task.checkCancellation()
       let mouseDownEventNumber = eventNumber
+      #if DEBUG
+        host.diagnosticOutcome = .notObserved
+        defer {
+          host.diagnosticOutcome = nil
+          host.diagnosticPointer = nil
+        }
+      #endif
       sendResizeMouseEvent(
         .leftMouseDown, at: mouseDown, to: window, number: mouseDownEventNumber)
+      #if DEBUG
+        print("RESIZE_FRACTIONAL phase=down side=\(fixedSide) handle=\(handle) tracking=\(controller.isTracking) outcome=\(host.diagnosticOutcome?.rawValue ?? "disabled") pointer=\(String(describing: host.diagnosticPointer)) frame=\(window.frame)")
+        host.diagnosticOutcome = .notObserved
+        host.diagnosticPointer = nil
+      #endif
       eventNumber += 1
       try #require(controller.isTracking)
       sendResizeMouseEvent(.leftMouseDragged, atScreen: release, to: window, number: eventNumber)
+      #if DEBUG
+        print("RESIZE_FRACTIONAL phase=drag tracking=\(controller.isTracking) outcome=\(host.diagnosticOutcome?.rawValue ?? "disabled") pointer=\(String(describing: host.diagnosticPointer)) target=\(release) frame=\(window.frame) proposal=\(String(describing: controller.currentProposal?.frame))")
+        host.diagnosticOutcome = .notObserved
+        host.diagnosticPointer = nil
+      #endif
       eventNumber += 1
       sendResizeMouseEvent(.leftMouseUp, atScreen: release, to: window, number: eventNumber)
+      #if DEBUG
+        print("RESIZE_FRACTIONAL phase=up tracking=\(controller.isTracking) outcome=\(host.diagnosticOutcome?.rawValue ?? "disabled") pointer=\(String(describing: host.diagnosticPointer)) frame=\(window.frame) commits=\(commits.count)")
+        host.diagnosticOutcome = nil
+        host.diagnosticPointer = nil
+      #endif
       eventNumber += 1
 
       #expect(commits.count == 1)

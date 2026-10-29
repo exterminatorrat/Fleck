@@ -952,6 +952,22 @@
   final class MenuPanelResizeHostView: NSView {
     typealias FallbackVisibleFrameProvider = @MainActor (NSWindow) -> CGRect?
 
+    #if DEBUG
+      enum DiagnosticOutcome: String {
+        case notObserved, entered, ownerOrWindowRejected, hidden, notTracking, ineligible
+        case pointerRejected, beginRejected, began, updateRejected, updated
+        case finishUpdateRejected, finishFrameRejected, finishAdoptionRejected, committed
+        case backingAlignmentRejected, cancelled
+      }
+
+      var diagnosticOutcome: DiagnosticOutcome?
+      var diagnosticPointer: CGPoint?
+
+      private func recordDiagnostic(_ outcome: DiagnosticOutcome) {
+        if diagnosticOutcome != nil { diagnosticOutcome = outcome }
+      }
+    #endif
+
     private let controller: MenuPanelResizeController
     private let fallbackVisibleFrameProvider: FallbackVisibleFrameProvider
     private var attachmentID: UUID?
@@ -1324,35 +1340,72 @@
     }
 
     private func handle(_ event: NSEvent) -> NSEvent? {
+      #if DEBUG
+        let isDiagnosticGesture = diagnosticOutcome != nil
+          && [.leftMouseDown, .leftMouseDragged, .leftMouseUp].contains(event.type)
+        if isDiagnosticGesture { recordDiagnostic(.entered) }
+      #endif
       guard let attachmentID, controller.isPresentationOwner(attachmentID),
         let window = installedWindow, event.window === window
-      else { return event }
+      else {
+        #if DEBUG
+          if isDiagnosticGesture { recordDiagnostic(.ownerOrWindowRejected) }
+        #endif
+        return event
+      }
       guard window.isVisible else {
+        #if DEBUG
+          if isDiagnosticGesture { recordDiagnostic(.hidden) }
+        #endif
         resetCursor()
         return event
       }
       let canonicalPointer: CGPoint?
       switch event.type {
       case .leftMouseDown:
-        guard isLiveResizeEligible(in: window) else { return event }
+        guard isLiveResizeEligible(in: window) else {
+          #if DEBUG
+            recordDiagnostic(.ineligible)
+          #endif
+          return event
+        }
         canonicalPointer = MenuPanelResizePointerInput.canonicalPoint(from: event.cgEvent)
       case .leftMouseDragged, .leftMouseUp:
-        guard controller.isOwned(by: attachmentID) else { return event }
+        guard controller.isOwned(by: attachmentID) else {
+          #if DEBUG
+            recordDiagnostic(.notTracking)
+          #endif
+          return event
+        }
         guard isLiveResizeEligible(in: window) else {
           cancelAndRestore(in: window)
+          #if DEBUG
+            recordDiagnostic(.ineligible)
+          #endif
           return nil
         }
         canonicalPointer = MenuPanelResizePointerInput.canonicalPoint(from: event.cgEvent)
       default:
         canonicalPointer = nil
       }
+      #if DEBUG
+        if isDiagnosticGesture { diagnosticPointer = canonicalPointer }
+      #endif
       switch event.type {
       case .leftMouseDown:
-        guard let canonicalPointer else { return event }
+        guard let canonicalPointer else {
+          #if DEBUG
+            recordDiagnostic(.pointerRejected)
+          #endif
+          return event
+        }
         return begin(pointer: canonicalPointer, in: window) ? nil : event
       case .leftMouseDragged:
         guard let canonicalPointer else {
           cancelAndRestore(in: window)
+          #if DEBUG
+            recordDiagnostic(.pointerRejected)
+          #endif
           return nil
         }
         update(pointer: canonicalPointer, in: window)
@@ -1360,6 +1413,9 @@
       case .leftMouseUp:
         guard let canonicalPointer else {
           cancelAndRestore(in: window)
+          #if DEBUG
+            recordDiagnostic(.pointerRejected)
+          #endif
           return nil
         }
         finish(pointer: canonicalPointer, in: window)
@@ -1429,15 +1485,26 @@
       guard case let .ready(initialSnapshot, handle, ownerID, statusButtonSource) = beginReadiness(
         at: window.convertPoint(fromScreen: pointer),
         in: window
-      ) else { return false }
+      ) else {
+        #if DEBUG
+          recordDiagnostic(.beginRejected)
+        #endif
+        return false
+      }
       var snapshot = initialSnapshot
       snapshot.initialPointer = pointer
       guard controller.begin(snapshot: snapshot, handle: handle, ownerID: ownerID) else {
+        #if DEBUG
+          recordDiagnostic(.beginRejected)
+        #endif
         return false
       }
       invalidateQueuedWork()
       activeStatusButtonSource = statusButtonSource
       setCursor(cursor(for: handle, fixedSide: snapshot.fixedSide))
+      #if DEBUG
+        if diagnosticOutcome == .entered { recordDiagnostic(.began) }
+      #endif
       return true
     }
 
@@ -1459,10 +1526,16 @@
           )
         }
       ) else {
+        #if DEBUG
+          if diagnosticOutcome == .entered { recordDiagnostic(.updateRejected) }
+        #endif
         cancelAndRestore(in: window)
         return
       }
       applyFrame(proposal.frame, to: window, displayImmediately: false)
+      #if DEBUG
+        if diagnosticOutcome == .entered { recordDiagnostic(.updated) }
+      #endif
       if let handle = controller.currentHandle,
         let fixedSide = controller.currentFixedSide
       {
@@ -1491,6 +1564,9 @@
           }
         )
       else {
+        #if DEBUG
+          if diagnosticOutcome == .entered { recordDiagnostic(.finishUpdateRejected) }
+        #endif
         cancelAndRestore(in: window)
         return
       }
@@ -1509,6 +1585,9 @@
           )
         }
       ) else {
+        #if DEBUG
+          if diagnosticOutcome == .entered { recordDiagnostic(.finishFrameRejected) }
+        #endif
         cancelAndRestore(in: window)
         return
       }
@@ -1522,6 +1601,9 @@
         adoptedEffectiveSize,
         controller.presentationContentSize(ownerID: attachmentID) == final.contentSize
       else {
+        #if DEBUG
+          recordDiagnostic(.finishAdoptionRejected)
+        #endif
         let snapshot = controller.cancelCompletion(ownerID: attachmentID)
         activeStatusButtonSource = nil
         if let snapshot {
@@ -1538,6 +1620,9 @@
       alignedFixedSide = final.fixedSide
       alignedFrame = final.frame
       onCommit(final.contentSize)
+      #if DEBUG
+        recordDiagnostic(.committed)
+      #endif
       _ = controller.clearCompletion(preferredSize: preferredSize, ownerID: attachmentID)
       invalidateQueuedWork()
       scheduleReconcile()
@@ -1555,6 +1640,9 @@
       )
       activeStatusButtonSource = nil
       if let snapshot {
+        #if DEBUG
+          if diagnosticOutcome == .entered { recordDiagnostic(.cancelled) }
+        #endif
         restore(
           snapshot: snapshot,
           in: window,
@@ -1985,7 +2073,12 @@
         contentSize.width.isFinite, contentSize.height.isFinite,
         contentSize.width > 0, contentSize.height > 0,
         !proposal.isLegalPreference || isLegalPreference
-      else { return nil }
+      else {
+        #if DEBUG
+          recordDiagnostic(.backingAlignmentRejected)
+        #endif
+        return nil
+      }
       return MenuPanelResizeProposal(
         contentSize: contentSize,
         frame: frame,
