@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.1-beta.1] - 2026-10-29
+
+### Fixed
+
+- Keep the Activity scrollbar thumb proportionally positioned within the native knob by
+  preserving fractional vertical coordinates, with quarter-position regression coverage.
+
+Source-only correction. Compilation, tests and native visual behavior remain unverified.
+
 ## [1.7.0-beta.1] - 2026-10-27
 
 ### Added
