@@ -1965,7 +1965,8 @@ private enum SettingsReadinessFailureWitness {
       while !pending.isEmpty, visited < 1_024 {
         let view = pending.removeLast()
         visited += 1
-        if let identifier = view.accessibilityIdentifier(), identifiers.contains(identifier) {
+        let identifier = view.accessibilityIdentifier()
+        if identifiers.contains(identifier) {
           matches[identifier, default: []].append(view)
         }
         let children = view.subviews
