@@ -4123,6 +4123,268 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   #expect(selectedNoteID == .some(nil))
 }
 
+@Test @MainActor func DictationCapsuleNativeChooserMenuRejectsStaleCaptureAndSuccessActions() throws {
+  let controller = DictationCapsuleController(automaticallyAdvancesLivePill: false)
+  controller.setPanelVisibilitySuppressedForTesting(true)
+  controller.setReduceMotionOverrideForTesting(true)
+  defer { controller.dismiss() }
+  var selections: [UUID?] = []
+  var selectedCaptures: [UUID] = []
+  let onChoice: @MainActor (UUID, UUID?) -> Void = { captureID, noteID in
+    selectedCaptures.append(captureID)
+    selections.append(noteID)
+  }
+  let captureID = UUID()
+  let noteID = UUID()
+  let chooser = DictationCapsuleChooser(ambiguity: .init(
+    captureID: captureID,
+    choices: [.init(destination: .init(noteID: noteID, title: "Synthetic destination"), contextHint: "Synthetic")]
+  ))
+  let failure = DictationCapsuleStatus.routingFailure(status: "Needs attention", message: "Synthetic routing failure")
+  controller.render(.init(status: failure, sessionID: captureID), chooser: chooser,
+    onChoice: onChoice)
+  let menu = try #require(controller.panel.contentView?.menu)
+  let submenu = try #require(menu.items.first(where: { $0.title == chooser.menuTitle })?.submenu)
+  let destination = try #require(submenu.items.first(where: { $0.title == chooser.choices[0].menuTitle }))
+  let keepInbox = try #require(submenu.items.first(where: { $0.title == chooser.keepInboxTitle }))
+  let target = try #require(destination.target as? NSObject)
+  let destinationAction = try #require(destination.action)
+  let keepAction = try #require(keepInbox.action)
+  #expect(target.responds(to: destinationAction))
+  #expect(keepInbox.target === target)
+  _ = target.perform(destinationAction, with: destination)
+  _ = target.perform(keepAction, with: keepInbox)
+  #expect(selections == [noteID, nil])
+  #expect(selectedCaptures == [captureID, captureID])
+
+  let replacementID = UUID()
+  let replacement = DictationCapsuleChooser(ambiguity: .init(
+    captureID: replacementID,
+    choices: [.init(destination: .init(noteID: noteID, title: "Synthetic destination"), contextHint: "Synthetic")]
+  ), allowsKeepInInbox: false)
+  controller.render(.init(status: failure, sessionID: replacementID), chooser: replacement,
+    onChoice: onChoice)
+  _ = target.perform(destinationAction, with: destination)
+  _ = target.perform(keepAction, with: keepInbox)
+  #expect(selections == [noteID, nil])
+  #expect(selectedCaptures == [captureID, captureID])
+  let replacementMenu = try #require(controller.panel.contentView?.menu?.items.first(where: {
+    $0.title == replacement.menuTitle
+  })?.submenu)
+  #expect(!replacementMenu.items.contains(where: { $0.title == replacement.keepInboxTitle }))
+  let replacementItem = try #require(replacementMenu.items.first(where: { $0.title == replacement.choices[0].menuTitle }))
+  let replacementTarget = try #require(replacementItem.target as? NSObject)
+  let replacementAction = try #require(replacementItem.action)
+  _ = replacementTarget.perform(replacementAction, with: replacementItem)
+  #expect(selections == [noteID, nil, noteID])
+  #expect(selectedCaptures == [captureID, captureID, replacementID])
+
+  controller.render(.init(status: .saved(destination: "Inbox"), sessionID: replacementID),
+    chooser: replacement, onChoice: onChoice)
+  let successMenu = try #require(controller.panel.contentView?.menu)
+  #expect(!successMenu.items.contains(where: { $0.title == replacement.menuTitle }))
+  #expect(!successMenu.items.contains(where: { $0.title == replacement.keepInboxTitle }))
+  _ = replacementTarget.perform(replacementAction, with: replacementItem)
+  #expect(selections == [noteID, nil, noteID])
+  #expect(selectedCaptures == [captureID, captureID, replacementID])
+  #expect(controller.currentChooser == nil)
+  #expect(controller.currentContext.status == .idle)
+}
+
+@Test @MainActor func DictationCapsuleNativeChooserMenuRejectsRetiredChoiceInSameCapture() throws {
+  let controller = DictationCapsuleController(automaticallyAdvancesLivePill: false)
+  controller.setPanelVisibilitySuppressedForTesting(true)
+  controller.setReduceMotionOverrideForTesting(true)
+  defer { controller.dismiss() }
+  let captureID = UUID()
+  let retiredID = UUID()
+  let liveID = UUID()
+  let choices: [DictationRoutingChoice] = [retiredID, liveID].map {
+    .init(destination: .init(noteID: $0, title: $0 == retiredID ? "Retired destination" : "Live destination"), contextHint: "Synthetic")
+  }
+  let chooser = DictationCapsuleChooser(ambiguity: .init(captureID: captureID, choices: choices))
+  let context = DictationCapsuleContext(
+    status: .routingFailure(status: "Needs attention", message: "Synthetic routing failure"),
+    sessionID: captureID
+  )
+  var selections: [UUID] = []
+  let onChoice: @MainActor (UUID, UUID?) -> Void = { selectedCaptureID, noteID in
+    #expect(selectedCaptureID == captureID)
+    if let noteID { selections.append(noteID) }
+  }
+  controller.render(context, chooser: chooser, onChoice: onChoice)
+  let oldMenu = try #require(controller.panel.contentView?.menu?.items.first(where: {
+    $0.title == chooser.menuTitle
+  })?.submenu)
+  let retiredItem = try #require(oldMenu.items.first(where: { $0.title == chooser.choices[0].menuTitle }))
+  let target = try #require(retiredItem.target as? NSObject)
+  let retiredAction = try #require(retiredItem.action)
+
+  let currentChooser = DictationCapsuleChooser(
+    ambiguity: .init(captureID: captureID, choices: [choices[1]]),
+    allowsKeepInInbox: false
+  )
+  controller.render(context, chooser: currentChooser, onChoice: onChoice)
+  _ = target.perform(retiredAction, with: retiredItem)
+  #expect(selections.isEmpty)
+  let liveMenu = try #require(controller.panel.contentView?.menu?.items.first(where: {
+    $0.title == currentChooser.menuTitle
+  })?.submenu)
+  #expect(liveMenu.items.map(\.title) == [currentChooser.choices[0].menuTitle])
+  let liveItem = try #require(liveMenu.items.first)
+  let liveTarget = try #require(liveItem.target as? NSObject)
+  let liveAction = try #require(liveItem.action)
+  _ = liveTarget.perform(liveAction, with: liveItem)
+  #expect(selections == [liveID])
+}
+
+@Test @MainActor func DictationCapsuleNativeChooserMenuRejectsStaleGenerationForUnchangedChooser() throws {
+  let controller = DictationCapsuleController(automaticallyAdvancesLivePill: false)
+  controller.setPanelVisibilitySuppressedForTesting(true)
+  controller.setReduceMotionOverrideForTesting(true)
+  defer { controller.dismiss() }
+
+  let captureID = UUID()
+  let noteID = UUID()
+  let chooser = DictationCapsuleChooser(ambiguity: .init(
+    captureID: captureID,
+    choices: [.init(destination: .init(noteID: noteID, title: "Synthetic destination"), contextHint: "Synthetic")]
+  ), allowsKeepInInbox: false)
+  let context = DictationCapsuleContext(
+    status: .routingFailure(status: "Needs attention", message: "Synthetic routing failure"),
+    sessionID: captureID
+  )
+  var selectedCaptures: [UUID] = []
+  var selections: [UUID?] = []
+  let onChoice: @MainActor (UUID, UUID?) -> Void = { selectedCaptureID, noteID in
+    selectedCaptures.append(selectedCaptureID)
+    selections.append(noteID)
+  }
+
+  controller.render(context, chooser: chooser, onChoice: onChoice)
+  #expect(controller.currentContext == context)
+  #expect(controller.currentChooser == chooser)
+  #expect(controller.currentContext.sessionID == captureID)
+  #expect(controller.currentChooser?.captureID == captureID)
+  let firstGeneration = controller.presentationModel.presentationGeneration
+  let firstMenu = try #require(controller.panel.contentView?.menu?.items.first(where: {
+    $0.title == chooser.menuTitle
+  })?.submenu)
+  let staleItem = try #require(firstMenu.items.first(where: { $0.title == chooser.choices[0].menuTitle }))
+  let target = try #require(staleItem.target as? NSObject)
+  let action = try #require(staleItem.action)
+  #expect(target.responds(to: action))
+  _ = target.perform(action, with: staleItem)
+  #expect(selections == [noteID])
+  #expect(selectedCaptures == [captureID])
+
+  controller.render(context, chooser: chooser, onChoice: onChoice)
+  let secondGeneration = controller.presentationModel.presentationGeneration
+  #expect(secondGeneration > firstGeneration)
+  #expect(controller.currentContext == context)
+  #expect(controller.currentChooser == chooser)
+  #expect(controller.currentContext.sessionID == captureID)
+  #expect(controller.currentChooser?.captureID == captureID)
+
+  _ = target.perform(action, with: staleItem)
+  #expect(selections == [noteID])
+  #expect(selectedCaptures == [captureID])
+
+  let refreshedMenu = try #require(controller.panel.contentView?.menu?.items.first(where: {
+    $0.title == chooser.menuTitle
+  })?.submenu)
+  #expect(refreshedMenu.items.map(\.title) == [chooser.choices[0].menuTitle])
+  let refreshedItem = try #require(refreshedMenu.items.first)
+  let refreshedTarget = try #require(refreshedItem.target as? NSObject)
+  let refreshedAction = try #require(refreshedItem.action)
+  _ = refreshedTarget.perform(refreshedAction, with: refreshedItem)
+  #expect(selections == [noteID, noteID])
+  #expect(selectedCaptures == [captureID, captureID])
+}
+
+@Test @MainActor func DictationCapsuleChooserEligibilityMatchesPresentationContext() {
+  let controller = DictationCapsuleController(automaticallyAdvancesLivePill: false)
+  controller.setPanelVisibilitySuppressedForTesting(true)
+  controller.setReduceMotionOverrideForTesting(true)
+  defer { controller.dismiss() }
+
+  let captureID = UUID()
+  let noteID = UUID()
+  let invalidNoteID = UUID()
+  let chooser = DictationCapsuleChooser(
+    ambiguity: .init(
+      captureID: captureID,
+      choices: [
+        .init(
+          destination: .init(noteID: noteID, title: "Synthetic destination"),
+          contextHint: "Synthetic"
+        )
+      ]
+    ),
+    allowsKeepInInbox: true
+  )
+  let routingFailure = DictationCapsuleStatus.routingFailure(
+    status: "Needs attention",
+    message: "Synthetic routing failure"
+  )
+  let eligibleContext = DictationCapsuleContext(status: routingFailure, sessionID: captureID)
+  var selectedCaptures: [UUID] = []
+  var selections: [UUID?] = []
+  let onChoice: @MainActor (UUID, UUID?) -> Void = { selectedCaptureID, noteID in
+    selectedCaptures.append(selectedCaptureID)
+    selections.append(noteID)
+  }
+
+  controller.render(eligibleContext, chooser: chooser, onChoice: onChoice)
+  #expect(controller.currentChooser == chooser)
+  #expect(controller.presentationModel.chooser == chooser)
+  controller.selectRoutingChoice(captureID: captureID, noteID: invalidNoteID)
+  #expect(selections.isEmpty)
+  #expect(selectedCaptures.isEmpty)
+  controller.selectRoutingChoice(captureID: captureID, noteID: noteID)
+  controller.selectRoutingChoice(captureID: captureID, noteID: nil)
+  #expect(selections == [noteID, nil])
+  #expect(selectedCaptures == [captureID, captureID])
+
+  let idleWithStaleChooser = DictationCapsuleContext(status: .idle, sessionID: captureID)
+  controller.render(idleWithStaleChooser, chooser: chooser, onChoice: onChoice)
+  #expect(controller.currentChooser == nil)
+  #expect(controller.presentationModel.chooser == nil)
+
+  let wrongStatus = DictationCapsuleContext(
+    status: .failed("Synthetic non-routing failure"),
+    sessionID: captureID
+  )
+  controller.render(wrongStatus, chooser: chooser, onChoice: onChoice)
+  #expect(controller.currentChooser == nil)
+  #expect(controller.presentationModel.chooser == nil)
+
+  let mismatchedSession = DictationCapsuleContext(
+    status: routingFailure,
+    sessionID: UUID()
+  )
+  controller.render(mismatchedSession, chooser: chooser, onChoice: onChoice)
+  #expect(controller.currentChooser == nil)
+  #expect(controller.presentationModel.chooser == nil)
+
+  let emptyChooser = DictationCapsuleChooser(
+    ambiguity: .init(captureID: captureID, choices: []),
+    allowsKeepInInbox: false
+  )
+  controller.render(eligibleContext, chooser: emptyChooser, onChoice: onChoice)
+  #expect(controller.currentChooser == nil)
+  #expect(controller.presentationModel.chooser == nil)
+  #expect(selections == [noteID, nil])
+  #expect(selectedCaptures == [captureID, captureID])
+
+  controller.render(eligibleContext, chooser: chooser, onChoice: onChoice)
+  #expect(controller.currentChooser == chooser)
+  #expect(controller.presentationModel.chooser == chooser)
+  controller.selectRoutingChoice(captureID: captureID, noteID: noteID)
+  #expect(selections == [noteID, nil, noteID])
+  #expect(selectedCaptures == [captureID, captureID, captureID])
+}
+
 @Test func DictationCapsuleChooserKeepsEveryManualChoiceAndDisambiguatesFolders() throws {
   let captureID = UUID()
   let choices = (0..<6).map { index in

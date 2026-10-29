@@ -2320,7 +2320,7 @@
         retireCoordinatorSession(coordinatorEvent?.context?.sessionID)
       }
       if displayedContext.status != .listening { waveformModel.reset() }
-      currentChooser = context.status.isSavedResult ? nil : chooser
+      currentChooser = displayableChooser
       currentChoiceHandler = onChoice
       panel.allowsActions = visibleAction != nil
         || errorPresentationModel.presentation != nil
@@ -3998,6 +3998,12 @@
 
   @MainActor
   private final class DictationCapsuleHostingView: NSView {
+    private struct MenuChoice {
+      let generation: UInt64
+      let captureID: UUID
+      let noteID: UUID?
+    }
+
     private let model: DictationCapsulePresentationModel
     private let fleckPillModel: FleckPillLivePresentationModel
     private let errorPresentationModel: FleckErrorPresentationModel
@@ -4180,6 +4186,35 @@
       } else if let action = model.action, action != .openHistory {
         addItem(action.title, action: #selector(recovery(_:)), to: menu)
       }
+      if let chooser = model.context.displayableChooser(model.chooser), chooser.displaysMenu {
+        let submenu = NSMenu(title: chooser.menuTitle)
+        var choices: [(title: String, noteID: UUID?)] = chooser.choices.map {
+          ($0.menuTitle, $0.id)
+        }
+        if chooser.allowsKeepInInbox {
+          choices.append((chooser.keepInboxTitle, nil))
+        }
+        for choice in choices {
+          if choice.noteID == nil, !chooser.choices.isEmpty {
+            submenu.addItem(.separator())
+          }
+          let item = NSMenuItem(
+            title: choice.title,
+            action: #selector(chooseDestination(_:)),
+            keyEquivalent: ""
+          )
+          item.target = self
+          item.representedObject = MenuChoice(
+            generation: model.presentationGeneration,
+            captureID: chooser.captureID,
+            noteID: choice.noteID
+          )
+          submenu.addItem(item)
+        }
+        let item = NSMenuItem(title: chooser.menuTitle, action: nil, keyEquivalent: "")
+        item.submenu = submenu
+        menu.addItem(item)
+      }
       return menu
     }
 
@@ -4217,6 +4252,20 @@
         return
       }
       inputRouter.onRecovery()
+    }
+
+    @objc private func chooseDestination(_ sender: NSMenuItem) {
+      guard let choice = sender.representedObject as? MenuChoice,
+        choice.generation == model.presentationGeneration,
+        let chooser = model.context.displayableChooser(model.chooser),
+        chooser.captureID == choice.captureID
+      else { return }
+      if let noteID = choice.noteID {
+        guard chooser.choices.contains(where: { $0.id == noteID }) else { return }
+      } else {
+        guard chooser.allowsKeepInInbox else { return }
+      }
+      model.choiceHandler(choice.captureID, choice.noteID)
     }
 
     @objc private func dockBottom() {

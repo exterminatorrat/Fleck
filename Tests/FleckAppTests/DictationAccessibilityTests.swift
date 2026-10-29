@@ -1069,11 +1069,21 @@ private func renderedPixels(with identifier: String, in host: NSView) throws -> 
     onOpenFleck: {},
     onDockChanged: { _ in }
   )
-  controller.render(.saved(destination: "Inbox"), action: .undo) {
-    actions += 1
-  }
+  let captureID = UUID()
+  let chooser = DictationCapsuleChooser(ambiguity: .init(captureID: captureID, choices: []))
+  controller.render(
+    .init(
+      status: .routingFailure(status: "Needs attention", message: "Synthetic routing failure"),
+      sessionID: captureID
+    ),
+    action: .copy,
+    chooser: chooser,
+    onAction: { actions += 1 }
+  )
   controller.fleckPillModel.tick(at: 11, displayedEnergy: 0)
   #expect(!controller.fleckPillModel.isVisible)
+  #expect(controller.currentChooser?.captureID == captureID)
+  #expect(controller.errorPresentationModel.presentation == nil)
 
   panel.setFrame(CGRect(x: 0, y: 0, width: 264, height: 36), display: false)
   panel.contentView?.frame = CGRect(x: 0, y: 0, width: 264, height: 36)
@@ -1093,7 +1103,7 @@ private func renderedPixels(with identifier: String, in host: NSView) throws -> 
   guard let actionButton = descendants(of: host)
     .first(where: { $0.responds(to: performClick) })
   else {
-    Issue.record("Expected the rendered Undo action button to be discoverable")
+    Issue.record("Expected the rendered Copy recovery action button to be discoverable")
     controller.dismiss()
     return
   }
@@ -2394,10 +2404,10 @@ private actor AccessibilitySleepGate {
   var primaryClicks = 0
   controller.presentIdle(dock: .left, onOpenFleck: { primaryClicks += 1 }, onDockChanged: { _ in })
   controller.configureInteraction(
-    onPrimaryClick: { primaryClicks += 1 },
+    onPrimaryClick: {},
     onStop: {},
     onCancel: {},
-    onOpenFleck: {},
+    onOpenFleck: { primaryClicks += 1 },
     onOpenHistory: {},
     onOpenSettings: {},
     onDismiss: {},

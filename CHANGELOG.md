@@ -3,6 +3,20 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.1-beta.1] - 2026-10-29
+
+### Fixed
+
+- Add native destination chooser actions to the dictation capsule menu, rejecting
+  stale items after a newer presentation, capture replacement, or choice change.
+- Align capsule accessibility fixtures with recovery routing, wait for matching live-pill
+  render receipts, and register runtime waiters before opening load gates.
+- Retain the controller's routing chooser only when its capture and context are
+  still displayable.
+
+Source-only validation. Tests, compilation, native/visual/accessibility validation,
+hosted CI, and packaging were not run.
+
 ## [1.7.0-beta.1] - 2026-10-27
 
 ### Fixed
