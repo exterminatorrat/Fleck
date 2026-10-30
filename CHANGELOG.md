@@ -3,6 +3,18 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.3-beta.1] - 2026-10-30
+
+### Fixed
+
+- Inherit the reviewed menu-panel native-frame adoption repair, including interaction
+  ownership/revision fencing, reentrant rollback and unchanged-axis validation.
+- Preserve observable size updates and immediate/deferred publication ordering with the
+  complete reviewed native-adoption regressions and existing display coverage.
+
+Source-only dependency inheritance. Compiler checks, test discovery/tests and native,
+real-event, display and pixel behavior in this source context remain unverified.
+
 ## [1.7.2-beta.1] - 2026-10-30
 
 ### Fixed
