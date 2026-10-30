@@ -193,6 +193,11 @@
     static var defaultValue: Binding<SettingsKeyboardFocusReturnRequest?> { .constant(nil) }
   }
 
+  #if DEBUG
+  private struct SettingsReadinessReturnObservationSourceEnvironmentKey: EnvironmentKey {
+    static var defaultValue: AnyObject? { nil }
+  }
+  #endif
   extension EnvironmentValues {
     var settingsKeyboardFocusReturnRequest: Binding<SettingsKeyboardFocusReturnRequest?> {
       get { self[SettingsKeyboardFocusReturnRequestEnvironmentKey.self] }
@@ -203,6 +208,13 @@
       get { self[SettingsSearchRequestEnvironmentKey.self] }
       set { self[SettingsSearchRequestEnvironmentKey.self] = newValue }
     }
+    #if DEBUG
+
+    var settingsReadinessReturnObservationSource: AnyObject? {
+      get { self[SettingsReadinessReturnObservationSourceEnvironmentKey.self] }
+      set { self[SettingsReadinessReturnObservationSourceEnvironmentKey.self] = newValue }
+    }
+    #endif
   }
 
   enum SettingsSearchMove {
@@ -908,6 +920,9 @@
 
     @Published private var lastInput: (windowNumber: Int, isKeyboard: Bool)?
     private(set) var inputID = UUID()
+    #if DEBUG
+    var readinessReturnObservation: (@MainActor (AnyObject?, String) -> Void)?
+    #endif
 
     var showsKeyboardFocusCue: Bool {
       guard let lastInput else { return false }
@@ -950,6 +965,10 @@
     let target: SettingsSearchTarget
     let request: SettingsSearchRequest?
     @Environment(\.settingsKeyboardFocusReturnRequest) private var keyboardReturnRequest
+    #if DEBUG
+    @Environment(\.settingsReadinessReturnObservationSource)
+      private var readinessReturnObservationSource: AnyObject?
+    #endif
     @FocusState private var isKeyboardFocused: Bool
     @AccessibilityFocusState private var isFocused: Bool
     @ObservedObject private var inputModality = SettingsSearchInputModality.shared
@@ -1036,9 +1055,29 @@
           isFocused = true
         }
         .task(id: keyboardReturnRequest.wrappedValue?.id) { @MainActor in
+          #if DEBUG
+          if target == .dictationStatus {
+            inputModality.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[F93-readiness-return:consumer] requestPresent=\(keyboardReturnRequest.wrappedValue != nil)"
+            )
+          }
+          #endif
           guard let returnRequest = keyboardReturnRequest.wrappedValue else { return }
           let generation = returnAttachment.generation
           await Task.yield()
+          #if DEBUG
+          if target == .dictationStatus {
+            inputModality.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[F93-readiness-return:yield] cancelled=\(Task.isCancelled) sameID=\(keyboardReturnRequest.wrappedValue?.id == returnRequest.id) nativeViewPresent=\(returnAttachment.view != nil) generationMatches=\(returnAttachment.generation == generation) inputMatches=\(returnRequest.inputID == inputModality.inputID) requestWindowPresent=\(returnRequest.window != nil)"
+            )
+            inputModality.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[F93-readiness-return:yield] attachmentMatchesRequestWindow=\(returnAttachment.view?.window != nil && returnRequest.window != nil && returnAttachment.view?.window === returnRequest.window) appActive=\(NSApp.isActive) keyMatchesRequestWindow=\(NSApp.keyWindow != nil && returnRequest.window != nil && NSApp.keyWindow === returnRequest.window) requestWindowIsKey=\(returnRequest.window?.isKeyWindow == true) requestWindowVisible=\(returnRequest.window?.isVisible == true)"
+            )
+          }
+          #endif
           guard !Task.isCancelled, keyboardReturnRequest.wrappedValue?.id == returnRequest.id else { return }
           keyboardReturnRequest.wrappedValue = nil
           guard NSApp.isActive,
@@ -1049,6 +1088,14 @@
             NSApp.keyWindow === window,
             window.isKeyWindow, window.isVisible
           else { return }
+          #if DEBUG
+          if target == .dictationStatus {
+            inputModality.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[F93-readiness-return:accepted] accepted=true"
+            )
+          }
+          #endif
           inputModality.record(isKeyboardInput: true, windowNumber: window.windowNumber)
           isKeyboardFocused = true
           isFocused = true

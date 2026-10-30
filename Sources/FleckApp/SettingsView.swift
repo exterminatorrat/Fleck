@@ -960,6 +960,10 @@
     @EnvironmentObject private var appState: AppState
     @Environment(\.fleckThemeSnapshot) private var theme
     @Environment(\.fleckUIFont) private var uiFont
+    #if DEBUG
+    @Environment(\.settingsReadinessReturnObservationSource)
+      private var readinessReturnObservationSource: AnyObject?
+    #endif
     @ObservedObject var runtime: DictationRuntime
     @ObservedObject private var personalDictionarySettingsViewModel:
       PersonalDictionarySettingsViewModel
@@ -1538,13 +1542,31 @@
                 window: $0, inputID: SettingsSearchInputModality.shared.inputID
               )
             }
+            #if DEBUG
+            SettingsSearchInputModality.shared.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[F93-readiness-return:exit] pending=\(pendingReadinessKeyboardReturn != nil) windowPresent=\(pendingReadinessKeyboardReturn?.window != nil) keyMatch=\(pendingReadinessKeyboardReturn?.window != nil && NSApp.keyWindow != nil && pendingReadinessKeyboardReturn?.window === NSApp.keyWindow) parentMatch=\(pendingReadinessKeyboardReturn?.window != nil && NSApp.keyWindow?.parent != nil && pendingReadinessKeyboardReturn?.window === NSApp.keyWindow?.parent) inputMatch=\(pendingReadinessKeyboardReturn?.inputID == SettingsSearchInputModality.shared.inputID)"
+            )
+            #endif
             isReadinessPopoverPresented = false
           }
           .onDisappear {
             let returnRequest = pendingReadinessKeyboardReturn
             pendingReadinessKeyboardReturn = nil
+            #if DEBUG
+            SettingsSearchInputModality.shared.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[F93-readiness-return:disappear] pending=\(returnRequest != nil) dictation=\(selectedSection == .dictation)"
+            )
+            #endif
             guard selectedSection == .dictation else { return }
             readinessKeyboardReturnRequest = returnRequest
+            #if DEBUG
+            SettingsSearchInputModality.shared.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[F93-readiness-return:transfer] pending=\(returnRequest != nil) bound=\(readinessKeyboardReturnRequest != nil) sameID=\(returnRequest != nil && readinessKeyboardReturnRequest?.id == returnRequest?.id)"
+            )
+            #endif
           }
       }
       .settingsSearchAnchor(.dictationStatus, request: searchRequest)

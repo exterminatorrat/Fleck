@@ -1084,6 +1084,18 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
     #expect(fixture.runtime.modifierMonitorState == .unauthorized)
 
     var openedSettings: [DictationSystemSettingsAction] = []
+    #if DEBUG
+    let host = NSHostingView(
+      rootView: SettingsView(
+        runtime: fixture.runtime,
+        openSystemSettingsAction: { openedSettings.append($0) }
+      )
+        .environmentObject(fixture.appState)
+        .environment(\.dynamicTypeSize, .accessibility5)
+        .environment(\.colorScheme, .light)
+        .environment(\.settingsReadinessReturnObservationSource, fixture.runtime)
+    )
+    #else
     let host = NSHostingView(
       rootView: SettingsView(
         runtime: fixture.runtime,
@@ -1093,6 +1105,7 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
         .environment(\.dynamicTypeSize, .accessibility5)
         .environment(\.colorScheme, .light)
     )
+    #endif
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 840, height: 600),
       styleMask: [.titled, .resizable, .closable],
@@ -1303,6 +1316,34 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
     #expect(fixture.monitor.requestCount == 1)
     #expect(openedSettings.map(\.pane) == [.microphone, .speechRecognition, .inputMonitoring])
 
+    #if DEBUG
+      let observationModality = SettingsSearchInputModality.shared
+      let previousReadinessReturnObservation = observationModality.readinessReturnObservation
+      var readinessReturnObservationCount = 0
+      var readinessReturnObservationBytes = 0
+      var readinessReturnObservationLimited = false
+      observationModality.readinessReturnObservation = { source, record in
+        guard source === fixture.runtime else { return }
+        let scopedRecord = record + " sourceOwned=true hostOwned=\(host.window === window)"
+        let bytes = scopedRecord.utf8.count + 1
+        guard readinessReturnObservationCount < 7,
+          readinessReturnObservationBytes + bytes <= 1920
+        else {
+          readinessReturnObservationLimited = true
+          return
+        }
+        readinessReturnObservationCount += 1
+        readinessReturnObservationBytes += bytes
+        print(scopedRecord)
+      }
+      defer {
+        observationModality.readinessReturnObservation = previousReadinessReturnObservation
+        print(
+          "[F93-readiness-return:limit] records=\(readinessReturnObservationCount)"
+            + " bytes=\(readinessReturnObservationBytes) limited=\(readinessReturnObservationLimited)"
+        )
+      }
+    #endif
     print(
       "[F93-readiness-escape:before] active=\(application.isActive)"
         + " keyOriginal=\(application.keyWindow === window)"
