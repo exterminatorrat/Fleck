@@ -3164,6 +3164,7 @@
       let unfiledNotes = appState.visibleNotes(in: nil)
       return HStack(spacing: 0) {
         Button {
+          focusedRow = .unfiled
           onSelect(nil)
         } label: {
           rowLabel(
@@ -3179,11 +3180,6 @@
           )
         }
         .buttonStyle(.plain)
-        .modifier(
-          FolderRowFocusPublisher(onFocusChange: { isFocused in
-            updateFocusedRow(.unfiled, isFocused: isFocused)
-          })
-        )
         .focusable()
         .focused($focusedRow, equals: .unfiled)
         .focusEffectDisabled()
@@ -3246,6 +3242,7 @@
         folderEditor(label: "Folder name", focus: .folder(folder.id))
       } else {
         Button {
+          focusedRow = .folder(folder.id)
           onSelect(folder.id)
         } label: {
           rowLabel(
@@ -3259,14 +3256,6 @@
           )
         }
         .buttonStyle(.plain)
-        .modifier(
-          FolderRowFocusPublisher(onFocusChange: { isFocused in
-            updateFocusedRow(.folder(folder.id), isFocused: isFocused)
-          })
-        )
-        .focusable()
-        .focused($focusedRow, equals: .folder(folder.id))
-        .focusEffectDisabled()
         .background(nativeNoteDropAnchor(.folder(folder.id)))
         .modifier(ReorderDropTarget(
           destinationID: folder.id, type: FolderDragPayload.folderType,
@@ -3293,6 +3282,9 @@
             folderReorder = nil
           })
         }))
+        .focusable()
+        .focused($focusedRow, equals: .folder(folder.id))
+        .focusEffectDisabled()
         .contextMenu {
           Button("Move Left", systemImage: "arrow.left") { moveFolder(folder.id, offset: -1) }
           Button("Move Right", systemImage: "arrow.right") { moveFolder(folder.id, offset: 1) }
@@ -3375,21 +3367,6 @@
           .accessibilityLabel("Cancel folder name")
       }
       .accessibilityElement(children: .contain)
-    }
-
-    private struct FolderRowFocusPublisher: ViewModifier {
-      @Environment(\.isFocused) private var isNativeFocused
-      let onFocusChange: (Bool) -> Void
-
-      init(onFocusChange: @escaping (Bool) -> Void) {
-        self.onFocusChange = onFocusChange
-      }
-
-      func body(content: Content) -> some View {
-        content.onChange(of: isNativeFocused) { _, isFocused in
-          onFocusChange(isFocused)
-        }
-      }
     }
 
     @ViewBuilder
@@ -3709,14 +3686,6 @@
       guard isCreatingFolder else { return false }
       return FolderNavigatorOcclusionPresentation(composerLeadingX: composerLeadingX)
         .covers(rowFrames[target])
-    }
-
-    private func updateFocusedRow(_ row: FocusedRow, isFocused: Bool) {
-      if isFocused {
-        focusedRow = row
-      } else if focusedRow == row {
-        focusedRow = nil
-      }
     }
 
     private func activateFocusedRow() {

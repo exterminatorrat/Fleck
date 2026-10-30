@@ -3,6 +3,19 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.4-beta.1] - 2026-10-30
+
+### Fixed
+
+- Inherit the reviewed root/folder-row focus-wrapper prerequisite without importing
+  unrelated folder-creation or rename-editor changes.
+- Inherit the folder-ID School-row fixture correction and strict visual/focus-layer
+  association regression coverage instead of selecting a row by a fixed width.
+
+Source-only dependency inheritance, not a new feature or proved runtime recovery.
+Compiler checks, test discovery/tests and native/visual/accessibility checks on this
+current source remain unrun.
+
 ## [1.7.3-beta.1] - 2026-10-30
 
 ### Fixed
