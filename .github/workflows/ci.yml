@@ -467,7 +467,7 @@ jobs:
       max-parallel: 4
       matrix:
         include:
-          - source: 970695041cac0cc74ee6e8bb2e0da935c595b8f1
+          - source: d0971d8aba8a043476c91c627584d7ae2f2ed8b2
             lane: readiness-native-failure-witness
             graph: enhanced
             expected_count: 1
@@ -479,7 +479,7 @@ jobs:
               Scripts/test-enhanced-candidate-pin.sh 3cf05fe69df708afc82df3cf5fc277048d00922d
               Scripts/run-swift-tests-with-appkit-host.sh 6b132d1258f1dadf2b39152b3a37b7d72f63d34c
               Tests/Support/AppKitTestMain.swift 990dd974967dc472bc1d09f9c8705a52db53a058
-              Tests/FleckAppTests/DictationSettingsTests.swift 3f7cad91375be0af5ebaef9364b3df82487e4e72
+              Tests/FleckAppTests/DictationSettingsTests.swift 0feadefc55beeb64c7e0ad9f749770d289ee7e33
               Sources/FleckApp/SettingsView.swift 8ec36a18cc90a675182edd0fc1db32cefa838f26
               Sources/FleckApp/SettingsSearch.swift 74aaad1435f72de870a595accbc0524ee91ab20e
     env:
