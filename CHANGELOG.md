@@ -3,6 +3,19 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.12-beta.1] - 2026-10-30
+
+### Fixed
+
+- Explicitly dismiss the existing readiness popover on Escape and request return to its
+  trigger through the existing public focus state only while its native attachment,
+  active key window and original keyboard-input generation remain current.
+- Add regression coverage for stale native attachments and intervening pointer/key input,
+  and bounded diagnostic observations for existing Dictionary and Appearance CI failures.
+
+Source-only CI repair candidate. Compilation, regression execution, native keyboard and
+accessibility restoration remain unverified; no passing CI or test-build delivery is claimed.
+
 ## [1.5.10-beta.1] - 2026-10-30
 
 ### Fixed

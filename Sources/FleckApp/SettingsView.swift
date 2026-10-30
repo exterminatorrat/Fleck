@@ -974,6 +974,8 @@
     @State private var isSettingsSearchFieldFocused = false
     @State private var searchQuery = ""
     @State private var isReadinessPopoverPresented = false
+    @State private var pendingReadinessKeyboardReturn: SettingsKeyboardFocusReturnRequest?
+    @State private var readinessKeyboardReturnRequest: SettingsKeyboardFocusReturnRequest?
     @State private var searchFocusRequest: UUID?
     @State private var highlightedSearchTarget: SettingsSearchTarget?
     @State private var searchRequest: SettingsSearchRequest?
@@ -1113,6 +1115,8 @@
         recordingSelection.transition(to: newSection)
         if newSection != .dictation {
           isReadinessPopoverPresented = false
+          pendingReadinessKeyboardReturn = nil
+          readinessKeyboardReturnRequest = nil
         }
       }
       .onChange(of: searchQuery) { _, _ in
@@ -1528,8 +1532,23 @@
       .popover(isPresented: $isReadinessPopoverPresented, arrowEdge: .top) {
         dictationReadinessPopover
           .fleckPopoverTheme(theme)
+          .onExitCommand {
+            pendingReadinessKeyboardReturn = NSApp.keyWindow?.parent.map {
+              SettingsKeyboardFocusReturnRequest(
+                window: $0, inputID: SettingsSearchInputModality.shared.inputID
+              )
+            }
+            isReadinessPopoverPresented = false
+          }
+          .onDisappear {
+            let returnRequest = pendingReadinessKeyboardReturn
+            pendingReadinessKeyboardReturn = nil
+            guard selectedSection == .dictation else { return }
+            readinessKeyboardReturnRequest = returnRequest
+          }
       }
       .settingsSearchAnchor(.dictationStatus, request: searchRequest)
+      .environment(\.settingsKeyboardFocusReturnRequest, $readinessKeyboardReturnRequest)
       .accessibilityLabel("Dictation readiness")
       .accessibilityValue(isReady ? "Ready" : "Needs attention")
       .accessibilityHint("Show dictation readiness and recovery actions.")

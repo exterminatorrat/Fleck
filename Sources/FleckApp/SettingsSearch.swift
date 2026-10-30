@@ -179,11 +179,26 @@
     }
   }
 
+  struct SettingsKeyboardFocusReturnRequest {
+    let id = UUID()
+    weak var window: NSWindow?
+    let inputID: UUID
+  }
+
   private struct SettingsSearchRequestEnvironmentKey: EnvironmentKey {
     static let defaultValue: SettingsSearchRequest? = nil
   }
 
+  private struct SettingsKeyboardFocusReturnRequestEnvironmentKey: EnvironmentKey {
+    static var defaultValue: Binding<SettingsKeyboardFocusReturnRequest?> { .constant(nil) }
+  }
+
   extension EnvironmentValues {
+    var settingsKeyboardFocusReturnRequest: Binding<SettingsKeyboardFocusReturnRequest?> {
+      get { self[SettingsKeyboardFocusReturnRequestEnvironmentKey.self] }
+      set { self[SettingsKeyboardFocusReturnRequestEnvironmentKey.self] = newValue }
+    }
+
     var settingsSearchRequest: SettingsSearchRequest? {
       get { self[SettingsSearchRequestEnvironmentKey.self] }
       set { self[SettingsSearchRequestEnvironmentKey.self] = newValue }
@@ -888,10 +903,11 @@
   }
 
   @MainActor
-  private final class SettingsSearchInputModality: ObservableObject {
+  final class SettingsSearchInputModality: ObservableObject {
     static let shared = SettingsSearchInputModality()
 
     @Published private var lastInput: (windowNumber: Int, isKeyboard: Bool)?
+    private(set) var inputID = UUID()
 
     var showsKeyboardFocusCue: Bool {
       guard let lastInput else { return false }
@@ -899,16 +915,45 @@
     }
 
     func record(isKeyboardInput: Bool, windowNumber: Int) {
+      inputID = UUID()
       lastInput = (windowNumber: windowNumber, isKeyboard: isKeyboardInput)
+    }
+  }
+
+  @MainActor
+  final class SettingsKeyboardFocusReturnAttachment: ObservableObject {
+    private(set) weak var view: NSView?
+    private(set) var generation = UUID()
+
+    func bind(to view: NSView?) {
+      self.view = view
+      invalidate()
+    }
+
+    func invalidate() {
+      generation = UUID()
+    }
+
+    func matches(
+      _ request: SettingsKeyboardFocusReturnRequest,
+      generation: UUID,
+      inputID: UUID
+    ) -> Bool {
+      guard self.generation == generation, request.inputID == inputID,
+        let view, let window = request.window
+      else { return false }
+      return view.window === window
     }
   }
 
   private struct SettingsSearchAnchorModifier: ViewModifier {
     let target: SettingsSearchTarget
     let request: SettingsSearchRequest?
+    @Environment(\.settingsKeyboardFocusReturnRequest) private var keyboardReturnRequest
     @FocusState private var isKeyboardFocused: Bool
     @AccessibilityFocusState private var isFocused: Bool
     @ObservedObject private var inputModality = SettingsSearchInputModality.shared
+    @StateObject private var returnAttachment = SettingsKeyboardFocusReturnAttachment()
 
     private var isKeyboardFocusCueVisible: Bool {
       isKeyboardFocused && inputModality.showsKeyboardFocusCue
@@ -928,7 +973,10 @@
         .focused($isKeyboardFocused)
         .accessibilityFocused($isFocused)
         .background {
-          SettingsSearchProbe(identifier: target.accessibilityIdentifier)
+          SettingsSearchProbe(
+            identifier: target.accessibilityIdentifier,
+            returnAttachment: returnAttachment
+          )
           if isKeyboardFocused {
             SettingsSearchProbe(identifier: "settings-keyboard-focus-\(target.identifier)")
           }
@@ -987,7 +1035,26 @@
           isKeyboardFocused = true
           isFocused = true
         }
+        .task(id: keyboardReturnRequest.wrappedValue?.id) { @MainActor in
+          guard let returnRequest = keyboardReturnRequest.wrappedValue else { return }
+          let generation = returnAttachment.generation
+          await Task.yield()
+          guard !Task.isCancelled, keyboardReturnRequest.wrappedValue?.id == returnRequest.id else { return }
+          keyboardReturnRequest.wrappedValue = nil
+          guard NSApp.isActive,
+            let window = returnRequest.window,
+            returnAttachment.matches(
+              returnRequest, generation: generation, inputID: inputModality.inputID
+            ),
+            NSApp.keyWindow === window,
+            window.isKeyWindow, window.isVisible
+          else { return }
+          inputModality.record(isKeyboardInput: true, windowNumber: window.windowNumber)
+          isKeyboardFocused = true
+          isFocused = true
+        }
         .onDisappear {
+          returnAttachment.invalidate()
           guard target.usesVocabularyFocusLifecycle else { return }
           isKeyboardFocused = false
           isFocused = false
@@ -997,16 +1064,42 @@
 
   struct SettingsSearchProbe: NSViewRepresentable {
     let identifier: String
+    var returnAttachment: SettingsKeyboardFocusReturnAttachment? = nil
 
-    func makeNSView(context: Context) -> NSView {
-      let view = NSView()
+    func makeNSView(context: Context) -> ProbeView {
+      let view = ProbeView()
+      view.bind(to: returnAttachment)
       view.setAccessibilityElement(false)
       view.setAccessibilityIdentifier(identifier)
       return view
     }
 
-    func updateNSView(_ view: NSView, context: Context) {
+    func updateNSView(_ view: ProbeView, context: Context) {
+      view.bind(to: returnAttachment)
       view.setAccessibilityIdentifier(identifier)
+    }
+
+    static func dismantleNSView(_ view: ProbeView, coordinator: ()) {
+      view.bind(to: nil)
+    }
+
+    final class ProbeView: NSView {
+      private weak var returnAttachment: SettingsKeyboardFocusReturnAttachment?
+
+      func bind(to attachment: SettingsKeyboardFocusReturnAttachment?) {
+        guard returnAttachment !== attachment else { return }
+        if returnAttachment?.view === self {
+          returnAttachment?.bind(to: nil)
+        }
+        returnAttachment = attachment
+        attachment?.bind(to: self)
+      }
+
+      override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard returnAttachment?.view === self else { return }
+        returnAttachment?.invalidate()
+      }
     }
   }
 
