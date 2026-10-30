@@ -1318,6 +1318,7 @@ private func renderedPixels(with identifier: String, in host: NSView) throws -> 
   let panel = DictationCapsulePanel()
   let controller = DictationCapsuleController(panel: panel, automaticallyAdvancesLivePill: false,
     markLoader: { mark })
+  #expect(controller.recoveryActionReceiverForTesting == nil)
   controller.setPanelVisibilitySuppressedForTesting(true)
   controller.setReduceMotionOverrideForTesting(true)
   let nativeFrameControl = NSPanel(contentRect: .zero, styleMask: panel.styleMask,
@@ -1377,17 +1378,17 @@ private func renderedPixels(with identifier: String, in host: NSView) throws -> 
     #expect(rendered.hitTest(NSPoint(x: rendered.bounds.midX, y: rendered.bounds.midY)) == nil)
   }
   let recovery = try #require(renderedView(with: "fleck-rail-recovery", in: host))
-  let actionButton = try #require(renderedActionButton(in: host))
+  let actionReceiver = try #require(controller.recoveryActionReceiverForTesting)
+  #expect(actionReceiver !== host)
   let recoveryCenter = recovery.convert(
     NSPoint(x: recovery.bounds.midX, y: recovery.bounds.midY), to: host
   )
-  #expect(actionButton.convert(actionButton.bounds, to: host).contains(recoveryCenter))
+  #expect(actionReceiver.convert(actionReceiver.bounds, to: host).contains(recoveryCenter))
   let actionHit = try #require(host.hitTest(host.convert(recoveryCenter, to: host.superview)))
   #expect(actionHit !== host)
   #expect(
-    actionHit === actionButton
-      || actionHit.isDescendant(of: actionButton)
-      || actionButton.isDescendant(of: actionHit)
+    actionHit === actionReceiver
+      || actionHit.isDescendant(of: actionReceiver)
   )
   controller.dismiss()
 }

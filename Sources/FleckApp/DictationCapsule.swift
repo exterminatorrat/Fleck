@@ -2112,6 +2112,11 @@
     }
 
 #if DEBUG
+    var recoveryActionReceiverForTesting: NSView? {
+      guard errorPresentationModel.presentation?.actionTitle != nil else { return nil }
+      return hostingView.recoveryActionReceiverForTesting
+    }
+
     func setReduceMotionOverrideForTesting(_ override: Bool?) {
       reduceMotionOverrideForTesting = override
       hostingView.setReduceMotionOverrideForTesting(override)
@@ -4069,6 +4074,10 @@
     }
 
 #if DEBUG
+    var recoveryActionReceiverForTesting: NSView {
+      hostingView
+    }
+
     func setReduceMotionOverrideForTesting(_ override: Bool?) {
       var rootView = hostingView.rootView
       rootView.reduceMotionOverrideForTesting = override
