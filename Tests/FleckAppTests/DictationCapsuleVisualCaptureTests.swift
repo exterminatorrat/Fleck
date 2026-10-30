@@ -91,7 +91,7 @@
     #expect(abs(panelFrame.minY - nativeExpectedFrame.minY) <= 0.5)
     #expect(abs(panelFrame.width - nativeExpectedFrame.width) <= 0.5)
     #expect(abs(panelFrame.height - nativeExpectedFrame.height) <= 0.5)
-    if let size { #expect(panelFrame.size == size) }
+    if let size { #expect(expectedFrame.size == size) }
     #expect(host.bounds.size == panelFrame.size)
     #expect(host.bounds == CGRect(origin: .zero, size: panelFrame.size))
     #expect(nativeFrameControl.screen === screen)
