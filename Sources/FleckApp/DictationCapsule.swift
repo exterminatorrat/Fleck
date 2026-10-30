@@ -2117,6 +2117,16 @@
       return hostingView.recoveryActionReceiverForTesting
     }
 
+    func armPostedDownWitnessForTesting(eventNumber: Int, sessionID: UUID) -> Bool {
+      hostingView.armPostedDownWitnessForTesting(
+        eventNumber: eventNumber, sessionID: sessionID, panel: panel
+      )
+    }
+
+    func takePostedDownWitnessForTesting() -> DictationCapsulePostedDownWitnessForTesting? {
+      hostingView.takePostedDownWitnessForTesting()
+    }
+
     func setReduceMotionOverrideForTesting(_ override: Bool?) {
       reduceMotionOverrideForTesting = override
       hostingView.setReduceMotionOverrideForTesting(override)
@@ -4078,6 +4088,18 @@
       hostingView
     }
 
+    func armPostedDownWitnessForTesting(
+      eventNumber: Int, sessionID: UUID, panel: NSWindow
+    ) -> Bool {
+      hostingView.armPostedDownWitnessForTesting(
+        eventNumber: eventNumber, sessionID: sessionID, panel: panel
+      )
+    }
+
+    func takePostedDownWitnessForTesting() -> DictationCapsulePostedDownWitnessForTesting? {
+      hostingView.takePostedDownWitnessForTesting()
+    }
+
     func setReduceMotionOverrideForTesting(_ override: Bool?) {
       var rootView = hostingView.rootView
       rootView.reduceMotionOverrideForTesting = override
@@ -4283,6 +4305,17 @@
 
   }
 
+#if DEBUG
+  struct DictationCapsulePostedDownWitnessForTesting {
+    var entered = false
+    var windowMatches = false
+    var sessionMatches = false
+    var localX: Double?
+    var localY: Double?
+    var regionCode: Int8 = -1
+  }
+#endif
+
   @MainActor
   private final class DictationCapsuleEventHostingView: NSHostingView<DictationCapsuleEventRootView> {
     private let model: DictationCapsulePresentationModel
@@ -4292,6 +4325,39 @@
     private var consumedRegion: FleckRailInteractionRegion?
     private var consumedRecoveryGeneration: UInt64?
     private weak var consumedTarget: NSView?
+
+#if DEBUG
+    private struct PostedDownWitness {
+      let eventNumber: Int
+      let sessionID: UUID
+      let windowIdentity: ObjectIdentifier
+      let windowNumber: Int
+      var result = DictationCapsulePostedDownWitnessForTesting()
+    }
+
+    private var postedDownWitness: PostedDownWitness?
+
+    func armPostedDownWitnessForTesting(
+      eventNumber: Int, sessionID: UUID, panel: NSWindow
+    ) -> Bool {
+      guard case nil = postedDownWitness,
+        eventNumber > 0, panel.windowNumber > 0, window === panel,
+        rootView.errorPresentationModel.presentation?.sessionID == sessionID,
+        rootView.errorPresentationModel.presentation?.actionTitle != nil
+      else { return false }
+      postedDownWitness = PostedDownWitness(
+        eventNumber: eventNumber, sessionID: sessionID,
+        windowIdentity: ObjectIdentifier(panel), windowNumber: panel.windowNumber
+      )
+      return true
+    }
+
+    func takePostedDownWitnessForTesting() -> DictationCapsulePostedDownWitnessForTesting? {
+      let result = postedDownWitness?.result
+      postedDownWitness = nil
+      return result
+    }
+#endif
 
     init(
       rootView: DictationCapsuleEventRootView,
@@ -4315,8 +4381,40 @@
     }
 
     override func mouseDown(with event: NSEvent) {
+#if DEBUG
+      var recordPostedDownPoint = false
+      if var witness = postedDownWitness, !witness.result.entered,
+        event.eventNumber == witness.eventNumber, event.type == .leftMouseDown
+      {
+        witness.result.entered = true
+        if let eventWindow = event.window {
+          witness.result.windowMatches = event.windowNumber == witness.windowNumber
+            && ObjectIdentifier(eventWindow) == witness.windowIdentity
+            && window === eventWindow
+        }
+        witness.result.sessionMatches =
+          rootView.errorPresentationModel.presentation?.sessionID == witness.sessionID
+        recordPostedDownPoint = witness.result.windowMatches && witness.result.sessionMatches
+        postedDownWitness = witness
+      }
+#endif
       let point = convert(event.locationInWindow, from: nil)
       let region = actionRegion(at: point)
+#if DEBUG
+      if recordPostedDownPoint, var witness = postedDownWitness {
+        if point.x.isFinite && point.y.isFinite {
+          witness.result.localX = Double(point.x)
+          witness.result.localY = Double(point.y)
+        }
+        switch region {
+        case nil: witness.result.regionCode = 0
+        case .some(.recovery): witness.result.regionCode = 1
+        case .some(.stop): witness.result.regionCode = 2
+        case .some(.cancel): witness.result.regionCode = 3
+        }
+        postedDownWitness = witness
+      }
+#endif
       consumedRegion = region
       consumedRecoveryGeneration = region == .recovery
         ? rootView.errorPresentationModel.interactionGeneration : nil

@@ -96,6 +96,19 @@ private struct RetryPostedEvent: @unchecked Sendable {
   let event: NSEvent
 }
 
+private func retryWitnessCoordinate(_ value: Double?) -> String {
+  guard let value, value.isFinite, abs(value) <= 1_000_000 else { return "_" }
+  let text = String(value)
+  guard text.utf8.count <= 32 else { return "_" }
+  for byte in text.utf8 {
+    switch byte {
+    case 43, 45, 46, 48...57, 69, 101: continue
+    default: return "_"
+    }
+  }
+  return text
+}
+
 @Test @MainActor func DictationCapsulePostedEventRetryQualification() async throws {
   let application = try #require(NSApp)
   try #require(application.isRunning, "Requires the existing AppKit test host's live NSApplication.run loop")
@@ -104,6 +117,21 @@ private struct RetryPostedEvent: @unchecked Sendable {
   let controller = DictationCapsuleController(automaticallyAdvancesLivePill: false,
     reduceMotionProvider: { true })
   controller.setReduceMotionOverrideForTesting(true)
+  var witnessArmed = false
+  var witnessPostReturned = false
+  var witnessFrozen = false
+  var witnessSnapshot: DictationCapsulePostedDownWitnessForTesting?
+  defer {
+    let record = "posted-down-witness v=1 o=0"
+      + " a=\(witnessArmed ? 1 : 0) p=\(witnessPostReturned ? 1 : 0)"
+      + " e=\(witnessSnapshot?.entered == true ? 1 : 0)"
+      + " w=\(witnessSnapshot?.windowMatches == true ? 1 : 0)"
+      + " s=\(witnessSnapshot?.sessionMatches == true ? 1 : 0)"
+      + " r=\(witnessSnapshot?.regionCode ?? -1)"
+      + " x=\(retryWitnessCoordinate(witnessSnapshot?.localX))"
+      + " y=\(retryWitnessCoordinate(witnessSnapshot?.localY))"
+    print(record)
+  }
   defer { controller.dismiss() }
   var acceptedTokens: [UInt64] = []
   var acceptedSessions: [UUID?] = []
@@ -149,6 +177,16 @@ private struct RetryPostedEvent: @unchecked Sendable {
     }))
   defer { NSEvent.removeMonitor(monitor) }
 
+  @MainActor func freezePostedDownWitness() {
+    guard witnessArmed, !witnessFrozen else { return }
+    witnessSnapshot = controller.takePostedDownWitnessForTesting()
+    witnessFrozen = true
+  }
+  witnessArmed = controller.armPostedDownWitnessForTesting(
+    eventNumber: down.eventNumber, sessionID: sessionID
+  )
+  defer { freezePostedDownWitness() }
+
   func post(_ event: NSEvent) async throws {
     try #require(event.windowNumber == panel.windowNumber && event.window === panel)
     try #require(event.eventNumber > 0)
@@ -164,7 +202,9 @@ private struct RetryPostedEvent: @unchecked Sendable {
   }
 
   try await post(down)
+  witnessPostReturned = true
   try #require(controller.errorPresentationModel.isActionPressed)
+  freezePostedDownWitness()
   try #require(acceptedTokens.isEmpty)
   try await post(up)
   try #require(acceptedTokens.count == 1)
