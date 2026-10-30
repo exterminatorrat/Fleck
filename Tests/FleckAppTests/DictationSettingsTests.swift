@@ -1057,6 +1057,8 @@ func DictationSettingsHostedWindowKeepsNativeChromeStableAcrossDestinations()
 func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async throws {
   let application = NSApplication.shared
   try await withSettingsTestApplicationActivationState(application) {
+    let previousAccessibility = enableSettingsAccessibility()
+    defer { restoreSettingsAccessibility(previousAccessibility) }
     let fixture = try await RuntimeFixture(
       finalText: nil,
       capsuleEnabled: false,
@@ -1081,8 +1083,12 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
     fixture.runtime.preferencesDidChange()
     #expect(fixture.runtime.modifierMonitorState == .unauthorized)
 
+    var openedSettings: [DictationSystemSettingsAction] = []
     let host = NSHostingView(
-      rootView: SettingsView(runtime: fixture.runtime)
+      rootView: SettingsView(
+        runtime: fixture.runtime,
+        openSystemSettingsAction: { openedSettings.append($0) }
+      )
         .environmentObject(fixture.appState)
         .environment(\.dynamicTypeSize, .accessibility5)
         .environment(\.colorScheme, .light)
@@ -1159,11 +1165,6 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
     NSApp.sendEvent(mouseUp)
     await settleSettingsHost(host)
 
-    #expect(
-      settingsView(
-        withAccessibilityIdentifier: "settings-keyboard-focus-dictation-status", in: host)
-        != nil
-    )
     #expect(
       settingsView(
         withAccessibilityIdentifier: "settings-keyboard-focus-cue-dictation-status",
@@ -1244,6 +1245,99 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
         in: popover
       ) != nil
     )
+
+    let actionTitles = [
+      "Open Microphone Settings", "Open Speech Recognition Settings", "Enable Input Monitoring",
+    ]
+    @MainActor
+    func readinessAction(_ index: Int) throws -> any NSAccessibilityProtocol {
+      let content = try #require(popoverWindow.contentView)
+      let matches = settingsAccessibilityElements(
+        in: content, identifier: actionTitles[index], attribute: "accessibilityLabel"
+      )
+      try #require(matches.count == 1)
+      return try #require(matches.first as? NSAccessibilityProtocol)
+    }
+    for index in actionTitles.indices {
+      #expect(try readinessAction(index).isAccessibilityEnabled())
+    }
+    let keyboardWindows = [window, popoverWindow]
+    let firstActionIsFocused = try readinessAction(0).isAccessibilityFocused()
+    if !firstActionIsFocused {
+      try sendSettingsKey(48, characters: "\t", ownedWindows: keyboardWindows)
+      await settleSettingsHost(popover)
+    }
+    try #require(try readinessAction(0).isAccessibilityFocused())
+    try sendSettingsKey(49, characters: " ", ownedWindows: keyboardWindows)
+    await settleSettingsHost(popover)
+    #expect(openedSettings.map(\.pane) == [.microphone])
+
+    try sendSettingsKey(48, characters: "\t", ownedWindows: keyboardWindows)
+    await settleSettingsHost(popover)
+    try #require(try readinessAction(1).isAccessibilityFocused())
+    try sendSettingsKey(49, characters: " ", ownedWindows: keyboardWindows)
+    await settleSettingsHost(popover)
+    #expect(openedSettings.map(\.pane) == [.microphone, .speechRecognition])
+
+    try sendSettingsKey(
+      48, characters: "\u{19}", modifierFlags: [.shift], ownedWindows: keyboardWindows
+    )
+    await settleSettingsHost(popover)
+    #expect(try readinessAction(0).isAccessibilityFocused())
+    try sendSettingsKey(48, characters: "\t", ownedWindows: keyboardWindows)
+    await settleSettingsHost(popover)
+    #expect(try readinessAction(1).isAccessibilityFocused())
+    try sendSettingsKey(48, characters: "\t", ownedWindows: keyboardWindows)
+    await settleSettingsHost(popover)
+    try #require(try readinessAction(2).isAccessibilityFocused())
+    try sendSettingsKey(49, characters: " ", ownedWindows: keyboardWindows)
+    await settleSettingsHost(popover)
+    #expect(fixture.monitor.requestCount == 1)
+    #expect(openedSettings.map(\.pane) == [.microphone, .speechRecognition, .inputMonitoring])
+
+    try sendSettingsKey(53, characters: "\u{1b}", ownedWindows: keyboardWindows)
+    await settleSettingsHost(host)
+    try #require(!popoverWindow.isVisible)
+    try #require(application.keyWindow === window)
+    #expect(
+      settingsView(
+        withAccessibilityIdentifier: "settings-keyboard-focus-dictation-status", in: host
+      ) != nil
+    )
+    let triggers = settingsAccessibilityElements(
+      in: host, identifier: "settings-dictation-readiness-button"
+    )
+    try #require(triggers.count == 1)
+    let trigger = try #require(triggers.first as? NSAccessibilityProtocol)
+    #expect(trigger.isAccessibilityFocused())
+    #expect(
+      settingsView(
+        withAccessibilityIdentifier: "settings-keyboard-focus-cue-dictation-status", in: host
+      ) != nil
+    )
+    try sendSettingsKey(49, characters: " ", ownedWindows: [window])
+    await settleSettingsHost(host)
+    let reopenedWindow = try #require(
+      application.windows.first {
+        $0 !== window && $0.isVisible
+          && $0.contentView.map {
+            settingsView(
+              withAccessibilityIdentifier: "settings-dictation-readiness-popover", in: $0
+            ) != nil
+          } == true
+      }
+    )
+    defer { reopenedWindow.orderOut(nil) }
+    try sendSettingsKey(53, characters: "\u{1b}", ownedWindows: [window, reopenedWindow])
+    await settleSettingsHost(host)
+    #expect(!reopenedWindow.isVisible)
+    #expect(application.keyWindow === window)
+    let returnedTriggers = settingsAccessibilityElements(
+      in: host, identifier: "settings-dictation-readiness-button"
+    )
+    try #require(returnedTriggers.count == 1)
+    let returnedTrigger = try #require(returnedTriggers.first as? NSAccessibilityProtocol)
+    #expect(returnedTrigger.isAccessibilityFocused())
   }
 }
 
@@ -1949,9 +2043,11 @@ private func settingsView(withAccessibilityIdentifier identifier: String, in vie
 }
 
 @MainActor
-private func settingsAccessibilityElements(in value: Any?, identifier: String) -> [NSObject] {
+private func settingsAccessibilityElements(
+  in value: Any?, identifier: String, attribute: String = "accessibilityIdentifier"
+) -> [NSObject] {
   guard let element = value as? NSObject else { return [] }
-  let identifierSelector = NSSelectorFromString("accessibilityIdentifier")
+  let identifierSelector = NSSelectorFromString(attribute)
   let matchesIdentifier = element.responds(to: identifierSelector)
     && element.perform(identifierSelector)?.takeUnretainedValue() as? String == identifier
   var matches = matchesIdentifier ? [element] : []
@@ -1959,9 +2055,39 @@ private func settingsAccessibilityElements(in value: Any?, identifier: String) -
   let rawChildren = element.responds(to: childrenSelector)
     ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
   for child in NSAccessibility.unignoredChildren(from: rawChildren ?? []) {
-    matches.append(contentsOf: settingsAccessibilityElements(in: child, identifier: identifier))
+    matches.append(contentsOf: settingsAccessibilityElements(
+      in: child, identifier: identifier, attribute: attribute
+    ))
   }
   return matches
+}
+
+@MainActor
+private func sendSettingsKey(
+  _ keyCode: UInt16,
+  characters: String,
+  modifierFlags: NSEvent.ModifierFlags = [],
+  ownedWindows: [NSWindow]
+) throws {
+  let window = try #require(NSApp.keyWindow)
+  try #require(ownedWindows.contains { $0 === window })
+  for type in [NSEvent.EventType.keyDown, .keyUp] {
+    let event = try #require(
+      NSEvent.keyEvent(
+        with: type,
+        location: .zero,
+        modifierFlags: modifierFlags,
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: type == .keyDown ? characters : "",
+        charactersIgnoringModifiers: type == .keyDown ? characters : "",
+        isARepeat: false,
+        keyCode: keyCode
+      )
+    )
+    NSApp.sendEvent(event)
+  }
 }
 
 @MainActor
@@ -2966,7 +3092,8 @@ func hostedNotesPanelOmitsActiveDestinationGuideForFocusedAndSmartCapture()
   #expect(!source.contains("DictationShortcutRecorder("))
   #expect(source.contains("Button(\"Enable Input Monitoring\")"))
   #expect(source.contains("await runtime.recoverModifierMonitoring()"))
-  #expect(source.contains("runtime.openSystemSettings(settings)"))
+  #expect(source.contains("openSystemSettingsAction(settings)"))
+  #expect(source.contains("runtime.openSystemSettings(action)"))
 }
 
 @Test @MainActor func DictationEditorRegistryUsesOnlyTheActualFirstResponder() {

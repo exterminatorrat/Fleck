@@ -965,6 +965,7 @@
       PersonalDictionarySettingsViewModel
     @ObservedObject private var historyController: DictationHistoryController
     private let buildIdentity: BuildIdentity
+    private let openSystemSettingsAction: @MainActor (DictationSystemSettingsAction) -> Void
     @State private var selectedSection = SettingsSection.editing
     @State private var showsHistoryClearConfirmation = false
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
@@ -980,9 +981,16 @@
     @State private var isDictationPrivacyExpanded = false
     @State private var isUIFontPickerPresented = false
 
-    init(runtime: DictationRuntime, buildIdentity: BuildIdentity = .current()) {
+    init(
+      runtime: DictationRuntime,
+      buildIdentity: BuildIdentity = .current(),
+      openSystemSettingsAction: (@MainActor (DictationSystemSettingsAction) -> Void)? = nil
+    ) {
       self.runtime = runtime
       self.buildIdentity = buildIdentity
+      self.openSystemSettingsAction = openSystemSettingsAction ?? { action in
+        runtime.openSystemSettings(action)
+      }
       _personalDictionarySettingsViewModel = ObservedObject(
         wrappedValue: runtime.personalDictionarySettingsViewModel
       )
@@ -1536,7 +1544,7 @@
           Button("Enable Input Monitoring") {
             Task { @MainActor in
               guard let settings = await runtime.recoverModifierMonitoring() else { return }
-              runtime.openSystemSettings(settings)
+              openSystemSettingsAction(settings)
             }
           }
           .disabled(!dictationModifierPresentation.isPickerEnabled)
@@ -1580,7 +1588,7 @@
 
             ForEach(recoveryActions, id: \.pane) { action in
               Button(action.title) {
-                runtime.openSystemSettings(action)
+                openSystemSettingsAction(action)
               }
               .buttonStyle(.bordered)
             }

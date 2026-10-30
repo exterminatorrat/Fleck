@@ -3,6 +3,19 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.10-beta.1] - 2026-10-30
+
+### Fixed
+
+- Correct the readiness-popover fixture's unsupported trigger-focus retention assumption
+  with semantic coverage of existing keyboard entry, actions, traversal, dismissal and return.
+- Make the existing System Settings actions recordable in that fixture while preserving
+  their original default runtime delegation; no actions or production focus policy change.
+
+Source-only CI repair candidate. Compilation, tests, native keyboard/accessibility and
+current-context checks remain unrun for this change; no passing behavior, CI or test-build
+delivery is claimed.
+
 ## [1.5.9-beta.1] - 2026-10-29
 
 ### Fixed
