@@ -467,19 +467,19 @@ jobs:
       max-parallel: 4
       matrix:
         include:
-          - source: ff2345630d491c18f75bd1947577fca42f573948
+          - source: ce6e8928171367dca056ee3a45636a11bf6d2039
             lane: scroller-observation
             graph: ordinary
             expected_count: 1
-            selector: '^FleckAppTests\.AgentActivityScrollTests/visualKnobUsesStableProportionalGeometryAtBothEndpoints\(\)$'
+            selector: '^FleckAppTests\.AgentActivityScrollTests/heldNativeDragFreezesVisualLengthUntilMouseUp\(\)$'
             expected_match_ids: |
-              FleckAppTests.AgentActivityScrollTests/visualKnobUsesStableProportionalGeometryAtBothEndpoints()
+              FleckAppTests.AgentActivityScrollTests/heldNativeDragFreezesVisualLengthUntilMouseUp()
             expected_blob_pins: |
               Scripts/run-nonempty-swift-tests.sh a426615a3bd67136591c505756a1faa4903ca1b5
               Scripts/run-swift-tests-with-appkit-host.sh 0d57f35dd07041479608354390c9db85d9f81d41
               Tests/Support/AppKitTestMain.swift 990dd974967dc472bc1d09f9c8705a52db53a058
               Sources/FleckApp/AgentActivityView.swift 1e0b0b5d8543365b316c7b98b05fa9c27cc8f1c1
-              Tests/FleckAppTests/AgentActivityScrollTests.swift dd294a019fcf966e28f9941a95f1e72d2f953187
+              Tests/FleckAppTests/AgentActivityScrollTests.swift 367ffb96d9b2a4406d81cea76617baa90f90be09
     env:
       TEST_SOURCE_SHA: ${{ matrix.source }}
       TEST_GRAPH: ${{ matrix.graph }}
