@@ -1250,31 +1250,39 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
       "Open Microphone Settings", "Open Speech Recognition Settings", "Enable Input Monitoring",
     ]
     @MainActor
-    func readinessAction(_ index: Int) throws -> any NSAccessibilityProtocol {
+    func readinessAction(_ index: Int) throws -> NSObject {
       let content = try #require(popoverWindow.contentView)
       let matches = settingsAccessibilityElements(
         in: content, identifier: actionTitles[index], attribute: "accessibilityLabel"
       )
       try #require(matches.count == 1)
-      return try #require(matches.first as? NSAccessibilityProtocol)
+      return try #require(matches.first)
+    }
+    @MainActor
+    func accessibilityFlag(_ element: NSObject, _ key: String) throws -> Bool {
+      let selector = NSSelectorFromString(
+        "is" + key.prefix(1).uppercased() + String(key.dropFirst())
+      )
+      try #require(element.responds(to: selector))
+      return try #require(element.value(forKey: key) as? Bool)
     }
     for index in actionTitles.indices {
-      #expect(try readinessAction(index).isAccessibilityEnabled())
+      #expect(try accessibilityFlag(readinessAction(index), "accessibilityEnabled"))
     }
     let keyboardWindows = [window, popoverWindow]
-    let firstActionIsFocused = try readinessAction(0).isAccessibilityFocused()
+    let firstActionIsFocused = try accessibilityFlag(readinessAction(0), "accessibilityFocused")
     if !firstActionIsFocused {
       try sendSettingsKey(48, characters: "\t", ownedWindows: keyboardWindows)
       await settleSettingsHost(popover)
     }
-    try #require(try readinessAction(0).isAccessibilityFocused())
+    try #require(try accessibilityFlag(readinessAction(0), "accessibilityFocused"))
     try sendSettingsKey(49, characters: " ", ownedWindows: keyboardWindows)
     await settleSettingsHost(popover)
     #expect(openedSettings.map(\.pane) == [.microphone])
 
     try sendSettingsKey(48, characters: "\t", ownedWindows: keyboardWindows)
     await settleSettingsHost(popover)
-    try #require(try readinessAction(1).isAccessibilityFocused())
+    try #require(try accessibilityFlag(readinessAction(1), "accessibilityFocused"))
     try sendSettingsKey(49, characters: " ", ownedWindows: keyboardWindows)
     await settleSettingsHost(popover)
     #expect(openedSettings.map(\.pane) == [.microphone, .speechRecognition])
@@ -1283,13 +1291,13 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
       48, characters: "\u{19}", modifierFlags: [.shift], ownedWindows: keyboardWindows
     )
     await settleSettingsHost(popover)
-    #expect(try readinessAction(0).isAccessibilityFocused())
+    #expect(try accessibilityFlag(readinessAction(0), "accessibilityFocused"))
     try sendSettingsKey(48, characters: "\t", ownedWindows: keyboardWindows)
     await settleSettingsHost(popover)
-    #expect(try readinessAction(1).isAccessibilityFocused())
+    #expect(try accessibilityFlag(readinessAction(1), "accessibilityFocused"))
     try sendSettingsKey(48, characters: "\t", ownedWindows: keyboardWindows)
     await settleSettingsHost(popover)
-    try #require(try readinessAction(2).isAccessibilityFocused())
+    try #require(try accessibilityFlag(readinessAction(2), "accessibilityFocused"))
     try sendSettingsKey(49, characters: " ", ownedWindows: keyboardWindows)
     await settleSettingsHost(popover)
     #expect(fixture.monitor.requestCount == 1)
@@ -1308,8 +1316,8 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
       in: host, identifier: "settings-dictation-readiness-button"
     )
     try #require(triggers.count == 1)
-    let trigger = try #require(triggers.first as? NSAccessibilityProtocol)
-    #expect(trigger.isAccessibilityFocused())
+    let trigger = try #require(triggers.first)
+    #expect(try accessibilityFlag(trigger, "accessibilityFocused"))
     #expect(
       settingsView(
         withAccessibilityIdentifier: "settings-keyboard-focus-cue-dictation-status", in: host
@@ -1336,8 +1344,8 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
       in: host, identifier: "settings-dictation-readiness-button"
     )
     try #require(returnedTriggers.count == 1)
-    let returnedTrigger = try #require(returnedTriggers.first as? NSAccessibilityProtocol)
-    #expect(returnedTrigger.isAccessibilityFocused())
+    let returnedTrigger = try #require(returnedTriggers.first)
+    #expect(try accessibilityFlag(returnedTrigger, "accessibilityFocused"))
   }
 }
 
