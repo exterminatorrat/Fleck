@@ -21,10 +21,30 @@ enum AdmittedModelInstallPhase: Equatable, Sendable {
   case failed(message: String)
 }
 
+enum AdmittedModelInstallationOperation: Equatable, Sendable {
+  case install
+  case repair
+  case update
+  case remove
+}
+
 struct AdmittedModelInstallationSnapshot: Equatable, Sendable {
   let recommendation: AdmittedModelRecommendation
   let phase: AdmittedModelInstallPhase
   let lastError: String?
+  let activeOperation: AdmittedModelInstallationOperation?
+
+  init(
+    recommendation: AdmittedModelRecommendation,
+    phase: AdmittedModelInstallPhase,
+    lastError: String?,
+    activeOperation: AdmittedModelInstallationOperation? = nil
+  ) {
+    self.recommendation = recommendation
+    self.phase = phase
+    self.lastError = lastError
+    self.activeOperation = activeOperation
+  }
 }
 
 @MainActor
@@ -237,6 +257,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
   private var healthSubscription: AnyCancellable?
   private var operationTask: Task<Void, Never>?
   private var operationID: UUID?
+  private var activeOperation: AdmittedModelInstallationOperation?
   private var lastReceivedBytes: Int64 = 0
   private var managerReady = false
   private var cancellationRequested = false
@@ -285,9 +306,15 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
   }
 
   private func publish(_ next: AdmittedModelInstallationSnapshot) {
-    snapshot = next
-    phaseHistory.append(next.phase)
-    continuation.yield(next)
+    let snapshot = AdmittedModelInstallationSnapshot(
+      recommendation: next.recommendation,
+      phase: next.phase,
+      lastError: next.lastError,
+      activeOperation: activeOperation
+    )
+    self.snapshot = snapshot
+    phaseHistory.append(snapshot.phase)
+    continuation.yield(snapshot)
   }
 
   private func beginOperationSubscriptions() {
@@ -377,6 +404,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
 
   private func endOperation() {
     operationID = nil
+    activeOperation = nil
     progressSubscription?.cancel()
     progressSubscription = nil
     stateSubscription?.cancel()
@@ -385,6 +413,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
 
   private func checkCancellation() -> Bool {
     guard !Task.isCancelled, !cancellationRequested else {
+      activeOperation = nil
       publish(.init(
         recommendation: .recommended(descriptor),
         phase: .cancelled,
@@ -411,6 +440,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
     ))
     try await calibrate()
     guard checkCancellation() else { return false }
+    activeOperation = nil
     publish(.init(
       recommendation: .recommended(descriptor),
       phase: .installed,
@@ -420,6 +450,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
   }
 
   private func runManagerOperation(
+    operationKind: AdmittedModelInstallationOperation,
     initialPhase: AdmittedModelInstallPhase,
     runsStartupAndCalibration: Bool,
     requiresTransferCapacityPreflight: Bool,
@@ -445,6 +476,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
         return
       }
     }
+    activeOperation = operationKind
     beginOperationSubscriptions()
     publish(.init(
       recommendation: .recommended(descriptor),
@@ -457,6 +489,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
       do {
         try await operation()
         guard !Task.isCancelled, !self.cancellationRequested else {
+          self.activeOperation = nil
           self.publish(.init(
             recommendation: .recommended(self.descriptor),
             phase: .cancelled,
@@ -465,6 +498,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
           return
         }
         guard !runsStartupAndCalibration || self.managerReady || self.manager.state == .ready else {
+          self.activeOperation = nil
           self.publish(.init(
             recommendation: .recommended(self.descriptor),
             phase: .failed(message: "The model did not reach ready state."),
@@ -472,15 +506,21 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
           ))
           return
         }
-        guard runsStartupAndCalibration else { return }
+        guard runsStartupAndCalibration else {
+          self.activeOperation = nil
+          self.publishManagerState(self.manager.state)
+          return
+        }
         _ = try await self.runStartupAndCalibration()
       } catch is CancellationError {
+        self.activeOperation = nil
         self.publish(.init(
           recommendation: .recommended(self.descriptor),
           phase: .cancelled,
           lastError: "Model operation cancelled."
         ))
       } catch {
+        self.activeOperation = nil
         if self.cancellationRequested || Task.isCancelled {
           self.publish(.init(
             recommendation: .recommended(self.descriptor),
@@ -509,6 +549,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
 
   func install() async {
     await runManagerOperation(
+      operationKind: .install,
       initialPhase: .downloading(
         receivedBytes: 0,
         totalBytes: descriptor.downloadBytes
@@ -520,6 +561,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
 
   func repair() async {
     await runManagerOperation(
+      operationKind: .repair,
       initialPhase: .downloading(
         receivedBytes: 0,
         totalBytes: descriptor.downloadBytes
@@ -531,6 +573,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
 
   func update() async {
     await runManagerOperation(
+      operationKind: .update,
       initialPhase: .downloading(
         receivedBytes: 0,
         totalBytes: descriptor.downloadBytes
@@ -584,6 +627,7 @@ final class EnhancedModelManagerInstaller: AdmittedModelInstalling {
 
   func remove() async {
     await runManagerOperation(
+      operationKind: .remove,
       initialPhase: .removing,
       runsStartupAndCalibration: false,
       requiresTransferCapacityPreflight: false

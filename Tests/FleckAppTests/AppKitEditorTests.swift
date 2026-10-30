@@ -6960,7 +6960,7 @@ private func hostedThemeCapture(in view: NSView) throws -> NSBitmapImageRep {
 }
 
 @MainActor
-private func hostedNativeWindowCapture(_ window: NSWindow) async throws -> NSBitmapImageRep {
+func hostedNativeWindowCapture(_ window: NSWindow) async throws -> NSBitmapImageRep {
   let targetWindowID = CGWindowID(window.windowNumber)
   let clock = ContinuousClock()
   let deadline = clock.now.advanced(by: .seconds(2))

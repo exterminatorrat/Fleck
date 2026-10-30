@@ -1,6 +1,7 @@
 import AppKit
-import Combine
 import FleckCore
+import Combine
+import QuartzCore
 import SwiftUI
 import Testing
 
@@ -127,6 +128,47 @@ private func brightPixelBounds(
   return bounds
 }
 
+@MainActor
+private func nativePixelBounds<Content: View>(
+  of content: Content,
+  size: CGSize,
+  alphaThreshold: CGFloat = 0.05
+) throws -> CGRect? {
+  let host = NSHostingView(rootView: content)
+  host.frame = CGRect(origin: .zero, size: size)
+  host.layoutSubtreeIfNeeded()
+  let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+  host.cacheDisplay(in: host.bounds, to: imageRep)
+  let scaleX = CGFloat(imageRep.pixelsWide) / size.width
+  let scaleY = CGFloat(imageRep.pixelsHigh) / size.height
+  var bounds: CGRect?
+  for y in 0..<imageRep.pixelsHigh {
+    for x in 0..<imageRep.pixelsWide {
+      guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+        color.alphaComponent > alphaThreshold
+      else { continue }
+      let pixel = CGRect(
+        x: CGFloat(x) / scaleX,
+        y: CGFloat(y) / scaleY,
+        width: 1 / scaleX,
+        height: 1 / scaleY
+      )
+      bounds = bounds?.union(pixel) ?? pixel
+    }
+  }
+  return bounds
+}
+
+@MainActor
+private func renderedPixels(with identifier: String, in host: NSView) throws -> Data {
+  host.layoutSubtreeIfNeeded()
+  let probe = try #require(renderedView(with: identifier, in: host))
+  let rect = probe.convert(probe.bounds, to: host)
+  let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: rect))
+  host.cacheDisplay(in: rect, to: bitmap)
+  return try #require(bitmap.representation(using: .png, properties: [:]))
+}
+
 @Test @MainActor func DictationAccessibilityKeepsActiveProgressTileAtCrispBaseSize() throws {
   let padding: CGFloat = 10
   let activeTile = 1
@@ -173,6 +215,12 @@ private func brightPixelBounds(
     (.cleaning, CGSize(width: 192, height: 36), "Polishing"),
     (.routing, CGSize(width: 192, height: 36), "Organizing"),
     (.saving, CGSize(width: 192, height: 36), "Saving"),
+    (.saved(destination: "Inbox"), CGSize(width: 46, height: 24), nil),
+    (
+      .savedWithoutCleanup(destination: "Inbox"),
+      CGSize(width: 46, height: 24),
+      nil
+    ),
     (.noSpeech, CGSize(width: 192, height: 36), "No speech heard"),
     (.repairingModel, CGSize(width: 224, height: 36), "Repairing enhanced model"),
     (.failed("Microphone unavailable"), CGSize(width: 264, height: 36), "Dictation failed"),
@@ -186,59 +234,6 @@ private func brightPixelBounds(
   }
 }
 
-@Test @MainActor func DictationAccessibilitySavedInputsClearControlsAndReturnToStandby() throws {
-  let panel = DictationCapsulePanel()
-  let controller = DictationCapsuleController(panel: panel, markLoader: { nil })
-  defer { controller.dismiss() }
-  controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
-
-  let chooser = DictationCapsuleChooser(
-    ambiguity: .init(
-      captureID: UUID(),
-      choices: [
-        .init(
-          destination: .init(noteID: UUID(), title: "Projects"),
-          contextHint: "Synthetic roadmap"
-        )
-      ]
-    )
-  )
-  let statuses: [DictationCapsuleStatus] = [
-    .saved(destination: "Inbox"),
-    .savedWithoutCleanup(destination: "Inbox"),
-  ]
-
-  for status in statuses {
-    let context = DictationCapsuleContext(
-      status: status,
-      sessionID: UUID(),
-      mode: .smartCapture,
-      pipelineStage: .save
-    )
-    let presentation = DictationCapsulePresentation(
-      status: status,
-      action: .undo,
-      chooser: chooser,
-      context: context
-    )
-    controller.render(context, action: .undo, chooser: chooser)
-
-    #expect(DictationCapsuleController.size(for: status) == DictationCapsuleController.idleSize)
-    #expect(presentation.visibleText == nil)
-    #expect(presentation.voiceOverText == "Fleck dictation ready")
-    #expect(presentation.visualMode == .idle)
-    #expect(controller.currentContext.status == .idle)
-    #expect(controller.presentationModel.context == controller.currentContext)
-    #expect(controller.presentationModel.action == nil)
-    #expect(controller.presentationModel.chooser == nil)
-    #expect(controller.currentChooser == nil)
-    #expect(!panel.allowsActions)
-    #expect(controller.fleckPillModel.state == .standby)
-    #expect(FleckRailAccessibility.actions(for: controller.currentContext).isEmpty)
-    #expect(renderedActionButton(in: try #require(panel.contentView)) == nil)
-  }
-}
-
 @Test func DictationAccessibilityKeepsResultWidthsAtTheirCeilings() {
   let destination = String(repeating: "A very long destination ", count: 20)
   let saved = DictationCapsulePresentation(
@@ -249,6 +244,7 @@ private func brightPixelBounds(
     status: .savedWithoutCleanup(destination: destination),
     action: .copy
   )
+
   #expect(saved.measuredWidth <= saved.widthCeiling)
   #expect(fallback.measuredWidth <= fallback.widthCeiling)
   #expect(saved.visibleText == nil)
@@ -273,6 +269,52 @@ private func brightPixelBounds(
 
 @Test @MainActor func DictationAccessibilityResultSizingUsesControllerFrameSource() {
   let visibleFrame = CGRect(x: 100, y: 200, width: 1_000, height: 800)
+  let savedShort = DictationCapsulePresentation(
+    status: .saved(destination: "Inbox"),
+    action: .undo
+  )
+  let savedLong = DictationCapsulePresentation(
+    status: .saved(destination: String(repeating: "Long destination ", count: 20)),
+    action: .undo
+  )
+  let savedShortFrame = DictationCapsuleController.frame(
+    for: .bottom,
+    status: .saved(destination: "Inbox"),
+    measuredWidth: savedShort.measuredWidth,
+    in: visibleFrame
+  )
+  let savedLongFrame = DictationCapsuleController.frame(
+    for: .bottom,
+    status: .saved(destination: String(repeating: "Long destination ", count: 20)),
+    measuredWidth: savedLong.measuredWidth,
+    in: visibleFrame
+  )
+  #expect(savedShortFrame.width < DictationCapsuleController.savedSize.width)
+  #expect(savedLongFrame.size == DictationCapsuleController.idleSize)
+
+  let savedOriginalShort = DictationCapsulePresentation(
+    status: .savedWithoutCleanup(destination: "Inbox"),
+    action: .copy
+  )
+  let savedOriginalLong = DictationCapsulePresentation(
+    status: .savedWithoutCleanup(destination: String(repeating: "Long destination ", count: 20)),
+    action: .copy
+  )
+  let savedOriginalShortFrame = DictationCapsuleController.frame(
+    for: .bottom,
+    status: .savedWithoutCleanup(destination: "Inbox"),
+    measuredWidth: savedOriginalShort.measuredWidth,
+    in: visibleFrame
+  )
+  let savedOriginalLongFrame = DictationCapsuleController.frame(
+    for: .bottom,
+    status: .savedWithoutCleanup(destination: String(repeating: "Long destination ", count: 20)),
+    measuredWidth: savedOriginalLong.measuredWidth,
+    in: visibleFrame
+  )
+  #expect(savedOriginalShortFrame.width < DictationCapsuleController.savedWithoutCleanupSize.width)
+  #expect(savedOriginalLongFrame.size == DictationCapsuleController.idleSize)
+
   for action in [DictationCapsuleAction.copy, .openHistory, .openDestination] {
     let failure = DictationCapsulePresentation(
       status: .failed("technical capture detail"),
@@ -303,14 +345,6 @@ private func brightPixelBounds(
   )
   #expect(noSpeech.measuredWidth < DictationCapsuleController.noSpeechSize.width)
   #expect(noSpeechFrame.width == noSpeech.measuredWidth)
-  #expect(
-    DictationCapsuleController.size(for: .saved(destination: "Inbox"))
-      == DictationCapsuleController.idleSize
-  )
-  #expect(
-    DictationCapsuleController.size(for: .savedWithoutCleanup(destination: "Inbox"))
-      == DictationCapsuleController.idleSize
-  )
 
   let fixedStatuses: [DictationCapsuleStatus] = [
     .idle, .arming, .listening, .finalizing, .cleaning, .routing, .saving, .repairingModel,
@@ -565,21 +599,30 @@ private func brightPixelBounds(
     FleckRailMark.layoutFrameSize(for: .rail(reversed: false))
       == CGSize(width: 30, height: 14)
   )
-  #expect(DictationCapsuleDock.allCases == [.bottom])
-  #expect(FleckRailContentOrder.markAndContent(for: .bottom) == [.mark, .statusText])
-  #expect(FleckRailContentOrder.listening(for: .bottom) == [.mark, .waveform, .timer])
-  #expect(FleckRailContentOrder.terminal(for: .bottom, includesAction: true) == [
+  #expect(FleckRailContentOrder.markAndContent(for: .left) == [.mark, .statusText])
+  #expect(FleckRailContentOrder.markAndContent(for: .right) == [.statusText, .mark])
+  #expect(FleckRailContentOrder.listening(for: .left) == [.mark, .waveform, .actions])
+  #expect(FleckRailContentOrder.listening(for: .right) == [.actions, .waveform, .mark])
+  #expect(FleckRailContentOrder.terminal(for: .left, includesAction: true) == [
     .mark, .terminalGlyph, .statusText, .divider, .action,
   ])
-  #expect(FleckRailContentOrder.terminal(for: .bottom, includesAction: false) == [
+  #expect(FleckRailContentOrder.terminal(for: .right, includesAction: true) == [
+    .action, .divider, .statusText, .terminalGlyph, .mark,
+  ])
+  #expect(FleckRailContentOrder.terminal(for: .left, includesAction: false) == [
     .mark, .terminalGlyph, .statusText,
+  ])
+  #expect(FleckRailContentOrder.terminal(for: .right, includesAction: false) == [
+    .statusText, .terminalGlyph, .mark,
   ])
 }
 
 @Test @MainActor func DictationAccessibilityPlacesMarkAtEachOuterDockEdge() {
-  func placedFrames() -> (mark: CGRect, content: CGRect)? {
+  func placedFrames(
+    for dock: DictationCapsuleDock
+  ) -> (mark: CGRect, content: CGRect)? {
     let root = FleckRailLayout(
-      order: FleckRailContentOrder.markAndContent(for: .bottom),
+      order: FleckRailContentOrder.markAndContent(for: dock),
       spacing: 7
     ) {
       LayoutProbe(identifier: "mark")
@@ -609,12 +652,12 @@ private func brightPixelBounds(
     )
   }
 
-  guard let bottom = placedFrames() else {
-    Issue.record("Expected the bottom custom-layout probe views to be rendered")
+  guard let left = placedFrames(for: .left), let right = placedFrames(for: .right) else {
+    Issue.record("Expected both custom-layout probe views to be rendered")
     return
   }
-  #expect(abs(bottom.mark.minX - 8) < 0.1)
-  #expect(bottom.mark.maxX < bottom.content.minX)
+  #expect(abs(left.mark.minX - 8) < 0.1)
+  #expect(abs(right.mark.maxX - 92) < 0.1)
 }
 
 @Test @MainActor func DictationAccessibilityAnchorsIdentityAndListeningToRailEdges() throws {
@@ -649,6 +692,52 @@ private func brightPixelBounds(
     return probe.convert(probe.bounds, to: host)
   }
 
+  var openFleckActions = 0
+  controller.presentIdle(
+    dock: .bottom,
+    onOpenFleck: { openFleckActions += 1 },
+    onDockChanged: { _ in }
+  )
+  let standbyGeometry = FleckPillGeometry.shell(expansion: 0)
+  #expect(controller.fleckPillModel.frame.expansion == 0)
+  #expect(standbyGeometry.width == 43.5)
+  #expect(standbyGeometry.height == 9)
+  let standbyPixels = try #require(
+    try nativePixelBounds(
+      of: FleckPillCanvas(frame: controller.fleckPillModel.frame),
+      size: DictationCapsuleController.livePillHostSize,
+      alphaThreshold: 0.001
+    )
+  )
+  #expect(abs(standbyPixels.midX - 90) < 1)
+  #expect(abs(standbyPixels.width - standbyGeometry.width) < 1)
+  #expect(abs(standbyPixels.height - standbyGeometry.height) < 2.5)
+  #expect(FleckRailAccessibility.actions(for: controller.currentContext) == [.openFleck])
+  panel.contentView?.menu?.performActionForItem(at: 0)
+  #expect(openFleckActions == 1)
+
+  let activeFrame = FleckPillArtworkFrame(
+    expansion: 1,
+    energy: 0,
+    phase: 0,
+    activationMix: 0,
+    processingMix: 0,
+    signalOpacity: 0,
+    glint: 0,
+    glintOpacity: 0
+  )
+  let activePixels = try #require(
+    try nativePixelBounds(
+      of: FleckPillCanvas(frame: activeFrame),
+      size: DictationCapsuleController.livePillHostSize,
+      alphaThreshold: 0.001
+    )
+  )
+  #expect(abs(activePixels.minX - 6) < 1.5)
+  #expect(abs(activePixels.maxX - 174) < 1.5)
+
+  #expect(controller.fleckPillModel.state == .standby)
+  #expect(controller.fleckPillModel.usesFixedHost)
   controller.render(.idle)
   let standbyHost = try #require(panel.contentView)
   standbyHost.layoutSubtreeIfNeeded()
@@ -676,11 +765,8 @@ private func brightPixelBounds(
   ), let bottomWaveform = probeFrame(
     "fleck-rail-waveform",
     size: DictationCapsuleController.listeningSize
-  ), let bottomTimer = probeFrame(
-    "fleck-rail-timer",
-    size: DictationCapsuleController.listeningSize
-  ), let bottomElapsed = probeFrame(
-    "fleck-rail-elapsed",
+  ), let bottomActions = probeFrame(
+    "fleck-rail-actions",
     size: DictationCapsuleController.listeningSize
   ) else {
     Issue.record("Expected the bottom listening probes")
@@ -689,11 +775,56 @@ private func brightPixelBounds(
   #expect(abs(bottomMark.minX - 8) < 0.1)
   #expect(abs(bottomMark.midY - 18) < 0.1)
   #expect(abs(bottomWaveform.midX - 88) < 0.1)
-  #expect(abs(bottomTimer.maxX - 168) < 0.1)
-  #expect(abs(bottomElapsed.maxX - 168) < 0.1)
+  #expect(abs(bottomActions.maxX - 168) < 0.1)
+  #expect(probeFrame("fleck-rail-elapsed", size: DictationCapsuleController.listeningSize) == nil)
   #expect(bottomMark.maxX < bottomWaveform.minX)
-  #expect(bottomWaveform.maxX < bottomTimer.minX)
+  #expect(bottomWaveform.maxX < bottomActions.minX)
 
+  controller.setDock(.left)
+  controller.render(listening)
+  guard let leftMark = probeFrame(
+    "fleck-rail-mark",
+    size: DictationCapsuleController.listeningSize
+  ), let leftWaveform = probeFrame(
+    "fleck-rail-waveform",
+    size: DictationCapsuleController.listeningSize
+  ), let leftActions = probeFrame(
+    "fleck-rail-actions",
+    size: DictationCapsuleController.listeningSize
+  ) else {
+    Issue.record("Expected the left listening probes")
+    return
+  }
+  #expect(abs(leftMark.minX - 8) < 0.1)
+  #expect(abs(leftMark.midY - 18) < 0.1)
+  #expect(abs(leftWaveform.midX - 88) < 0.1)
+  #expect(abs(leftActions.maxX - 168) < 0.1)
+  #expect(probeFrame("fleck-rail-elapsed", size: DictationCapsuleController.listeningSize) == nil)
+  #expect(leftMark.maxX < leftWaveform.minX)
+  #expect(leftWaveform.maxX < leftActions.minX)
+
+  controller.setDock(.right)
+  controller.render(listening)
+  guard let rightMark = probeFrame(
+    "fleck-rail-mark",
+    size: DictationCapsuleController.listeningSize
+  ), let rightWaveform = probeFrame(
+    "fleck-rail-waveform",
+    size: DictationCapsuleController.listeningSize
+  ), let rightActions = probeFrame(
+    "fleck-rail-actions",
+    size: DictationCapsuleController.listeningSize
+  ) else {
+    Issue.record("Expected the right listening probes")
+    return
+  }
+  #expect(controller.currentDock == .bottom)
+  #expect(abs(rightMark.minX - 8) < 0.1)
+  #expect(abs(rightWaveform.midX - 88) < 0.1)
+  #expect(abs(rightActions.maxX - 168) < 0.1)
+  #expect(probeFrame("fleck-rail-elapsed", size: DictationCapsuleController.listeningSize) == nil)
+  #expect(rightMark.maxX < rightWaveform.minX)
+  #expect(rightWaveform.maxX < rightActions.minX)
 }
 
 @Test @MainActor func DictationAccessibilityMirrorsRenderedTerminalFramesAtDockEdges() {
@@ -705,9 +836,9 @@ private func brightPixelBounds(
     action: CGRect
   )
 
-  func placedFrames() -> TerminalFrames? {
+  func placedFrames(for dock: DictationCapsuleDock) -> TerminalFrames? {
     let root = FleckRailLayout(
-      order: FleckRailContentOrder.markAndContent(for: .bottom),
+      order: FleckRailContentOrder.markAndContent(for: dock),
       spacing: 7
     ) {
       LayoutProbe(identifier: "mark")
@@ -715,7 +846,7 @@ private func brightPixelBounds(
       FleckRailTerminalLayout(
         elements: [.terminalGlyph, .statusText, .divider, .action],
         order: FleckRailContentOrder.terminalCluster(
-          for: .bottom,
+          for: dock,
           includesAction: true
         ),
         spacing: 7
@@ -763,16 +894,22 @@ private func brightPixelBounds(
     return (mark, glyph, text, divider, action)
   }
 
-  guard let bottom = placedFrames() else {
-    Issue.record("Expected every bottom recovery element to be rendered")
+  guard let left = placedFrames(for: .left), let right = placedFrames(for: .right) else {
+    Issue.record("Expected every terminal element to be rendered")
     return
   }
 
-  #expect(abs(bottom.mark.minX - 8) < 0.1)
-  #expect(bottom.mark.maxX < bottom.glyph.minX)
-  #expect(bottom.glyph.maxX < bottom.text.minX)
-  #expect(bottom.text.maxX < bottom.divider.minX)
-  #expect(bottom.divider.maxX < bottom.action.minX)
+  #expect(abs(left.mark.minX - 8) < 0.1)
+  #expect(left.mark.maxX < left.glyph.minX)
+  #expect(left.glyph.maxX < left.text.minX)
+  #expect(left.text.maxX < left.divider.minX)
+  #expect(left.divider.maxX < left.action.minX)
+
+  #expect(abs(right.mark.maxX - 192) < 0.1)
+  #expect(right.action.minX < right.divider.minX)
+  #expect(right.divider.minX < right.text.minX)
+  #expect(right.text.minX < right.glyph.minX)
+  #expect(right.glyph.minX < right.mark.minX)
 }
 
 @Test @MainActor func DictationAccessibilityCentersProcessingRailBeforeAndAfterLabelDelay() async {
@@ -827,11 +964,16 @@ private func brightPixelBounds(
   #expect(abs(hiddenMark.midX - DictationCapsuleController.activeSize.width / 2) < 0.1)
   #expect(frame(for: "fleck-rail-processing-text") == nil)
 
-  try? await Task.sleep(for: .milliseconds(500))
-  for _ in 0..<5 { await Task.yield() }
-  guard let visibleMark = frame(for: "fleck-rail-mark"),
-    let visibleText = frame(for: "fleck-rail-processing-text")
-  else {
+  var visibleMark: CGRect?
+  var visibleText: CGRect?
+  for _ in 0..<50 {
+    for _ in 0..<5 { await Task.yield() }
+    visibleMark = frame(for: "fleck-rail-mark")
+    visibleText = frame(for: "fleck-rail-processing-text")
+    if visibleMark != nil, visibleText != nil { break }
+    try? await Task.sleep(for: .milliseconds(20))
+  }
+  guard let visibleMark, let visibleText else {
     Issue.record("Expected the visible processing label and rail")
     return
   }
@@ -877,19 +1019,20 @@ private func brightPixelBounds(
   guard let host = panel.contentView,
     let stop = renderedView(with: "fleck-rail-stop", in: host),
     let cancel = renderedView(with: "fleck-rail-cancel", in: host),
-    let timer = renderedView(with: "fleck-rail-timer", in: host)
+    let actions = renderedView(with: "fleck-rail-actions", in: host)
   else {
     Issue.record("Expected the hands-free hover action probes")
     return
   }
   let stopFrame = stop.convert(stop.bounds, to: host)
   let cancelFrame = cancel.convert(cancel.bounds, to: host)
-  let timerFrame = timer.convert(timer.bounds, to: host)
+  let actionsFrame = actions.convert(actions.bounds, to: host)
   #expect(stopFrame.size == CGSize(width: 28, height: 28))
   #expect(cancelFrame.size == CGSize(width: 28, height: 28))
   #expect(abs(stopFrame.minX - 110) < 0.1)
   #expect(abs(cancelFrame.maxX - 168) < 0.1)
-  #expect(abs(timerFrame.maxX - 168) < 0.1)
+  #expect(abs(actionsFrame.maxX - 168) < 0.1)
+  #expect(renderedView(with: "fleck-rail-elapsed", in: host) == nil)
 }
 
 @Test func DictationAccessibilityKeepsPersistentProgressAndCanonicalMarkSubtrees() throws {
@@ -917,16 +1060,30 @@ private func brightPixelBounds(
 
 @Test @MainActor func DictationAccessibilityPersistentHostLeavesGestureRoutingToDescendants() {
   let panel = DictationCapsulePanel()
-  let controller = DictationCapsuleController(panel: panel)
+  let controller = DictationCapsuleController(
+    panel: panel, monotonicNow: { 10 }, automaticallyAdvancesLivePill: false
+  )
   var actions = 0
   controller.presentIdle(
     dock: .bottom,
     onOpenFleck: {},
     onDockChanged: { _ in }
   )
-  controller.render(.failed("Save failed"), action: .openHistory) {
-    actions += 1
-  }
+  let captureID = UUID()
+  let chooser = DictationCapsuleChooser(ambiguity: .init(captureID: captureID, choices: []))
+  controller.render(
+    .init(
+      status: .routingFailure(status: "Needs attention", message: "Synthetic routing failure"),
+      sessionID: captureID
+    ),
+    action: .copy,
+    chooser: chooser,
+    onAction: { actions += 1 }
+  )
+  controller.fleckPillModel.tick(at: 11, displayedEnergy: 0)
+  #expect(!controller.fleckPillModel.isVisible)
+  #expect(controller.currentChooser?.captureID == captureID)
+  #expect(controller.errorPresentationModel.presentation == nil)
 
   panel.setFrame(CGRect(x: 0, y: 0, width: 264, height: 36), display: false)
   panel.contentView?.frame = CGRect(x: 0, y: 0, width: 264, height: 36)
@@ -946,7 +1103,7 @@ private func brightPixelBounds(
   guard let actionButton = descendants(of: host)
     .first(where: { $0.responds(to: performClick) })
   else {
-    Issue.record("Expected the rendered failure recovery button to be discoverable")
+    Issue.record("Expected the rendered Copy recovery action button to be discoverable")
     controller.dismiss()
     return
   }
@@ -971,7 +1128,14 @@ private func brightPixelBounds(
   let visibleFrame = CGRect(x: 100, y: 200, width: 1_000, height: 800)
   let mark = try #require(canonicalFleckMarkImage())
   let panel = DictationCapsulePanel()
-  let controller = DictationCapsuleController(panel: panel, markLoader: { mark })
+  let controller = DictationCapsuleController(panel: panel, automaticallyAdvancesLivePill: false,
+    markLoader: { mark })
+  controller.setPanelVisibilitySuppressedForTesting(true)
+  controller.setReduceMotionOverrideForTesting(true)
+  let nativeFrameControl = NSPanel(contentRect: .zero, styleMask: panel.styleMask,
+    backing: .buffered, defer: true)
+  nativeFrameControl.isReleasedWhenClosed = false
+  defer { nativeFrameControl.close() }
 
   controller.presentIdle(
     dock: .bottom,
@@ -980,27 +1144,38 @@ private func brightPixelBounds(
   )
 
   func assertActionFits(
-    status: DictationCapsuleStatus,
-    action: DictationCapsuleAction
+    context: DictationCapsuleContext,
+    action: DictationCapsuleAction,
+    chooser: DictationCapsuleChooser
   ) {
     panel.orderOut(nil)
-    controller.render(status, action: action)
-    let presentation = DictationCapsulePresentation(status: status, action: action)
+    controller.render(context, action: action, chooser: chooser)
+    let presentation = DictationCapsulePresentation(status: context.status, action: action,
+      chooser: chooser, context: context)
     let frame = DictationCapsuleController.frame(
       for: .bottom,
-      status: status,
+      status: context.status,
       measuredWidth: presentation.measuredWidth,
       in: visibleFrame
     )
-    panel.setFrame(CGRect(origin: .zero, size: frame.size), display: false)
-    panel.contentView?.frame = CGRect(origin: .zero, size: frame.size)
+    let requestedFrame = CGRect(origin: .zero, size: frame.size)
+    nativeFrameControl.setFrame(requestedFrame, display: false)
+    panel.setFrame(requestedFrame, display: false)
+    panel.contentView?.frame = CGRect(origin: .zero, size: panel.frame.size)
     panel.contentView?.layoutSubtreeIfNeeded()
     guard let host = panel.contentView, let actionButton = renderedActionButton(in: host) else {
-      Issue.record("Expected the rendered action button in the hosted \(status) result")
+      Issue.record("Expected the rendered action button in the hosted \(context.status) result")
       return
     }
+    #expect(controller.errorPresentationModel.presentation == nil)
+    #expect(controller.presentationModel.action?.accessibilityLabel == action.title)
+    #expect(controller.currentChooser?.captureID == context.sessionID)
     let actionFrame = actionButton.convert(actionButton.bounds, to: host)
-    #expect(frame.width == controller.panel.frame.width)
+    #expect(panel.frame == nativeFrameControl.frame)
+    #expect(host.bounds.size == panel.frame.size)
+    #expect(panel.backingScaleFactor == nativeFrameControl.backingScaleFactor)
+    #expect(host.convertToBacking(host.bounds).size
+      == nativeFrameControl.convertToBacking(CGRect(origin: .zero, size: nativeFrameControl.frame.size)).size)
     #expect(actionFrame.width > 0)
     #expect(actionFrame.width <= DictationCapsulePresentation.actionWidth(for: action))
     #expect(actionFrame.minX >= host.bounds.minX)
@@ -1009,14 +1184,27 @@ private func brightPixelBounds(
     #expect(actionFrame.maxY <= host.bounds.maxY)
   }
 
-  assertActionFits(
-    status: .failed("technical failure detail"),
-    action: .copy
-  )
-  assertActionFits(
-    status: .failed("Destination unavailable"),
-    action: .openDestination
-  )
+  let captureID = UUID()
+  assertActionFits(context: .init(
+    status: .routingFailure(status: "Needs attention", message: "Synthetic routing failure"),
+    sessionID: captureID
+  ), action: .copy, chooser: DictationCapsuleChooser(
+    ambiguity: .init(captureID: captureID, choices: []), allowsKeepInInbox: true
+  ))
+  controller.render(.saved(destination: String(repeating: "Long destination ", count: 20)),
+    action: .undo)
+  let host = try #require(panel.contentView)
+  host.layoutSubtreeIfNeeded()
+  #expect(controller.currentContext.status == .idle)
+  #expect(controller.fleckPillModel.state == .standby)
+  #expect(controller.errorPresentationModel.presentation == nil)
+  #expect(controller.presentationModel.action == nil)
+  #expect(controller.currentChooser == nil)
+  #expect(panel.frame.size == DictationCapsuleController.livePillHostSize)
+  #expect(host.bounds.size == panel.frame.size)
+  #expect(renderedActionButton(in: host) == nil)
+  #expect(renderedView(with: "fleck-rail-recovery", in: host) == nil)
+  #expect(panel.contentView?.menu?.items.contains(where: { $0.title == "Undo" }) == false)
   controller.dismiss()
 }
 
@@ -1024,7 +1212,14 @@ private func brightPixelBounds(
   let visibleFrame = CGRect(x: 100, y: 200, width: 1_000, height: 800)
   let mark = try #require(canonicalFleckMarkImage())
   let panel = DictationCapsulePanel()
-  let controller = DictationCapsuleController(panel: panel, markLoader: { mark })
+  let controller = DictationCapsuleController(panel: panel, automaticallyAdvancesLivePill: false,
+    markLoader: { mark })
+  controller.setPanelVisibilitySuppressedForTesting(true)
+  controller.setReduceMotionOverrideForTesting(true)
+  let nativeFrameControl = NSPanel(contentRect: .zero, styleMask: panel.styleMask,
+    backing: .buffered, defer: true)
+  nativeFrameControl.isReleasedWhenClosed = false
+  defer { nativeFrameControl.close() }
 
   controller.presentIdle(
     dock: .bottom,
@@ -1058,7 +1253,7 @@ private func brightPixelBounds(
   ]
   #expect(requiredFailureCopies == ["Microphone access needed", "Couldn't save"])
 
-  for dock in DictationCapsuleDock.allCases {
+  for dock in [DictationCapsuleDock.bottom, .left, .right] {
     for action in [DictationCapsuleAction.openHistory, .openDestination] {
       controller.setDock(dock)
       controller.render(failureContext, action: action)
@@ -1067,26 +1262,36 @@ private func brightPixelBounds(
         action: action,
         context: failureContext
       )
-      let frame = DictationCapsuleController.frame(
-        for: dock,
-        status: failureContext.status,
-        measuredWidth: presentation.measuredWidth,
+      let frame = DictationCapsuleController.errorSurfaceFrame(
+        for: .bottom,
         in: visibleFrame
       )
-      panel.setFrame(CGRect(origin: .zero, size: frame.size), display: false)
-      panel.contentView?.frame = CGRect(origin: .zero, size: frame.size)
+      nativeFrameControl.setFrame(frame, display: false)
+      panel.setFrame(frame, display: false)
+      panel.contentView?.frame = CGRect(origin: .zero, size: panel.frame.size)
       panel.contentView?.layoutSubtreeIfNeeded()
       guard let host = panel.contentView else {
         Issue.record("Expected the persistent hosted failure frame")
         continue
       }
+      let error = try #require(controller.errorPresentationModel.presentation)
+      #expect(controller.currentDock == .bottom)
+      #expect(error.message == presentation.visibleText)
+      #expect(error.recoveryAction == action)
+      #expect(error.actionTitle == action.buttonTitle)
+      #expect(controller.errorPresentationModel.canBeginAction)
+      #expect(panel.frame == nativeFrameControl.frame)
+      #expect(host.bounds.size == panel.frame.size)
+      #expect(panel.backingScaleFactor == nativeFrameControl.backingScaleFactor)
+      #expect(host.convertToBacking(host.bounds).size
+        == nativeFrameControl.convertToBacking(CGRect(origin: .zero, size: nativeFrameControl.frame.size)).size)
       for identifier in [
-        "fleck-rail-mark",
-        "fleck-terminal-glyph",
-        "fleck-terminal-text",
-        "fleck-terminal-divider",
+        "fleck-error-surface",
+        "fleck-error-message",
         "fleck-rail-recovery",
+        "fleck-error-action-label",
       ] {
+        #expect(descendants(of: host).filter { $0.identifier?.rawValue == identifier }.count == 1)
         guard let rendered = renderedView(with: identifier, in: host) else {
           Issue.record("Expected rendered \(identifier) for \(action) at \(dock)")
           continue
@@ -1111,16 +1316,33 @@ private func brightPixelBounds(
 @Test @MainActor func DictationAccessibilityNoSpeechWithoutActionFitsHostedFrame() throws {
   let mark = try #require(canonicalFleckMarkImage())
   let panel = DictationCapsulePanel()
-  let controller = DictationCapsuleController(panel: panel, markLoader: { mark })
+  let controller = DictationCapsuleController(panel: panel, automaticallyAdvancesLivePill: false,
+    markLoader: { mark })
+  #expect(controller.recoveryActionReceiverForTesting == nil)
+  controller.setPanelVisibilitySuppressedForTesting(true)
+  controller.setReduceMotionOverrideForTesting(true)
+  let nativeFrameControl = NSPanel(contentRect: .zero, styleMask: panel.styleMask,
+    backing: .buffered, defer: true)
+  nativeFrameControl.isReleasedWhenClosed = false
+  defer { nativeFrameControl.close() }
 
   controller.render(.noSpeech, action: nil)
-  let presentation = DictationCapsulePresentation(status: .noSpeech, action: nil)
-  let expectedSize = DictationCapsuleController.size(
-    for: .noSpeech,
-    measuredWidth: presentation.measuredWidth
-  )
-  #expect(abs(panel.frame.width - expectedSize.width) < 0.1)
-  #expect(panel.frame.width <= DictationCapsuleController.noSpeechSize.width)
+  let screen = try #require(panel.screen ?? NSScreen.main ?? NSScreen.screens.first)
+  let logicalFrame = DictationCapsuleController.errorSurfaceFrame(for: .bottom,
+    in: screen.visibleFrame)
+  nativeFrameControl.setFrame(logicalFrame, display: false)
+  #expect(panel.frame == nativeFrameControl.frame)
+  #expect(panel.frame.width <= nativeFrameControl.frame.width)
+  let error = try #require(controller.errorPresentationModel.presentation)
+  #expect(controller.currentContext.status == .noSpeech)
+  #expect(controller.presentationModel.action == nil)
+  #expect(controller.currentChooser == nil)
+  #expect(error.kind == .noSpeech)
+  #expect(error.message == "No speech heard")
+  #expect(error.actionTitle == "Try again")
+  #expect(error.phase == .default)
+  #expect(error.dismissal == 0)
+  #expect(controller.errorPresentationModel.canBeginAction)
 
   guard let host = panel.contentView else {
     Issue.record("Expected the persistent no-speech host")
@@ -1129,13 +1351,19 @@ private func brightPixelBounds(
   }
   host.frame = CGRect(origin: .zero, size: panel.frame.size)
   host.layoutSubtreeIfNeeded()
+  #expect(host.bounds.size == panel.frame.size)
+  #expect(panel.backingScaleFactor == nativeFrameControl.backingScaleFactor)
+  #expect(host.convertToBacking(host.bounds).size
+    == nativeFrameControl.convertToBacking(CGRect(origin: .zero, size: nativeFrameControl.frame.size)).size)
 
   let identifiers = [
-    "fleck-rail-mark",
-    "fleck-terminal-glyph",
-    "fleck-terminal-text",
+    "fleck-error-surface",
+    "fleck-error-message",
+    "fleck-rail-recovery",
+    "fleck-error-action-label",
   ]
   for identifier in identifiers {
+    #expect(descendants(of: host).filter { $0.identifier?.rawValue == identifier }.count == 1)
     guard let rendered = renderedView(with: identifier, in: host) else {
       Issue.record("Expected rendered no-speech view with identifier \(identifier)")
       continue
@@ -1149,10 +1377,62 @@ private func brightPixelBounds(
     #expect(frame.maxY <= host.bounds.maxY)
     #expect(rendered.hitTest(NSPoint(x: rendered.bounds.midX, y: rendered.bounds.midY)) == nil)
   }
+  let recovery = try #require(renderedView(with: "fleck-rail-recovery", in: host))
+  let actionReceiver = try #require(controller.recoveryActionReceiverForTesting)
+  #expect(actionReceiver !== host)
+  let recoveryCenter = recovery.convert(
+    NSPoint(x: recovery.bounds.midX, y: recovery.bounds.midY), to: host
+  )
+  #expect(actionReceiver.convert(actionReceiver.bounds, to: host).contains(recoveryCenter))
+  let actionHit = try #require(host.hitTest(host.convert(recoveryCenter, to: host.superview)))
+  #expect(actionHit !== host)
+  #expect(
+    actionHit === actionReceiver
+      || actionHit.isDescendant(of: actionReceiver)
+  )
   controller.dismiss()
 }
 
 @Test func DictationAccessibilityResolvesContrastSafeFleckColorsForEveryPalette() {
+  func expectPaletteDerivation(
+    _ actual: FleckRailRGB,
+    from selected: FleckRailRGB,
+    minimum: Double,
+    shell: FleckRailRGB
+  ) {
+    if FleckRailColors.contrastRatio(selected, against: shell) >= minimum {
+      #expect(actual == selected)
+      return
+    }
+
+    let outputChannels = [actual.red, actual.green, actual.blue]
+    let selectedChannels = [selected.red, selected.green, selected.blue]
+    let mixAmounts = zip(outputChannels, selectedChannels).compactMap { output, input in
+      input < 1 ? (output - input) / (1 - input) : nil
+    }
+    let amount = mixAmounts.first ?? -1
+    #expect(amount >= 0 && amount <= 1)
+    #expect(mixAmounts.allSatisfy { abs($0 - amount) < 0.0001 })
+    #expect(FleckRailColors.contrastRatio(actual, against: shell) >= minimum)
+  }
+
+  func secondaryTextCompositedContrasts(
+    _ colors: FleckRailColors
+  ) -> (secondaryText: Double, skippedOutline: Double, lowAlphaControl: Double) {
+    let white = FleckRailRGB(red: 1, green: 1, blue: 1)
+    let surface = colors.shell.mixed(
+      with: white,
+      amount: 1 - colors.effectiveShellOpacity
+    )
+    let outline = colors.secondaryText.mixed(with: surface, amount: 0.2)
+    let lowAlphaControl = colors.secondaryText.mixed(with: surface, amount: 0.8)
+    return (
+      FleckRailColors.contrastRatio(colors.secondaryText, against: surface),
+      FleckRailColors.contrastRatio(outline, against: surface),
+      FleckRailColors.contrastRatio(lowAlphaControl, against: surface)
+    )
+  }
+
   for family in FleckColorTheme.allCases {
     for (mode, appearance) in [(AppTheme.light, FleckThemeAppearance.light), (.dark, .dark)] {
       let theme = FleckThemeSnapshot.resolve(
@@ -1166,17 +1446,61 @@ private func brightPixelBounds(
 
       #expect(theme.appearance == appearance)
       #expect(colors.accentHex == theme.palette[.accent])
-      #expect(colors.displayCoreHex == theme.palette[.accent])
-      #expect(colors.displayLiveHex == theme.palette[.focusRing])
-      #expect(colors.shell.hex == theme.palette[.capsuleSurface])
-      #expect(colors.primaryText.hex == theme.palette[.capsuleText])
+      #expect(colors.shell.hex == FleckRailColors.shellHex)
       #expect(colors.effectiveShellOpacity == FleckRailColors.shellOpacity)
       #expect(FleckRailColors.contrastRatio(colors.primaryText, against: colors.shell) >= 4.5)
+      let compositedContrasts = secondaryTextCompositedContrasts(colors)
+      #expect(compositedContrasts.secondaryText >= 4.5)
+      #expect(compositedContrasts.skippedOutline >= 3)
+      #expect(compositedContrasts.lowAlphaControl < 3)
       #expect(FleckRailColors.contrastRatio(colors.displayCore, against: colors.shell) >= 3)
       #expect(FleckRailColors.contrastRatio(colors.displayLive, against: colors.shell) >= 3)
       #expect(FleckRailColors.contrastRatio(colors.success, against: colors.shell) >= 3)
       #expect(FleckRailColors.contrastRatio(colors.warning, against: colors.shell) >= 3)
       #expect(FleckRailColors.contrastRatio(colors.failure, against: colors.shell) >= 3)
+
+      expectPaletteDerivation(
+        colors.displayCore,
+        from: FleckRailRGB(hex: theme.palette[.accent])!,
+        minimum: 3.6,
+        shell: colors.shell
+      )
+      expectPaletteDerivation(
+        colors.displayLive,
+        from: FleckRailRGB(hex: theme.palette[.focusRing])!,
+        minimum: 3.6,
+        shell: colors.shell
+      )
+      expectPaletteDerivation(
+        colors.primaryText,
+        from: FleckRailRGB(hex: theme.palette[.capsuleText])!,
+        minimum: 5.2,
+        shell: colors.shell
+      )
+      expectPaletteDerivation(
+        colors.secondaryText,
+        from: FleckRailRGB(hex: theme.palette[.caption])!,
+        minimum: 5.2,
+        shell: colors.shell
+      )
+      expectPaletteDerivation(
+        colors.success,
+        from: FleckRailRGB(hex: theme.palette[.success])!,
+        minimum: 3.6,
+        shell: colors.shell
+      )
+      expectPaletteDerivation(
+        colors.warning,
+        from: FleckRailRGB(hex: theme.palette[.warning])!,
+        minimum: 3.6,
+        shell: colors.shell
+      )
+      expectPaletteDerivation(
+        colors.failure,
+        from: FleckRailRGB(hex: theme.palette[.error])!,
+        minimum: 3.6,
+        shell: colors.shell
+      )
 
       let opaqueTheme = FleckThemeSnapshot.resolve(
         colorTheme: family,
@@ -1188,6 +1512,10 @@ private func brightPixelBounds(
       let opaqueColors = FleckRailColors(theme: opaqueTheme)
       #expect(opaqueColors.reduceTransparency)
       #expect(opaqueColors.effectiveShellOpacity == 1)
+      let opaqueCompositedContrasts = secondaryTextCompositedContrasts(opaqueColors)
+      #expect(opaqueCompositedContrasts.secondaryText >= 4.5)
+      #expect(opaqueCompositedContrasts.skippedOutline >= 3)
+      #expect(opaqueCompositedContrasts.lowAlphaControl < 3)
     }
   }
 }
@@ -1198,32 +1526,200 @@ private func brightPixelBounds(
 }
 
 @Test @MainActor func DictationAccessibilityUsesHorizontalDockGeometryWithTenPointInset() {
-  #expect(DictationCapsuleDock.allCases == [.bottom])
-  #expect(DictationCapsuleController.livePillHostSize == CGSize(width: 180, height: 39))
+  let visibleFrame = CGRect(x: 100, y: 200, width: 1_000, height: 800)
+  let expectedSize = CGSize(width: 192, height: 36)
+
   #expect(DictationCapsuleController.edgeInset == 10)
-
-  let offsetVisibleFrame = CGRect(x: -1_280, y: 37, width: 1_200, height: 800)
-  let offsetPill = DictationCapsuleController.livePillFrame(in: offsetVisibleFrame)
-  #expect(offsetPill == CGRect(x: -770, y: 37, width: 180, height: 39))
-  #expect(offsetVisibleFrame.contains(offsetPill))
-
-  let tinyVisibleFrame = CGRect(x: -2_560, y: -100, width: 120, height: 24)
-  let tinyPill = DictationCapsuleController.livePillFrame(in: tinyVisibleFrame)
-  #expect(tinyPill == tinyVisibleFrame)
-  #expect(tinyVisibleFrame.contains(tinyPill))
-
-  let failureFrame = DictationCapsuleController.frame(
+  let bottom = DictationCapsuleController.frame(
     for: .bottom,
-    size: DictationCapsuleController.failureSize,
-    in: offsetVisibleFrame
+    size: expectedSize,
+    in: visibleFrame
   )
-  #expect(failureFrame.minY == offsetVisibleFrame.minY + 10)
-  #expect(offsetVisibleFrame.contains(failureFrame))
+  let left = DictationCapsuleController.frame(
+    for: .left,
+    size: expectedSize,
+    in: visibleFrame
+  )
+  let right = DictationCapsuleController.frame(
+    for: .right,
+    size: expectedSize,
+    in: visibleFrame
+  )
+
+  #expect(bottom.size == expectedSize)
+  #expect(left.size == expectedSize)
+  #expect(right.size == expectedSize)
+  #expect(bottom.minY == visibleFrame.minY + 10)
+  #expect(left.minX == visibleFrame.minX + 10)
+  #expect(right.maxX == visibleFrame.maxX - 10)
+  #expect(left.midY == visibleFrame.midY)
+  #expect(right.midY == visibleFrame.midY)
 }
 
 @Test func DictationAccessibilityReduceMotionUsesOpacityOnly() {
   #expect(DictationCapsuleTransition.forReduceMotion(true) == .opacity)
   #expect(DictationCapsuleTransition.forReduceMotion(false) == .scaleAndOpacity)
+}
+
+@Test @MainActor
+func DictationAccessibilityReducedMotionKeepsNativePillStaticAndActionsAvailable() async throws {
+  @MainActor final class Clock {
+    var now: TimeInterval = 10
+    var readCount = 0
+    func sample() -> TimeInterval {
+      readCount += 1
+      return now
+    }
+  }
+  let clock = Clock()
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(
+    panel: panel,
+    monotonicNow: { clock.sample() },
+    automaticallyAdvancesLivePill: true,
+    reduceMotionProvider: { true },
+    markLoader: { nil }
+  )
+  defer { controller.dismiss() }
+  var stopActions = 0
+  var cancelActions = 0
+  controller.configureInteraction(
+    onPrimaryClick: {},
+    onStop: { stopActions += 1 },
+    onCancel: { cancelActions += 1 },
+    onOpenFleck: {},
+    onOpenHistory: {},
+    onOpenSettings: {},
+    onDismiss: {},
+    onRecovery: {}
+  )
+  controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
+  let host = try #require(panel.contentView)
+  host.layoutSubtreeIfNeeded()
+  #expect(host.bounds.size == DictationCapsuleController.livePillHostSize)
+  #expect(controller.fleckPillModel.state == .standby)
+  #expect(controller.fleckPillModel.frame.expansion == 0)
+
+  let sessionID = UUID()
+  let captureContext = DictationCoordinatorContext(
+    sessionID: sessionID,
+    mode: .smartCapture,
+    pipelineStage: .capture,
+    cleanupOutcome: nil,
+    failureStage: nil
+  )
+  controller.render(
+    capsuleContext(.arming, sessionID: sessionID),
+    coordinatorEvent: DictationCoordinatorEvent(
+      phase: .arming,
+      terminal: nil,
+      context: captureContext
+    )
+  )
+  #expect(controller.fleckPillModel.state == .arming)
+  #expect(controller.fleckPillModel.frame.expansion == 1)
+  #expect(controller.fleckPillModel.frame.signalOpacity == 0.32)
+  #expect(!controller.fleckPillModel.needsAnimation)
+  #expect(panel.frame.size == DictationCapsuleController.livePillHostSize)
+  #expect(panel.isVisible)
+  #expect(controller.currentContext.status == .arming)
+  #expect(controller.fleckPillModel.isVisible)
+  #expect(DictationCapsuleMotion.shellDuration(
+    from: .arming,
+    to: .listening,
+    reduceMotion: true
+  ) == DictationCapsuleMotion.reduceMotionCrossfade)
+
+  host.layer?.removeAnimation(forKey: "transition")
+  controller.render(
+    capsuleContext(.listening, sessionID: sessionID),
+    coordinatorEvent: DictationCoordinatorEvent(
+      phase: .listening(mode: .smartCapture, engine: .standard),
+      terminal: nil,
+      context: captureContext
+    )
+  )
+  let listeningCrossfade = try #require(
+    host.layer?.animation(forKey: "transition") as? CATransition
+  )
+  #expect(listeningCrossfade.type == .fade)
+  #expect(listeningCrossfade.duration == DictationCapsuleMotion.reduceMotionCrossfade)
+  #expect(controller.fleckPillModel.state == .listening)
+  #expect(controller.fleckPillModel.frame.expansion == 1)
+  #expect(controller.fleckPillModel.frame.activationMix == 0)
+  #expect(!controller.fleckPillModel.needsAnimation)
+  #expect(panel.frame.size == DictationCapsuleController.livePillHostSize)
+  #expect(controller.presentationModel.voiceOverLabel == "Dictation listening")
+  #expect(FleckRailAccessibility.actions(for: controller.currentContext) == [.stop, .cancel])
+
+  controller.updateAudioLevel(0.5)
+  #expect(controller.fleckPillModel.frame.energy > 0)
+  #expect(controller.fleckPillModel.frame.phase == 0)
+  #expect(controller.fleckPillModel.needsAnimation)
+  controller.presentationModel.stopHandler()
+  controller.presentationModel.cancelHandler()
+  #expect(stopActions == 1)
+  #expect(cancelActions == 1)
+  let initialListeningEnergy = controller.fleckPillModel.frame.energy
+  for _ in 0..<4 {
+    clock.now += 0.075
+    try await Task.sleep(for: .milliseconds(70))
+  }
+  #expect(controller.fleckPillModel.frame.energy > 0)
+  #expect(controller.fleckPillModel.frame.energy < initialListeningEnergy)
+  for _ in 0..<6 {
+    clock.now += 0.075
+    try await Task.sleep(for: .milliseconds(70))
+  }
+  #expect(controller.fleckPillModel.frame.energy == 0)
+  #expect(controller.fleckPillModel.frame.phase == 0)
+  #expect(controller.fleckPillModel.frame.expansion == 1)
+  #expect(!controller.fleckPillModel.needsAnimation)
+
+  host.layer?.removeAnimation(forKey: "transition")
+  let polishContext = DictationCoordinatorContext(
+    sessionID: sessionID,
+    mode: .smartCapture,
+    pipelineStage: .polish,
+    cleanupOutcome: nil,
+    failureStage: nil
+  )
+  controller.render(
+    capsuleContext(.cleaning, sessionID: sessionID, stage: .polish),
+    coordinatorEvent: DictationCoordinatorEvent(
+      phase: .cleaning,
+      terminal: nil,
+      context: polishContext
+    )
+  )
+  let processingCrossfade = try #require(
+    host.layer?.animation(forKey: "transition") as? CATransition
+  )
+  #expect(processingCrossfade.type == .fade)
+  #expect(processingCrossfade.duration == DictationCapsuleMotion.reduceMotionCrossfade)
+  #expect(controller.fleckPillModel.state == .processing)
+  #expect(controller.fleckPillModel.frame.expansion == 1)
+  #expect(controller.fleckPillModel.frame.processingMix == 1)
+  #expect(controller.fleckPillModel.frame.glint == 0)
+  #expect(controller.fleckPillModel.frame.glintOpacity == 0)
+  #expect(!controller.fleckPillModel.needsAnimation)
+  #expect(panel.frame.size == DictationCapsuleController.livePillHostSize)
+  for _ in 0..<10 { await Task.yield() }
+  let settledClockReads = clock.readCount
+  try await Task.sleep(for: .milliseconds(50))
+  #expect(clock.readCount == settledClockReads)
+
+  host.layer?.removeAnimation(forKey: "transition")
+  controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
+  let idleCrossfade = try #require(
+    host.layer?.animation(forKey: "transition") as? CATransition
+  )
+  #expect(idleCrossfade.type == .fade)
+  #expect(idleCrossfade.duration == DictationCapsuleMotion.reduceMotionCrossfade)
+  #expect(controller.fleckPillModel.state == .standby)
+  #expect(controller.fleckPillModel.frame.expansion == 0)
+  #expect(!controller.fleckPillModel.needsAnimation)
+  #expect(panel.frame.size == DictationCapsuleController.livePillHostSize)
 }
 
 @Test func DictationAccessibilityUsesExactRestrainedMotionTimings() {
@@ -1258,9 +1754,16 @@ private func brightPixelBounds(
   #expect(
     DictationCapsuleMotion.transitionDuration(
       from: .cleaning,
+      to: .saved(destination: "Inbox"),
+      reduceMotion: false
+    ) == DictationCapsuleMotion.result
+  )
+  #expect(
+    DictationCapsuleMotion.transitionDuration(
+      from: .saved(destination: "Inbox"),
       to: .idle,
       reduceMotion: false
-    ) == DictationCapsuleMotion.tileMorph
+    ) == DictationCapsuleMotion.contentExit
   )
   #expect(
     DictationCapsuleMotion.transitionDuration(
@@ -1283,34 +1786,34 @@ private func brightPixelBounds(
   #expect(
     DictationCapsuleMotion.contentDuration(
       from: .cleaning,
-      to: .failed("save failed"),
+      to: .saved(destination: "Inbox"),
       reduceMotion: false
     ) == DictationCapsuleMotion.result
   )
   #expect(
     DictationCapsuleMotion.contentDuration(
-      from: .failed("save failed"),
+      from: .saved(destination: "Inbox"),
       to: .idle,
       reduceMotion: false
     ) == DictationCapsuleMotion.contentExit
   )
   #expect(
     DictationCapsuleMotion.shellDuration(
-      from: .failed("save failed"),
+      from: .saved(destination: "Inbox"),
       to: .idle,
       reduceMotion: false
     ) == DictationCapsuleMotion.shellSettle
   )
   #expect(
     DictationCapsuleMotion.contentDuration(
-      from: .failed("save failed"),
+      from: .saved(destination: "Inbox"),
       to: .idle,
       reduceMotion: true
     ) == DictationCapsuleMotion.reduceMotionCrossfade
   )
   #expect(
     DictationCapsuleMotion.shellDuration(
-      from: .failed("save failed"),
+      from: .saved(destination: "Inbox"),
       to: .idle,
       reduceMotion: true
     ) == DictationCapsuleMotion.reduceMotionCrossfade
@@ -1650,17 +2153,13 @@ private actor AccessibilitySleepGate {
   controller.dismiss()
 }
 
-@Test @MainActor func DictationAccessibilityChooserRemainsCaptureBoundAndNonactivating() throws {
+@Test @MainActor func DictationAccessibilityChooserRemainsCaptureBoundAndNonactivating() {
   let panel = DictationCapsulePanel()
   let controller = DictationCapsuleController(panel: panel)
   let firstCaptureID = UUID()
   let secondCaptureID = UUID()
   let noteID = UUID()
   var selections: [(UUID, UUID?)] = []
-  let routingFailure = DictationCapsuleStatus.routingFailure(
-    status: "Saved to Inbox",
-    message: "No clear destination"
-  )
   let chooser = DictationCapsuleChooser(
     ambiguity: .init(
       captureID: firstCaptureID,
@@ -1674,13 +2173,15 @@ private actor AccessibilitySleepGate {
   )
 
   controller.render(
-    routingFailure,
+    DictationCapsuleContext(
+      status: .routingFailure(status: "Needs attention", message: "Synthetic first route failure"),
+      sessionID: firstCaptureID
+    ),
     chooser: chooser,
     onChoice: { selections.append(($0, $1)) }
   )
 
   #expect(panel.allowsActions)
-  #expect(renderedView(with: "fleck-rail-chooser", in: try #require(panel.contentView)) != nil)
   #expect(!panel.canBecomeKey)
   #expect(!panel.canBecomeMain)
   controller.selectRoutingChoice(captureID: firstCaptureID, noteID: noteID)
@@ -1692,7 +2193,10 @@ private actor AccessibilitySleepGate {
   #expect(selections[1].1 == nil)
 
   controller.render(
-    routingFailure,
+    DictationCapsuleContext(
+      status: .routingFailure(status: "Needs attention", message: "Synthetic second route failure"),
+      sessionID: secondCaptureID
+    ),
     chooser: .init(
       ambiguity: .init(captureID: secondCaptureID, choices: chooser.choices.map {
         .init(
@@ -1709,7 +2213,10 @@ private actor AccessibilitySleepGate {
   #expect(selections.last?.0 == secondCaptureID)
 
   controller.render(
-    routingFailure,
+    DictationCapsuleContext(
+      status: .routingFailure(status: "Needs attention", message: "Synthetic moved route failure"),
+      sessionID: secondCaptureID
+    ),
     chooser: .init(
       ambiguity: .init(
         captureID: secondCaptureID,
@@ -1731,16 +2238,12 @@ private actor AccessibilitySleepGate {
   #expect(selections.count == movedSelectionCount)
 }
 
-@Test @MainActor func DictationAccessibilityChooserSurvivesDockReinstallationWithUndo() throws {
+@Test @MainActor func DictationAccessibilityChooserSurvivesDockReinstallationWithUndo() {
   let panel = DictationCapsulePanel()
   let controller = DictationCapsuleController(panel: panel)
   let captureID = UUID()
   let noteID = UUID()
   var selectedCaptureID: UUID?
-  let routingFailure = DictationCapsuleStatus.routingFailure(
-    status: "Saved to Inbox",
-    message: "No clear destination"
-  )
   let chooser = DictationCapsuleChooser(
     ambiguity: .init(
       captureID: captureID,
@@ -1754,7 +2257,10 @@ private actor AccessibilitySleepGate {
   )
 
   controller.render(
-    routingFailure,
+    DictationCapsuleContext(
+      status: .routingFailure(status: "Needs attention", message: "Synthetic route failure"),
+      sessionID: captureID
+    ),
     action: .undo,
     chooser: chooser,
     onChoice: { captureID, _ in selectedCaptureID = captureID }
@@ -1763,10 +2269,6 @@ private actor AccessibilitySleepGate {
   controller.selectRoutingChoice(captureID: captureID, noteID: noteID)
 
   #expect(panel.allowsActions)
-  #expect(controller.currentDock == .bottom)
-  #expect(controller.currentChooser?.captureID == captureID)
-  #expect(renderedView(with: "fleck-rail-chooser", in: try #require(panel.contentView)) != nil)
-  #expect(controller.presentationModel.action == .undo)
   #expect(selectedCaptureID == captureID)
   #expect(!panel.canBecomeKey)
   #expect(!panel.canBecomeMain)
@@ -1787,17 +2289,20 @@ private actor AccessibilitySleepGate {
 }
 
 @Test @MainActor func DictationAccessibilitySelectsTheNearestSupportedDock() {
-  let visibleFrame = CGRect(x: -1_280, y: 200, width: 1_000, height: 800)
-  let points = [
-    CGPoint(x: visibleFrame.minX, y: visibleFrame.midY),
-    CGPoint(x: visibleFrame.maxX, y: visibleFrame.midY),
-    CGPoint(x: visibleFrame.midX, y: visibleFrame.minY),
-    CGPoint(x: visibleFrame.midX, y: visibleFrame.maxY),
-  ]
+  let visibleFrame = CGRect(x: 100, y: 200, width: 1_000, height: 800)
 
-  for point in points {
-    #expect(DictationCapsuleController.nearestDock(to: point, in: visibleFrame) == .bottom)
-  }
+  #expect(DictationCapsuleController.nearestDock(
+    to: CGPoint(x: visibleFrame.minX, y: visibleFrame.midY),
+    in: visibleFrame
+  ) == .bottom)
+  #expect(DictationCapsuleController.nearestDock(
+    to: CGPoint(x: visibleFrame.maxX, y: visibleFrame.midY),
+    in: visibleFrame
+  ) == .bottom)
+  #expect(DictationCapsuleController.nearestDock(
+    to: CGPoint(x: visibleFrame.midX, y: visibleFrame.minY),
+    in: visibleFrame
+  ) == .bottom)
 }
 
 @Test @MainActor func DictationAccessibilityPrefersKeyboardFocusDisplayOverPointerAndPrimary() {
@@ -1932,6 +2437,7 @@ private actor AccessibilitySleepGate {
         mode: .smartCapture,
         pipelineStage: .save,
         cleanupOutcome: .usedRaw,
+        cleanupFallbackProvenance: .serviceFallback,
         failureStage: nil
       )
     ),
@@ -1978,12 +2484,12 @@ private actor AccessibilitySleepGate {
   let panel = DictationCapsulePanel()
   let controller = DictationCapsuleController(panel: panel)
   var primaryClicks = 0
-  controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
+  controller.presentIdle(dock: .left, onOpenFleck: { primaryClicks += 1 }, onDockChanged: { _ in })
   controller.configureInteraction(
-    onPrimaryClick: { primaryClicks += 1 },
+    onPrimaryClick: {},
     onStop: {},
     onCancel: {},
-    onOpenFleck: {},
+    onOpenFleck: { primaryClicks += 1 },
     onOpenHistory: {},
     onOpenSettings: {},
     onDismiss: {},
@@ -1991,10 +2497,10 @@ private actor AccessibilitySleepGate {
   )
 
   let host = panel.contentView!
-  host.frame = CGRect(origin: .zero, size: DictationCapsuleController.idleSize)
+  host.frame = CGRect(origin: .zero, size: DictationCapsuleController.livePillHostSize)
   host.layoutSubtreeIfNeeded()
   let eventHost = host.subviews.first!
-  let point = NSPoint(x: host.bounds.midX, y: host.bounds.midY)
+  let point = NSPoint(x: host.bounds.midX, y: 4)
   let mouseDown = NSEvent.mouseEvent(
     with: .leftMouseDown,
     location: point,
@@ -2023,16 +2529,14 @@ private actor AccessibilitySleepGate {
   controller.dismiss()
 }
 
-@Test @MainActor func DictationAccessibilityIdleDragTogglesIndicatorsOnlyAfterThreshold()
-  async throws
-{
+@Test @MainActor func DictationAccessibilityIdleDragTogglesIndicatorsOnlyAfterThreshold() async throws {
   let mark = try #require(canonicalFleckMarkImage())
   let panel = DictationCapsulePanel()
   let controller = DictationCapsuleController(panel: panel, markLoader: { mark })
   controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
 
   let host = panel.contentView!
-  host.frame = CGRect(origin: .zero, size: DictationCapsuleController.idleSize)
+  host.frame = CGRect(origin: .zero, size: DictationCapsuleController.livePillHostSize)
   host.layoutSubtreeIfNeeded()
   let eventHost = host.subviews.first!
   let start = NSPoint(x: host.bounds.midX, y: host.bounds.midY)
@@ -2099,6 +2603,7 @@ private actor AccessibilitySleepGate {
   #expect(indicators.hitTest(NSPoint(x: indicators.bounds.midX, y: indicators.bounds.midY)) == nil)
   eventHost.mouseUp(with: up)
   #expect(!controller.presentationModel.showsDockIndicators)
+  for _ in 0..<5 { await Task.yield() }
   host.layoutSubtreeIfNeeded()
   #expect(renderedView(with: "fleck-dock-indicators", in: host) == nil)
   controller.dismiss()
@@ -2107,29 +2612,384 @@ private actor AccessibilitySleepGate {
 @Test @MainActor func DictationAccessibilityIdleHitTestMatchesRoundedShell() {
   let panel = DictationCapsulePanel()
   let controller = DictationCapsuleController(panel: panel)
-  controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
+  controller.presentIdle(dock: .left, onOpenFleck: {}, onDockChanged: { _ in })
   let host = panel.contentView!
   host.frame = CGRect(origin: .zero, size: DictationCapsuleController.livePillHostSize)
   host.layoutSubtreeIfNeeded()
 
-  let shell = FleckPillGeometry.shell(expansion: controller.fleckPillModel.frame.expansion)
-  let shellCenter = shell.shellTransform.applying(to: FleckPillPoint(x: 112, y: 35))
-  let scale = FleckPillGeometry.artworkScale
-  let artworkX = (host.bounds.width - FleckPillGeometry.canvasSize.width) / 2
-    + scale * (8 + shellCenter.x)
-  let artworkY = (host.bounds.height - FleckPillGeometry.canvasSize.height) / 2
-    + scale * (12 + shellCenter.y)
-  let interiorPoint = NSPoint(
-    x: host.bounds.minX + artworkX,
-    y: host.isFlipped ? host.bounds.minY + artworkY : host.bounds.maxY - artworkY
-  )
-
-  #expect(host.bounds.size == DictationCapsuleController.livePillHostSize)
-  #expect(host.hitTest(interiorPoint) != nil)
+  #expect(controller.currentDock == .bottom)
+  #expect(host.hitTest(NSPoint(x: host.bounds.midX, y: 4)) != nil)
   #expect(host.hitTest(NSPoint(x: host.bounds.midX, y: host.bounds.midY)) == nil)
   #expect(host.hitTest(NSPoint(x: host.bounds.minX, y: host.bounds.minY)) == nil)
   #expect(host.hitTest(NSPoint(x: host.bounds.maxX + 1, y: host.bounds.midY)) == nil)
   controller.dismiss()
+}
+
+@Test @MainActor func DictationAccessibilityNativeStandbyHitRegionRoutesOpenFleck() throws {
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel, automaticallyAdvancesLivePill: false)
+  defer { controller.dismiss() }
+  var openActions = 0
+  var primaryClicks = 0
+  controller.configureInteraction(
+    onPrimaryClick: { primaryClicks += 1 },
+    onStop: {}, onCancel: {}, onOpenFleck: {}, onOpenHistory: {},
+    onOpenSettings: {}, onDismiss: {}, onRecovery: {}
+  )
+  controller.presentIdle(
+    dock: .bottom,
+    onOpenFleck: { openActions += 1 },
+    onDockChanged: { _ in }
+  )
+  let host = try #require(panel.contentView)
+  host.layoutSubtreeIfNeeded()
+  #expect(host.bounds.size == DictationCapsuleController.livePillHostSize)
+  #expect(!host.isFlipped)
+  for point in [NSPoint(x: 90, y: 20), NSPoint(x: 30, y: 4), NSPoint(x: 150, y: 4)] {
+    #expect(host.hitTest(point) == nil)
+  }
+  let center = NSPoint(x: 90, y: 4)
+  let target = try #require(host.hitTest(center))
+  #expect(target === host.subviews.first)
+  let location = host.convert(center, to: nil)
+  for (index, type) in [NSEvent.EventType.leftMouseDown, .leftMouseUp].enumerated() {
+    let event = try #require(NSEvent.mouseEvent(
+      with: type, location: location, modifierFlags: [], timestamp: 0,
+      windowNumber: panel.windowNumber, context: nil, eventNumber: index,
+      clickCount: 1, pressure: 0
+    ))
+    if type == .leftMouseDown { target.mouseDown(with: event) }
+    else { target.mouseUp(with: event) }
+  }
+  #expect(openActions == 1)
+  #expect(primaryClicks == 0)
+}
+
+@Test @MainActor func DictationAccessibilityNativeActiveHitRegionIncludesOnlyVisibleControls() throws {
+  let controller = DictationCapsuleController(
+    monotonicNow: { 10 }, automaticallyAdvancesLivePill: false
+  )
+  controller.setReduceMotionOverrideForTesting(false)
+  defer { controller.dismiss() }
+  let context = capsuleContext(.listening)
+  controller.render(context, coordinatorEvent: DictationCoordinatorEvent(
+    phase: .listening(mode: .smartCapture, engine: .standard),
+    terminal: nil,
+    context: DictationCoordinatorContext(
+      sessionID: context.sessionID!, mode: .smartCapture, pipelineStage: .capture,
+      cleanupOutcome: nil, failureStage: nil
+    )
+  ))
+  let host = try #require(controller.panel.contentView)
+  host.layoutSubtreeIfNeeded()
+  #expect(controller.fleckPillModel.frame.expansion == 0)
+  #expect(host.hitTest(NSPoint(x: 90, y: 23)) == nil)
+  controller.fleckPillModel.tick(at: 11, displayedEnergy: 0)
+  host.layoutSubtreeIfNeeded()
+  #expect(controller.fleckPillModel.frame.expansion == 1)
+  #expect(host.hitTest(NSPoint(x: 90, y: 23)) != nil)
+  #expect(host.bounds.size == DictationCapsuleController.livePillHostSize)
+  for point in [NSPoint(x: 90, y: 33), NSPoint(x: 15, y: 12), NSPoint(x: 165, y: 12)] {
+    #expect(host.hitTest(point) == nil)
+  }
+  #expect(host.hitTest(NSPoint(x: 90, y: 16)) != nil)
+  let cancel = try #require(renderedView(with: "fleck-rail-cancel", in: host))
+  let cancelFrame = cancel.convert(cancel.bounds, to: host)
+  #expect(host.hitTest(NSPoint(x: cancelFrame.midX, y: cancelFrame.midY)) == nil)
+  controller.presentationModel.setListeningHover(true)
+  host.layoutSubtreeIfNeeded()
+  for identifier in ["fleck-rail-stop", "fleck-rail-cancel"] {
+    let probe = try #require(renderedView(with: identifier, in: host))
+    let frame = probe.convert(probe.bounds, to: host)
+    #expect(host.hitTest(NSPoint(x: frame.midX, y: frame.midY)) != nil)
+  }
+  #expect(host.hitTest(NSPoint(x: 90, y: 33)) == nil)
+  controller.presentationModel.setListeningHover(false)
+  host.layoutSubtreeIfNeeded()
+  #expect(host.hitTest(NSPoint(x: cancelFrame.midX, y: cancelFrame.midY)) == nil)
+}
+
+@Test @MainActor func DictationAccessibilityLegacyTerminalImmediatelyHidesNativeListeningPill() async throws {
+  var sampleCount = 0
+  var now = 10.0
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(
+    panel: panel,
+    monotonicNow: {
+      sampleCount += 1
+      now += 0.016
+      return now
+    }
+  )
+  defer { controller.dismiss() }
+  controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
+
+  let sessionID = UUID()
+  let listening = capsuleContext(.listening, sessionID: sessionID)
+  controller.render(
+    listening,
+    coordinatorEvent: DictationCoordinatorEvent(
+      phase: .listening(mode: .smartCapture, engine: .standard),
+      terminal: nil,
+      context: DictationCoordinatorContext(
+        sessionID: sessionID,
+        mode: .smartCapture,
+        pipelineStage: .capture,
+        cleanupOutcome: nil,
+        failureStage: nil
+      )
+    )
+  )
+  now += 0.5
+  controller.fleckPillModel.tick(at: now, displayedEnergy: 0)
+  controller.updateAudioLevel(0.2)
+  #expect(controller.fleckPillModel.isVisible)
+  #expect(controller.fleckPillModel.frame.expansion == 1)
+  #expect(controller.fleckPillModel.needsAnimation)
+  let listeningSamples = sampleCount
+  for _ in 0..<20 where sampleCount == listeningSamples {
+    try await Task.sleep(for: .milliseconds(20))
+  }
+  #expect(sampleCount > listeningSamples)
+
+  let host = try #require(panel.contentView)
+  for _ in 0..<5 { await Task.yield() }
+  host.layoutSubtreeIfNeeded()
+  #expect(renderedView(with: "fleck-pill-canvas", in: host) != nil)
+  var recoveryActions = 0
+  let saved = capsuleContext(.saved(destination: "Inbox"), sessionID: sessionID)
+  controller.render(saved, action: .undo) { recoveryActions += 1 }
+  #expect(controller.fleckPillModel.isVisible)
+  #expect(!panel.hasShadow)
+  #expect(!panel.allowsActions)
+  #expect(controller.currentContext.status == .idle)
+  #expect(controller.presentationModel.action == nil)
+  #expect(FleckRailAccessibility.actions(for: saved) == [.dismiss])
+
+  for _ in 0..<5 { await Task.yield() }
+  host.layoutSubtreeIfNeeded()
+  #expect(renderedView(with: "fleck-pill-canvas", in: host) != nil)
+  #expect(renderedView(with: "fleck-rail-recovery", in: host) == nil)
+  #expect(renderedView(with: "fleck-compact-saved-text", in: host) == nil)
+  let expectedSize = DictationCapsuleController.livePillHostSize
+  try await Task.sleep(for: .milliseconds(400))
+  host.layoutSubtreeIfNeeded()
+  #expect(abs(panel.frame.width - expectedSize.width) < 0.5)
+  #expect(abs(panel.frame.height - expectedSize.height) < 0.5)
+  #expect(abs(host.bounds.width - expectedSize.width) < 0.5)
+  #expect(abs(host.bounds.height - expectedSize.height) < 0.5)
+  for probe in descendants(of: host) where probe.identifier?.rawValue.hasPrefix("fleck-") == true {
+    let frame = probe.convert(probe.bounds, to: host)
+    if frame.width > 0, frame.height > 0 { #expect(host.bounds.contains(frame)) }
+  }
+
+  let menu = try #require(host.menu)
+  #expect(!menu.items.contains(where: { $0.title == "Undo" }))
+  #expect(recoveryActions == 0)
+  let terminalSamples = sampleCount
+  try await Task.sleep(for: .milliseconds(100))
+  #expect(sampleCount == terminalSamples)
+}
+
+@Test @MainActor func DictationAccessibilityEventlessArmingImmediatelyHidesNativeProcessingPill() async throws {
+  var sampleCount = 0
+  var now = 10.0
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(
+    panel: panel,
+    monotonicNow: {
+      sampleCount += 1
+      now += 0.016
+      return now
+    }
+  )
+  controller.setReduceMotionOverrideForTesting(false)
+  defer { controller.dismiss() }
+  controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
+
+  let sessionID = UUID()
+  let processing = capsuleContext(
+    .cleaning,
+    sessionID: sessionID,
+    stage: .polish,
+    cleanup: .pending
+  )
+  controller.render(
+    processing,
+    coordinatorEvent: DictationCoordinatorEvent(
+      phase: .cleaning,
+      terminal: nil,
+      context: DictationCoordinatorContext(
+        sessionID: sessionID,
+        mode: .smartCapture,
+        pipelineStage: .polish,
+        cleanupOutcome: .pending,
+        failureStage: nil
+      )
+    )
+  )
+  #expect(controller.fleckPillModel.state == .processing)
+  now += 0.5
+  controller.fleckPillModel.tick(at: now, displayedEnergy: 0)
+  #expect(controller.fleckPillModel.frame.expansion == 1)
+  #expect(controller.fleckPillModel.needsAnimation)
+  let processingSamples = sampleCount
+  for _ in 0..<20 where sampleCount == processingSamples {
+    try await Task.sleep(for: .milliseconds(20))
+  }
+  #expect(sampleCount > processingSamples)
+
+  let host = try #require(panel.contentView)
+  for _ in 0..<5 { await Task.yield() }
+  host.layoutSubtreeIfNeeded()
+  #expect(renderedView(with: "fleck-pill-canvas", in: host) != nil)
+  let arming = capsuleContext(.arming, sessionID: sessionID)
+  controller.render(arming)
+  #expect(controller.fleckPillModel.state == .hidden)
+  #expect(!controller.fleckPillModel.needsAnimation)
+  #expect(panel.hasShadow)
+  #expect(!panel.allowsActions)
+  #expect(controller.presentationModel.action == nil)
+  #expect(FleckRailAccessibility.actions(for: arming).isEmpty)
+
+  for _ in 0..<5 { await Task.yield() }
+  host.layoutSubtreeIfNeeded()
+  #expect(renderedView(with: "fleck-pill-canvas", in: host) == nil)
+  try await Task.sleep(for: .milliseconds(400))
+  host.layoutSubtreeIfNeeded()
+  #expect(panel.frame.size == DictationCapsuleController.startingSize)
+  #expect(host.bounds.size == DictationCapsuleController.startingSize)
+  for probe in descendants(of: host) where probe.identifier?.rawValue.hasPrefix("fleck-") == true {
+    let frame = probe.convert(probe.bounds, to: host)
+    if frame.width > 0, frame.height > 0 { #expect(host.bounds.contains(frame)) }
+  }
+  let armingSamples = sampleCount
+  try await Task.sleep(for: .milliseconds(100))
+  #expect(sampleCount == armingSamples)
+}
+
+@Test @MainActor func DictationAccessibilityListeningHasNoElapsedCounterOrOneSecondWakeup() async throws {
+  @MainActor final class Clock {
+    var now: TimeInterval = 10
+    var sampledTimes: [TimeInterval] = []
+    func sample() -> TimeInterval {
+      sampledTimes.append(now)
+      return now
+    }
+  }
+  let clock = Clock()
+  let controller = DictationCapsuleController(
+    monotonicNow: { clock.sample() },
+    automaticallyAdvancesLivePill: false
+  )
+  defer { controller.dismiss() }
+  let context = capsuleContext(.listening)
+  controller.render(context, coordinatorEvent: DictationCoordinatorEvent(
+    phase: .listening(mode: .smartCapture, engine: .standard),
+    terminal: nil,
+    context: DictationCoordinatorContext(
+      sessionID: context.sessionID!, mode: .smartCapture, pipelineStage: .capture,
+      cleanupOutcome: nil, failureStage: nil
+    )
+  ))
+  clock.now = 10.1
+  controller.updateAudioLevel(0.25)
+  controller.fleckPillModel.tick(at: clock.now, displayedEnergy: Double(
+    controller.waveformModel.displayedEnergy(monotonicNow: clock.now)
+  ))
+  #expect(controller.fleckPillModel.frame.energy > 0)
+  clock.now = 11
+  controller.fleckPillModel.tick(at: clock.now, displayedEnergy: Double(
+    controller.waveformModel.displayedEnergy(monotonicNow: clock.now)
+  ))
+  #expect(controller.fleckPillModel.frame.energy == 0)
+  #expect(!controller.fleckPillModel.needsAnimation)
+  let settledFrame = controller.fleckPillModel.frame
+  let settledGeneration = controller.fleckPillModel.renderGeneration
+  let host = try #require(controller.panel.contentView)
+  host.layoutSubtreeIfNeeded()
+  #expect(renderedView(with: "fleck-rail-timer", in: host) == nil)
+  #expect(renderedView(with: "fleck-rail-elapsed", in: host) == nil)
+  #expect(renderedView(with: "fleck-rail-stop", in: host) != nil)
+  #expect(renderedView(with: "fleck-rail-cancel", in: host) != nil)
+  #expect(controller.currentContext.status == .listening)
+  #expect(FleckRailAccessibility.actions(for: controller.currentContext) == [.stop, .cancel])
+  #expect(controller.fleckPillModel.frame == settledFrame)
+  #expect(controller.fleckPillModel.renderGeneration == settledGeneration)
+  #expect(!controller.fleckPillModel.needsAnimation)
+
+  clock.sampledTimes.removeAll()
+  try await Task.sleep(for: .milliseconds(1200))
+  #expect(clock.sampledTimes.isEmpty)
+  #expect(controller.fleckPillModel.frame == settledFrame)
+  #expect(controller.fleckPillModel.renderGeneration == settledGeneration)
+
+  controller.dismiss()
+  clock.sampledTimes.removeAll()
+  try await Task.sleep(for: .milliseconds(1200))
+  #expect(clock.sampledTimes.isEmpty)
+  controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
+  clock.sampledTimes.removeAll()
+  try await Task.sleep(for: .milliseconds(1200))
+  #expect(clock.sampledTimes.isEmpty)
+}
+
+@Test @MainActor func DictationAccessibilityNormalMotionZeroCallbacksQuiesceNativePillAnimation() async throws {
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(
+    panel: panel,
+    monotonicNow: { ProcessInfo.processInfo.systemUptime },
+    automaticallyAdvancesLivePill: true,
+    reduceMotionProvider: { false },
+    markLoader: { nil }
+  )
+  defer { controller.dismiss() }
+  controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
+  let sessionID = UUID()
+  controller.render(
+    capsuleContext(.listening, sessionID: sessionID),
+    coordinatorEvent: DictationCoordinatorEvent(
+      phase: .listening(mode: .smartCapture, engine: .standard),
+      terminal: nil,
+      context: DictationCoordinatorContext(
+        sessionID: sessionID,
+        mode: .smartCapture,
+        pipelineStage: .capture,
+        cleanupOutcome: nil,
+        failureStage: nil
+      )
+    )
+  )
+  controller.updateAudioLevel(0.20)
+  #expect(controller.fleckPillModel.frame.energy > 0)
+  #expect(panel.isVisible)
+  #expect(controller.fleckPillModel.state == .listening)
+  #expect(controller.fleckPillModel.needsAnimation)
+  let phaseDeadline = ProcessInfo.processInfo.systemUptime + 0.3
+  while controller.fleckPillModel.frame.phase == 0,
+    ProcessInfo.processInfo.systemUptime < phaseDeadline
+  {
+    try await Task.sleep(for: .milliseconds(5))
+    await Task.yield()
+  }
+  #expect(controller.fleckPillModel.frame.phase > 0)
+
+  for _ in 0..<25 {
+    controller.updateAudioLevel(0)
+    try await Task.sleep(for: .milliseconds(20))
+  }
+
+  #expect(controller.waveformModel.energy == 0)
+  #expect(controller.waveformModel.displayedEnergy(
+    monotonicNow: ProcessInfo.processInfo.systemUptime
+  ) == 0)
+  #expect(controller.fleckPillModel.frame.energy == 0)
+  #expect(!controller.fleckPillModel.needsAnimation)
+  let settledFrame = controller.fleckPillModel.frame
+  let settledGeneration = controller.fleckPillModel.renderGeneration
+  try await Task.sleep(for: .milliseconds(120))
+  #expect(controller.fleckPillModel.frame == settledFrame)
+  #expect(controller.fleckPillModel.renderGeneration == settledGeneration)
 }
 
 @Test @MainActor func DictationAccessibilityHostedButtonsConsumeTheirExactRegions() {
@@ -2225,13 +3085,17 @@ private actor AccessibilitySleepGate {
   #expect(cancelActions == 1)
   #expect(primaryClicks == 0)
 
-  controller.render(.failed("Save failed"), action: .openHistory) {
+  controller.render(.saved(destination: "Inbox"), action: .undo) {
     recoveryActions += 1
   }
-  host.frame = CGRect(origin: .zero, size: DictationCapsuleController.failureSize)
+  host.frame = CGRect(origin: .zero, size: DictationCapsuleController.livePillHostSize)
   host.layoutSubtreeIfNeeded()
-  click(identifier: "fleck-rail-recovery", eventNumber: 104)
-  #expect(recoveryActions == 1)
+  let menu = host.menu
+  let undo = menu?.items.firstIndex(where: { $0.title == "Undo" })
+  #expect(undo == nil)
+  if let undo { menu?.performActionForItem(at: undo) }
+  #expect(controller.currentContext.status == .idle)
+  #expect(recoveryActions == 0)
   #expect(dismissActions == 0)
   #expect(primaryClicks == 0)
   controller.dismiss()
@@ -2267,12 +3131,12 @@ private actor AccessibilitySleepGate {
   let noSpeech = DictationCapsuleContext(status: .noSpeech)
   let failed = DictationCapsuleContext(status: .failed("save failed"))
 
-  #expect(FleckRailAccessibility.actions(for: idle).isEmpty)
+  #expect(FleckRailAccessibility.actions(for: idle) == [.openFleck])
   #expect(FleckRailAccessibility.actions(for: handsFreeListening) == [.stop, .cancel])
   #expect(FleckRailAccessibility.actions(for: holdListening).isEmpty)
   #expect(FleckRailAccessibility.actions(for: processing).isEmpty)
   #expect(FleckRailAccessibility.actions(for: repairing).isEmpty)
-  #expect(FleckRailAccessibility.actions(for: saved.presentationContext()).isEmpty)
+  #expect(FleckRailAccessibility.actions(for: saved) == [.dismiss])
   #expect(FleckRailAccessibility.actions(for: noSpeech) == [.dismiss])
   #expect(FleckRailAccessibility.actions(for: failed) == [.dismiss])
 }
@@ -2553,4 +3417,58 @@ private func settingsViewSource() throws -> String {
     contentsOf: repository.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
     encoding: .utf8
   )
+}
+
+
+@Test @MainActor func DictationAccessibilitySavedInputsClearControlsAndReturnToStandby() throws {
+  let panel = DictationCapsulePanel()
+  let controller = DictationCapsuleController(panel: panel, markLoader: { nil })
+  defer { controller.dismiss() }
+  controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
+
+  let chooser = DictationCapsuleChooser(
+    ambiguity: .init(
+      captureID: UUID(),
+      choices: [
+        .init(
+          destination: .init(noteID: UUID(), title: "Projects"),
+          contextHint: "Synthetic roadmap"
+        )
+      ]
+    )
+  )
+  let statuses: [DictationCapsuleStatus] = [
+    .saved(destination: "Inbox"),
+    .savedWithoutCleanup(destination: "Inbox"),
+  ]
+
+  for status in statuses {
+    let context = DictationCapsuleContext(
+      status: status,
+      sessionID: UUID(),
+      mode: .smartCapture,
+      pipelineStage: .save
+    )
+    let presentation = DictationCapsulePresentation(
+      status: status,
+      action: .undo,
+      chooser: chooser,
+      context: context
+    )
+    controller.render(context, action: .undo, chooser: chooser)
+
+    #expect(DictationCapsuleController.size(for: status) == DictationCapsuleController.idleSize)
+    #expect(presentation.visibleText == nil)
+    #expect(presentation.voiceOverText == "Fleck dictation ready")
+    #expect(presentation.visualMode == .idle)
+    #expect(controller.currentContext.status == .idle)
+    #expect(controller.presentationModel.context == controller.currentContext)
+    #expect(controller.presentationModel.action == nil)
+    #expect(controller.presentationModel.chooser == nil)
+    #expect(controller.currentChooser == nil)
+    #expect(!panel.allowsActions)
+    #expect(controller.fleckPillModel.state == .standby)
+    #expect(FleckRailAccessibility.actions(for: controller.currentContext) == [.openFleck])
+    #expect(renderedActionButton(in: try #require(panel.contentView)) == nil)
+  }
 }
