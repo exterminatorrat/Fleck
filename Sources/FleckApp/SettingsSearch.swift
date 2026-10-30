@@ -949,6 +949,17 @@
       generation = UUID()
     }
 
+    func publishReturnRequest(
+      inputID: UUID,
+      to request: Binding<SettingsKeyboardFocusReturnRequest?>
+    ) {
+      guard let window = view?.window else {
+        request.wrappedValue = nil
+        return
+      }
+      request.wrappedValue = SettingsKeyboardFocusReturnRequest(window: window, inputID: inputID)
+    }
+
     func matches(
       _ request: SettingsKeyboardFocusReturnRequest,
       generation: UUID,
@@ -972,7 +983,19 @@
     @FocusState private var isKeyboardFocused: Bool
     @AccessibilityFocusState private var isFocused: Bool
     @ObservedObject private var inputModality = SettingsSearchInputModality.shared
-    @StateObject private var returnAttachment = SettingsKeyboardFocusReturnAttachment()
+    @StateObject private var returnAttachment: SettingsKeyboardFocusReturnAttachment
+
+    init(
+      target: SettingsSearchTarget,
+      request: SettingsSearchRequest?,
+      returnAttachment: SettingsKeyboardFocusReturnAttachment? = nil
+    ) {
+      self.target = target
+      self.request = request
+      _returnAttachment = StateObject(
+        wrappedValue: returnAttachment ?? SettingsKeyboardFocusReturnAttachment()
+      )
+    }
 
     private var isKeyboardFocusCueVisible: Bool {
       isKeyboardFocused && inputModality.showsKeyboardFocusCue
@@ -1156,6 +1179,18 @@
       request: SettingsSearchRequest?
     ) -> some View {
       modifier(SettingsSearchAnchorModifier(target: target, request: request))
+    }
+
+    func settingsSearchAnchor(
+      _ target: SettingsSearchTarget,
+      request: SettingsSearchRequest?,
+      returnAttachment: () -> SettingsKeyboardFocusReturnAttachment?
+    ) -> some View {
+      modifier(
+        SettingsSearchAnchorModifier(
+          target: target, request: request, returnAttachment: returnAttachment()
+        )
+      )
     }
   }
 

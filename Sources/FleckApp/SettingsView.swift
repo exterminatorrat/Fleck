@@ -978,8 +978,8 @@
     @State private var isSettingsSearchFieldFocused = false
     @State private var searchQuery = ""
     @State private var isReadinessPopoverPresented = false
-    @State private var pendingReadinessKeyboardReturn: SettingsKeyboardFocusReturnRequest?
     @State private var readinessKeyboardReturnRequest: SettingsKeyboardFocusReturnRequest?
+    @StateObject private var readinessReturnAttachment = SettingsKeyboardFocusReturnAttachment()
     @State private var searchFocusRequest: UUID?
     @State private var highlightedSearchTarget: SettingsSearchTarget?
     @State private var searchRequest: SettingsSearchRequest?
@@ -1119,7 +1119,6 @@
         recordingSelection.transition(to: newSection)
         if newSection != .dictation {
           isReadinessPopoverPresented = false
-          pendingReadinessKeyboardReturn = nil
           readinessKeyboardReturnRequest = nil
         }
       }
@@ -1537,39 +1536,36 @@
         dictationReadinessPopover
           .fleckPopoverTheme(theme)
           .onExitCommand {
-            pendingReadinessKeyboardReturn = NSApp.keyWindow?.parent.map {
-              SettingsKeyboardFocusReturnRequest(
-                window: $0, inputID: SettingsSearchInputModality.shared.inputID
+            let inputID = SettingsSearchInputModality.shared.inputID
+            if selectedSection == .dictation {
+              readinessReturnAttachment.publishReturnRequest(
+                inputID: inputID, to: $readinessKeyboardReturnRequest
               )
+            } else {
+              readinessKeyboardReturnRequest = nil
             }
             #if DEBUG
+            let returnRequest = readinessKeyboardReturnRequest
             SettingsSearchInputModality.shared.readinessReturnObservation?(
               readinessReturnObservationSource,
-              "[F93-readiness-return:exit] pending=\(pendingReadinessKeyboardReturn != nil) windowPresent=\(pendingReadinessKeyboardReturn?.window != nil) keyMatch=\(pendingReadinessKeyboardReturn?.window != nil && NSApp.keyWindow != nil && pendingReadinessKeyboardReturn?.window === NSApp.keyWindow) parentMatch=\(pendingReadinessKeyboardReturn?.window != nil && NSApp.keyWindow?.parent != nil && pendingReadinessKeyboardReturn?.window === NSApp.keyWindow?.parent) inputMatch=\(pendingReadinessKeyboardReturn?.inputID == SettingsSearchInputModality.shared.inputID)"
+              "[F93-readiness-return:exit] pending=\(returnRequest != nil) windowPresent=\(returnRequest?.window != nil) keyMatch=\(returnRequest?.window != nil && NSApp.keyWindow != nil && returnRequest?.window === NSApp.keyWindow) parentMatch=\(returnRequest?.window != nil && NSApp.keyWindow?.parent != nil && returnRequest?.window === NSApp.keyWindow?.parent) inputMatch=\(returnRequest?.inputID == inputID)"
             )
             #endif
             isReadinessPopoverPresented = false
           }
+          #if DEBUG
           .onDisappear {
-            let returnRequest = pendingReadinessKeyboardReturn
-            pendingReadinessKeyboardReturn = nil
-            #if DEBUG
+            let returnRequest = readinessKeyboardReturnRequest
             SettingsSearchInputModality.shared.readinessReturnObservation?(
               readinessReturnObservationSource,
               "[F93-readiness-return:disappear] pending=\(returnRequest != nil) dictation=\(selectedSection == .dictation)"
             )
-            #endif
-            guard selectedSection == .dictation else { return }
-            readinessKeyboardReturnRequest = returnRequest
-            #if DEBUG
-            SettingsSearchInputModality.shared.readinessReturnObservation?(
-              readinessReturnObservationSource,
-              "[F93-readiness-return:transfer] pending=\(returnRequest != nil) bound=\(readinessKeyboardReturnRequest != nil) sameID=\(returnRequest != nil && readinessKeyboardReturnRequest?.id == returnRequest?.id)"
-            )
-            #endif
           }
+          #endif
       }
-      .settingsSearchAnchor(.dictationStatus, request: searchRequest)
+      .settingsSearchAnchor(.dictationStatus, request: searchRequest) {
+        readinessReturnAttachment
+      }
       .environment(\.settingsKeyboardFocusReturnRequest, $readinessKeyboardReturnRequest)
       .accessibilityLabel("Dictation readiness")
       .accessibilityValue(isReady ? "Ready" : "Needs attention")

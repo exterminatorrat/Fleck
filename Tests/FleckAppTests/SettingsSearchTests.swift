@@ -387,6 +387,63 @@
       #expect(!attachment.matches(request, generation: generation, inputID: inputModality.inputID))
     }
 
+    @Test @MainActor
+    func readinessReturnProducerWritesTheBoundWindowAndReplacesTheCurrentInput() throws {
+      let (window, _, attachment) = readinessReturnHost()
+      defer { window.contentView = nil }
+      var boundRequest: SettingsKeyboardFocusReturnRequest?
+      let requestBinding = Binding(
+        get: { boundRequest },
+        set: { boundRequest = $0 }
+      )
+      let firstInputID = UUID()
+
+      attachment.publishReturnRequest(inputID: firstInputID, to: requestBinding)
+      let firstRequest = try #require(boundRequest)
+      #expect(firstRequest.window === window)
+      #expect(firstRequest.inputID == firstInputID)
+
+      let currentInputID = UUID()
+      attachment.publishReturnRequest(inputID: currentInputID, to: requestBinding)
+      let currentRequest = try #require(boundRequest)
+      #expect(currentRequest.id != firstRequest.id)
+      #expect(currentRequest.window === window)
+      #expect(currentRequest.inputID == currentInputID)
+    }
+
+    @Test @MainActor
+    func readinessReturnProducerClearsUnboundAndDetachedRequests() {
+      let (window, view, attachment) = readinessReturnHost()
+      let fallbackWindow = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+        styleMask: [.borderless], backing: .buffered, defer: false
+      )
+      defer {
+        window.contentView = nil
+        fallbackWindow.contentView = nil
+      }
+      var boundRequest: SettingsKeyboardFocusReturnRequest? =
+        SettingsKeyboardFocusReturnRequest(window: fallbackWindow, inputID: UUID())
+      let requestBinding = Binding(
+        get: { boundRequest },
+        set: { boundRequest = $0 }
+      )
+
+      view.bind(to: nil)
+      #expect(attachment.view == nil)
+      #expect(view.window === window)
+      attachment.publishReturnRequest(inputID: UUID(), to: requestBinding)
+      #expect(boundRequest == nil)
+
+      view.bind(to: attachment)
+      window.contentView = nil
+      #expect(attachment.view === view)
+      #expect(view.window == nil)
+      boundRequest = SettingsKeyboardFocusReturnRequest(window: fallbackWindow, inputID: UUID())
+      attachment.publishReturnRequest(inputID: UUID(), to: requestBinding)
+      #expect(boundRequest == nil)
+    }
+
     @MainActor
     private func readinessReturnHost() -> (
       NSWindow, SettingsSearchProbe.ProbeView, SettingsKeyboardFocusReturnAttachment

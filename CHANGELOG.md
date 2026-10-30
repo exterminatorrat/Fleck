@@ -3,6 +3,19 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.13-beta.1] - 2026-10-31
+
+### Fixed
+
+- Source readiness Escape-return requests from the trigger's bound native attachment and
+  hand them directly to the existing guarded focus consumer before dismissing the popover.
+- Add regression coverage for bound-window/current-input publication and clearing stale
+  requests when the producer's native attachment is unbound or detached.
+
+Source-only CI repair candidate. Compilation, tests and hosted keyboard/accessibility
+behavior remain unrun; prior public CI is red and Dictionary/Appearance failures remain open.
+No passing CI, unchanged-head recovery or test-build delivery is claimed.
+
 ## [1.5.12-beta.1] - 2026-10-30
 
 ### Fixed
