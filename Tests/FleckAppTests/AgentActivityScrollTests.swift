@@ -152,9 +152,16 @@ struct AgentActivityScrollTests {
           dy: AgentActivityScroller.visualTrackInset
         )
         let travel = track.height - visual.height
-        let expectedY = scroller.isFlipped
+        let proportionalY = scroller.isFlipped
           ? track.minY + travel * position
           : track.maxY - visual.height - travel * position
+        let expectedY = try expectedAgentActivityKnobOriginY(
+          proportionalY: proportionalY,
+          size: visual.size,
+          scroller: scroller,
+          native: native,
+          track: track
+        )
 
         #expect(visualSize == nil || visual.size == visualSize)
         #expect(native.contains(visual))
@@ -173,6 +180,40 @@ struct AgentActivityScrollTests {
         #expect((visualSize?.height ?? 0) > AgentActivityScroller.visualMinimumKnobLength)
       }
     }
+  }
+
+  @Test @MainActor
+  func visualKnobTrackingPreservesTheFullInitialRectangleAtUnchangedValue() throws {
+    let scrollView = makeAgentActivityScrollerComparison(
+      scroller: AgentActivityScroller(),
+      appearanceName: .aqua
+    )
+    let scroller = try #require(scrollView.verticalScroller as? AgentActivityScroller)
+    scroller.knobProportion = 0.125
+    scroller.doubleValue = scroller.isFlipped ? 0.123 : 0.877
+    let initialRect = scroller.visualKnobRect
+    let native = scroller.rect(for: .knob)
+    let track = scroller.bounds.insetBy(dx: 0, dy: AgentActivityScroller.visualTrackInset)
+    let position = min(max(CGFloat(scroller.doubleValue), 0), 1)
+    let travel = track.height - initialRect.height
+    let proportionalY = scroller.isFlipped
+      ? track.minY + travel * position
+      : track.maxY - initialRect.height - travel * position
+    let expectedY = try expectedAgentActivityKnobOriginY(
+      proportionalY: proportionalY,
+      size: initialRect.size,
+      scroller: scroller,
+      native: native,
+      track: track
+    )
+    #expect(native.contains(initialRect))
+    #expect(abs(initialRect.minY - expectedY) < 0.001)
+
+    scroller.withHeldVisualKnobGeometry {
+      #expect(scroller.visualKnobRect == initialRect)
+    }
+
+    #expect(scroller.visualKnobRect == initialRect)
   }
 
   @Test @MainActor
@@ -321,9 +362,17 @@ struct AgentActivityScrollTests {
     let releasedRect = scroller.visualKnobRect
     let position = min(max(CGFloat(scroller.doubleValue), 0), 1)
     let travel = track.height - releasedRect.height
-    let expectedReleasedY = scroller.isFlipped
+    let proportionalY = scroller.isFlipped
       ? track.minY + travel * position
       : track.maxY - releasedRect.height - travel * position
+    let native = scroller.rect(for: .knob)
+    let expectedReleasedY = try expectedAgentActivityKnobOriginY(
+      proportionalY: proportionalY,
+      size: releasedRect.size,
+      scroller: scroller,
+      native: native,
+      track: track
+    )
 
     #expect(releasedRect.height == expectedReleasedHeight)
     #expect(releasedRect.height != heldBefore.height)
@@ -427,6 +476,36 @@ private func verifyAgentActivityScrollOpening(
 private enum AgentActivityScrollerPart {
   case knob
   case slot(highlighted: Bool)
+}
+
+@MainActor
+private func expectedAgentActivityKnobOriginY(
+  proportionalY: CGFloat,
+  size: NSSize,
+  scroller: NSScroller,
+  native: NSRect,
+  track: NSRect
+) throws -> CGFloat {
+  let bounds = scroller.bounds
+  let trailingInset = min(AgentActivityScroller.visualTrailingInset, bounds.width - size.width)
+  let x = bounds.maxX - trailingInset - size.width
+  let minimumY = max(native.minY, track.minY)
+  let maximumY = min(native.maxY - size.height, track.maxY - size.height)
+  try #require(
+    [
+      bounds.minX, bounds.minY, bounds.maxX, bounds.maxY, bounds.width, bounds.height,
+      track.minY, track.maxY, track.width, track.height, size.width, size.height,
+      scroller.knobProportion, CGFloat(scroller.doubleValue), x, x + size.width, proportionalY,
+      native.minX, native.minY, native.maxX, native.maxY, native.width, native.height,
+      minimumY, maximumY,
+    ].allSatisfy { $0.isFinite }
+  )
+  try #require(bounds.width > 0 && bounds.height > 0)
+  try #require(track.height > 0 && size.width > 0 && size.height > 0)
+  try #require(native.width > 0 && native.height >= size.height)
+  try #require(native.minX <= x && x + size.width <= native.maxX)
+  try #require(minimumY <= maximumY)
+  return min(max(proportionalY, minimumY), maximumY)
 }
 
 @MainActor

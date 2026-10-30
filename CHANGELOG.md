@@ -3,6 +3,19 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.2-beta.1] - 2026-10-30
+
+### Fixed
+
+- Project the Activity scrollbar thumb origin into overlapping native-knob and track
+  intervals only for finite usable geometry, preserving width and length. Outside that
+  domain, geometry remains unchanged and unqualified.
+- Retain the corrected held-entry origin and original proportional motion reference,
+  with full-rectangle continuity regression coverage and held-state cleanup on release.
+
+Source-only candidate. Compiler checks, tests, native tracking, real-event behavior and
+pixel behavior remain unverified.
+
 ## [1.7.1-beta.1] - 2026-10-29
 
 ### Fixed

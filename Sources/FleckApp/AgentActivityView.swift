@@ -47,6 +47,7 @@
     static let visualTrackInset: CGFloat = 3
 
     private var heldVisualKnobLength: CGFloat?
+    private var heldVisualKnobOrigin: (initial: CGFloat, proportional: CGFloat)?
     var knobColor = NSColor.secondaryLabelColor {
       didSet { needsDisplay = true }
     }
@@ -54,10 +55,14 @@
     override class var isCompatibleWithOverlayScrollers: Bool { true }
 
     var visualKnobRect: NSRect {
+      visualKnobGeometry.rect
+    }
+
+    private var visualKnobGeometry: (rect: NSRect, proportionalY: CGFloat) {
       let width = min(Self.visualKnobWidth, bounds.width)
       let trackInset = min(Self.visualTrackInset, bounds.height / 2)
       let track = bounds.insetBy(dx: 0, dy: trackInset)
-      guard width > 0, track.height > 0 else { return .zero }
+      guard width > 0, track.height > 0 else { return (.zero, 0) }
 
       let proportion = min(max(knobProportion, 0), 1)
       let naturalLength = track.height * proportion
@@ -67,15 +72,45 @@
       )
       let position = min(max(CGFloat(doubleValue), 0), 1)
       let travel = track.height - length
-      let y = isFlipped
+      let proportionalY = isFlipped
         ? track.minY + travel * position
         : track.maxY - length - travel * position
       let trailingInset = min(Self.visualTrailingInset, bounds.width - width)
-      return NSRect(
-        x: bounds.maxX - trailingInset - width,
-        y: y,
-        width: width,
-        height: length
+      let x = bounds.maxX - trailingInset - width
+      var y = proportionalY
+
+      if let heldOrigin = heldVisualKnobOrigin {
+        let translatedY = proportionalY == heldOrigin.proportional
+          ? heldOrigin.initial
+          : heldOrigin.initial + (proportionalY - heldOrigin.proportional)
+        let maximumY = track.maxY - length
+        if translatedY.isFinite, track.minY.isFinite, maximumY.isFinite {
+          y = min(max(translatedY, track.minY), maximumY)
+        }
+      } else if heldVisualKnobLength == nil {
+        let native = rect(for: .knob)
+        let minimumY = max(native.minY, track.minY)
+        let maximumY = min(native.maxY - length, track.maxY - length)
+        let finiteGeometry = [
+          bounds.minX, bounds.minY, bounds.maxX, bounds.maxY, bounds.width, bounds.height,
+          track.minY, track.maxY, width, length, knobProportion, CGFloat(doubleValue),
+          x, x + width, proportionalY, native.minX, native.minY, native.maxX, native.maxY,
+          native.width, native.height, minimumY, maximumY,
+        ].allSatisfy { $0.isFinite }
+        if finiteGeometry, bounds.width > 0, bounds.height > 0,
+          native.width > 0, native.height >= length,
+          native.minX <= x, x + width <= native.maxX, minimumY <= maximumY
+        {
+          let projectedY = min(max(proportionalY, minimumY), maximumY)
+          if projectedY != proportionalY {
+            y = projectedY
+          }
+        }
+      }
+
+      return (
+        NSRect(x: x, y: y, width: width, height: length),
+        proportionalY
       )
     }
 
@@ -98,12 +133,26 @@
         return
       }
 
-      heldVisualKnobLength = visualKnobRect.height
+      withHeldVisualKnobGeometry {
+        super.mouseDown(with: event)
+      }
+    }
+
+    func withHeldVisualKnobGeometry(_ body: () -> Void) {
+      let initial = visualKnobGeometry
+      heldVisualKnobLength = initial.rect.height
+      heldVisualKnobOrigin = nil
+      if initial.rect.minY.isFinite, initial.proportionalY.isFinite,
+        initial.rect.minY != initial.proportionalY
+      {
+        heldVisualKnobOrigin = (initial.rect.minY, initial.proportionalY)
+      }
       defer {
         heldVisualKnobLength = nil
+        heldVisualKnobOrigin = nil
         needsDisplay = true
       }
-      super.mouseDown(with: event)
+      body()
     }
   }
 
