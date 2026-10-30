@@ -1,5 +1,6 @@
 #if os(macOS)
   import AppKit
+  import Combine
 
   @MainActor
   final class StatusItemContextMenuController: NSObject {
@@ -20,6 +21,10 @@
     private var showNotesAction: (@MainActor () -> Void)?
     private var openSettingsAction: (@MainActor () -> Void)?
     private var openAboutAction: (@MainActor () -> Void)?
+    private weak var updateController: AppUpdateController?
+    private var updateObservation: AnyCancellable?
+    private var updateMenuItem: NSMenuItem?
+    private var updateExplanationItem: NSMenuItem?
     private(set) lazy var contextMenu: NSMenu = {
       let menu = NSMenu()
       menu.autoenablesItems = false
@@ -57,6 +62,7 @@
       updateItem.isEnabled = false
       updateItem.toolTip = Self.updateUnavailableExplanation
       menu.addItem(updateItem)
+      updateMenuItem = updateItem
 
       let updateExplanationItem = NSMenuItem(
         title: Self.updateUnavailableExplanation,
@@ -65,6 +71,7 @@
       )
       updateExplanationItem.isEnabled = false
       menu.addItem(updateExplanationItem)
+      self.updateExplanationItem = updateExplanationItem
 
       menu.addItem(.separator())
 
@@ -124,6 +131,38 @@
       contextMenu.item(withTitle: "About Fleck")?.isEnabled = true
     }
 
+    func bindUpdateController(_ controller: AppUpdateController) {
+      updateObservation = nil
+      updateController = controller
+      refreshUpdateItems()
+      updateObservation = controller.$state.sink { [weak self] _ in
+        Task { @MainActor [weak self] in
+          self?.refreshUpdateItems()
+        }
+      }
+    }
+
+    private func refreshUpdateItems() {
+      _ = contextMenu
+      guard let updateController else {
+        updateMenuItem?.isEnabled = false
+        updateMenuItem?.action = nil
+        updateMenuItem?.toolTip = Self.updateUnavailableExplanation
+        updateExplanationItem?.title = Self.updateUnavailableExplanation
+        return
+      }
+      updateMenuItem?.isEnabled = updateController.canCheckForUpdates
+      updateMenuItem?.action = updateController.canCheckForUpdates
+        ? #selector(checkForUpdateInformation(_:)) : nil
+      updateMenuItem?.target = self
+      updateMenuItem?.toolTip = updateController.statusText
+      if case .newVersionAvailable = updateController.state {
+        updateExplanationItem?.title = "A newer release is listed; installation is unavailable."
+      } else {
+        updateExplanationItem?.title = updateController.statusText
+      }
+    }
+
     private func handle(_ event: NSEvent) -> NSEvent? {
       guard
         Self.handles(
@@ -135,6 +174,7 @@
         return event
       }
 
+      refreshUpdateItems()
       NSMenu.popUpContextMenu(contextMenu, with: event, for: view)
       return nil
     }
@@ -161,6 +201,11 @@
 
     @objc private func openAbout(_ sender: Any?) {
       openAboutAction?()
+    }
+
+    @objc private func checkForUpdateInformation(_ sender: Any?) {
+      updateController?.checkForUpdates()
+      refreshUpdateItems()
     }
 
     @objc private func quitApplication(_ sender: Any?) {

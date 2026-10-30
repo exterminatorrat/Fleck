@@ -8,6 +8,8 @@ let infoPlistPath = packageRoot
     .appendingPathComponent("Sources/FleckApp/Info.plist").path
 let enhancedCandidateEnabled =
     ProcessInfo.processInfo.environment["FLECK_ENHANCED_CANDIDATE"] == "1"
+let sparkleEnabled =
+    ProcessInfo.processInfo.environment["FLECK_BUILD_WITHOUT_SPARKLE"] != "1"
 
 var packageDependencies: [Package.Dependency] = [
     .package(
@@ -29,6 +31,13 @@ var appResources: [Resource] = []
 var coreSwiftSettings: [SwiftSetting] = []
 var appSwiftSettings: [SwiftSetting] = []
 var appTestSwiftSettings: [SwiftSetting] = []
+
+if sparkleEnabled {
+    packageDependencies.append(
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0")
+    )
+    appDependencies.append(.product(name: "Sparkle", package: "sparkle"))
+}
 
 if enhancedCandidateEnabled {
     packageDependencies.append(

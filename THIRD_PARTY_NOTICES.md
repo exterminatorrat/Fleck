@@ -50,6 +50,26 @@ license/notice set or the exact dependency licenses into the app bundle.
 Binary distribution therefore remains blocked until packaging and link-graph
 verification are completed.
 
+## Trusted information-check source dependency
+
+The Fleck application target declares [Sparkle 2.10.0](https://github.com/sparkle-project/Sparkle/tree/2.10.0)
+for authenticated update information checks only. Framework embedding and the
+final binary link graph are not yet qualified. The official package declares
+binary artifact checksum
+`17e28312b8e18ab7cdbbe09a6fb28cc55a5479ec6c371dbc07cdecd2a14fd959`.
+
+Sparkle is not MPL-covered. Its complete upstream license, including external
+component notices for bsdiff, sais-lite, Ed25519 and SUSignatureVerifier, is
+preserved in [Sparkle-2.10.0-LICENSE.txt](docs/licenses/Sparkle-2.10.0-LICENSE.txt),
+SHA-256 `389a4e4e9a32f059775b13a06e25a591445ba229d2838d26dd3e7c0c45127cfe`.
+Preserve these notices and the framework's distributed license material when
+future authorized packaging actually embeds the dependency. Source declaration
+is not evidence that it is already present in a qualified app.
+
+`FLECK_BUILD_WITHOUT_SPARKLE=1` omits this dependency for isolated offline
+compiler validation only. It excludes the real adapter and Sparkle API from
+that validation and is not evidence of updater delivery or framework embedding.
+
 ## Enhanced candidate and Gemma helper graph
 
 The enhanced route is compile-gated and is not an ordinary shipping feature.

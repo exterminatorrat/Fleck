@@ -438,6 +438,15 @@
     case deferred
   }
 
+  struct MenuPanelResizeInteractionIdentity: Equatable {
+    let ownerID: UUID
+    let revision: Int
+
+    var successor: Self {
+      Self(ownerID: ownerID, revision: revision &+ 1)
+    }
+  }
+
   enum MenuPanelResizePointerInput {
     static func canonicalPoint(from representation: CGEvent?) -> CGPoint? {
       validated(representation?.unflippedLocation)
@@ -459,6 +468,9 @@
     private var handle: MenuPanelResizeHandle?
     private var proposal: MenuPanelResizeProposal?
     private var lastPointer: CGPoint?
+    private var interactionRevision = 0
+    private var isPublishingContentSize = false
+    private var needsContentSizePublication = false
     private var presentationOwnerID: UUID?
     private var relinquishPresentation: (@MainActor () -> Void)?
     private(set) var currentFixedSide: MenuPanelFixedSide?
@@ -491,15 +503,17 @@
           statusLabelFrame: snapshot.statusLabelFrame
         )
       else { return false }
+      interactionRevision &+= 1
+      let revision = interactionRevision
       self.snapshot = snapshot
       self.handle = handle
       proposal = nil
       lastPointer = snapshot.initialPointer
       currentFixedSide = snapshot.fixedSide
       completedPreferenceSize = nil
-      setDesiredContentSize(snapshot.initialContentSize, publication: .immediate)
       isTracking = true
-      return true
+      setDesiredContentSize(snapshot.initialContentSize, publication: .immediate)
+      return presentationOwnerID == ownerID && isTracking && interactionRevision == revision
     }
 
     @discardableResult
@@ -510,21 +524,30 @@
       ownerID: UUID? = nil,
       canonicalize: (MenuPanelResizeProposal) -> MenuPanelResizeProposal? = { $0 }
     ) -> MenuPanelResizeProposal? {
-      guard presentationOwnerID == ownerID,
+      guard presentationOwnerID == ownerID, isTracking,
         let snapshot, let handle, let currentFixedSide,
         statusLabelFrame == snapshot.statusLabelFrame,
         visibleFrame == snapshot.visibleFrame
       else { return nil }
+      let revision = interactionRevision
       guard let proposed = MenuPanelResizeGeometry.proposal(
         snapshot: snapshot,
         pointer: pointer,
         handle: handle,
         currentSide: currentFixedSide
       ), let proposal = canonicalize(proposed) else { return nil }
+      guard presentationOwnerID == ownerID, isTracking,
+        interactionRevision == revision
+      else { return nil }
+      interactionRevision &+= 1
+      let publishedRevision = interactionRevision
       self.proposal = proposal
       lastPointer = pointer
       self.currentFixedSide = proposal.fixedSide
       setDesiredContentSize(proposal.contentSize, publication: .immediate)
+      guard presentationOwnerID == ownerID, isTracking,
+        interactionRevision == publishedRevision
+      else { return nil }
       return proposal
     }
 
@@ -568,6 +591,7 @@
       ownerID: UUID? = nil,
       canonicalize: (MenuPanelResizeProposal) -> MenuPanelResizeProposal? = { $0 }
     ) -> MenuPanelResizeProposal? {
+      let revision = interactionRevision
       guard presentationOwnerID == ownerID,
         isTracking, let snapshot, let handle, let proposal, let lastPointer,
         let currentFixedSide,
@@ -581,12 +605,20 @@
           currentSide: currentFixedSide
         ).flatMap(canonicalize)
       else { return nil }
+      guard presentationOwnerID == ownerID, isTracking,
+        interactionRevision == revision
+      else { return nil }
+      interactionRevision &+= 1
+      let completedRevision = interactionRevision
       isTracking = false
       self.handle = nil
       self.proposal = finalProposal
       self.currentFixedSide = finalProposal.fixedSide
       completedPreferenceSize = finalProposal.contentSize
       setDesiredContentSize(finalProposal.contentSize, publication: .immediate)
+      guard presentationOwnerID == ownerID, !isTracking,
+        interactionRevision == completedRevision
+      else { return nil }
       return finalProposal
     }
 
@@ -602,6 +634,7 @@
     ) -> MenuPanelResizeSnapshot? {
       guard presentationOwnerID == ownerID, isTracking else { return nil }
       let snapshot = snapshot
+      interactionRevision &+= 1
       isTracking = false
       self.snapshot = nil
       handle = nil
@@ -634,10 +667,10 @@
       let previousRelinquish = relinquishPresentation
       relinquishPresentation = nil
       previousRelinquish?()
-      clearInteractionState(publication: publication)
       presentationOwnerID = ownerID
       relinquishPresentation = onRelinquish
-      return true
+      clearInteractionState(publication: publication)
+      return presentationOwnerID == ownerID
     }
 
     @discardableResult
@@ -659,13 +692,19 @@
       let relinquish = relinquishPresentation
       relinquishPresentation = nil
       relinquish?()
-      clearInteractionState(publication: publication)
+      guard presentationOwnerID == ownerID else { return false }
       presentationOwnerID = nil
-      return true
+      clearInteractionState(publication: publication)
+      return presentationOwnerID == nil
     }
 
     func isPresentationOwner(_ ownerID: UUID) -> Bool {
       presentationOwnerID == ownerID
+    }
+
+    func interactionIdentity(ownerID: UUID) -> MenuPanelResizeInteractionIdentity? {
+      guard presentationOwnerID == ownerID else { return nil }
+      return MenuPanelResizeInteractionIdentity(ownerID: ownerID, revision: interactionRevision)
     }
 
     func presentationContentSize(ownerID: UUID) -> CGSize? {
@@ -680,15 +719,20 @@
       publication: MenuPanelResizePublicationTiming = .immediate
     ) -> Bool {
       guard presentationOwnerID == ownerID else { return false }
+      if (isTracking || completedPreferenceSize != nil), desiredEffectiveContentSize != size {
+        interactionRevision &+= 1
+      }
+      let revision = interactionRevision
       setDesiredContentSize(size, publication: publication)
-      return true
+      return presentationOwnerID == ownerID && interactionRevision == revision
     }
 
     @discardableResult
     func publishPresentationContentSize(ownerID: UUID? = nil) -> Bool {
       guard presentationOwnerID == ownerID else { return false }
+      let revision = interactionRevision
       publishDesiredContentSize()
-      return true
+      return presentationOwnerID == ownerID && interactionRevision == revision
     }
 
     @discardableResult
@@ -697,6 +741,7 @@
         !isTracking, completedPreferenceSize != nil
       else { return nil }
       let snapshot = snapshot
+      interactionRevision &+= 1
       self.snapshot = nil
       proposal = nil
       lastPointer = nil
@@ -711,7 +756,9 @@
       preferredSize: CGSize? = nil,
       ownerID: UUID? = nil
     ) -> Bool {
-      guard presentationOwnerID == ownerID else { return false }
+      guard presentationOwnerID == ownerID, !isTracking else { return false }
+      interactionRevision &+= 1
+      let revision = interactionRevision
       snapshot = nil
       proposal = nil
       lastPointer = nil
@@ -724,10 +771,11 @@
           publication: .immediate
         )
       }
-      return true
+      return presentationOwnerID == ownerID && interactionRevision == revision
     }
 
     private func clearInteractionState(publication: MenuPanelResizePublicationTiming) {
+      interactionRevision &+= 1
       isTracking = false
       snapshot = nil
       handle = nil
@@ -743,13 +791,26 @@
       publication: MenuPanelResizePublicationTiming
     ) {
       desiredEffectiveContentSize = size
-      if publication == .immediate { publishDesiredContentSize() }
+      if publication == .immediate {
+        publishDesiredContentSize()
+      } else {
+        needsContentSizePublication = false
+      }
     }
 
     private func publishDesiredContentSize() {
-      if effectiveContentSize != desiredEffectiveContentSize {
-        effectiveContentSize = desiredEffectiveContentSize
+      guard !isPublishingContentSize else {
+        needsContentSizePublication = true
+        return
       }
+      isPublishingContentSize = true
+      defer { isPublishingContentSize = false }
+      repeat {
+        needsContentSizePublication = false
+        if effectiveContentSize != desiredEffectiveContentSize {
+          effectiveContentSize = desiredEffectiveContentSize
+        }
+      } while needsContentSizePublication
     }
   }
 
@@ -1441,28 +1502,40 @@
       return true
     }
 
+    private func isCurrentInteraction(
+      _ identity: MenuPanelResizeInteractionIdentity,
+      in window: NSWindow
+    ) -> Bool {
+      attachmentID == identity.ownerID && installedWindow === window && self.window === window
+        && controller.interactionIdentity(ownerID: identity.ownerID) == identity
+    }
+
     private func update(pointer: CGPoint, in window: NSWindow) {
       guard let attachmentID,
-        let statusLabelFrame = activeStatusButtonFrame(),
+        let interaction = controller.interactionIdentity(ownerID: attachmentID)
+      else { return }
+      guard let statusLabelFrame = activeStatusButtonFrame(),
         let screen = window.screen,
-        let proposal = controller.update(
-        pointer: pointer,
-        statusLabelFrame: statusLabelFrame,
-        visibleFrame: screen.visibleFrame,
-        ownerID: attachmentID,
-        canonicalize: {
-          self.backingAlignedProposal(
-            $0,
-            in: window,
-            on: screen,
-            statusLabelFrame: statusLabelFrame
-          )
-        }
-      ) else {
-        cancelAndRestore(in: window)
+        controller.update(
+          pointer: pointer,
+          statusLabelFrame: statusLabelFrame,
+          visibleFrame: screen.visibleFrame,
+          ownerID: attachmentID,
+          canonicalize: {
+            self.applyNativeProposal(
+              $0,
+              in: window,
+              on: screen,
+              statusLabelFrame: statusLabelFrame,
+              displayImmediately: false
+            )
+          }
+        ) != nil
+      else {
+        cancelAndRestore(in: window, expectedInteraction: interaction)
         return
       }
-      applyFrame(proposal.frame, to: window, displayImmediately: false)
+      guard isCurrentInteraction(interaction.successor, in: window) else { return }
       if let handle = controller.currentHandle,
         let fixedSide = controller.currentFixedSide
       {
@@ -1471,37 +1544,40 @@
     }
 
     private func finish(pointer: CGPoint, in window: NSWindow) {
-      let endingStatusButton = geometryStore?.resolveStatusButton()
       guard let attachmentID,
-        endingStatusButton?.sourceIdentity == activeStatusButtonSource,
+        let interaction = controller.interactionIdentity(ownerID: attachmentID)
+      else { return }
+      let endingStatusButton = geometryStore?.resolveStatusButton()
+      guard endingStatusButton?.sourceIdentity == activeStatusButtonSource,
         let statusLabelFrame = endingStatusButton?.screenFrame,
         let screen = window.screen,
-        let transient = controller.update(
+        controller.update(
           pointer: pointer,
           statusLabelFrame: statusLabelFrame,
           visibleFrame: screen.visibleFrame,
           ownerID: attachmentID,
           canonicalize: {
-            self.backingAlignedProposal(
+            self.applyNativeProposal(
               $0,
               in: window,
               on: screen,
               statusLabelFrame: statusLabelFrame
             )
           }
-        )
+        ) != nil
       else {
-        cancelAndRestore(in: window)
+        cancelAndRestore(in: window, expectedInteraction: interaction)
         return
       }
-      applyFrame(transient.frame, to: window)
+      let updatedInteraction = interaction.successor
+      guard isCurrentInteraction(updatedInteraction, in: window) else { return }
       guard let final = controller.finish(
         statusLabelFrame: statusLabelFrame,
         visibleFrame: screen.visibleFrame,
         currentFrame: window.frame,
         ownerID: attachmentID,
         canonicalize: {
-          self.backingAlignedProposal(
+          self.applyNativeProposal(
             $0,
             in: window,
             on: screen,
@@ -1509,25 +1585,29 @@
           )
         }
       ) else {
-        cancelAndRestore(in: window)
+        cancelAndRestore(in: window, expectedInteraction: updatedInteraction)
         return
       }
-      let adoptedFrame = applyFrame(final.frame, to: window)
-      let adoptedContentSize = window.contentRect(forFrameRect: window.frame).size
+      let completedInteraction = updatedInteraction.successor
+      guard isCurrentInteraction(completedInteraction, in: window) else { return }
       let adoptedEffectiveSize = controller.setPresentationContentSize(
         final.contentSize,
         ownerID: attachmentID
       )
-      guard adoptedFrame, adoptedContentSize == final.contentSize,
+      guard isCurrentInteraction(completedInteraction, in: window),
+        window.isVisible, isLiveResizeEligible(in: window),
+        activeStatusButtonFrame() == statusLabelFrame,
+        window.frame == final.frame,
+        window.contentRect(forFrameRect: window.frame).size == final.contentSize,
         adoptedEffectiveSize,
-        controller.presentationContentSize(ownerID: attachmentID) == final.contentSize
+        controller.presentationContentSize(ownerID: attachmentID) == final.contentSize,
+        isCurrentInteraction(completedInteraction, in: window)
       else {
-        let snapshot = controller.cancelCompletion(ownerID: attachmentID)
-        activeStatusButtonSource = nil
-        if let snapshot {
-          restore(snapshot: snapshot, in: window, ownerID: attachmentID)
-        }
-        resetCursor()
+        cancelAndRestore(
+          in: window,
+          expectedInteraction: completedInteraction,
+          completion: true
+        )
         return
       }
       geometryStore?.rememberCompletedSide(final.fixedSide)
@@ -1538,7 +1618,10 @@
       alignedFixedSide = final.fixedSide
       alignedFrame = final.frame
       onCommit(final.contentSize)
-      _ = controller.clearCompletion(preferredSize: preferredSize, ownerID: attachmentID)
+      guard isCurrentInteraction(completedInteraction, in: window),
+        controller.clearCompletion(preferredSize: preferredSize, ownerID: attachmentID),
+        isCurrentInteraction(completedInteraction.successor, in: window)
+      else { return }
       invalidateQueuedWork()
       scheduleReconcile()
       updateCursor(at: window.convertPoint(fromScreen: pointer), in: window)
@@ -1546,22 +1629,30 @@
 
     private func cancelAndRestore(
       in window: NSWindow,
-      publication: MenuPanelResizePublicationTiming = .immediate
+      publication: MenuPanelResizePublicationTiming = .immediate,
+      expectedInteraction: MenuPanelResizeInteractionIdentity? = nil,
+      completion: Bool = false
     ) {
-      guard let attachmentID, controller.isPresentationOwner(attachmentID) else { return }
-      let snapshot = controller.cancelSnapshot(
-        ownerID: attachmentID,
-        publication: publication
-      )
-      activeStatusButtonSource = nil
+      guard let attachmentID,
+        let interaction = expectedInteraction ?? controller.interactionIdentity(ownerID: attachmentID),
+        isCurrentInteraction(interaction, in: window)
+      else { return }
+      let snapshot = completion
+        ? controller.cancelCompletion(ownerID: interaction.ownerID)
+        : controller.cancelSnapshot(ownerID: interaction.ownerID, publication: publication)
+      let rollbackInteraction = snapshot == nil ? interaction : interaction.successor
+      guard isCurrentInteraction(rollbackInteraction, in: window) else { return }
       if let snapshot {
         restore(
           snapshot: snapshot,
           in: window,
-          ownerID: attachmentID,
-          publication: publication
+          ownerID: interaction.ownerID,
+          publication: publication,
+          expectedInteraction: rollbackInteraction
         )
       }
+      guard isCurrentInteraction(rollbackInteraction, in: window) else { return }
+      activeStatusButtonSource = nil
       resetCursor()
     }
 
@@ -1838,8 +1929,10 @@
       snapshot: MenuPanelResizeSnapshot,
       in window: NSWindow,
       ownerID: UUID,
-      publication: MenuPanelResizePublicationTiming = .immediate
+      publication: MenuPanelResizePublicationTiming = .immediate,
+      expectedInteraction: MenuPanelResizeInteractionIdentity? = nil
     ) {
+      guard expectedInteraction.map({ isCurrentInteraction($0, in: window) }) ?? true else { return }
       if let statusButton = geometryStore?.resolveStatusButton(),
         let screen = window.screen,
         let insets = frameInsets(for: window),
@@ -1850,15 +1943,17 @@
           visibleFrame: screen.visibleFrame,
           statusLabelFrame: statusButton.screenFrame,
           preferredSide: snapshot.fixedSide
-        )
+      )
       {
+        guard expectedInteraction.map({ isCurrentInteraction($0, in: window) }) ?? true else { return }
         applyFrame(placement.frame, to: window)
       } else {
         applyOwnedContainedFallback(
           frame: snapshot.initialFrame,
           to: window,
           ownerID: ownerID,
-          publication: publication
+          publication: publication,
+          expectedInteraction: expectedInteraction
         )
       }
     }
@@ -1907,9 +2002,11 @@
       frame: CGRect,
       to window: NSWindow,
       ownerID: UUID,
-      publication: MenuPanelResizePublicationTiming
+      publication: MenuPanelResizePublicationTiming,
+      expectedInteraction: MenuPanelResizeInteractionIdentity? = nil
     ) -> Bool {
       guard controller.isPresentationOwner(ownerID),
+        expectedInteraction.map({ isCurrentInteraction($0, in: window) }) ?? true,
         let visibleFrame = fallbackVisibleFrameProvider(window),
         let containedFrame = MenuPanelResizeGeometry.containedFrame(
           frame: frame,
@@ -1920,8 +2017,10 @@
       let contentSize = window.contentRect(forFrameRect: containedFrame).size
       guard contentSize.width.isFinite, contentSize.height.isFinite,
         contentSize.width > 0, contentSize.height > 0,
+        expectedInteraction.map({ isCurrentInteraction($0, in: window) }) ?? true,
         applyFrame(containedFrame, to: window),
-        controller.isPresentationOwner(ownerID)
+        controller.isPresentationOwner(ownerID),
+        expectedInteraction.map({ isCurrentInteraction($0, in: window) }) ?? true
       else { return false }
       clearAlignment()
       presentationTop = containedFrame.maxY
@@ -1962,12 +2061,15 @@
       return insets
     }
 
-    private func backingAlignedProposal(
+    private func applyNativeProposal(
       _ proposal: MenuPanelResizeProposal,
       in window: NSWindow,
       on screen: NSScreen,
-      statusLabelFrame: CGRect
+      statusLabelFrame: CGRect,
+      displayImmediately: Bool = true
     ) -> MenuPanelResizeProposal? {
+      guard ownsTracking, let handle = controller.currentHandle else { return nil }
+      let visibleFrame = screen.visibleFrame
       let frame = screen.backingAlignedRect(proposal.frame, options: .alignAllEdgesOutward)
       let contentSize = window.contentRect(forFrameRect: frame).size
       let isLegalPreference = contentSize.width >= MenuPanelResizeGeometry.minimumContentSize.width
@@ -1978,18 +2080,46 @@
       }
       guard frame.maxY == proposal.frame.maxY,
         hasFixedEdge,
+        handle.changesWidth || frame.width == proposal.frame.width,
+        handle.changesHeight || frame.height == proposal.frame.height,
         MenuPanelResizeGeometry.containedFrame(
           frame: frame,
-          visibleFrame: screen.visibleFrame
+          visibleFrame: visibleFrame
         ) == frame,
         contentSize.width.isFinite, contentSize.height.isFinite,
         contentSize.width > 0, contentSize.height > 0,
         !proposal.isLegalPreference || isLegalPreference
       else { return nil }
+      applyFrame(frame, to: window, displayImmediately: displayImmediately)
+      let nativeFrame = window.frame
+      let nativeContentSize = window.contentRect(forFrameRect: nativeFrame).size
+      let nativeHasFixedEdge = switch proposal.fixedSide {
+      case .left: nativeFrame.minX == statusLabelFrame.minX
+      case .right: nativeFrame.maxX == statusLabelFrame.maxX
+      }
+      let nativeIsLegalPreference =
+        nativeContentSize.width >= MenuPanelResizeGeometry.minimumContentSize.width
+        && nativeContentSize.height >= MenuPanelResizeGeometry.minimumContentSize.height
+      guard ownsTracking, installedWindow === window, self.window === window,
+        window.isVisible, isLiveResizeEligible(in: window),
+        activeStatusButtonFrame() == statusLabelFrame,
+        window.screen === screen, screen.visibleFrame == visibleFrame,
+        nativeFrame == frame || nativeFrame == frame.integral,
+        nativeFrame.maxY == frame.maxY, nativeHasFixedEdge,
+        handle.changesWidth || nativeFrame.width == proposal.frame.width,
+        handle.changesHeight || nativeFrame.height == proposal.frame.height,
+        MenuPanelResizeGeometry.containedFrame(
+          frame: nativeFrame,
+          visibleFrame: visibleFrame
+        ) == nativeFrame,
+        nativeContentSize.width.isFinite, nativeContentSize.height.isFinite,
+        nativeContentSize.width > 0, nativeContentSize.height > 0,
+        !proposal.isLegalPreference || nativeIsLegalPreference
+      else { return nil }
       return MenuPanelResizeProposal(
-        contentSize: contentSize,
-        frame: frame,
-        isLegalPreference: isLegalPreference,
+        contentSize: nativeContentSize,
+        frame: nativeFrame,
+        isLegalPreference: nativeIsLegalPreference,
         fixedSide: proposal.fixedSide
       )
     }
