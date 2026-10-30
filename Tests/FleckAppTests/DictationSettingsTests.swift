@@ -1303,8 +1303,32 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
     #expect(fixture.monitor.requestCount == 1)
     #expect(openedSettings.map(\.pane) == [.microphone, .speechRecognition, .inputMonitoring])
 
+    print(
+      "[F93-readiness-escape:before] active=\(application.isActive)"
+        + " keyOriginal=\(application.keyWindow === window)"
+        + " keyPopover=\(application.keyWindow === popoverWindow)"
+        + " keyNil=\(application.keyWindow == nil)"
+        + " parentOriginal=\(application.keyWindow?.parent === window)"
+        + " originalKey=\(window.isKeyWindow) originalVisible=\(window.isVisible)"
+        + " popoverKey=\(popoverWindow.isKeyWindow) popoverVisible=\(popoverWindow.isVisible)"
+        + " hostOriginal=\(host.window === window)"
+        + " triggerOriginal=\(readinessAnchor.window === window)"
+        + " popoverContentOwned=\(popover.window === popoverWindow)"
+    )
     try sendSettingsKey(53, characters: "\u{1b}", ownedWindows: keyboardWindows)
     await settleSettingsHost(host)
+    print(
+      "[F93-readiness-escape:after] active=\(application.isActive)"
+        + " keyOriginal=\(application.keyWindow === window)"
+        + " keyPopover=\(application.keyWindow === popoverWindow)"
+        + " keyNil=\(application.keyWindow == nil)"
+        + " parentOriginal=\(application.keyWindow?.parent === window)"
+        + " originalKey=\(window.isKeyWindow) originalVisible=\(window.isVisible)"
+        + " popoverKey=\(popoverWindow.isKeyWindow) popoverVisible=\(popoverWindow.isVisible)"
+        + " hostOriginal=\(host.window === window)"
+        + " triggerOriginal=\(readinessAnchor.window === window)"
+        + " popoverContentOwned=\(popover.window === popoverWindow)"
+    )
     try #require(!popoverWindow.isVisible)
     try #require(application.keyWindow === window)
     #expect(
