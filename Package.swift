@@ -140,9 +140,13 @@ let package = Package(
             name: "FleckCaptureLab",
             dependencies: ["FleckCore"]
         ),
+        .target(
+            name: "FleckMCPFixtureSupport",
+            path: "Tests/FleckMCPFixtureSupport"
+        ),
         .testTarget(
             name: "FleckCoreTests",
-            dependencies: ["FleckCore"]
+            dependencies: ["FleckCore", "FleckMCPFixtureSupport"]
         ),
         .testTarget(
             name: "FleckAgentProtocolTests",
@@ -154,7 +158,7 @@ let package = Package(
         ),
         .testTarget(
             name: "FleckAppTests",
-            dependencies: ["FleckApp"],
+            dependencies: ["FleckApp", "FleckMCPFixtureSupport"],
             swiftSettings: appTestSwiftSettings
         ),
         .testTarget(

@@ -1286,6 +1286,7 @@ public struct AgentWorkspaceCommitProof: Codable, Equatable, Sendable {
   public let resultingRevision: UInt64
   public let bodySHA256: String
   public let actor: AgentActivityActor
+  public let originatingActor: AgentActivityActor?
   public let operationID: UUID
   public let expiresAt: Date
 
@@ -1295,6 +1296,7 @@ public struct AgentWorkspaceCommitProof: Codable, Equatable, Sendable {
     resultingRevision: UInt64,
     bodySHA256: String,
     actor: AgentActivityActor,
+    originatingActor: AgentActivityActor? = nil,
     operationID: UUID,
     expiresAt: Date
   ) {
@@ -1303,6 +1305,7 @@ public struct AgentWorkspaceCommitProof: Codable, Equatable, Sendable {
     self.resultingRevision = resultingRevision
     self.bodySHA256 = bodySHA256
     self.actor = actor
+    self.originatingActor = originatingActor
     self.operationID = operationID
     self.expiresAt = expiresAt
   }

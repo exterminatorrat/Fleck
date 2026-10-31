@@ -38,6 +38,7 @@ public struct LocalStoreSnapshot: Equatable, Sendable {
   public let source: LocalStoreSnapshotSource
   public let generation: UInt64
   public let folderMigrationWarnings: [LocalStoreFolderMigrationWarning]
+  public let agentEventJournal: AgentEventJournal?
 
   public init(
     workspace: Workspace,
@@ -45,7 +46,8 @@ public struct LocalStoreSnapshot: Equatable, Sendable {
     commitProofs: [AgentWorkspaceCommitProof],
     source: LocalStoreSnapshotSource,
     generation: UInt64 = 0,
-    folderMigrationWarnings: [LocalStoreFolderMigrationWarning] = []
+    folderMigrationWarnings: [LocalStoreFolderMigrationWarning] = [],
+    agentEventJournal: AgentEventJournal? = nil
   ) {
     self.workspace = workspace
     self.preferences = preferences
@@ -53,6 +55,7 @@ public struct LocalStoreSnapshot: Equatable, Sendable {
     self.source = source
     self.generation = generation
     self.folderMigrationWarnings = folderMigrationWarnings
+    self.agentEventJournal = agentEventJournal
   }
 }
 
@@ -65,13 +68,16 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
   struct Hooks: Sendable {
     var beforeManifestCommit: @Sendable (UInt64) throws -> Void
     var afterManifestCommit: @Sendable (UInt64) throws -> Void
+    var makeUUID: @Sendable () -> UUID
 
     init(
       beforeManifestCommit: @escaping @Sendable (UInt64) throws -> Void = { _ in },
-      afterManifestCommit: @escaping @Sendable (UInt64) throws -> Void = { _ in }
+      afterManifestCommit: @escaping @Sendable (UInt64) throws -> Void = { _ in },
+      makeUUID: @escaping @Sendable () -> UUID = { UUID() }
     ) {
       self.beforeManifestCommit = beforeManifestCommit
       self.afterManifestCommit = afterManifestCommit
+      self.makeUUID = makeUUID
     }
   }
 
@@ -87,6 +93,10 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
     var rtfSHA256: [String: String]?
     var preferencesSHA256: String?
     var agentCommitProofs: [AgentWorkspaceCommitProof]?
+    var agentEventJournal: AgentEventJournal?
+    var agentEventJournalSHA256: String?
+    var agentEventJournalWasPresent: Bool
+    var agentEventJournalSHA256WasPresent: Bool
     var dictationFilingLedger: DictationFilingLedger?
     var dictationFilingLedgerSHA256: String?
 
@@ -102,6 +112,8 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
       rtfSHA256: [String: String]?,
       preferencesSHA256: String?,
       agentCommitProofs: [AgentWorkspaceCommitProof]?,
+      agentEventJournal: AgentEventJournal,
+      agentEventJournalSHA256: String,
       dictationFilingLedger: DictationFilingLedger,
       dictationFilingLedgerSHA256: String
     ) {
@@ -116,6 +128,10 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
       self.rtfSHA256 = rtfSHA256
       self.preferencesSHA256 = preferencesSHA256
       self.agentCommitProofs = agentCommitProofs
+      self.agentEventJournal = agentEventJournal
+      self.agentEventJournalSHA256 = agentEventJournalSHA256
+      agentEventJournalWasPresent = true
+      agentEventJournalSHA256WasPresent = true
       self.dictationFilingLedger = dictationFilingLedger
       self.dictationFilingLedgerSHA256 = dictationFilingLedgerSHA256
     }
@@ -148,6 +164,16 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
         [AgentWorkspaceCommitProof].self,
         forKey: .agentCommitProofs
       )
+      agentEventJournalWasPresent = container.contains(.agentEventJournal)
+      agentEventJournalSHA256WasPresent = container.contains(.agentEventJournalSHA256)
+      agentEventJournal = try container.decodeIfPresent(
+        AgentEventJournal.self,
+        forKey: .agentEventJournal
+      )
+      agentEventJournalSHA256 = try container.decodeIfPresent(
+        String.self,
+        forKey: .agentEventJournalSHA256
+      )
       if container.contains(.dictationFilingLedger)
         || container.contains(.dictationFilingLedgerSHA256)
       {
@@ -172,6 +198,8 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
       case rtfSHA256
       case preferencesSHA256
       case agentCommitProofs
+      case agentEventJournal
+      case agentEventJournalSHA256
       case dictationFilingLedger
       case dictationFilingLedgerSHA256
     }
@@ -418,6 +446,52 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
         try createRecovery(from: validRoot)
       }
 
+      let priorCandidate = validRoot ?? validRecovery
+      var eventJournal: AgentEventJournal
+      let canCaptureChanges: Bool
+      if let validRoot {
+        eventJournal =
+          validRoot.manifest.agentEventJournal
+          ?? AgentEventJournal(epoch: hooks.makeUUID(), historyIncomplete: true)
+        canCaptureChanges = true
+      } else if let validRecovery {
+        eventJournal =
+          validRecovery.manifest.agentEventJournal
+          ?? AgentEventJournal(epoch: hooks.makeUUID(), historyIncomplete: true)
+        if validRecovery.manifest.agentEventJournal != nil {
+          eventJournal.markIncompleteAndRotate(to: hooks.makeUUID())
+        }
+        canCaptureChanges = true
+      } else {
+        let hasPriorManifest = [rootURL, recoveryURL].contains {
+          fileManager.fileExists(atPath: $0.appendingPathComponent("workspace.json").path)
+        }
+        eventJournal = AgentEventJournal(
+          epoch: hooks.makeUUID(),
+          historyIncomplete: hasPriorManifest
+        )
+        canCaptureChanges = !hasPriorManifest
+      }
+      let saveDate = now()
+      if canCaptureChanges {
+        let previousFolderIDs = Dictionary(
+          uniqueKeysWithValues: (priorCandidate?.manifest.metadata ?? [:]).compactMap {
+            noteID, metadata in
+            metadata.folderID.map { (noteID, $0) }
+          }
+        )
+        try eventJournal.captureChanges(
+          from: priorCandidate?.snapshot.workspace,
+          to: workspace,
+          previousFolderIDs: previousFolderIDs,
+          commitProof: commitProof,
+          occurredAt: saveDate,
+          makeUUID: hooks.makeUUID
+        )
+      }
+      try eventJournal.trim(now: saveDate)
+      let eventJournalSHA256 = sha256(try eventJournal.canonicalData())
+
       let preferencesData = try encoder().encode(preferences)
       let preferencesHash = sha256(preferencesData)
       let canReusePreferences = canReuse(
@@ -470,11 +544,7 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
         }
       }
 
-      var proofs =
-        (validRoot?.manifest.agentCommitProofs
-        ?? loadCandidate(in: recoveryURL, source: .recovery)?
-        .manifest.agentCommitProofs
-        ?? [])
+      var proofs = (priorCandidate?.manifest.agentCommitProofs ?? [])
         .filter { $0.expiresAt > now() }
       if let commitProof {
         proofs.removeAll { $0.changeID == commitProof.changeID }
@@ -526,6 +596,8 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
         rtfSHA256: rtfHashes,
         preferencesSHA256: manifestPreferencesHash,
         agentCommitProofs: proofs,
+        agentEventJournal: eventJournal,
+        agentEventJournalSHA256: eventJournalSHA256,
         dictationFilingLedger: workspace.dictationFilingLedger,
         dictationFilingLedgerSHA256: sha256(
           try workspace.dictationFilingLedger.canonicalData()
@@ -696,6 +768,22 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
     {
       return nil
     }
+    guard
+      manifest.agentEventJournalWasPresent
+        == manifest.agentEventJournalSHA256WasPresent
+    else {
+      return nil
+    }
+    if manifest.agentEventJournalWasPresent {
+      guard
+        let journal = manifest.agentEventJournal,
+        let expectedHash = manifest.agentEventJournalSHA256,
+        let journalData = try? journal.canonicalData(),
+        sha256(journalData) == expectedHash
+      else {
+        return nil
+      }
+    }
 
     let preferencesURL = directory.appendingPathComponent("preferences.json")
     let preferencesData = try? Data(contentsOf: preferencesURL)
@@ -827,7 +915,8 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
           .filter { $0.expiresAt > now() },
         source: source,
         generation: manifest.snapshotGeneration ?? 0,
-        folderMigrationWarnings: folderMigrationWarnings
+        folderMigrationWarnings: folderMigrationWarnings,
+        agentEventJournal: manifest.agentEventJournal
       ),
       manifest: manifest,
       directory: directory

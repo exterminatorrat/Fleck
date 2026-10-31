@@ -326,7 +326,8 @@
         profileID: baseline.profileID,
         grantRevision: expectedGrantRevision + 1,
         allowedCapabilities: allowedCapabilities,
-        grants: grants
+        grants: grants,
+        allowsEventObservation: baseline.allowsEventObservation
       )
     }
 
@@ -371,7 +372,8 @@
         profileID: baseline.profileID,
         grantRevision: baseline.grantRevision + 1,
         allowedCapabilities: baseline.allowedCapabilities,
-        grants: grants
+        grants: grants,
+        allowsEventObservation: baseline.allowsEventObservation
       )
     }
 

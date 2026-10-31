@@ -6,6 +6,105 @@ import Testing
 
 @Suite(.serialized)
 struct AgentCapabilityStoreTests {
+  @Test(arguments: [false, true])
+  func InterruptedPrivacyPolicyWriteFailsClosed(hasExistingPolicy: Bool) async throws {
+    let fixture = try CapabilityStoreFixture()
+    defer { fixture.remove() }
+    let profileID = UUID()
+    let oldDeniedID = UUID()
+    let newDeniedID = UUID()
+    _ = try await fixture.store.loadOrMigrate(
+      activeProfileIDs: [profileID],
+      workspace: Workspace()
+    )
+    let oldPolicy: AgentCapabilityPrivacyPolicy?
+    if hasExistingPolicy {
+      oldPolicy = try await fixture.store.replacePrivacyPolicy(
+        deniedNoteIDs: [oldDeniedID],
+        deniedFolderIDs: [],
+        expectedGeneration: nil
+      ).privacyPolicy
+    } else {
+      oldPolicy = nil
+    }
+    let currentBytes = try Data(contentsOf: fixture.capabilitiesURL)
+    let currentURL = fixture.capabilitiesURL
+    let interruptedStore = AgentCapabilityStore(
+      capabilitiesURL: currentURL,
+      previousCapabilitiesURL: fixture.previousCapabilitiesURL,
+      writeData: { data, url in
+        if url == currentURL { throw CapabilityStoreTestError.invalidDocument }
+        try data.write(to: url, options: .atomic)
+      }
+    )
+    await #expect(throws: AgentWorkspaceError(code: .internalSaveFailure)) {
+      _ = try await interruptedStore.replacePrivacyPolicy(
+        deniedNoteIDs: [newDeniedID],
+        deniedFolderIDs: [],
+        expectedGeneration: oldPolicy?.generation
+      )
+    }
+    #expect(try Data(contentsOf: currentURL) == currentBytes)
+    let backup = try #require(
+      JSONSerialization.jsonObject(
+        with: Data(contentsOf: fixture.previousCapabilitiesURL)
+      ) as? [String: Any]
+    )
+    let backupPolicy = try #require(backup["privacyPolicy"] as? [String: Any])
+    let backupDeniedIDs = try #require(backupPolicy["deniedNoteIDs"] as? [String])
+    #expect(Set(backupDeniedIDs) == Set(
+      (hasExistingPolicy ? [oldDeniedID, newDeniedID] : [newDeniedID]).map(\.uuidString)
+    ))
+    let reloaded = fixture.reloadedStore()
+    await #expect(throws: AgentWorkspaceError(code: .internalSaveFailure)) {
+      _ = try await reloaded.currentState()
+    }
+    let authority = AgentCapabilityAuthority(store: reloaded)
+    await #expect(throws: AgentWorkspaceError(code: .internalSaveFailure)) {
+      _ = try await authority.snapshot(profileID: profileID, workspace: Workspace())
+    }
+    #expect(try Data(contentsOf: currentURL) == currentBytes)
+  }
+
+  @Test func CompletedPrivacyPolicyWritesAndProfileCopiesRemainReadable() async throws {
+    let fixture = try CapabilityStoreFixture()
+    defer { fixture.remove() }
+    let profileID = UUID()
+    let noteID = UUID()
+    _ = try await fixture.store.loadOrMigrate(
+      activeProfileIDs: [profileID],
+      workspace: Workspace()
+    )
+    let first = try await fixture.store.replacePrivacyPolicy(
+      deniedNoteIDs: [noteID],
+      deniedFolderIDs: [],
+      expectedGeneration: nil
+    )
+    let firstPolicy = try #require(first.privacyPolicy)
+    let second = try await fixture.store.replacePrivacyPolicy(
+      deniedNoteIDs: [],
+      deniedFolderIDs: [],
+      expectedGeneration: firstPolicy.generation
+    )
+    #expect(second.privacyPolicy?.generation != firstPolicy.generation)
+    #expect(second.privacyPolicy?.deniedNoteIDs.isEmpty == true)
+    #expect(try await fixture.reloadedStore().currentState() == second)
+    let baseline = try #require(second.profiles[profileID])
+    let replacement = AgentProfileCapabilities(
+      profileID: profileID,
+      grantRevision: baseline.grantRevision + 1,
+      allowedCapabilities: baseline.allowedCapabilities,
+      grants: baseline.grants,
+      allowsEventObservation: baseline.allowsEventObservation
+    )
+    let copied = try await fixture.store.replaceProfile(
+      replacement,
+      expectedGrantRevision: baseline.grantRevision
+    )
+    #expect(try await fixture.reloadedStore().currentState() == copied)
+    #expect(copied.privacyPolicy == second.privacyPolicy)
+  }
+
   @Test func MigratesLegacySharesToEveryActiveProfile() async throws {
     let fixture = try CapabilityStoreFixture()
     defer { fixture.remove() }

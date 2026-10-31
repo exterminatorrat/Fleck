@@ -11,11 +11,16 @@ public release log. Packaging unchanged source does not add a changelog entry.
   request ownership, cancellation, output ordering and EOF settlement.
 - Add strict version-2 event contracts and wire compatibility checks. Subscription execution
   and callback delivery remain unavailable in this foundational layer.
+- Add the content-free event journal with snapshot integrity/history fencing, default-off
+  scoped observation authority, global privacy exclusions and pending subscription/key lifecycle
+  persistence. Event commands and callback delivery remain unavailable until the next layer.
 
 ### Fixed
 
 - Handle closed output pipes without SIGPIPE termination, forward legacy notification-only
   batches without responses, preserve cancellation ownership and reject unsupported replay age.
+- Fail closed on interrupted privacy-policy generations and pending-subscription lookups
+  behind the persisted trusted-clock watermark.
 
 This is one constituent of the shared 1.7.0-beta.1 retained-feature development cohort, not a
 separate release. Local compilation, tests and native behavior remain unrun; hosted checks are
