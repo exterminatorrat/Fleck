@@ -3,6 +3,16 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.35-beta.1] - 2026-11-01
+
+### Fixed
+
+- Allow panel-resize reentry when native geometry is already aligned while deferred reconciliation remains queued.
+
+Source repair candidate only; this guard remains uncompiled and native verification is unrun.
+Recovery of the predecessor's rollback/restart failures and direct nil/nonfinite event-adapter
+coverage remain unverified.
+
 ## [1.4.31-beta.1] - 2026-10-31
 
 ### Fixed
