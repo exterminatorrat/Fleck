@@ -1380,6 +1380,26 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
     let triggers = settingsAccessibilityElements(
       in: host, identifier: "settings-dictation-readiness-button"
     )
+    let focusedAXTarget: String = {
+      let focusSelector = NSSelectorFromString("accessibilityFocusedUIElement")
+      let windowSelector = NSSelectorFromString("accessibilityWindow")
+      let identifierSelector = NSSelectorFromString("accessibilityIdentifier")
+      guard window.responds(to: focusSelector),
+        let focused = window.perform(focusSelector)?.takeUnretainedValue() as? NSObject,
+        focused !== window,
+        focused.responds(to: windowSelector),
+        let focusedWindow = focused.perform(windowSelector)?.takeUnretainedValue() as? NSWindow,
+        focusedWindow === window,
+        focused.responds(to: identifierSelector),
+        let identifier = focused.perform(identifierSelector)?.takeUnretainedValue() as? String
+      else { return "unavailable" }
+      switch identifier {
+      case "settings-dictation-readiness-button": return "readiness-trigger"
+      case "settings-search-field": return "other"
+      default: return "unavailable"
+      }
+    }()
+    print("[F93-readiness-focused-ax] target=\(focusedAXTarget)")
     try #require(triggers.count == 1)
     let trigger = try #require(triggers.first)
     #expect(try accessibilityFlag(trigger, "accessibilityFocused"))
