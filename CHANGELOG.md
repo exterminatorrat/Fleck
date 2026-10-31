@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.33-beta.1] - 2026-10-31
+
+Development CI repair candidate only; this is not an accepted build or public release.
+
+### Fixed
+
+- Keep native resize geometry consistent for fractional pointer input while preventing stale
+  updates, rollback or commits from overwriting newer interactions.
+
 ## [1.4.29-beta.1] - 2026-10-31
 
 Development CI repair candidate only; this is not an accepted build or public release.
