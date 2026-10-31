@@ -3,6 +3,24 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.30-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed activity scrollbar geometry and tracking correction while preserving
+  the native Tab and bullet-caret editor checkpoint and its prior parent corrections.
+
+Source checkpoint only; combined compilation and native verification remain pending.
+
+## [1.4.27-beta.1] - 2026-10-31
+
+### Fixed
+
+- Keep the activity scrollbar's visual knob within native knob geometry at fractional positions.
+- Preserve the initial visual knob rectangle when native tracking begins and retain held-size behavior.
+
+Source checkpoint only; compilation and native verification remain pending.
+
 ## [1.4.23-beta.1] - 2026-10-31
 
 ### Fixed
