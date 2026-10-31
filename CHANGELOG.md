@@ -3,6 +3,18 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.21-beta.1] - 2026-10-31
+
+Private development candidate only; these corrections are not an accepted build or public release.
+
+### Fixed
+
+- Balance Settings traffic-light spacing against the measured native sidebar search and header.
+- Send native Backtab characters in the Models keyboard regression while preserving Full Keyboard
+  Access behavior.
+- Preserve folder-row focus through reorder hosting and associate the School regression fixture
+  with its accessibility owner instead of a fixed width.
+
 ## [1.4.7-beta.1] - 2026-10-08
 
 Private development candidate only; this correction is not an accepted build or public release.
