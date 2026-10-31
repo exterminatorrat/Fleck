@@ -360,6 +360,101 @@ private func nativeTabDragMaximumPixelComponentDelta(from source: NSImage, to re
   #expect(!tabStrip.contains("windowBackgroundColor"))
 }
 
+@Test func noteTabTitleFadeLeavesBadgesAndReorderHitAreaOutsideItsMask() throws {
+  let source = try tabNotesPanelSource()
+  let tabStrip = try #require(
+    source.components(separatedBy: "private var tabStrip").last?
+      .components(separatedBy: "private var motion").first
+  )
+  let titleLabelStart = try #require(source.range(of: "  private struct NoteTabTitleLabel"))
+  let titleLabelEnd = try #require(
+    source.range(of: "\n  enum FontSizeSubmission", range: titleLabelStart.upperBound..<source.endIndex)
+  )
+  let titleLabel = source[titleLabelStart.lowerBound..<titleLabelEnd.lowerBound]
+  let pinBadge = try #require(tabStrip.range(of: "if note.isPinned"))
+  let title = try #require(tabStrip.range(of: "NoteTabTitleLabel(title: note.displayTitle)"))
+  let sharedBadge = try #require(
+    tabStrip.range(of: "if appState.isSharedWithAnyActiveProfile(note.id)")
+  )
+
+  #expect(pinBadge.lowerBound < title.lowerBound)
+  #expect(title.lowerBound < sharedBadge.lowerBound)
+  #expect(titleLabel.contains("ViewThatFits(in: .horizontal)"))
+  #expect(titleLabel.contains(".mask { NoteTabTitleFadeMask() }"))
+  #expect(titleLabel.contains(".accessibilityLabel(title)"))
+  #expect(!titleLabel.contains(".fleckUIFont"))
+  #expect(TabTitlePresentation.maximumWidth == 160)
+  #expect(TabTitlePresentation.fadeWidth == 12)
+  #expect(tabStrip.contains("AgentSharingPresentation.sharedBadgeAccessibilityLabel"))
+  #expect(tabStrip.contains(".contentShape(Capsule())"))
+  #expect(tabStrip.contains(".modifier(ReorderDragSource(begin:"))
+  #expect(tabStrip.contains(".accessibilityIdentifier(\"note-tab-\\(note.id.uuidString)\")"))
+  #expect(tabStrip.contains("_ = activateNoteAndScope(note.id)"))
+  #expect(tabStrip.contains(".contextMenu {"))
+}
+
+@Test @MainActor
+func noteTabLongTitleIsCappedWhileShortTitleAndActivationRemainNatural() async throws {
+  let longTitle = String(repeating: "Long title ", count: 20)
+  let shortNote = Note(title: "Short")
+  let longNote = Note(title: longTitle, isPinned: true)
+  let fixture = await NotesPanelTitleFixture(notes: [shortNote, longNote], width: 520)
+  defer { fixture.close() }
+
+  let shortIdentifier = "note-tab-\(shortNote.id.uuidString)"
+  let longIdentifier = "note-tab-\(longNote.id.uuidString)"
+  let shortFrame = try #require(fixture.accessibilityFrame(for: shortIdentifier))
+  let longFrame = try #require(fixture.accessibilityFrame(for: longIdentifier))
+
+  #expect(shortFrame.width < TabTitlePresentation.maximumWidth)
+  #expect(longFrame.width > shortFrame.width)
+  #expect(longFrame.width <= TabTitlePresentation.maximumWidth + 56)
+  #expect(fixture.accessibilityLabel(for: longIdentifier)?.contains(longNote.displayTitle) == true)
+
+  fixture.state.workspace.selectedNoteID = shortNote.id
+  clickHostedPointer(
+    atScreen: NSPoint(x: longFrame.midX, y: longFrame.midY),
+    in: fixture.window
+  )
+  await settleTabStripHost(fixture.host)
+  #expect(fixture.state.workspace.selectedNoteID == longNote.id)
+}
+
+@Test @MainActor
+func noteTabLongTitleRemainsCappedAndAccessibleAtRTLAccessibilitySize() async throws {
+  let title = String(repeating: "Long title ", count: 24)
+  let notes = (0..<3).map { Note(title: "\($0) \(title)") }
+  let fixture = await NotesPanelTitleFixture(notes: notes, width: 260)
+  defer { fixture.close() }
+
+  let identifier = "note-tab-\(notes[0].id.uuidString)"
+  let narrowFrame = try #require(fixture.accessibilityFrame(for: identifier))
+  #expect(narrowFrame.width <= TabTitlePresentation.maximumWidth + 56)
+  #expect(fixture.accessibilityLabel(for: identifier)?.contains(notes[0].displayTitle) == true)
+
+  await fixture.resize(to: 520)
+  let wideFrame = try #require(fixture.accessibilityFrame(for: identifier))
+  #expect(wideFrame.width <= TabTitlePresentation.maximumWidth + 56)
+
+  await fixture.setEnvironment(layoutDirection: .rightToLeft, dynamicTypeSize: .accessibility2)
+  let rtlAccessibilityFrame = try #require(fixture.accessibilityFrame(for: identifier))
+  #expect(rtlAccessibilityFrame.width <= TabTitlePresentation.maximumWidth + 56)
+  #expect(fixture.accessibilityLabel(for: identifier)?.contains(notes[0].displayTitle) == true)
+}
+
+@Test @MainActor
+func noteTabFadeAlphaEndsAtSemanticTrailingEdgeInLTRAndRTL() throws {
+  let leadingX: CGFloat = 2
+  let trailingX = TabTitlePresentation.maximumWidth - 2
+  let ltrLeadingAlpha = try noteTabFadeAlpha(layoutDirection: .leftToRight, atX: leadingX)
+  let ltrTrailingAlpha = try noteTabFadeAlpha(layoutDirection: .leftToRight, atX: trailingX)
+  let rtlLeadingAlpha = try noteTabFadeAlpha(layoutDirection: .rightToLeft, atX: leadingX)
+  let rtlTrailingAlpha = try noteTabFadeAlpha(layoutDirection: .rightToLeft, atX: trailingX)
+
+  #expect(ltrLeadingAlpha > ltrTrailingAlpha + 0.5)
+  #expect(rtlTrailingAlpha > rtlLeadingAlpha + 0.5)
+}
+
 @Test @MainActor
 func hostedNotesPanelTabOverflowLeftControlReturnsFromTrailingOffset() async throws {
   let root = FileManager.default.temporaryDirectory
@@ -776,6 +871,134 @@ private func clickHostedPointer(atScreen point: NSPoint, in window: NSWindow) {
     ) else { continue }
     window.sendEvent(event)
   }
+}
+
+@MainActor
+private final class NotesPanelTitleFixture {
+  let root: URL
+  let state: AppState
+  let runtime: DictationRuntime
+  let host: NSHostingView<AnyView>
+  let window: NSWindow
+  private var layoutDirection: LayoutDirection
+  private var dynamicTypeSize: DynamicTypeSize
+
+  init(
+    notes: [Note],
+    width: CGFloat,
+    layoutDirection: LayoutDirection = .leftToRight,
+    dynamicTypeSize: DynamicTypeSize = .large
+  ) async {
+    root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("note-tab-title-" + UUID().uuidString, isDirectory: true)
+    state = AppState(
+      store: LocalStore(rootURL: root),
+      saveOperation: { _, _, _, _ in .committed }
+    )
+    await state.waitUntilInitialLoad()
+    state.workspace = Workspace(notes: notes, selectedNoteID: notes.first?.id)
+    runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+    self.layoutDirection = layoutDirection
+    self.dynamicTypeSize = dynamicTypeSize
+    let rootView = NotesPanel(dictationRuntime: runtime, sizing: .container)
+      .environmentObject(state)
+      .environment(\.layoutDirection, layoutDirection)
+      .environment(\.dynamicTypeSize, dynamicTypeSize)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    host = NSHostingView(rootView: AnyView(rootView))
+    window = NSWindow(
+      contentRect: NSRect(x: -10_000, y: -10_000, width: width, height: 430),
+      styleMask: [.titled, .resizable],
+      backing: .buffered,
+      defer: false
+    )
+    window.isReleasedWhenClosed = false
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+    await settle()
+  }
+
+  func resize(to width: CGFloat) async {
+    window.setContentSize(NSSize(width: width, height: 430))
+    host.frame = NSRect(origin: .zero, size: NSSize(width: width, height: 430))
+    await settle()
+  }
+
+  func setEnvironment(
+    layoutDirection: LayoutDirection,
+    dynamicTypeSize: DynamicTypeSize
+  ) async {
+    self.layoutDirection = layoutDirection
+    self.dynamicTypeSize = dynamicTypeSize
+    host.rootView = makeRootView()
+    await settle()
+  }
+
+  func accessibilityLabel(for identifier: String) -> String? {
+    guard let element = hostedPointerElement(host, identifier: identifier) else { return nil }
+    let selector = NSSelectorFromString("accessibilityLabel")
+    guard element.responds(to: selector) else { return nil }
+    return element.perform(selector)?.takeUnretainedValue() as? String
+  }
+
+  func accessibilityFrame(for identifier: String) -> NSRect? {
+    guard let element = hostedPointerElement(host, identifier: identifier),
+      let frame = (element.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue,
+      !frame.isEmpty
+    else { return nil }
+    return frame
+  }
+
+  func close() {
+    window.contentView = nil
+    window.orderOut(nil)
+    window.close()
+    Task { await runtime.shutdown() }
+    try? FileManager.default.removeItem(at: root)
+  }
+
+  private func makeRootView() -> AnyView {
+    AnyView(
+      NotesPanel(dictationRuntime: runtime, sizing: .container)
+        .environmentObject(state)
+        .environment(\.layoutDirection, layoutDirection)
+        .environment(\.dynamicTypeSize, dynamicTypeSize)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    )
+  }
+
+  private func settle() async {
+    await settleTabStripHost(host)
+  }
+}
+
+@MainActor
+private func noteTabFadeAlpha(
+  layoutDirection: LayoutDirection,
+  atX position: CGFloat
+) throws -> CGFloat {
+  let width = TabTitlePresentation.maximumWidth
+  let height: CGFloat = 24
+  let renderer = ImageRenderer(content:
+    Color.white
+      .frame(width: width, height: height)
+      .mask { NoteTabTitleFadeMask() }
+      .environment(\.layoutDirection, layoutDirection)
+  )
+  renderer.scale = 1
+  renderer.isOpaque = false
+  let image = try #require(renderer.cgImage)
+  try #require(image.width > 0)
+  try #require(image.height > 0)
+  let bitmap = NSBitmapImageRep(cgImage: image)
+  try #require(bitmap.pixelsWide > 0)
+  try #require(bitmap.pixelsHigh > 0)
+  let scale = CGFloat(bitmap.pixelsWide) / width
+  let pixelX = min(bitmap.pixelsWide - 1, max(0, Int((position * scale).rounded(.down))))
+  let color = try #require(
+    bitmap.colorAt(x: pixelX, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB)
+  )
+  return color.alphaComponent
 }
 
 @MainActor

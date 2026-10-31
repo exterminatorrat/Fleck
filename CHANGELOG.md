@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.26-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed Dictionary capture, folder overflow/focus, Settings spacing and Models
+  Backtab corrections while preserving capped, fading note-tab titles and full accessible labels.
+
+Source-only dependency integration; this checkpoint's CI and native validation remain pending.
+
 ## [1.4.25-beta.1] - 2026-10-31
 
 ### Fixed
@@ -53,6 +62,15 @@ Source checkpoint only; compilation and native verification remain pending.
 Source checkpoint only; this combined source's CI, native interaction and visual validation
 remain pending.
 
+## [1.4.18-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed activity-scrollbar containment and held-entry correction while
+  preserving capped, fading note-tab titles and their full accessible labels.
+
+Source-only dependency integration; this checkpoint's CI and native validation remain pending.
+
 ## [1.4.17-beta.1] - 2026-10-31
 
 ### Fixed
@@ -73,6 +91,15 @@ Source-only dependency integration; this checkpoint's CI and native validation r
 
 Source propagation of the reviewed correction; this checkpoint's CI and native validation
 remain pending. Supporting paired CI passes on the existing dependency are not a complete-app pass.
+
+## [1.4.15-beta.1] - 2026-10-29
+
+### Fixed
+
+- Cap note-tab title labels with a semantic trailing fade while preserving full accessible titles.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests, visual/accessibility inspection and native behavior remain unverified.
 
 ## [1.4.14-beta.1] - 2026-10-29
 
