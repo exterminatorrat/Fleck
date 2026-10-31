@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.24-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed Settings spacing, Models Backtab and folder-row focus/School fixture
+  corrections while preserving native resize, scrollbar tracking and folder-creation guards.
+
+Source checkpoint only; this combined source's CI and native/visual verification remain pending.
+
 ## [1.4.23-beta.1] - 2026-10-31
 
 ### Fixed
@@ -22,6 +31,51 @@ Source checkpoint only; combined compilation and native verification remain pend
   explicit accessibility owner instead of an assumed row width.
 
 Source checkpoint only; compilation and native verification remain pending.
+
+## [1.4.19-beta.1] - 2026-10-31
+
+### Fixed
+
+- Ignore retained overflow-rail actions during folder creation so the scrolled folder
+  geometry stays in place, with both rail directions covered by the existing regression.
+- Inherit the Dictionary priority-star capture fixture's explicit logical bitmap size
+  without changing production appearance or assertion thresholds.
+
+Source checkpoint only; this combined source's CI, native interaction and visual validation
+remain pending.
+
+## [1.4.16-beta.1] - 2026-10-31
+
+### Fixed
+
+- Constrain idle and released activity-scrollbar paint to the usable native knob and track
+  interval without changing its dimensions or weakening containment checks.
+- Preserve the corrected full knob rectangle when entering native tracking and retain its
+  proportional movement while the held length stays frozen.
+
+Source propagation of the reviewed correction; this checkpoint's CI and native validation
+remain pending. Supporting paired CI passes on the existing dependency are not a complete-app pass.
+
+## [1.4.11-beta.1] - 2026-10-29
+
+### Fixed
+
+- Adopt bounded actual native resize frames while preserving anchor, top, containment and
+  legal-preference checks.
+- Protect resize rollback and completion from newer interactions while preserving deferred
+  size publication during reentry.
+- Reject backing alignment or native adoption that changes an untouched resize axis.
+
+Source-only checkpoint; compilation, tests and native resize validation remain unrun.
+
+## [1.4.10-beta.1] - 2026-10-26
+
+### Fixed
+
+- Avoid redundant native text-view frame updates during editor layout and use stable flexible
+  sizing for the notes panel root.
+
+Source-only port; CPU behavior, native resize/rendering, compilation and tests remain unverified.
 
 ## [1.4.9-beta.1] - 2026-10-26
 
