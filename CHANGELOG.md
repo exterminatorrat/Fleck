@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.25-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed Dictionary capture, folder overflow/focus, Settings spacing and Models
+  Backtab corrections while preserving theme-matched banners, inline opt-out and native resizing.
+
+Source-only dependency integration; this checkpoint's CI and native validation remain pending.
+
 ## [1.4.24-beta.1] - 2026-10-31
 
 ### Fixed
@@ -44,6 +53,15 @@ Source checkpoint only; compilation and native verification remain pending.
 Source checkpoint only; this combined source's CI, native interaction and visual validation
 remain pending.
 
+## [1.4.17-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed activity-scrollbar containment and held-entry correction while
+  preserving theme-matched banners and their existing inline opt-out behavior.
+
+Source-only dependency integration; this checkpoint's CI and native validation remain pending.
+
 ## [1.4.16-beta.1] - 2026-10-31
 
 ### Fixed
@@ -55,6 +73,16 @@ remain pending.
 
 Source propagation of the reviewed correction; this checkpoint's CI and native validation
 remain pending. Supporting paired CI passes on the existing dependency are not a complete-app pass.
+
+## [1.4.14-beta.1] - 2026-10-29
+
+### Fixed
+
+- Port theme-matched agent-update and capture-failure banner surfaces, plus an inline opt-out
+  wired to the existing agent-banner preference.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests, visual/accessibility inspection and native behavior remain unverified.
 
 ## [1.4.11-beta.1] - 2026-10-29
 

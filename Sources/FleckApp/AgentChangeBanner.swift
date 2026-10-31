@@ -37,9 +37,11 @@
   }
 
   struct AgentChangeBanner: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
     let presentation: AgentBannerPresentation
     let motion: AppMotion
     let onUndo: () -> Void
+    let onDoNotShowAgain: () -> Void
     let onDismiss: () -> Void
 
     var body: some View {
@@ -51,6 +53,12 @@
         Spacer()
         Button("Undo", action: onUndo)
           .buttonStyle(.borderless)
+        Button("Do not show again", action: onDoNotShowAgain)
+          .font(.caption)
+          .buttonStyle(.borderless)
+          .accessibilityIdentifier("agent-banner-do-not-show-again")
+          .accessibilityLabel("Do not show agent update banners again")
+          .accessibilityHint("Turns off routine agent update banners. You can turn them on again in Agents settings.")
         NotesPanelBannerCloseButton(
           label: "Agent Activity update",
           action: onDismiss
@@ -58,7 +66,8 @@
       }
       .padding(.horizontal, 10)
       .padding(.vertical, 7)
-      .background(.quaternary.opacity(0.45))
+      .foregroundStyle(theme.color(.textPrimary))
+      .background(theme.color(.raised))
       .accessibilityElement(children: .contain)
       .transition(
         motion.reduceMotion
