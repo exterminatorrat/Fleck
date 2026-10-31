@@ -3,6 +3,18 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.16-beta.1] - 2026-10-31
+
+### Fixed
+
+- Constrain idle and released activity-scrollbar paint to the usable native knob and track
+  interval without changing its dimensions or weakening containment checks.
+- Preserve the corrected full knob rectangle when entering native tracking and retain its
+  proportional movement while the held length stays frozen.
+
+Source propagation of the reviewed correction; this checkpoint's CI and native validation
+remain pending. Supporting paired CI passes on the existing dependency are not a complete-app pass.
+
 ## [1.4.11-beta.1] - 2026-10-29
 
 ### Fixed
