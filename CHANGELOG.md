@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.28-beta.1] - 2026-10-31
+
+Private development candidate only; this correction is not an accepted build or public release.
+
+### Fixed
+
+- Keep the Agent Activity scrollbar's visual knob within valid native geometry and preserve its
+  full initial rectangle during tracking, with proportional-position and release coverage.
+
 ## [1.4.21-beta.1] - 2026-10-31
 
 Private development candidate only; these corrections are not an accepted build or public release.
