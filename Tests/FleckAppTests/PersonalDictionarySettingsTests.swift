@@ -1308,6 +1308,20 @@ func personalDictionaryVocabularySearchUsesResponsiveInlineFieldAndAccessibleDis
     encoding: .utf8
   )
 
+  let themeSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/FleckThemeSnapshot.swift"),
+    encoding: .utf8
+  )
+  let buttonStart = try #require(themeSource.range(of: "private struct FleckQuietButtonBody: View"))
+  let buttonEnd = try #require(
+    themeSource.range(of: "extension View {", range: buttonStart.upperBound..<themeSource.endIndex)
+  )
+  let buttonSource = themeSource[buttonStart.lowerBound..<buttonEnd.lowerBound]
+  #expect(buttonSource.contains(".contentShape(Rectangle())"))
+  #expect(buttonSource.contains("let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)"))
+  #expect(buttonSource.contains("shape.fill("))
+  #expect(buttonSource.contains("isEnabled && (isHovered || configuration.isPressed)"))
+
   #expect(settingsSource.contains("ViewThatFits(in: .horizontal)"))
   #expect(settingsSource.contains("private var dictionaryToolbar: some View"))
   #expect(settingsSource.contains("private var searchControl: some View"))
@@ -1521,6 +1535,7 @@ func personalDictionaryCommandFRoutesFromSidebarAndContentWithoutBreakingSearchO
 
 @Test @MainActor
 func personalDictionaryToolbarUsesPaddedTargetsInlineSearchAndKeyboardDismissal() async throws {
+  var diagnosticReopenedRecorded = false
   let layouts: [(
     name: String,
     width: CGFloat,
@@ -1687,6 +1702,20 @@ func personalDictionaryToolbarUsesPaddedTargetsInlineSearchAndKeyboardDismissal(
     )
     #expect(!(reopenedSearchField is NSSearchField))
     #expect(reopenedSearchField.placeholderString == "Search vocabulary")
+    let diagnosticReopenedEditor = reopenedSearchField.currentEditor()
+    if !(diagnosticReopenedEditor is NSTextView), !diagnosticReopenedRecorded {
+      diagnosticReopenedRecorded = true
+      let diagnosticResponderEditor = window.firstResponder as? NSTextView
+      let diagnostic = "[F93-6178:reopened-editor] width=\(layout.width) height=\(layout.height)"
+        + " dark=\(layout.appearance == .dark) active=\(NSApp.isActive)"
+        + " key=\(window.isKeyWindow) keyOwned=\(NSApp.keyWindow === window) visible=\(window.isVisible)"
+        + " hostOwned=\(host.window === window) fieldOwned=\(reopenedSearchField.window === window)"
+        + " hidden=\(reopenedSearchField.isHiddenOrHasHiddenAncestor) bounds=\(reopenedSearchField.bounds)"
+        + " editorPresent=\(diagnosticReopenedEditor != nil) responderIsEditor=\(diagnosticResponderEditor != nil)"
+        + " responderIsField=\(window.firstResponder === reopenedSearchField)"
+        + " responderOwnsField=\((diagnosticResponderEditor?.delegate as AnyObject?) === reopenedSearchField)"
+      print(String(decoding: diagnostic.utf8.prefix(1000), as: UTF8.self) + " truncated=\(diagnostic.utf8.count > 1000)")
+    }
     let reopenedEditor = try #require(reopenedSearchField.currentEditor() as? NSTextView)
     #expect(window.firstResponder === reopenedEditor)
 
@@ -1843,12 +1872,53 @@ func personalDictionaryPriorityStarStaysVisibleWithoutHoverAndDeleteRemainsHidde
       host,
       name: "dictionary-priority-star-\(appearance == .dark ? "dark" : "light")"
     )
+    #expect(screenshot.size == host.bounds.size)
     let goldFrame = CGRect(
       x: host.bounds.maxX - 64,
       y: host.bounds.minY,
       width: 64,
       height: host.bounds.height
     )
+    let diagnosticPriorityFrame = personalDictionaryHostFrame(fromScreenFrame: priorityFrame, in: host)
+    let diagnosticClickPoint = NSPoint(x: starredRowFrame.maxX - 13, y: starredRowFrame.midY)
+    let diagnosticPriorityBeforeClick = viewModel.entries.first(where: { $0.id == starredEntry.id })?.isPriority
+    let diagnosticRevisionBeforeClick = viewModel.revision
+    let diagnosticTarget = personalDictionaryPriorityStarColor(
+      appearance: appearance, windowAppearance: window.appearance
+    ).usingColorSpace(.deviceRGB)
+    let diagnosticTargetRGBA = diagnosticTarget.map {
+      [$0.redComponent, $0.greenComponent, $0.blueComponent, $0.alphaComponent]
+    } ?? []
+    let diagnosticScaleX = CGFloat(screenshot.pixelsWide) / host.bounds.width
+    let diagnosticScaleY = CGFloat(screenshot.pixelsHigh) / host.bounds.height
+    let diagnosticOriginY = host.isFlipped
+      ? host.bounds.maxY - goldFrame.maxY : goldFrame.minY - host.bounds.minY
+    let diagnosticROI: [CGFloat] = [
+      max(((goldFrame.minX - host.bounds.minX) * diagnosticScaleX).rounded(.down), 0),
+      max((diagnosticOriginY * diagnosticScaleY).rounded(.down), 0),
+      min(((goldFrame.maxX - host.bounds.minX) * diagnosticScaleX).rounded(.up), CGFloat(screenshot.pixelsWide)),
+      min(((diagnosticOriginY + goldFrame.height) * diagnosticScaleY).rounded(.up), CGFloat(screenshot.pixelsHigh)),
+    ]
+    let diagnosticPixelX = ((diagnosticPriorityFrame.midX - host.bounds.minX) * diagnosticScaleX).rounded(.down)
+    let diagnosticPixelY = ((host.isFlipped
+      ? host.bounds.maxY - diagnosticPriorityFrame.midY
+      : diagnosticPriorityFrame.midY - host.bounds.minY) * diagnosticScaleY).rounded(.down)
+    var diagnosticSampleRGBA: [CGFloat] = []
+    if diagnosticPixelX.isFinite, diagnosticPixelY.isFinite,
+      diagnosticPixelX >= 0, diagnosticPixelY >= 0,
+      diagnosticPixelX < CGFloat(screenshot.pixelsWide), diagnosticPixelY < CGFloat(screenshot.pixelsHigh),
+      let sample = screenshot.colorAt(x: Int(diagnosticPixelX), y: Int(diagnosticPixelY))?.usingColorSpace(.deviceRGB)
+    {
+      diagnosticSampleRGBA = [sample.redComponent, sample.greenComponent, sample.blueComponent, sample.alphaComponent]
+    }
+    let diagnosticPaint = "[F93-6178:star-paint] dark=\(appearance == .dark) active=\(NSApp.isActive)"
+      + " key=\(window.isKeyWindow) keyOwned=\(NSApp.keyWindow === window) visible=\(window.isVisible)"
+      + " bounds=\(host.bounds) bitmap=\(screenshot.pixelsWide)x\(screenshot.pixelsHigh) flipped=\(host.isFlipped)"
+      + " gold=\(goldFrame) roi=\(diagnosticROI) ax=\(diagnosticPriorityFrame) click=\(diagnosticClickPoint)"
+      + " inAX=\(diagnosticPriorityFrame.contains(diagnosticClickPoint)) inVisible=\(host.visibleRect.contains(diagnosticClickPoint))"
+      + " targetRGBA=\(diagnosticTargetRGBA) sampleRGBA=\(diagnosticSampleRGBA) pixel=\(diagnosticPixelX),\(diagnosticPixelY)"
+      + " explicitAppearance=\(window.appearance != nil) effectiveDark=\(host.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)"
+    print(String(decoding: diagnosticPaint.utf8.prefix(1000), as: UTF8.self) + " truncated=\(diagnosticPaint.utf8.count > 1000)")
     #expect(
       personalDictionaryAccentPixelCount(
         in: screenshot,
@@ -1879,6 +1949,15 @@ func personalDictionaryPriorityStarStaysVisibleWithoutHoverAndDeleteRemainsHidde
     await settlePersonalDictionarySettingsHost(host)
     try await Task.sleep(for: .milliseconds(120))
     await settlePersonalDictionarySettingsHost(host)
+    let diagnosticPriorityAfterClick = viewModel.entries.first(where: { $0.id == starredEntry.id })?.isPriority
+    let diagnosticState = "[F93-6178:star-click] dark=\(appearance == .dark)"
+      + " beforePresent=\(diagnosticPriorityBeforeClick != nil) beforeStarred=\(diagnosticPriorityBeforeClick == true)"
+      + " afterPresent=\(diagnosticPriorityAfterClick != nil) afterStarred=\(diagnosticPriorityAfterClick == true)"
+      + " revisionBefore=\(diagnosticRevisionBeforeClick) revisionAfter=\(viewModel.revision)"
+      + " active=\(NSApp.isActive) key=\(window.isKeyWindow) keyOwned=\(NSApp.keyWindow === window) visible=\(window.isVisible)"
+      + " editPresent=\(viewModel.entryEdit != nil) deletePresent=\(viewModel.pendingEntryDeletion != nil)"
+      + " errorPresent=\(viewModel.errorMessage != nil) sheetPresent=\(window.attachedSheet != nil)"
+    print(String(decoding: diagnosticState.utf8.prefix(1000), as: UTF8.self) + " truncated=\(diagnosticState.utf8.count > 1000)")
     #expect(viewModel.entries.first(where: { $0.id == starredEntry.id })?.isPriority == false)
     #expect(viewModel.pendingEntryDeletion == nil)
 
@@ -2150,8 +2229,26 @@ func personalDictionarySortPopoverKeepsSearchAndKeyboardInteractionsAccessible()
   )
   let sortSource = settingsSource[sortStart.lowerBound..<reloadStart.lowerBound]
 
+  let themeSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/FleckThemeSnapshot.swift"),
+    encoding: .utf8
+  )
+  let surfaceStart = try #require(themeSource.range(of: "private struct FleckThemedSurface: ViewModifier"))
+  let surfaceEnd = try #require(
+    themeSource.range(
+      of: "struct FleckQuietButtonStyle: ButtonStyle",
+      range: surfaceStart.upperBound..<themeSource.endIndex
+    )
+  )
+  let surfaceSource = themeSource[surfaceStart.lowerBound..<surfaceEnd.lowerBound]
+  #expect(surfaceSource.contains("@Environment(\\.fleckThemeSnapshot) private var theme"))
+  #expect(surfaceSource.contains("content.background("))
+  #expect(surfaceSource.contains("theme.color(.card)"))
+  #expect(surfaceSource.contains("in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)"))
+
   #expect(sortSource.contains("Text(\"SORT BY\")"))
-  #expect(sortSource.contains(".background(.regularMaterial"))
+  #expect(sortSource.contains(".fleckThemedSurface(cornerRadius: 12)"))
+  #expect(sortSource.contains("sortPopover\n          .fleckPopoverTheme(theme)"))
   #expect(sortSource.contains("sortOrdersForCurrentFilter"))
   #expect(sortSource.contains("SettingsVocabularySortOrder.allCases"))
   #expect(sortSource.contains("viewModel.filter == .suggestions"))
@@ -2968,6 +3065,7 @@ private func capturePersonalDictionaryHost(
       bitsPerPixel: 0
     )
   )
+  image.size = host.bounds.size
   host.cacheDisplay(in: host.bounds, to: image)
 
   if let directory = ProcessInfo.processInfo.environment[

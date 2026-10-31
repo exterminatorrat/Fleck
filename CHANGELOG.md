@@ -3,6 +3,71 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.13-beta.1] - 2026-10-31
+
+### Fixed
+
+- Source readiness Escape-return requests from the trigger's bound native attachment and
+  hand them directly to the existing guarded focus consumer before dismissing the popover.
+- Add regression coverage for bound-window/current-input publication and clearing stale
+  requests when the producer's native attachment is unbound or detached.
+
+Source-only CI repair candidate. Compilation, tests and hosted keyboard/accessibility
+behavior remain unrun; prior public CI is red and Dictionary/Appearance failures remain open.
+No passing CI, unchanged-head recovery or test-build delivery is claimed.
+
+## [1.5.12-beta.1] - 2026-10-30
+
+### Fixed
+
+- Explicitly dismiss the existing readiness popover on Escape and request return to its
+  trigger through the existing public focus state only while its native attachment,
+  active key window and original keyboard-input generation remain current.
+- Add regression coverage for stale native attachments and intervening pointer/key input,
+  and bounded diagnostic observations for existing Dictionary and Appearance CI failures.
+
+Source-only CI repair candidate. Compilation, regression execution, native keyboard and
+accessibility restoration remain unverified; no passing CI or test-build delivery is claimed.
+
+## [1.5.10-beta.1] - 2026-10-30
+
+### Fixed
+
+- Correct the readiness-popover fixture's unsupported trigger-focus retention assumption
+  with semantic coverage of existing keyboard entry, actions, traversal, dismissal and return.
+- Make the existing System Settings actions recordable in that fixture while preserving
+  their original default runtime delegation; no actions or production focus policy change.
+
+Source-only CI repair candidate. Compilation, tests, native keyboard/accessibility and
+current-context checks remain unrun for this change; no passing behavior, CI or test-build
+delivery is claimed.
+
+## [1.5.9-beta.1] - 2026-10-29
+
+### Fixed
+
+- Balance native Settings traffic lights against measured sidebar search and header frames,
+  retaining calibrated placement while the header is hidden.
+- Add geometry/cache regression coverage and encode the Models reverse-Tab fixture with
+  AppKit's backtab character.
+
+Source-only repair checkpoint. Compilation, tests and native/visual/accessibility validation
+remain unrun for this change; hosted CI has not run for this checkpoint. Readiness focus
+ownership remains unresolved.
+
+## [1.5.8-beta.1] - 2026-10-27
+
+### Fixed
+
+- Inherit the explicit interface-font correction while preserving theme propagation,
+  Settings/Models appearance, neutral hover and filing regression coverage.
+- Use AppKit's supported light/dark appearance assignment so system accessibility contrast
+  remains authoritative, and preserve rectangular padded hit targets beneath rounded hover paint.
+- Match Models keyboard-focus regression coverage to its dynamically updated native key loop.
+
+Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
+and native behavior remain unverified; hosted verification is pending.
+
 ## [1.5.7-beta.1] - 2026-10-27
 
 ### Fixed
@@ -29,6 +94,16 @@ and native behavior remain unverified; hosted verification is pending.
 Source-only review correction. Compilation, tests, visual/accessibility inspection and native
 behavior remain unverified locally.
 
+## [1.5.4-beta.1] - 2026-10-27
+
+### Fixed
+
+- Bind formatting-toolbar popovers to the existing theme snapshot and integrate the filing
+  rich-text codec compiler repair.
+
+Source-only compiler repair checkpoint. Local compilation, tests and native appearance remain
+unrun; hosted verification is pending.
+
 ## [1.5.3-beta.1] - 2026-10-27
 
 ### Fixed
@@ -39,6 +114,17 @@ behavior remain unverified locally.
 
 Source-only compiler repair checkpoint. Local compilation, tests and native behavior remain
 unrun; hosted verification is pending.
+
+## [1.5.1-beta.1] - 2026-10-27
+
+### Fixed
+
+- Propagate the selected theme to native window backing and app-owned surfaces while preserving
+  transparent material Notes and existing opaque accessibility policies.
+- Align Models page/detail headers with Settings and add neutral, disabled-aware button hover.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests, visual/accessibility inspection and native behavior remain unverified.
 
 ## [1.5.0-beta.1] - 2026-10-27
 

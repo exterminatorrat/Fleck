@@ -308,6 +308,158 @@
       #expect(!SettingsSearchTarget.dictationPrivacy.usesVocabularyFocusLifecycle)
     }
 
+    @Test @MainActor
+    func readinessReturnRejectsAnAnchorMovedToAnotherWindow() {
+      let (window, view, attachment) = readinessReturnHost()
+      let otherWindow = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+        styleMask: [.borderless], backing: .buffered, defer: false
+      )
+      defer {
+        window.contentView = nil
+        otherWindow.contentView = nil
+      }
+      let inputID = UUID()
+      let request = SettingsKeyboardFocusReturnRequest(window: window, inputID: inputID)
+      let generation = attachment.generation
+      #expect(attachment.matches(request, generation: generation, inputID: inputID))
+
+      window.contentView = nil
+      otherWindow.contentView = view
+      #expect(view.window === otherWindow)
+      #expect(!attachment.matches(request, generation: generation, inputID: inputID))
+      #expect(!attachment.matches(request, generation: attachment.generation, inputID: inputID))
+    }
+
+    @Test @MainActor
+    func readinessReturnRejectsDetachedAndReattachedNativeAttachment() {
+      let (window, view, attachment) = readinessReturnHost()
+      defer { window.contentView = nil }
+      let inputID = UUID()
+      let request = SettingsKeyboardFocusReturnRequest(window: window, inputID: inputID)
+      let generation = attachment.generation
+      #expect(attachment.matches(request, generation: generation, inputID: inputID))
+
+      window.contentView = nil
+      #expect(view.window == nil)
+      #expect(!attachment.matches(request, generation: generation, inputID: inputID))
+      window.contentView = view
+      #expect(view.window === window)
+      #expect(!attachment.matches(request, generation: generation, inputID: inputID))
+      let currentGeneration = attachment.generation
+      #expect(attachment.matches(request, generation: currentGeneration, inputID: inputID))
+      attachment.invalidate()
+      #expect(!attachment.matches(request, generation: currentGeneration, inputID: inputID))
+    }
+
+    @Test @MainActor
+    func readinessReturnReplacementSurvivesOldAttachmentDismantling() {
+      let (window, oldView, attachment) = readinessReturnHost()
+      defer { window.contentView = nil }
+      let inputID = UUID()
+      let request = SettingsKeyboardFocusReturnRequest(window: window, inputID: inputID)
+      let generation = attachment.generation
+      #expect(attachment.matches(request, generation: generation, inputID: inputID))
+
+      let replacement = SettingsSearchProbe.ProbeView()
+      replacement.bind(to: attachment)
+      window.contentView = replacement
+      oldView.bind(to: nil)
+      #expect(attachment.view === replacement)
+      #expect(!attachment.matches(request, generation: generation, inputID: inputID))
+      #expect(attachment.matches(request, generation: attachment.generation, inputID: inputID))
+    }
+
+    @Test(arguments: [false, true]) @MainActor
+    func readinessReturnRejectsInterveningPointerOrKeyInput(isKeyboard: Bool) {
+      let (window, _, attachment) = readinessReturnHost()
+      defer { window.contentView = nil }
+      let inputModality = SettingsSearchInputModality()
+      inputModality.record(isKeyboardInput: true, windowNumber: window.windowNumber)
+      let request = SettingsKeyboardFocusReturnRequest(
+        window: window, inputID: inputModality.inputID
+      )
+      let generation = attachment.generation
+      #expect(attachment.matches(request, generation: generation, inputID: inputModality.inputID))
+
+      inputModality.record(isKeyboardInput: isKeyboard, windowNumber: window.windowNumber)
+      #expect(request.inputID != inputModality.inputID)
+      #expect(!attachment.matches(request, generation: generation, inputID: inputModality.inputID))
+    }
+
+    @Test @MainActor
+    func readinessReturnProducerWritesTheBoundWindowAndReplacesTheCurrentInput() throws {
+      let (window, _, attachment) = readinessReturnHost()
+      defer { window.contentView = nil }
+      var boundRequest: SettingsKeyboardFocusReturnRequest?
+      let requestBinding = Binding(
+        get: { boundRequest },
+        set: { boundRequest = $0 }
+      )
+      let firstInputID = UUID()
+
+      attachment.publishReturnRequest(inputID: firstInputID, to: requestBinding)
+      let firstRequest = try #require(boundRequest)
+      #expect(firstRequest.window === window)
+      #expect(firstRequest.inputID == firstInputID)
+
+      let currentInputID = UUID()
+      attachment.publishReturnRequest(inputID: currentInputID, to: requestBinding)
+      let currentRequest = try #require(boundRequest)
+      #expect(currentRequest.id != firstRequest.id)
+      #expect(currentRequest.window === window)
+      #expect(currentRequest.inputID == currentInputID)
+    }
+
+    @Test @MainActor
+    func readinessReturnProducerClearsUnboundAndDetachedRequests() {
+      let (window, view, attachment) = readinessReturnHost()
+      let fallbackWindow = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+        styleMask: [.borderless], backing: .buffered, defer: false
+      )
+      defer {
+        window.contentView = nil
+        fallbackWindow.contentView = nil
+      }
+      var boundRequest: SettingsKeyboardFocusReturnRequest? =
+        SettingsKeyboardFocusReturnRequest(window: fallbackWindow, inputID: UUID())
+      let requestBinding = Binding(
+        get: { boundRequest },
+        set: { boundRequest = $0 }
+      )
+
+      view.bind(to: nil)
+      #expect(attachment.view == nil)
+      #expect(view.window === window)
+      attachment.publishReturnRequest(inputID: UUID(), to: requestBinding)
+      #expect(boundRequest == nil)
+
+      view.bind(to: attachment)
+      window.contentView = nil
+      #expect(attachment.view === view)
+      #expect(view.window == nil)
+      boundRequest = SettingsKeyboardFocusReturnRequest(window: fallbackWindow, inputID: UUID())
+      attachment.publishReturnRequest(inputID: UUID(), to: requestBinding)
+      #expect(boundRequest == nil)
+    }
+
+    @MainActor
+    private func readinessReturnHost() -> (
+      NSWindow, SettingsSearchProbe.ProbeView, SettingsKeyboardFocusReturnAttachment
+    ) {
+      _ = NSApplication.shared
+      let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+        styleMask: [.borderless], backing: .buffered, defer: false
+      )
+      let attachment = SettingsKeyboardFocusReturnAttachment()
+      let view = SettingsSearchProbe.ProbeView()
+      view.bind(to: attachment)
+      window.contentView = view
+      return (window, view, attachment)
+    }
+
     @Test func searchSelectionUsesThePaletteAccentAndPairedSelectionTokens() {
       for family in FleckColorTheme.allCases {
         for appearance in FleckThemeAppearance.allCases {

@@ -451,7 +451,7 @@
             } label: {
               Image(systemName: "xmark")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(FleckQuietButtonStyle())
             .accessibilityLabel("Dismiss note link picker")
           }
 
@@ -532,7 +532,7 @@
         }
         .padding(12)
         .frame(maxWidth: 560, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .fleckThemedSurface(cornerRadius: 12)
         .overlay {
           RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary)
         }

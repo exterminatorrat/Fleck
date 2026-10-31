@@ -1142,6 +1142,10 @@
           }
         }
       }
+      .background(
+        FleckWindowTheme(usesOpaqueBackground: isPinned || chromeMaterialPolicy == .opaque)
+          .frame(width: 0, height: 0)
+      )
       .tint(theme.color(.accent))
       .foregroundStyle(theme.color(.textPrimary))
       .environment(\.fleckChromeAppearance, appState.preferences.chromeAppearance)
@@ -1465,6 +1469,7 @@
             }
           )
           .frame(width: 320)
+          .fleckPopoverTheme(theme)
         }
         Button {
           let pointerActivation = searchPointerActivationPending
@@ -1591,7 +1596,7 @@
         .accessibilityLabel("Customize")
         .help("Customize")
       }
-      .buttonStyle(.plain)
+      .buttonStyle(FleckQuietButtonStyle())
       .padding(.horizontal, 14)
       .padding(.vertical, 11)
     }
@@ -1821,6 +1826,7 @@
               arrowEdge: .bottom
             ) {
               tabColorPicker(noteID: note.id)
+                .fleckPopoverTheme(theme)
             }
                 }
               }
@@ -2244,7 +2250,7 @@
 
         agentActivityContent
           .frame(maxWidth: 520, maxHeight: 400)
-          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+          .fleckThemedSurface(cornerRadius: 14)
           .clipShape(RoundedRectangle(cornerRadius: 14))
           .shadow(radius: 20, y: 8)
           .accessibilityElement(children: .contain)
@@ -3876,7 +3882,7 @@
 
         TrashView(onDone: onDone)
           .frame(maxWidth: 520, maxHeight: 400)
-          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+          .fleckThemedSurface(cornerRadius: 14)
           .clipShape(RoundedRectangle(cornerRadius: 14))
           .shadow(radius: 20, y: 8)
           .accessibilityElement(children: .contain)
@@ -3923,7 +3929,7 @@
         }
         .padding(20)
         .frame(maxWidth: 360)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .fleckThemedSurface(cornerRadius: 14)
         .shadow(radius: 20, y: 8)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Delete folder confirmation")
@@ -3965,7 +3971,7 @@
         }
         .padding(20)
         .frame(maxWidth: 360)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .fleckThemedSurface(cornerRadius: 14)
         .shadow(radius: 20, y: 8)
       }
     }
@@ -4086,6 +4092,7 @@
     }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.fleckThemeSnapshot) private var theme
     @ObservedObject var appState: AppState
     @ObservedObject var commands: EditorCommands
     @ObservedObject var dictationRuntime: DictationRuntime
@@ -4132,6 +4139,7 @@
       .accessibilityHidden(!isEditorVisible)
       .popover(item: $presentedPopover, arrowEdge: .bottom) { popover in
         popoverContent(popover)
+          .fleckPopoverTheme(theme)
       }
       .onAppear(perform: syncFontSizeText)
       .onChange(of: commands.currentFontSize) { _, _ in syncFontSizeText() }
