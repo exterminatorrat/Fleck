@@ -3,6 +3,19 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.22-beta.1] - 2026-10-31
+
+Development CI repair candidate only; this is not an accepted build or public release.
+
+### Fixed
+
+- Balance Settings traffic-light spacing against native sidebar search and heading geometry,
+  preserving the last valid inset while filtering hides the heading.
+- Use native backtab characters in the Models keyboard-navigation fixture while retaining
+  both Full Keyboard Access branches.
+- Preserve the folder-row focus layer around the existing drag/drop wrapper and associate
+  the School fixture with its folder accessibility identifier rather than a fixed width.
+
 ## [1.4.7-beta.1] - 2026-10-08
 
 Private development candidate only; this correction is not an accepted build or public release.
