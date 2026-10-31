@@ -1,5 +1,6 @@
 #if os(macOS)
   import AppKit
+  import FleckCore
   import SwiftUI
 
   enum AgentProfilesPresentation {
@@ -68,6 +69,7 @@
     @Environment(\.fleckThemeSnapshot) private var theme
     @State private var showsClearConfirmation = false
     @State private var showsAgentActivity = false
+    @State private var cursorSetupTask: Task<Void, Never>?
     @State private var profileForCapabilities: AgentIntegrationProfile?
     @State private var isActivityExpanded = false
     @State private var isAccessExpanded = false
@@ -151,6 +153,9 @@
       .onChange(of: searchRequest?.id, initial: true) { _, _ in
         revealSearchTarget()
       }
+      .onDisappear {
+        cancelCursorSetup()
+      }
       .sheet(item: $profileForCapabilities) { profile in
         if let capabilities = appState.capabilityProfile(profile.id) {
           AgentCapabilityEditorView(
@@ -225,10 +230,64 @@
       VStack(alignment: .leading, spacing: 8) {
         Text("Available Integrations")
           .font(.headline)
+        cursorIntegrationRow
         ForEach(AgentIntegrationKind.allCases) { integration in
           integrationRow(integration)
         }
       }
+    }
+
+    private var cursorIntegrationRow: some View {
+      VStack(alignment: .leading, spacing: 6) {
+        SettingsPreferenceRow(
+          "Cursor",
+          detail:
+            "Uses Cursor's documented local MCP install prompt. The helper is installed if needed; new profiles start with no access, and existing access is shown below and never changed. Cursor will ask before installing."
+        ) {
+          Button("Set up in Cursor…") {
+            beginCursorSetup()
+          }
+          .disabled(isCursorSetupBlocked)
+        }
+        if let message = appState.cursorSetupStatus.message {
+          Text(message)
+            .font(.caption)
+            .foregroundStyle(
+              appState.cursorSetupStatus.isError ? theme.color(.error) : Color.secondary
+            )
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        if cursorSetupTask != nil {
+          Button("Cancel setup", role: .cancel) {
+            cancelCursorSetup()
+          }
+          .controlSize(.small)
+        }
+      }
+    }
+
+    private var isCursorSetupBlocked: Bool {
+      cursorSetupTask != nil
+        || appState.cursorSetupStatus.isInProgress
+        || !appState.isAgentWorkspaceAvailable
+    }
+
+    private func beginCursorSetup(
+      profileID: UUID? = nil,
+      expectedCapabilities: AgentProfileCapabilities? = nil
+    ) {
+      guard !isCursorSetupBlocked else { return }
+      cursorSetupTask = Task {
+        await appState.setUpCursor(
+          profileID: profileID,
+          expectedCapabilities: expectedCapabilities
+        )
+        cursorSetupTask = nil
+      }
+    }
+
+    private func cancelCursorSetup() {
+      cursorSetupTask?.cancel()
     }
 
     private func integrationRow(_ integration: AgentIntegrationKind) -> some View {
@@ -254,6 +313,12 @@
       VStack(alignment: .leading, spacing: 8) {
         Text("Connected Profiles")
           .font(.headline)
+        Text(
+          "Profiles can be prepared before a client accepts an install prompt. Times below reflect only connections Fleck has recorded."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
         let profiles = AgentProfilesPresentation.active(appState.agentProfiles)
         if profiles.isEmpty {
           Text("No integrations connected yet. Add one above when the local connector is ready.")
@@ -287,12 +352,38 @@
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .accessibilityLabel(summary.accessibilityLabel)
+              if profile.displayName == "Cursor" {
+                if let configuration = appState.cursorManualConfiguration(profileID: profile.id) {
+                  Button("Copy Cursor JSON") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(configuration, forType: .string)
+                  }
+                  Text(
+                    "Merge this entry under “mcpServers” in Cursor's existing config; preserve unrelated entries."
+                  )
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+                  .fixedSize(horizontal: false, vertical: true)
+                }
+                Button("Open in Cursor…") {
+                  beginCursorSetup(
+                    profileID: profile.id,
+                    expectedCapabilities: capabilities
+                  )
+                }
+                .disabled(isCursorSetupBlocked)
+                .accessibilityHint(
+                  "Requests Cursor's install prompt using this profile's displayed access scope without changing its grants"
+                )
+              }
               Button("Edit Capabilities…") {
                 profileForCapabilities = profile
               }
             }
           }
-          if let snippet = appState.agentSetupSnippet(profileID: profile.id) {
+          if profile.displayName != "Cursor",
+            let snippet = appState.agentSetupSnippet(profileID: profile.id)
+          {
             VStack(alignment: .trailing, spacing: 4) {
               Text(snippet)
                 .font(.system(.caption, design: .monospaced))

@@ -105,6 +105,7 @@
     @Published private(set) var trashedNotes: [TrashedNote] = []
     @Published private(set) var latestAgentFeedback: AgentChangeFeedback?
     @Published private(set) var agentProfiles: [AgentIntegrationProfile] = []
+    @Published private(set) var cursorSetupStatus = CursorSetupStatus.idle
     @Published private(set) var agentActivity: [AgentActivityRecord] = []
     @Published private(set) var agentBannerPresentation: AgentBannerPresentation?
     let agentActivityIndicator = AgentActivityIndicatorPresentation()
@@ -136,6 +137,28 @@
     private let restoreOperation: RestoreOperation
     private let replaceAgentCapabilitiesOperation:
       AgentCapabilityBatchReplaceOperation
+    private lazy var cursorSetupFlow = CursorSetupFlow(
+      prepareConnector: { [weak self] in
+        guard let self else { throw CursorSetupFlowError.unavailable }
+        return try await self.prepareCursorHelper()
+      },
+      loadActiveProfiles: { [weak self] in
+        guard let self, await self.refreshAgentProfiles() else {
+          throw CursorSetupFlowError.unavailable
+        }
+        return self.agentProfiles
+      },
+      createProfile: { [weak self] in
+        guard let self, let profile = await self.addAgentProfile(named: "Cursor") else {
+          throw CursorSetupFlowError.unavailable
+        }
+        return profile
+      },
+      openURL: { NSWorkspace.shared.open($0) },
+      statusChanged: { [weak self] status in
+        self?.cursorSetupStatus = status
+      }
+    )
     private struct NoteAccessTransactionLock {
       let ownerID: UUID
       let capturedContext: AgentNoteAccessContext
@@ -1983,7 +2006,76 @@
       }
     }
 
-    func addAgentProfile(named name: String) async {
+    func setUpCursor(
+      profileID: UUID? = nil,
+      expectedCapabilities: AgentProfileCapabilities? = nil
+    ) async {
+      guard isAgentWorkspaceAvailable else {
+        if !cursorSetupStatus.isInProgress {
+          cursorSetupStatus = .failure
+        }
+        return
+      }
+      await cursorSetupFlow.setUp(profileID: profileID) { [weak self] profile, isNewProfile in
+        guard
+          let self,
+          self.isAgentWorkspaceAvailable,
+          self.agentProfiles.contains(where: {
+            $0.id == profile.id && $0.displayName == "Cursor" && !$0.isRevoked
+          }),
+          let current = self.capabilityProfile(profile.id)
+        else {
+          return false
+        }
+        if isNewProfile {
+          return current.grantRevision == 0
+            && current.allowedCapabilities.isEmpty
+            && current.grants.isEmpty
+        }
+        guard profileID == profile.id, let expectedCapabilities else { return false }
+        return current == expectedCapabilities
+      }
+    }
+
+    private func prepareCursorHelper() async throws -> URL {
+      await refreshAgentConnectorStatus()
+      guard !Task.isCancelled else { throw CancellationError() }
+      if !isAgentConnectorInstalled {
+        await installAgentBridge()
+      }
+      guard !Task.isCancelled else { throw CancellationError() }
+      guard isAgentConnectorInstalled else {
+        agentCleanupError =
+          "Could not prepare the local Agent Connector for Cursor. Use the manual setup below."
+        throw CursorSetupFlowError.unavailable
+      }
+      do {
+        return try AgentBridgeInstaller.live().installedHelperURL
+      } catch {
+        agentCleanupError =
+          "Could not prepare the local Agent Connector for Cursor. Use the manual setup below."
+        throw CursorSetupFlowError.unavailable
+      }
+    }
+
+    func cursorManualConfiguration(profileID: UUID) -> String? {
+      guard
+        isAgentWorkspaceAvailable,
+        isAgentConnectorInstalled,
+        agentProfiles.contains(where: {
+          $0.id == profileID && $0.displayName == "Cursor" && !$0.isRevoked
+        }),
+        capabilityProfile(profileID) != nil,
+        let helperURL = try? AgentBridgeInstaller.live().installedHelperURL
+      else { return nil }
+      return AgentClientSetup(
+        installedHelperURL: helperURL,
+        profileID: profileID
+      ).cursorManualConfiguration
+    }
+
+    @discardableResult
+    func addAgentProfile(named name: String) async -> AgentIntegrationProfile? {
       do {
         let provisioning = try await agentProfileStore.create(name: name)
         do {
@@ -2007,11 +2099,15 @@
           }
           throw error
         }
-        await refreshAgentProfiles()
+        guard await refreshAgentProfiles() else { return nil }
         agentCleanupError = nil
+        return provisioning.profile
       } catch {
         await refreshAgentConnectorStatus()
-        agentCleanupError = "Could not add \(name): \(error.localizedDescription)"
+        agentCleanupError = name == "Cursor"
+          ? "Could not prepare the Cursor profile. The manual setup remains available."
+          : "Could not add \(name): \(error.localizedDescription)"
+        return nil
       }
     }
 
