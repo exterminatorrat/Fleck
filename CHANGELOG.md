@@ -3,6 +3,35 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.24-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed Settings spacing, Models Backtab and folder-row focus/School fixture
+  corrections while preserving native resize, scrollbar tracking and folder-creation guards.
+
+Source checkpoint only; this combined source's CI and native/visual verification remain pending.
+
+## [1.4.23-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed Settings chrome, Models Backtab and folder-row focus/School fixture
+  corrections while preserving the native Tab and bullet-caret editor checkpoint.
+
+Source checkpoint only; combined compilation and native verification remain pending.
+
+## [1.4.20-beta.1] - 2026-10-31
+
+### Fixed
+
+- Calibrate Settings traffic-light spacing against measured native sidebar search and header geometry.
+- Use the native Backtab character in the existing Models reverse-focus regression test.
+- Preserve folder-row focus through the reorder wrapper and associate the School fixture with its
+  explicit accessibility owner instead of an assumed row width.
+
+Source checkpoint only; compilation and native verification remain pending.
+
 ## [1.4.19-beta.1] - 2026-10-31
 
 ### Fixed
