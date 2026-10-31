@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.32-beta.1] - 2026-10-31
+
+Private development candidate only; this correction is not an accepted build or public release.
+
+### Fixed
+
+- Preserve native fractional menu-panel resize geometry with revision, ownership, rollback and
+  commit fencing while retaining the existing event admission, hit, cursor and anchor policies.
+
 ## [1.4.28-beta.1] - 2026-10-31
 
 Private development candidate only; this correction is not an accepted build or public release.
