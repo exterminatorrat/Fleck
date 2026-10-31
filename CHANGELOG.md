@@ -12,6 +12,26 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 Source checkpoint only; this combined source's CI and native/visual verification remain pending.
 
+## [1.4.38-beta.1] - 2026-11-01
+
+### Fixed
+
+- Integrate the reviewed aligned-geometry resize reentry guard with the existing editor
+  and native fractional-resize checkpoints.
+
+Source checkpoint only; compilation and native verification remain pending. Recovery of the
+predecessor's failures and direct nil/nonfinite event-adapter injection coverage remain unverified.
+
+## [1.4.35-beta.1] - 2026-11-01
+
+### Fixed
+
+- Allow panel-resize reentry when native geometry is already aligned while deferred reconciliation remains queued.
+
+Source repair candidate only; this guard remains uncompiled and native verification is unrun.
+Recovery of the predecessor's rollback/restart failures and direct nil/nonfinite event-adapter
+coverage remain unverified.
+
 ## [1.4.34-beta.1] - 2026-11-01
 
 ### Fixed
