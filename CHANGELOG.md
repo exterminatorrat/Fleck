@@ -3,6 +3,18 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.19-beta.1] - 2026-10-31
+
+### Fixed
+
+- Ignore retained overflow-rail actions during folder creation so the scrolled folder
+  geometry stays in place, with both rail directions covered by the existing regression.
+- Inherit the Dictionary priority-star capture fixture's explicit logical bitmap size
+  without changing production appearance or assertion thresholds.
+
+Source checkpoint only; this combined source's CI, native interaction and visual validation
+remain pending.
+
 ## [1.4.16-beta.1] - 2026-10-31
 
 ### Fixed
