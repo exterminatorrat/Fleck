@@ -3,6 +3,16 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.31-beta.1] - 2026-10-31
+
+### Fixed
+
+- Preserve canonical pointer coordinates and native size readback during fractional panel resizing.
+- Fence resize publication, rollback and commit against stale interaction revisions and ownership.
+
+Source checkpoint only; compilation and native verification remain pending. Direct nil/nonfinite
+event-adapter coverage remains open.
+
 ## [1.4.27-beta.1] - 2026-10-31
 
 ### Fixed
