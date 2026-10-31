@@ -6,6 +6,13 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      native_readiness_probe_only:
+        description: >-
+          Run only the fixed supplemental Enhanced readiness selector; required CI
+          remains independent and fail-closed.
+        required: false
+        type: boolean
+        default: false
       own_window_capture_probe:
         description: >-
           Run the supplemental hosted own-window capture probe; it does not replace
@@ -31,10 +38,14 @@ on:
 permissions:
   contents: read
 
+env:
+  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+
 jobs:
   detect-changes:
     name: Detect documentation-only changes
-    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.native_readiness_probe_only }}
+    runs-on: namespace-profile-fleck
     timeout-minutes: 5
     permissions:
       contents: read
@@ -47,6 +58,28 @@ jobs:
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
+      - name: Report Namespace runner platform and toolchain
+        run: |
+          uname -s
+          uname -m
+          if [ "$(uname -s)" = Darwin ]; then
+            sw_vers
+            xcodebuild -version
+            swift --version
+            xcrun --sdk macosx --show-sdk-version
+            printf '%s\n' /Applications/Xcode*.app
+            printf 'Launch manager: '
+            launchctl managername
+            printf 'Launch manager UID: '
+            launchctl manageruid
+            printf 'Console UID: '
+            stat -f '%u' /dev/console
+            if launchctl print "gui/$(id -u)" >/dev/null 2>&1; then
+              printf 'GUI bootstrap domain: present\n'
+            else
+              printf 'GUI bootstrap domain: absent\n'
+            fi
+          fi
       - name: Check out repository (actions/checkout v6.0.2, without credentials)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -70,7 +103,7 @@ jobs:
     name: macOS ordinary graph and package
     needs: detect-changes
     if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
-    runs-on: macos-26
+    runs-on: namespace-profile-fleck
     timeout-minutes: 90
     outputs:
       source_commit: ${{ steps.source.outputs.commit }}
@@ -168,7 +201,7 @@ jobs:
     name: macOS ordinary repeat and bundle validation
     needs: [detect-changes, macos-build]
     if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
-    runs-on: macos-26
+    runs-on: namespace-profile-fleck
     timeout-minutes: 90
     outputs:
       source_commit: ${{ steps.source.outputs.commit }}
@@ -245,7 +278,7 @@ jobs:
     name: Validate README-only change
     needs: detect-changes
     if: ${{ needs.detect-changes.outputs.route == 'docs' }}
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-fleck
     timeout-minutes: 5
     permissions:
       contents: read
@@ -285,7 +318,7 @@ jobs:
     name: macOS build and tests
     if: ${{ always() }}
     needs: [detect-changes, docs-validation, macos-build, macos-validation, macos-enhanced]
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-fleck
     timeout-minutes: 90
     env:
       DETECTOR_RESULT: ${{ needs.detect-changes.result }}
@@ -356,7 +389,7 @@ jobs:
     name: macOS Enhanced Local candidate gates
     needs: detect-changes
     if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
-    runs-on: macos-26
+    runs-on: namespace-profile-fleck
     timeout-minutes: 60
     steps:
       - name: Check out repository (actions/checkout v6.0.2)
@@ -377,7 +410,28 @@ jobs:
         env:
           FLECK_NATIVE_CAPTURE_QA: "0"
         run: |
-          Scripts/run-nonempty-enhanced-tests.sh '^.+$'
+          runner_uid="$(id -u)"
+          test "$runner_uid" -ne 0
+          test "$(stat -f '%u' /dev/console)" = "$runner_uid"
+          /bin/launchctl print "gui/$runner_uid" >/dev/null
+          native_environment=(
+            "PATH=$PATH" "HOME=$HOME" "DEVELOPER_DIR=$DEVELOPER_DIR"
+            "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+            "FLECK_NATIVE_CAPTURE_QA=$FLECK_NATIVE_CAPTURE_QA"
+          )
+          if [[ ${TMPDIR+x} ]]; then
+            native_environment+=("TMPDIR=$TMPDIR")
+          fi
+          /usr/bin/sudo -n -E /bin/launchctl asuser "$runner_uid" \
+            /usr/bin/sudo -n -E -u "#$runner_uid" \
+            /usr/bin/env "${native_environment[@]}" /bin/bash -euo pipefail -c '
+              printf "Native test launch manager: "
+              /bin/launchctl managername
+              test "$(/bin/launchctl managername)" = Aqua
+              test "$(id -u)" = "$(stat -f "%u" /dev/console)"
+              cd "$GITHUB_WORKSPACE"
+              exec Scripts/run-nonempty-enhanced-tests.sh "$@"
+            ' -- '^.+$'
           git diff --exit-code -- Package.resolved
       - name: Declare native capture boundary (candidate graph)
         if: always()
@@ -401,10 +455,86 @@ jobs:
           Scripts/check-candidate-release-rejected.sh
           git diff --exit-code -- Package.resolved
 
+  native-readiness-probe:
+    name: Supplemental single-selector native readiness probe
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native_readiness_probe_only }}
+    runs-on: namespace-profile-fleck
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository (actions/checkout v6.0.2, without credentials)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Capture source and workflow, test, and host blob pins
+        run: |
+          set -euo pipefail
+          source_commit="$(git rev-parse --verify 'HEAD^{commit}')"
+          source_tree="$(git rev-parse --verify 'HEAD^{tree}')"
+          test "$source_commit" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          printf 'Source commit: %s\n' "$source_commit"
+          printf 'Source tree: %s\n' "$source_tree"
+          printf 'Working tree: clean\n'
+          printf 'Workflow blob: '
+          git rev-parse --verify "$GITHUB_SHA:.github/workflows/ci.yml"
+          printf 'Selector test blob: '
+          git rev-parse --verify "$GITHUB_SHA:Tests/FleckAppTests/DictationSettingsTests.swift"
+          printf 'Enhanced runner blob: '
+          git rev-parse --verify "$GITHUB_SHA:Scripts/run-nonempty-enhanced-tests.sh"
+          printf 'AppKit host runner blob: '
+          git rev-parse --verify "$GITHUB_SHA:Scripts/run-swift-tests-with-appkit-host.sh"
+          printf 'AppKit host source blob: '
+          git rev-parse --verify "$GITHUB_SHA:Tests/Support/AppKitTestMain.swift"
+          printf 'Enhanced pin verifier blob: '
+          git rev-parse --verify "$GITHUB_SHA:Scripts/test-enhanced-candidate-pin.sh"
+          printf 'Enhanced resolver blob: '
+          git rev-parse --verify "$GITHUB_SHA:Scripts/resolve-enhanced-candidate.sh"
+          printf 'Root Package.resolved blob: '
+          git rev-parse --verify "$GITHUB_SHA:Package.resolved"
+      - name: Record runner host and toolchain metadata
+        run: |
+          set -euo pipefail
+          uname -s
+          uname -m
+          sw_vers
+          xcodebuild -version
+          swift --version
+          xcrun --sdk macosx --show-sdk-version
+          printf 'Launch manager name: '
+          launchctl managername
+          printf 'Launch manager UID: '
+          launchctl manageruid
+          printf 'Process UID: '
+          id -u
+          printf 'Console UID: '
+          stat -f '%u' /dev/console
+      - name: Install and verify ripgrep
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            brew install ripgrep
+          fi
+          rg --version
+      - name: Verify Enhanced Local candidate pin
+        run: Scripts/test-enhanced-candidate-pin.sh
+      - name: Run fixed Enhanced readiness selector
+        env:
+          FLECK_NATIVE_CAPTURE_QA: "0"
+        run: |
+          set -euo pipefail
+          set +e
+          Scripts/run-nonempty-enhanced-tests.sh '^FleckAppTests\.DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize\(\)$'
+          selector_status=$?
+          set -e
+          git diff --exit-code -- Package.resolved
+          exit "$selector_status"
+
   own-window-capture-probe:
     name: Supplemental own-window capture probe
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.own_window_capture_probe }}
-    runs-on: macos-26
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.own_window_capture_probe && !inputs.native_readiness_probe_only }}
+    runs-on: namespace-profile-fleck
     timeout-minutes: 15
     permissions:
       contents: read
@@ -427,7 +557,7 @@ jobs:
           {
             printf 'Git commit SHA: '
             git rev-parse --verify HEAD
-            printf 'Runner image: GitHub-hosted macos-26\n'
+            printf 'Runner profile: namespace-profile-fleck\n'
             sw_vers
             xcodebuild -version
             swift --version
@@ -456,8 +586,8 @@ jobs:
 
   folder-navigator-diagnostic:
     name: Supplemental folder navigator diagnostic (ordinary)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe }}
-    runs-on: macos-26
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe && !inputs.native_readiness_probe_only }}
+    runs-on: namespace-profile-fleck
     timeout-minutes: 60
     permissions:
       contents: read
@@ -488,8 +618,8 @@ jobs:
 
   folder-navigator-diagnostic-enhanced:
     name: Supplemental folder navigator diagnostic (Enhanced)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe }}
-    runs-on: macos-26
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe && !inputs.native_readiness_probe_only }}
+    runs-on: namespace-profile-fleck
     timeout-minutes: 60
     permissions:
       contents: read
