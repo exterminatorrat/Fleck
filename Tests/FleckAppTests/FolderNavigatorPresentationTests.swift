@@ -337,6 +337,45 @@ struct FolderNavigatorPresentationTests {
     try fixture.performAccessibilityPress(label: "Reveal earlier folders")
     await fixture.settle()
     #expect(scroll.contentView.bounds.origin == scrolledOffset)
+    try fixture.performAccessibilityPress(label: "Reveal later folders")
+    await fixture.settle()
+    #expect(scroll.contentView.bounds.origin == scrolledOffset)
+  }
+
+  @Test(arguments: [false, true])
+  func composingRejectsRetainedOverflowAccessibilityActions(startAtTrailing: Bool) async throws {
+    let fixture = try await FolderNavigatorFixture(
+      width: 520,
+      names: ["One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight"]
+    )
+    defer { fixture.close() }
+    let scroll = try fixture.folderScrollView()
+    let document = try #require(scroll.documentView)
+    let earlier = try fixture.element(label: "Reveal earlier folders")
+    let later = try fixture.element(label: "Reveal later folders")
+    let press = NSSelectorFromString("accessibilityPerformPress")
+    try #require(earlier.responds(to: press))
+    try #require(later.responds(to: press))
+
+    try #require(document.bounds.width > scroll.contentView.bounds.width)
+    if startAtTrailing {
+      try fixture.performAccessibilityPress(label: "Reveal later folders")
+      await fixture.settle()
+    }
+    let scrolledOffset = scroll.contentView.bounds.origin
+    try #require(startAtTrailing ? scrolledOffset.x > 0 : scrolledOffset.x == 0)
+    try fixture.performAccessibilityPress(label: "New folder")
+    await fixture.settle()
+    _ = try #require(fixture.elementIfPresent(label: "Cancel new folder"))
+
+    for control in [earlier, later] {
+      _ = control.perform(press)
+      await fixture.settle()
+      #expect(try fixture.folderScrollView() === scroll)
+      #expect(scroll.documentView === document)
+      #expect(scroll.contentView.bounds.origin == scrolledOffset)
+    }
+    await fixture.closeAndWait()
   }
 
   @Test func compactUnfiledAllocationStaysStableAcrossComposeCloseAndReopen() async throws {
@@ -1258,6 +1297,7 @@ private final class FolderNavigatorNativeDiagnostics: NSObject, NSTextFieldDeleg
 @MainActor
 private final class FolderNavigatorFixture {
   private static var nextMouseEventNumber = 1
+  private var closeTask: Task<Void, Never>?
 
   let root: URL
   let state: AppState
@@ -1309,11 +1349,27 @@ private final class FolderNavigatorFixture {
   }
 
   func close() {
+    guard closeTask == nil else { return }
     window.contentView = nil
     window.orderOut(nil)
     window.close()
-    Task { await runtime.shutdown() }
-    try? FileManager.default.removeItem(at: root)
+    let runtime = self.runtime
+    let root = self.root
+    closeTask = Task {
+      await runtime.shutdown()
+      do {
+        if FileManager.default.fileExists(atPath: root.path) {
+          try FileManager.default.removeItem(at: root)
+        }
+      } catch {
+        Issue.record("Folder navigator fixture cleanup failed: \(error)")
+      }
+    }
+  }
+
+  func closeAndWait() async {
+    close()
+    await closeTask?.value
   }
 
   func settle() async {
