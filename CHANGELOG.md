@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.23-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed Settings chrome, Models Backtab and folder-row focus/School fixture
+  corrections while preserving the native Tab and bullet-caret editor checkpoint.
+
+Source checkpoint only; combined compilation and native verification remain pending.
+
 ## [1.4.20-beta.1] - 2026-10-31
 
 ### Fixed
@@ -13,6 +22,16 @@ public release log. Packaging unchanged source does not add a changelog entry.
   explicit accessibility owner instead of an assumed row width.
 
 Source checkpoint only; compilation and native verification remain pending.
+
+## [1.4.9-beta.1] - 2026-10-26
+
+### Fixed
+
+- Insert native tabs in empty plain paragraphs and populated bullet content while preserving
+  list nesting, paragraph tab policies, selection undo and prefix-safe caret movement.
+
+Source checkpoint only; Swift tests, builds, native rendering and AppKit caret blinking remain
+unverified.
 
 ## [1.4.8-beta.1] - 2026-10-26
 
