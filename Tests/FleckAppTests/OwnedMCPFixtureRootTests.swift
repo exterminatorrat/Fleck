@@ -575,3 +575,185 @@ private func identity(at url: URL) throws -> stat {
   #expect(try string(at: childURL.appendingPathComponent("sentinel")) == "preserve-replacement")
   #expect(FileManager.default.fileExists(atPath: movedChild.path))
 }
+
+@Test func publicSocketRootProvidesAShortPrivateEndpointAndCleansWhenEmpty() throws {
+  let root = try OwnedMCPFixtureRoot.createSocketRoot()
+  let rootPath = directoryPath(root.url)
+  var cleanupAttempted = false
+  defer {
+    if !cleanupAttempted && FileManager.default.fileExists(atPath: rootPath) {
+      recordCleanup(root)
+    }
+  }
+
+  let status = try identity(at: root.url)
+  let endpoint = root.url.appendingPathComponent("e.sock", isDirectory: false)
+  #expect(endpoint.path.utf8.count + 1 <= 104)
+  #expect(status.st_uid == geteuid())
+  #expect((status.st_mode & 0o7777) == 0o700)
+  #expect(try contents(of: root.url).isEmpty)
+  if ProcessInfo.processInfo.environment[OwnedMCPFixtureRoot.bindingEnvironmentKey] == nil {
+    #expect(directoryPath(root.url.deletingLastPathComponent()) == "/private/tmp")
+  }
+
+  cleanupAttempted = true
+  try root.cleanup()
+  #expect(!FileManager.default.fileExists(atPath: rootPath))
+}
+
+@Test func socketRootCleanupRejectsNonemptyDirectoryAndPreservesContents() throws {
+  let sandbox = try makeSandbox()
+  defer { recordCleanup(sandbox) }
+  let parent = sandbox.url.appendingPathComponent("socket-parent", isDirectory: true)
+  try makeDirectory(parent)
+  let root = try OwnedMCPFixtureRoot.createSocketRoot(
+    environment: [:],
+    guardedBuild: false,
+    ordinaryTemporaryDirectory: parent
+  )
+  let sentinel = root.url.appendingPathComponent("sentinel")
+  try Data("preserve-socket-content".utf8).write(to: sentinel)
+
+  #expect(throws: OwnedMCPFixtureRootError.cleanupFailed) {
+    try root.cleanup()
+  }
+  #expect(try string(at: sentinel) == "preserve-socket-content")
+  #expect(try contents(of: parent).map(\.lastPathComponent) == [root.url.lastPathComponent])
+}
+
+@Test func socketRootCleanupRejectsReboundRootAndPreservesOriginalAndReplacement() throws {
+  let sandbox = try makeSandbox()
+  defer { recordCleanup(sandbox) }
+  let parent = sandbox.url.appendingPathComponent("socket-parent", isDirectory: true)
+  try makeDirectory(parent)
+  let root = try OwnedMCPFixtureRoot.createSocketRoot(
+    environment: [:],
+    guardedBuild: false,
+    ordinaryTemporaryDirectory: parent
+  )
+  let movedOriginal = parent.appendingPathComponent("moved-original-root", isDirectory: true)
+  try FileManager.default.moveItem(at: root.url, to: movedOriginal)
+  try makeDirectory(root.url)
+  let replacementSentinel = root.url.appendingPathComponent("replacement-sentinel")
+  try Data("preserve-replacement-root".utf8).write(to: replacementSentinel)
+
+  #expect(throws: OwnedMCPFixtureRootError.identityMismatch) {
+    try root.cleanup()
+  }
+  #expect(FileManager.default.fileExists(atPath: movedOriginal.path))
+  #expect(try contents(of: movedOriginal).isEmpty)
+  #expect(try string(at: replacementSentinel) == "preserve-replacement-root")
+}
+
+@Test func socketRootCleanupRejectsReboundParentAndPreservesBothTrees() throws {
+  let sandbox = try makeSandbox()
+  defer { recordCleanup(sandbox) }
+  let parent = sandbox.url.appendingPathComponent("socket-parent", isDirectory: true)
+  try makeDirectory(parent)
+  let root = try OwnedMCPFixtureRoot.createSocketRoot(
+    environment: [:],
+    guardedBuild: false,
+    ordinaryTemporaryDirectory: parent
+  )
+  let movedParent = sandbox.url.appendingPathComponent("moved-socket-parent", isDirectory: true)
+  try FileManager.default.moveItem(at: parent, to: movedParent)
+  try makeDirectory(parent)
+  let replacementSentinel = parent.appendingPathComponent("replacement-sentinel")
+  try Data("preserve-replacement-parent".utf8).write(to: replacementSentinel)
+  let movedOriginalRoot = movedParent.appendingPathComponent(
+    root.url.lastPathComponent,
+    isDirectory: true
+  )
+
+  #expect(throws: OwnedMCPFixtureRootError.identityMismatch) {
+    try root.cleanup()
+  }
+  #expect(FileManager.default.fileExists(atPath: movedOriginalRoot.path))
+  #expect(try contents(of: movedOriginalRoot).isEmpty)
+  #expect(try string(at: replacementSentinel) == "preserve-replacement-parent")
+}
+
+@Test func guardedSocketRootRequiresBindingBeforeCreatingAnyPath() throws {
+  let sandbox = try makeSandbox()
+  defer { recordCleanup(sandbox) }
+  let missingParent = sandbox.url.appendingPathComponent("missing-ordinary-parent", isDirectory: true)
+
+  #expect(throws: OwnedMCPFixtureRootError.missingBinding) {
+    _ = try OwnedMCPFixtureRoot.createSocketRoot(
+      environment: [:],
+      guardedBuild: true,
+      ordinaryTemporaryDirectory: missingParent
+    )
+  }
+  #expect(!FileManager.default.fileExists(atPath: missingParent.path))
+  #expect(try contents(of: sandbox.url).isEmpty)
+}
+
+@Test func historicalPacketEnvironmentKeysFailBeforeCreatingAnyPath() throws {
+  let sandbox = try makeSandbox()
+  defer { recordCleanup(sandbox) }
+  let missingParent = sandbox.url.appendingPathComponent("missing-ordinary-parent", isDirectory: true)
+  let historicalEnvironments = [
+    ["FLECK_IPC_PACKET_MODE": "guarded"],
+    ["FLECK_IPC_PACKET_TMPDIR": missingParent.path],
+    ["FLECK_IPC_PACKET_MODE": "malformed", "FLECK_IPC_PACKET_TMPDIR": missingParent.path],
+  ]
+
+  for environment in historicalEnvironments {
+    #expect(throws: OwnedMCPFixtureRootError.bindingMismatch) {
+      _ = try OwnedMCPFixtureRoot.createSocketRoot(
+        environment: environment,
+        guardedBuild: false,
+        ordinaryTemporaryDirectory: missingParent
+      )
+    }
+  }
+  #expect(!FileManager.default.fileExists(atPath: missingParent.path))
+  #expect(try contents(of: sandbox.url).isEmpty)
+}
+
+@Test func malformedSocketBindingDoesNotFallBackToOrdinaryParent() throws {
+  let sandbox = try makeSandbox()
+  defer { recordCleanup(sandbox) }
+  let roots = try makeGuardedRoots(in: sandbox)
+  let fallbackParent = sandbox.url.appendingPathComponent("ordinary-fallback", isDirectory: true)
+  try makeDirectory(fallbackParent)
+  let sentinel = fallbackParent.appendingPathComponent("sentinel")
+  try Data("preserve-fallback".utf8).write(to: sentinel)
+
+  #expect(throws: OwnedMCPFixtureRootError.malformedBinding) {
+    _ = try OwnedMCPFixtureRoot.createSocketRoot(
+      environment: environment(roots, binding: "version=1"),
+      guardedBuild: false,
+      ordinaryTemporaryDirectory: fallbackParent
+    )
+  }
+  #expect(try contents(of: roots.temporary).isEmpty)
+  #expect(try contents(of: fallbackParent).map(\.lastPathComponent) == ["sentinel"])
+  #expect(try string(at: sentinel) == "preserve-fallback")
+}
+
+@Test func validSocketBindingOverridesMissingOrdinaryParent() throws {
+  let sandbox = try makeSandbox()
+  defer { recordCleanup(sandbox) }
+  let roots = try makeGuardedRoots(in: sandbox)
+  let missingOrdinaryParent = sandbox.url.appendingPathComponent(
+    "missing-ordinary-parent",
+    isDirectory: true
+  )
+  for guardedBuild in [false, true] {
+    let root = try OwnedMCPFixtureRoot.createSocketRoot(
+      environment: roots.environment,
+      guardedBuild: guardedBuild,
+      ordinaryTemporaryDirectory: missingOrdinaryParent
+    )
+    let status = try identity(at: root.url)
+
+    #expect(directoryPath(root.url.deletingLastPathComponent()) == roots.temporaryPath)
+    #expect(!FileManager.default.fileExists(atPath: missingOrdinaryParent.path))
+    #expect(status.st_uid == geteuid())
+    #expect((status.st_mode & 0o7777) == 0o700)
+    try root.cleanup()
+    #expect(try contents(of: roots.temporary).isEmpty)
+  }
+}

@@ -1,7 +1,7 @@
 import AppKit
 import CryptoKit
-import Foundation
 import FleckCore
+import Foundation
 import Testing
 
 @testable import FleckApp
@@ -1595,10 +1595,12 @@ func localUndoUsesNoProfileCapabilityAuthority() async throws {
   let workspace = Workspace(notes: [note], selectedNoteID: note.id)
   let profileID = UUID()
   let capabilityStore = AgentCapabilityStore(
-    capabilitiesURL: root
+    capabilitiesURL:
+      root
       .appendingPathComponent("AgentIntegrations", isDirectory: true)
       .appendingPathComponent("capabilities.json"),
-    previousCapabilitiesURL: root
+    previousCapabilitiesURL:
+      root
       .appendingPathComponent("AgentIntegrations", isDirectory: true)
       .appendingPathComponent("capabilities.previous.json")
   )
@@ -1676,6 +1678,872 @@ func localUndoUsesNoProfileCapabilityAuthority() async throws {
   )
 }
 
+@Test @MainActor func AgentTemporaryExclusionDuringSnapshotDeniesRead() async throws {
+  let note = Note(title: "Protected", body: "Private", agentAccess: true)
+  let fixture = AgentServiceFixture(note: note)
+  let capabilities = AgentRequestFenceCapabilityFixture()
+  let suspension = AgentRequestFenceSuspension(point: .snapshot)
+  let harness = try await makeAgentRequestFenceHarness(
+    fixture: fixture,
+    capabilities: capabilities,
+    suspension: suspension
+  )
+  let task = Task { @MainActor in
+    try await harness.service.execute(
+      profileID: fixture.profile.id,
+      credential: Data("credential".utf8),
+      command: .readNote(request: .init(noteID: note.id))
+    )
+  }
+  await suspension.waitUntilSuspended()
+  harness.authority.exclude(noteID: note.id)
+  await suspension.resume()
+
+  await #expect(throws: AgentWorkspaceError(code: .capabilityDenied)) {
+    try await task.value
+  }
+  #expect(fixture.state.workspace.notes[0] == note)
+}
+
+@Test @MainActor func AgentTemporaryExclusionABADuringSnapshotDeniesRead()
+  async throws
+{
+  let note = Note(title: "Protected", body: "Private", agentAccess: true)
+  let fixture = AgentServiceFixture(note: note)
+  let capabilities = AgentRequestFenceCapabilityFixture()
+  let suspension = AgentRequestFenceSuspension(point: .snapshot)
+  let harness = try await makeAgentRequestFenceHarness(
+    fixture: fixture,
+    capabilities: capabilities,
+    suspension: suspension
+  )
+  let task = Task { @MainActor in
+    try await harness.service.execute(
+      profileID: fixture.profile.id,
+      credential: Data("credential".utf8),
+      command: .readNote(request: .init(noteID: note.id))
+    )
+  }
+  await suspension.waitUntilSuspended()
+  harness.authority.exclude(noteID: note.id)
+  harness.authority.include(noteID: note.id)
+  await suspension.resume()
+
+  await #expect(throws: AgentWorkspaceError(code: .capabilityDenied)) {
+    try await task.value
+  }
+  #expect(fixture.state.workspace.notes[0] == note)
+}
+
+@Test @MainActor func AgentWorkspaceMoveIntoDeniedFolderDuringSnapshotDeniesRead()
+  async throws
+{
+  let allowedFolderID = UUID()
+  let deniedFolderID = UUID()
+  let note = Note(
+    title: "Before move",
+    body: "Private before move",
+    agentAccess: true,
+    folderID: allowedFolderID
+  )
+  let fixture = AgentServiceFixture(
+    note: note,
+    folders: [
+      try Folder(id: allowedFolderID, name: "Allowed"),
+      try Folder(id: deniedFolderID, name: "Denied"),
+    ]
+  )
+  let capabilities = AgentRequestFenceCapabilityFixture()
+  let suspension = AgentRequestFenceSuspension(point: .snapshot)
+  let harness = try await makeAgentRequestFenceHarness(
+    fixture: fixture,
+    capabilities: capabilities,
+    suspension: suspension,
+    deniedFolderIDs: [deniedFolderID]
+  )
+  let task = Task { @MainActor in
+    try await harness.service.execute(
+      profileID: fixture.profile.id,
+      credential: Data("credential".utf8),
+      command: .readNote(request: .init(noteID: note.id))
+    )
+  }
+  await suspension.waitUntilSuspended()
+  var movedWorkspace = fixture.state.workspace
+  movedWorkspace.notes[0].folderID = deniedFolderID
+  movedWorkspace.notes[0].title = "Private after move"
+  movedWorkspace.notes[0].body = "Private after move"
+  fixture.state.workspace = movedWorkspace
+  await suspension.resume()
+
+  await #expect(throws: AgentWorkspaceError(code: .capabilityDenied)) {
+    try await task.value
+  }
+  #expect(fixture.state.workspace == movedWorkspace)
+}
+
+@Test @MainActor func AgentAvailabilityLossDuringSnapshotDeniesRead() async throws {
+  let note = Note(title: "Protected", body: "Private", agentAccess: true)
+  let fixture = AgentServiceFixture(note: note)
+  let capabilities = AgentRequestFenceCapabilityFixture()
+  let suspension = AgentRequestFenceSuspension(point: .snapshot)
+  let harness = try await makeAgentRequestFenceHarness(
+    fixture: fixture,
+    capabilities: capabilities,
+    suspension: suspension
+  )
+  let task = Task { @MainActor in
+    try await harness.service.execute(
+      profileID: fixture.profile.id,
+      credential: Data("credential".utf8),
+      command: .readNote(request: .init(noteID: note.id))
+    )
+  }
+  await suspension.waitUntilSuspended()
+  fixture.state.isAgentWorkspaceAvailable = false
+  await suspension.resume()
+
+  await #expect(
+    throws: AgentWorkspaceError(
+      code: .fleckUnavailable,
+      recoveryAction: "Reopen Fleck after resolving its workspace storage."
+    )
+  ) {
+    try await task.value
+  }
+  #expect(fixture.state.workspace.notes[0] == note)
+}
+
+@Test @MainActor func AgentWorkspaceChangeDuringPendingFlushDeniesWrite()
+  async throws
+{
+  let allowedFolderID = UUID()
+  let deniedFolderID = UUID()
+  let note = Note(
+    title: "Before flush",
+    body: "Original",
+    agentAccess: true,
+    folderID: allowedFolderID
+  )
+  let fixture = AgentServiceFixture(
+    note: note,
+    folders: [
+      try Folder(id: allowedFolderID, name: "Allowed"),
+      try Folder(id: deniedFolderID, name: "Denied"),
+    ]
+  )
+  let capabilities = AgentRequestFenceCapabilityFixture()
+  let suspension = AgentRequestFenceSuspension(point: .none)
+  let harness = try await makeAgentRequestFenceHarness(
+    fixture: fixture,
+    capabilities: capabilities,
+    suspension: suspension,
+    deniedFolderIDs: [deniedFolderID]
+  )
+  let operationID = UUID()
+  let task = Task { @MainActor in
+    try await harness.service.execute(
+      profileID: fixture.profile.id,
+      credential: Data("credential".utf8),
+      command: .appendText(
+        request: .init(
+          context: .init(
+            noteID: note.id,
+            expectedRevision: note.revision,
+            operationID: operationID
+          ),
+          text: "Must not commit"
+        )
+      )
+    )
+  }
+  fixture.state.pauseNextFlush()
+  await fixture.state.waitUntilFlushStarts()
+  var movedWorkspace = fixture.state.workspace
+  movedWorkspace.notes[0].folderID = deniedFolderID
+  movedWorkspace.notes[0].title = "Private after flush"
+  movedWorkspace.notes[0].body = "Private after flush"
+  fixture.state.workspace = movedWorkspace
+  fixture.state.advancePersistenceGenerationOnNextFlush = true
+  fixture.state.resumeFlush()
+
+  await #expect(throws: AgentWorkspaceError(code: .capabilityDenied)) {
+    try await task.value
+  }
+  #expect(fixture.state.workspace == movedWorkspace)
+  #expect(fixture.state.commitCount == 0)
+  #expect(
+    fixture.activityStore.priorReceipt(
+      actor: .integration(
+        profileID: fixture.profile.id,
+        displayName: fixture.profile.displayName
+      ),
+      operationID: operationID
+    ) == nil
+  )
+}
+
+@Test @MainActor func AgentFlushGenerationAdvancePreservesStableWorkspaceWrite()
+  async throws
+{
+  let fixture = AgentServiceFixture()
+  let capabilities = AgentRequestFenceCapabilityFixture()
+  let suspension = AgentRequestFenceSuspension(point: .none)
+  let harness = try await makeAgentRequestFenceHarness(
+    fixture: fixture,
+    capabilities: capabilities,
+    suspension: suspension
+  )
+  let operationID = UUID()
+  fixture.state.pauseNextFlush()
+  let task = Task { @MainActor in
+    try await harness.service.execute(
+      profileID: fixture.profile.id,
+      credential: Data("credential".utf8),
+      command: .appendText(
+        request: .init(
+          context: .init(
+            noteID: fixture.note.id,
+            expectedRevision: fixture.note.revision,
+            operationID: operationID
+          ),
+          text: "Allowed"
+        )
+      )
+    )
+  }
+  await fixture.state.waitUntilFlushStarts()
+  fixture.state.advancePersistenceGenerationOnNextFlush = true
+  fixture.state.resumeFlush()
+
+  let response = try await task.value
+  guard case .write(let receipt) = response else {
+    Issue.record("Expected stable-context write receipt")
+    return
+  }
+  #expect(receipt.resultingRevision == fixture.note.revision + 1)
+  #expect(fixture.state.workspace.notes[0].body == "Original\n\nAllowed")
+  #expect(fixture.state.commitCount == 1)
+}
+
+@Test @MainActor func AgentTemporaryExclusionDuringReadAssertionDeniesListActivityAndTaskData()
+  async throws
+{
+  for commandKind in ["list", "activity", "tasks"] {
+    let note = Note(
+      title: "Protected",
+      body: "○ Private task",
+      agentAccess: true
+    )
+    let fixture = AgentServiceFixture(note: note)
+    if commandKind == "activity" {
+      _ = try await fixture.execute(
+        .appendText(
+          request: .init(
+            context: .init(
+              noteID: note.id,
+              expectedRevision: note.revision,
+              operationID: UUID()
+            ),
+            text: "Private activity"
+          )
+        )
+      )
+    }
+    let capabilities = AgentRequestFenceCapabilityFixture()
+    let suspension = AgentRequestFenceSuspension(point: .assertion(2))
+    let harness = try await makeAgentRequestFenceHarness(
+      fixture: fixture,
+      capabilities: capabilities,
+      suspension: suspension
+    )
+    let command: AgentWorkspaceCommand
+    switch commandKind {
+    case "list": command = .listSharedNotes
+    case "activity": command = .listActivity
+    default: command = .listTasks(request: .init(noteID: note.id))
+    }
+    let task = Task { @MainActor in
+      try await harness.service.execute(
+        profileID: fixture.profile.id,
+        credential: Data("credential".utf8),
+        command: command
+      )
+    }
+    await suspension.waitUntilSuspended()
+    harness.authority.exclude(noteID: note.id)
+    await suspension.resume()
+
+    await #expect(throws: AgentWorkspaceError(code: .capabilityDenied)) {
+      try await task.value
+    }
+  }
+}
+
+@Test @MainActor func AgentTemporaryExclusionDuringLastReadAssertionDeniesCachedReceipt()
+  async throws
+{
+  let fixture = AgentServiceFixture()
+  let operationID = UUID()
+  let command = AgentWorkspaceCommand.appendText(
+    request: .init(
+      context: .init(
+        noteID: fixture.note.id,
+        expectedRevision: fixture.note.revision,
+        operationID: operationID
+      ),
+      text: "Cached"
+    )
+  )
+  _ = try await fixture.execute(command)
+  let capabilities = AgentRequestFenceCapabilityFixture()
+  let suspension = AgentRequestFenceSuspension(point: .assertion(2))
+  let harness = try await makeAgentRequestFenceHarness(
+    fixture: fixture,
+    capabilities: capabilities,
+    suspension: suspension
+  )
+  let task = Task { @MainActor in
+    try await harness.service.execute(
+      profileID: fixture.profile.id,
+      credential: Data("credential".utf8),
+      command: command
+    )
+  }
+  await suspension.waitUntilSuspended()
+  harness.authority.exclude(noteID: fixture.note.id)
+  await suspension.resume()
+
+  await #expect(throws: AgentWorkspaceError(code: .capabilityDenied)) {
+    try await task.value
+  }
+  #expect(fixture.state.commitCount == 1)
+}
+
+@Test @MainActor func AgentTemporaryExclusionDuringSnapshotDeniesOldTaskHandleWrite()
+  async throws
+{
+  let note = Note(
+    title: "Tasks",
+    body: "○ Private task",
+    agentAccess: true,
+    revision: 3
+  )
+  let fixture = AgentServiceFixture(note: note)
+  let taskResponse = try await fixture.execute(
+    .listTasks(request: .init(noteID: note.id))
+  )
+  guard case .tasks(let tasks) = taskResponse, let taskHandle = tasks.first?.taskHandle
+  else {
+    Issue.record("Expected a task handle")
+    return
+  }
+  let capabilities = AgentRequestFenceCapabilityFixture()
+  let suspension = AgentRequestFenceSuspension(point: .snapshot)
+  let harness = try await makeAgentRequestFenceHarness(
+    fixture: fixture,
+    capabilities: capabilities,
+    suspension: suspension
+  )
+  let operationID = UUID()
+  let command = AgentWorkspaceCommand.renameTask(
+    request: .init(
+      context: .init(
+        noteID: note.id,
+        expectedRevision: note.revision,
+        operationID: operationID
+      ),
+      taskHandle: taskHandle,
+      text: "Must remain private"
+    )
+  )
+  let task = Task { @MainActor in
+    try await harness.service.execute(
+      profileID: fixture.profile.id,
+      credential: Data("credential".utf8),
+      command: command
+    )
+  }
+  await suspension.waitUntilSuspended()
+  harness.authority.exclude(noteID: note.id)
+  await suspension.resume()
+
+  await #expect(throws: AgentWorkspaceError(code: .capabilityDenied)) {
+    try await task.value
+  }
+  #expect(fixture.state.workspace.notes[0] == note)
+  #expect(fixture.state.commitCount == 0)
+}
+
+@Test @MainActor func AgentTemporaryExclusionBeforePrepareDeniesWriteAndAgentUndo()
+  async throws
+{
+  for isUndo in [false, true] {
+    let fixture = AgentServiceFixture()
+    let operationID = UUID()
+    let command: AgentWorkspaceCommand
+    if isUndo {
+      let seed = try await fixture.execute(
+        .appendText(
+          request: .init(
+            context: .init(
+              noteID: fixture.note.id,
+              expectedRevision: fixture.note.revision,
+              operationID: UUID()
+            ),
+            text: "Seed"
+          )
+        )
+      )
+      guard case .write(let receipt) = seed else {
+        Issue.record("Expected seed receipt for undo")
+        continue
+      }
+      command = .undoChange(
+        request: .init(
+          changeID: receipt.changeID,
+          expectedRevision: receipt.resultingRevision,
+          operationID: operationID
+        )
+      )
+    } else {
+      command = .appendText(
+        request: .init(
+          context: .init(
+            noteID: fixture.note.id,
+            expectedRevision: fixture.note.revision,
+            operationID: operationID
+          ),
+          text: "Must not commit"
+        )
+      )
+    }
+    let originalWorkspace = fixture.state.workspace
+    let originalCommitCount = fixture.state.commitCount
+    let originalActivityCount = fixture.activityStore.list(
+      profileID: fixture.profile.id,
+      visibleNoteIDs: [fixture.note.id]
+    ).count
+    let recordingStore = RecordingAgentActivityPersisting(base: fixture.activityStore)
+    let capabilities = AgentRequestFenceCapabilityFixture()
+    let suspension = AgentRequestFenceSuspension(point: .assertion(2))
+    let harness = try await makeAgentRequestFenceHarness(
+      fixture: fixture,
+      capabilities: capabilities,
+      suspension: suspension,
+      activityStore: recordingStore
+    )
+    let task = Task { @MainActor in
+      try await harness.service.execute(
+        profileID: fixture.profile.id,
+        credential: Data("credential".utf8),
+        command: command
+      )
+    }
+    await suspension.waitUntilSuspended()
+    harness.authority.exclude(noteID: fixture.note.id)
+    await suspension.resume()
+
+    await #expect(throws: AgentWorkspaceError(code: .capabilityDenied)) {
+      try await task.value
+    }
+    #expect(fixture.state.workspace == originalWorkspace)
+    #expect(fixture.state.commitCount == originalCommitCount)
+    #expect(recordingStore.preparedCount == 0)
+    #expect(recordingStore.committedCount == 0)
+    #expect(recordingStore.abortedCount == 0)
+    #expect(
+      fixture.activityStore.list(
+        profileID: fixture.profile.id,
+        visibleNoteIDs: [fixture.note.id]
+      ).count == originalActivityCount
+    )
+    #expect(
+      recordingStore.priorReceipt(
+        actor: .integration(
+          profileID: fixture.profile.id,
+          displayName: fixture.profile.displayName
+        ),
+        operationID: operationID
+      ) == nil
+    )
+  }
+}
+
+@Test @MainActor func AgentTemporaryExclusionBeforeCommitAbortsPreparedWriteAndAgentUndo()
+  async throws
+{
+  for isUndo in [false, true] {
+    let fixture = AgentServiceFixture()
+    let operationID = UUID()
+    let command: AgentWorkspaceCommand
+    if isUndo {
+      let seed = try await fixture.execute(
+        .appendText(
+          request: .init(
+            context: .init(
+              noteID: fixture.note.id,
+              expectedRevision: fixture.note.revision,
+              operationID: UUID()
+            ),
+            text: "Seed"
+          )
+        )
+      )
+      guard case .write(let receipt) = seed else {
+        Issue.record("Expected seed receipt for undo")
+        continue
+      }
+      command = .undoChange(
+        request: .init(
+          changeID: receipt.changeID,
+          expectedRevision: receipt.resultingRevision,
+          operationID: operationID
+        )
+      )
+    } else {
+      command = .appendText(
+        request: .init(
+          context: .init(
+            noteID: fixture.note.id,
+            expectedRevision: fixture.note.revision,
+            operationID: operationID
+          ),
+          text: "Must not commit"
+        )
+      )
+    }
+    let originalWorkspace = fixture.state.workspace
+    let originalCommitCount = fixture.state.commitCount
+    let originalActivityCount = fixture.activityStore.list(
+      profileID: fixture.profile.id,
+      visibleNoteIDs: [fixture.note.id]
+    ).count
+    let recordingStore = RecordingAgentActivityPersisting(base: fixture.activityStore)
+    let capabilities = AgentRequestFenceCapabilityFixture()
+    let suspension = AgentRequestFenceSuspension(point: .assertion(3))
+    let harness = try await makeAgentRequestFenceHarness(
+      fixture: fixture,
+      capabilities: capabilities,
+      suspension: suspension,
+      activityStore: recordingStore
+    )
+    let task = Task { @MainActor in
+      try await harness.service.execute(
+        profileID: fixture.profile.id,
+        credential: Data("credential".utf8),
+        command: command
+      )
+    }
+    await suspension.waitUntilSuspended()
+    harness.authority.exclude(noteID: fixture.note.id)
+    await suspension.resume()
+
+    await #expect(throws: AgentWorkspaceError(code: .capabilityDenied)) {
+      try await task.value
+    }
+    #expect(fixture.state.workspace == originalWorkspace)
+    #expect(fixture.state.commitCount == originalCommitCount)
+    #expect(recordingStore.preparedCount == 1)
+    #expect(recordingStore.committedCount == 0)
+    #expect(recordingStore.abortedCount == 1)
+    #expect(
+      fixture.activityStore.list(
+        profileID: fixture.profile.id,
+        visibleNoteIDs: [fixture.note.id]
+      ).count == originalActivityCount
+    )
+    #expect(
+      recordingStore.priorReceipt(
+        actor: .integration(
+          profileID: fixture.profile.id,
+          displayName: fixture.profile.displayName
+        ),
+        operationID: operationID
+      ) == nil
+    )
+  }
+}
+
+@Test @MainActor func AgentTemporaryExclusionAfterLastCredentialAwaitDeniesEventCatalog()
+  async throws
+{
+  let fixture = AgentServiceFixture()
+  let capabilities = AgentRequestFenceCapabilityFixture()
+  let initial = try await capabilities.store.loadOrMigrate(
+    activeProfileIDs: [fixture.profile.id],
+    workspace: fixture.state.workspace
+  )
+  let current = try #require(initial.profiles[fixture.profile.id])
+  _ = try await capabilities.store.replaceProfile(
+    AgentProfileCapabilities(
+      profileID: current.profileID,
+      grantRevision: current.grantRevision + 1,
+      allowedCapabilities: current.allowedCapabilities,
+      grants: current.grants,
+      allowsEventObservation: true
+    ),
+    expectedGrantRevision: current.grantRevision
+  )
+  let authority = AgentCapabilityAuthority(store: capabilities.store)
+  let profileGate = PausingAgentProfileAuthorizer(
+    profile: fixture.profile,
+    pauseOnCall: 2
+  )
+  let eventService = AgentEventSubscriptionService(
+    authority: authority,
+    store: AgentEventSubscriptionStore(
+      fileURL: capabilities.root.appendingPathComponent("subscriptions.json")
+    ),
+    signingKeyStore: AgentEventSigningKeyStore(secretStore: EventIPCSecretStore())
+  )
+  let service = AgentCommandService(
+    state: fixture.state,
+    profileStore: profileGate,
+    activityStore: fixture.activityStore,
+    capabilityAuthority: authority,
+    eventService: eventService,
+    taskHandleCodec: AgentTaskHandleCodec(
+      signingKeyProvider: FixedAgentSigningKeyProvider()
+    )
+  )
+  let task = Task { @MainActor in
+    try await service.execute(
+      profileID: fixture.profile.id,
+      credential: Data("credential".utf8),
+      command: .listEvents
+    )
+  }
+  await profileGate.waitUntilPaused()
+  authority.exclude(noteID: fixture.note.id)
+  await profileGate.resume()
+
+  await #expect(throws: AgentWorkspaceError(code: .capabilityDenied)) {
+    try await task.value
+  }
+}
+
+@Test @MainActor func agentTemporaryExclusionAfterCommitDeniesWriteReplyWithoutAbortingCommit()
+  async throws
+{
+  let fixture = AgentServiceFixture()
+  let recordingStore = RecordingAgentActivityPersisting(base: fixture.activityStore)
+  let capabilities = AgentRequestFenceCapabilityFixture()
+  let harness = try await makeAgentRequestFenceHarness(
+    fixture: fixture,
+    capabilities: capabilities,
+    suspension: AgentRequestFenceSuspension(point: .none),
+    activityStore: recordingStore
+  )
+  let operationID = UUID()
+  let actor = AgentActivityActor.integration(
+    profileID: fixture.profile.id,
+    displayName: fixture.profile.displayName
+  )
+  var feedbackObservedCommittedReceipt = false
+  fixture.state.onFeedback = {
+    feedbackObservedCommittedReceipt =
+      fixture.state.commitCount == 1
+      && recordingStore.committedCount == 1
+      && recordingStore.priorReceipt(actor: actor, operationID: operationID) != nil
+    harness.authority.exclude(noteID: fixture.note.id)
+  }
+  let command = AgentWorkspaceCommand.appendText(
+    request: .init(
+      context: .init(
+        noteID: fixture.note.id,
+        expectedRevision: fixture.note.revision,
+        operationID: operationID
+      ),
+      text: "Committed before denial"
+    )
+  )
+
+  await #expect(throws: AgentWorkspaceError(code: .capabilityDenied)) {
+    try await harness.service.execute(
+      profileID: fixture.profile.id,
+      credential: Data("credential".utf8),
+      command: command
+    )
+  }
+
+  #expect(feedbackObservedCommittedReceipt)
+  let receipt = try #require(recordingStore.priorReceipt(actor: actor, operationID: operationID))
+  #expect(receipt.previousRevision == fixture.note.revision)
+  #expect(receipt.resultingRevision == fixture.note.revision + 1)
+  #expect(fixture.state.workspace.notes[0].body == "Original\n\nCommitted before denial")
+  #expect(fixture.state.commitCount == 1)
+  #expect(fixture.state.agentCommitProofs.count == 1)
+  #expect(fixture.state.agentCommitProofs[0].changeID == receipt.changeID)
+  #expect(fixture.state.agentCommitProofs[0].operationID == operationID)
+  #expect(recordingStore.preparedCount == 1)
+  #expect(recordingStore.committedCount == 1)
+  #expect(recordingStore.abortedCount == 0)
+  #expect(
+    recordingStore.list(profileID: fixture.profile.id, visibleNoteIDs: [fixture.note.id])
+      .contains { $0.changeID == receipt.changeID }
+  )
+}
+
+@Test @MainActor
+func agentTemporaryExclusionABADuringCommittedUndoDeniesReplyWithoutAbortingCommit()
+  async throws
+{
+  let fixture = AgentServiceFixture()
+  let seedOperationID = UUID()
+  let seed = try await fixture.execute(
+    .appendText(
+      request: .init(
+        context: .init(
+          noteID: fixture.note.id,
+          expectedRevision: fixture.note.revision,
+          operationID: seedOperationID
+        ),
+        text: "Seed"
+      )
+    )
+  )
+  guard case .write(let seedReceipt) = seed else {
+    Issue.record("Expected seed receipt before undo")
+    return
+  }
+  let recordingStore = RecordingAgentActivityPersisting(base: fixture.activityStore)
+  let capabilities = AgentRequestFenceCapabilityFixture()
+  let harness = try await makeAgentRequestFenceHarness(
+    fixture: fixture,
+    capabilities: capabilities,
+    suspension: AgentRequestFenceSuspension(point: .none),
+    activityStore: recordingStore
+  )
+  let operationID = UUID()
+  let actor = AgentActivityActor.integration(
+    profileID: fixture.profile.id,
+    displayName: fixture.profile.displayName
+  )
+  var feedbackObservedCommittedReceipt = false
+  fixture.state.onFeedback = {
+    feedbackObservedCommittedReceipt =
+      fixture.state.commitCount == 2
+      && recordingStore.committedCount == 1
+      && recordingStore.priorReceipt(actor: actor, operationID: operationID) != nil
+    harness.authority.exclude(noteID: fixture.note.id)
+    harness.authority.include(noteID: fixture.note.id)
+  }
+  let command = AgentWorkspaceCommand.undoChange(
+    request: .init(
+      changeID: seedReceipt.changeID,
+      expectedRevision: seedReceipt.resultingRevision,
+      operationID: operationID
+    )
+  )
+
+  await #expect(throws: AgentWorkspaceError(code: .capabilityDenied)) {
+    try await harness.service.execute(
+      profileID: fixture.profile.id,
+      credential: Data("credential".utf8),
+      command: command
+    )
+  }
+
+  #expect(feedbackObservedCommittedReceipt)
+  let receipt = try #require(recordingStore.priorReceipt(actor: actor, operationID: operationID))
+  #expect(receipt.previousRevision == seedReceipt.resultingRevision)
+  #expect(receipt.resultingRevision == seedReceipt.resultingRevision + 1)
+  #expect(fixture.state.workspace.notes[0].body == "Original")
+  #expect(fixture.state.workspace.notes[0].revision == receipt.resultingRevision)
+  #expect(fixture.state.commitCount == 2)
+  #expect(fixture.state.agentCommitProofs.count == 2)
+  #expect(fixture.state.agentCommitProofs[1].changeID == receipt.changeID)
+  #expect(fixture.state.agentCommitProofs[1].operationID == operationID)
+  #expect(recordingStore.preparedCount == 1)
+  #expect(recordingStore.committedCount == 1)
+  #expect(recordingStore.abortedCount == 0)
+  #expect(
+    recordingStore.list(profileID: fixture.profile.id, visibleNoteIDs: [fixture.note.id])
+      .contains { $0.changeID == receipt.changeID }
+  )
+  #expect(harness.authority.temporaryExclusionGeneration != nil)
+}
+
+@Test @MainActor func agentAvailabilityLossAfterCommitDeniesWriteReplyWithoutAbortingCommit()
+  async throws
+{
+  let fixture = AgentServiceFixture()
+  let recordingStore = RecordingAgentActivityPersisting(base: fixture.activityStore)
+  let capabilities = AgentRequestFenceCapabilityFixture()
+  let harness = try await makeAgentRequestFenceHarness(
+    fixture: fixture,
+    capabilities: capabilities,
+    suspension: AgentRequestFenceSuspension(point: .none),
+    activityStore: recordingStore
+  )
+  let operationID = UUID()
+  let actor = AgentActivityActor.integration(
+    profileID: fixture.profile.id,
+    displayName: fixture.profile.displayName
+  )
+  var feedbackObservedCommittedReceipt = false
+  fixture.state.onFeedback = {
+    feedbackObservedCommittedReceipt =
+      fixture.state.commitCount == 1
+      && recordingStore.committedCount == 1
+      && recordingStore.priorReceipt(actor: actor, operationID: operationID) != nil
+    fixture.state.isAgentWorkspaceAvailable = false
+  }
+  let command = AgentWorkspaceCommand.appendText(
+    request: .init(
+      context: .init(
+        noteID: fixture.note.id,
+        expectedRevision: fixture.note.revision,
+        operationID: operationID
+      ),
+      text: "Committed before unavailability"
+    )
+  )
+
+  await #expect(
+    throws: AgentWorkspaceError(
+      code: .fleckUnavailable,
+      recoveryAction: "Reopen Fleck after resolving its workspace storage."
+    )
+  ) {
+    try await harness.service.execute(
+      profileID: fixture.profile.id,
+      credential: Data("credential".utf8),
+      command: command
+    )
+  }
+
+  #expect(feedbackObservedCommittedReceipt)
+  let receipt = try #require(recordingStore.priorReceipt(actor: actor, operationID: operationID))
+  #expect(receipt.previousRevision == fixture.note.revision)
+  #expect(receipt.resultingRevision == fixture.note.revision + 1)
+  #expect(fixture.state.workspace.notes[0].body == "Original\n\nCommitted before unavailability")
+  #expect(fixture.state.commitCount == 1)
+  #expect(fixture.state.agentCommitProofs.count == 1)
+  #expect(fixture.state.agentCommitProofs[0].changeID == receipt.changeID)
+  #expect(fixture.state.agentCommitProofs[0].operationID == operationID)
+  #expect(recordingStore.preparedCount == 1)
+  #expect(recordingStore.committedCount == 1)
+  #expect(recordingStore.abortedCount == 0)
+  #expect(
+    recordingStore.list(profileID: fixture.profile.id, visibleNoteIDs: [fixture.note.id])
+      .contains { $0.changeID == receipt.changeID }
+  )
+}
+
+@Test func LegacyCapabilityAuthorizerDefaultsToNilTemporaryExclusionGeneration()
+  async throws
+{
+  let authorizer = LegacyTestCapabilityAuthorizer()
+  #expect(authorizer.temporaryExclusionGeneration == nil)
+  try await authorizer.assertCurrent(
+    profileID: UUID(),
+    grantRevision: 1,
+    expectedTemporaryExclusionGeneration: nil
+  )
+}
+
 @Test @MainActor func MigratedWriteProfilePreservesRetryAndUndo() async throws {
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(
     "AgentCommandServiceTests-\(UUID().uuidString)",
@@ -1691,10 +2559,12 @@ func localUndoUsesNoProfileCapabilityAuthority() async throws {
   )
   let workspace = Workspace(notes: [note], selectedNoteID: note.id)
   let capabilityStore = AgentCapabilityStore(
-    capabilitiesURL: root
+    capabilitiesURL:
+      root
       .appendingPathComponent("AgentIntegrations", isDirectory: true)
       .appendingPathComponent("capabilities.json"),
-    previousCapabilitiesURL: root
+    previousCapabilitiesURL:
+      root
       .appendingPathComponent("AgentIntegrations", isDirectory: true)
       .appendingPathComponent("capabilities.previous.json")
   )
@@ -1802,10 +2672,12 @@ func localUndoUsesNoProfileCapabilityAuthority() async throws {
     selectedNoteID: note.id
   )
   let capabilityStore = AgentCapabilityStore(
-    capabilitiesURL: root
+    capabilitiesURL:
+      root
       .appendingPathComponent("AgentIntegrations", isDirectory: true)
       .appendingPathComponent("capabilities.json"),
-    previousCapabilitiesURL: root
+    previousCapabilitiesURL:
+      root
       .appendingPathComponent("AgentIntegrations", isDirectory: true)
       .appendingPathComponent("capabilities.previous.json")
   )
@@ -1922,10 +2794,12 @@ func localUndoUsesNoProfileCapabilityAuthority() async throws {
   let note = Note(title: "Summary", agentAccess: true)
   let workspace = Workspace(notes: [note], selectedNoteID: note.id)
   let capabilityStore = AgentCapabilityStore(
-    capabilitiesURL: root
+    capabilitiesURL:
+      root
       .appendingPathComponent("AgentIntegrations", isDirectory: true)
       .appendingPathComponent("capabilities.json"),
-    previousCapabilitiesURL: root
+    previousCapabilitiesURL:
+      root
       .appendingPathComponent("AgentIntegrations", isDirectory: true)
       .appendingPathComponent("capabilities.previous.json")
   )
@@ -2055,6 +2929,191 @@ private final class AgentServiceFixture {
       credential: Data("credential".utf8),
       command: command
     )
+  }
+}
+
+private struct AgentRequestFenceHarness {
+  let authority: AgentCapabilityAuthority
+  let service: AgentCommandService
+}
+
+@MainActor
+private func makeAgentRequestFenceHarness(
+  fixture: AgentServiceFixture,
+  capabilities: AgentRequestFenceCapabilityFixture,
+  suspension: AgentRequestFenceSuspension,
+  deniedFolderIDs: Set<UUID> = [],
+  activityStore: (any AgentActivityPersisting)? = nil
+) async throws -> AgentRequestFenceHarness {
+  _ = try await capabilities.store.loadOrMigrate(
+    activeProfileIDs: [fixture.profile.id],
+    workspace: fixture.state.workspace
+  )
+  if !deniedFolderIDs.isEmpty {
+    _ = try await capabilities.store.replacePrivacyPolicy(
+      deniedNoteIDs: [],
+      deniedFolderIDs: deniedFolderIDs,
+      expectedGeneration: nil
+    )
+  }
+  let authority = AgentCapabilityAuthority(store: capabilities.store)
+  let service = AgentCommandService(
+    state: fixture.state,
+    profileStore: FixedAgentAuthorizer(profile: fixture.profile),
+    activityStore: activityStore ?? fixture.activityStore,
+    capabilityAuthority: SuspendingAgentCapabilityAuthorizer(
+      base: authority,
+      suspension: suspension
+    ),
+    taskHandleCodec: AgentTaskHandleCodec(
+      signingKeyProvider: FixedAgentSigningKeyProvider()
+    )
+  )
+  return AgentRequestFenceHarness(authority: authority, service: service)
+}
+
+private final class AgentRequestFenceCapabilityFixture {
+  let root: URL
+  let store: AgentCapabilityStore
+
+  init() {
+    root = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "AgentRequestFenceCapabilityTests-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    store = AgentCapabilityStore(
+      capabilitiesURL:
+        root
+        .appendingPathComponent("AgentIntegrations", isDirectory: true)
+        .appendingPathComponent("capabilities.json"),
+      previousCapabilitiesURL:
+        root
+        .appendingPathComponent("AgentIntegrations", isDirectory: true)
+        .appendingPathComponent("capabilities.previous.json")
+    )
+  }
+
+  deinit {
+    try? FileManager.default.removeItem(at: root)
+  }
+}
+
+private actor AgentRequestFenceSuspension {
+  enum Point: Equatable {
+    case none
+    case snapshot
+    case assertion(Int)
+  }
+
+  private let point: Point
+  private var assertionCount = 0
+  private var isSuspended = false
+  private var continuation: CheckedContinuation<Void, Never>?
+
+  init(point: Point) {
+    self.point = point
+  }
+
+  func afterSnapshot() async {
+    guard point == .snapshot else { return }
+    await pause()
+  }
+
+  func afterAssertion() async {
+    assertionCount += 1
+    guard point == .assertion(assertionCount) else { return }
+    await pause()
+  }
+
+  func waitUntilSuspended() async {
+    while !isSuspended {
+      await Task.yield()
+    }
+  }
+
+  func resume() {
+    continuation?.resume()
+    continuation = nil
+  }
+
+  private func pause() async {
+    guard !isSuspended else { return }
+    isSuspended = true
+    await withCheckedContinuation { continuation = $0 }
+  }
+}
+
+private struct SuspendingAgentCapabilityAuthorizer: AgentCapabilityAuthorizing {
+  let base: AgentCapabilityAuthority
+  let suspension: AgentRequestFenceSuspension
+
+  var temporaryExclusionGeneration: UUID? {
+    base.temporaryExclusionGeneration
+  }
+
+  func snapshot(
+    profileID: UUID,
+    workspace: Workspace
+  ) async throws -> AgentAuthorizationSnapshot {
+    let snapshot = try await base.snapshot(profileID: profileID, workspace: workspace)
+    await suspension.afterSnapshot()
+    return snapshot
+  }
+
+  func assertCurrent(profileID: UUID, grantRevision: UInt64) async throws {
+    try await base.assertCurrent(
+      profileID: profileID,
+      grantRevision: grantRevision
+    )
+    await suspension.afterAssertion()
+  }
+
+  func assertCurrent(
+    profileID: UUID,
+    grantRevision: UInt64,
+    expectedTemporaryExclusionGeneration: UUID?
+  ) async throws {
+    try await base.assertCurrent(
+      profileID: profileID,
+      grantRevision: grantRevision,
+      expectedTemporaryExclusionGeneration: expectedTemporaryExclusionGeneration
+    )
+    await suspension.afterAssertion()
+  }
+}
+
+private actor PausingAgentProfileAuthorizer: AgentProfileAuthorizing {
+  private let profile: AgentIntegrationProfile
+  private let pauseOnCall: Int
+  private var callCount = 0
+  private var isPaused = false
+  private var continuation: CheckedContinuation<Void, Never>?
+
+  init(profile: AgentIntegrationProfile, pauseOnCall: Int) {
+    self.profile = profile
+    self.pauseOnCall = pauseOnCall
+  }
+
+  func authorize(
+    profileID: UUID,
+    credential: Data
+  ) async throws -> AgentIntegrationProfile {
+    callCount += 1
+    guard callCount == pauseOnCall else { return profile }
+    isPaused = true
+    await withCheckedContinuation { continuation = $0 }
+    return profile
+  }
+
+  func waitUntilPaused() async {
+    while !isPaused {
+      await Task.yield()
+    }
+  }
+
+  func resume() {
+    continuation?.resume()
+    continuation = nil
   }
 }
 
@@ -2211,8 +3270,14 @@ private final class FakeAgentWorkspaceState: AgentWorkspaceStateAccess {
   var latestFeedback: AgentChangeFeedback?
   var requestEvents: [AgentRequestEvent] = []
   var commitCount = 0
+  var onFeedback: (() -> Void)?
   var commitError: AgentWorkspaceError?
   var flushError: Error?
+  var advancePersistenceGenerationOnNextFlush = false
+  private var shouldPauseNextFlush = false
+  private var flushStarted = false
+  private var flushStartedContinuation: CheckedContinuation<Void, Never>?
+  private var flushContinuation: CheckedContinuation<Void, Never>?
 
   init(workspace: Workspace) {
     self.workspace = workspace
@@ -2220,6 +3285,31 @@ private final class FakeAgentWorkspaceState: AgentWorkspaceStateAccess {
 
   func flushPendingPersistenceForAgent() async throws {
     if let flushError { throw flushError }
+    guard shouldPauseNextFlush else { return }
+    shouldPauseNextFlush = false
+    flushStarted = true
+    flushStartedContinuation?.resume()
+    flushStartedContinuation = nil
+    await withCheckedContinuation { flushContinuation = $0 }
+    if advancePersistenceGenerationOnNextFlush {
+      persistenceGeneration += 1
+      advancePersistenceGenerationOnNextFlush = false
+    }
+  }
+
+  func pauseNextFlush() {
+    shouldPauseNextFlush = true
+    flushStarted = false
+  }
+
+  func waitUntilFlushStarts() async {
+    guard !flushStarted else { return }
+    await withCheckedContinuation { flushStartedContinuation = $0 }
+  }
+
+  func resumeFlush() {
+    flushContinuation?.resume()
+    flushContinuation = nil
   }
 
   func commitAgentWorkspace(
@@ -2239,6 +3329,7 @@ private final class FakeAgentWorkspaceState: AgentWorkspaceStateAccess {
 
   func publishAgentFeedback(_ feedback: AgentChangeFeedback) {
     latestFeedback = feedback
+    onFeedback?()
   }
 
   func publishAgentRequestEvent(_ event: AgentRequestEvent) {
@@ -2375,6 +3466,64 @@ private struct ThrowingAgentSigningKeyProvider: AgentSigningKeyProviding {
 }
 
 private struct UnexpectedAgentServiceTestError: Error {}
+
+private final class RecordingAgentActivityPersisting:
+  AgentActivityPersisting, @unchecked Sendable
+{
+  private let base: AgentActivityStore
+  private let lock = NSLock()
+  private var prepared = 0
+  private var committed = 0
+  private var aborted = 0
+
+  init(base: AgentActivityStore) {
+    self.base = base
+  }
+
+  var preparedCount: Int { lock.withLock { prepared } }
+  var committedCount: Int { lock.withLock { committed } }
+  var abortedCount: Int { lock.withLock { aborted } }
+
+  func prepare(_ transaction: PreparedAgentTransaction) throws {
+    lock.withLock { prepared += 1 }
+    try base.prepare(transaction)
+  }
+
+  func commit(changeID: UUID, receipt: AgentWriteReceipt) throws {
+    lock.withLock { committed += 1 }
+    try base.commit(changeID: changeID, receipt: receipt)
+  }
+
+  func abort(changeID: UUID) throws {
+    lock.withLock { aborted += 1 }
+    try base.abort(changeID: changeID)
+  }
+
+  func priorReceipt(
+    actor: AgentActivityActor,
+    operationID: UUID
+  ) -> AgentWriteReceipt? {
+    base.priorReceipt(actor: actor, operationID: operationID)
+  }
+
+  func list(
+    profileID: UUID?,
+    visibleNoteIDs: Set<UUID>
+  ) -> [AgentActivityRecord] {
+    base.list(profileID: profileID, visibleNoteIDs: visibleNoteIDs)
+  }
+
+  func record(id: UUID) -> AgentActivityRecord? {
+    base.record(id: id)
+  }
+
+  func reconcile(
+    workspace: Workspace,
+    commitProofs: [AgentWorkspaceCommitProof]
+  ) throws {
+    try base.reconcile(workspace: workspace, commitProofs: commitProofs)
+  }
+}
 
 private final class FailOnceCommitActivityStore:
   AgentActivityPersisting, @unchecked Sendable

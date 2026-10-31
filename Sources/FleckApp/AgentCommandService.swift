@@ -13,12 +13,13 @@
   }
 
   @MainActor
-  protocol AgentWorkspaceStateAccess: AnyObject {
+  protocol AgentWorkspaceStateAccess: AnyObject, Sendable {
     var workspace: Workspace { get }
     var persistenceGeneration: UInt64 { get }
     var preferences: AppPreferences { get }
     var isAgentWorkspaceAvailable: Bool { get }
     var agentCommitProofs: [AgentWorkspaceCommitProof] { get }
+    func refreshAgentEventMonitoring() async
     func flushPendingPersistenceForAgent() async throws
     func commitAgentWorkspace(
       _ workspace: Workspace,
@@ -27,6 +28,10 @@
     ) throws
     func publishAgentFeedback(_ feedback: AgentChangeFeedback)
     func publishAgentRequestEvent(_ event: AgentRequestEvent)
+  }
+
+  extension AgentWorkspaceStateAccess {
+    func refreshAgentEventMonitoring() async {}
   }
 
   protocol AgentProfileAuthorizing: Sendable {
@@ -59,11 +64,43 @@
 
   extension AgentActivityStore: AgentActivityPersisting {}
 
+  private final class AgentCommandQueueRelease: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    func wait() async {
+      await withCheckedContinuation { continuation in
+        let resumeImmediately = lock.withLock {
+          guard !released else { return true }
+          self.continuation = continuation
+          return false
+        }
+        if resumeImmediately { continuation.resume() }
+      }
+    }
+
+    func release() {
+      let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+        guard !released else { return nil }
+        released = true
+        defer { self.continuation = nil }
+        return self.continuation
+      }
+      continuation?.resume()
+    }
+  }
+
   @MainActor
   final class AgentCommandService {
     private struct BodyLine {
       let text: String
       let delimiter: String
+    }
+
+    private struct RequestContext {
+      let workspace: Workspace
+      let temporaryExclusionGeneration: UUID?
     }
 
     private struct PendingWrite {
@@ -73,10 +110,34 @@
       let receipt: AgentWriteReceipt
     }
 
+    @MainActor
+    private final class ResponseLeaseHolder {
+      private var lease: AgentEventResponseLease?
+
+      func install(_ lease: AgentEventResponseLease) {
+        precondition(self.lease == nil)
+        self.lease = lease
+      }
+
+      func complete(delivered: Bool) async {
+        guard let lease else { return }
+        self.lease = nil
+        await lease.complete(delivered: delivered)
+      }
+
+      func takeDisposition() -> (@Sendable (Bool) async -> Void)? {
+        guard let lease else { return nil }
+        self.lease = nil
+        return { await lease.complete(delivered: $0) }
+      }
+    }
+
     private let state: any AgentWorkspaceStateAccess
     private let profileStore: any AgentProfileAuthorizing
     private let capabilityAuthority: any AgentCapabilityAuthorizing
     private let activityStore: any AgentActivityPersisting
+    private let eventService: AgentEventSubscriptionService?
+    private let eventRuntime: AgentEventMonitoringRuntime?
     private let taskHandleCodec: AgentTaskHandleCodec
     private let now: @Sendable () -> Date
     private var commandTail = Task<Void, Never> {}
@@ -86,6 +147,8 @@
       profileStore: any AgentProfileAuthorizing,
       activityStore: any AgentActivityPersisting,
       capabilityAuthority: any AgentCapabilityAuthorizing = AgentCapabilityAuthority(),
+      eventService: AgentEventSubscriptionService? = nil,
+      eventRuntime: AgentEventMonitoringRuntime? = nil,
       taskHandleCodec: AgentTaskHandleCodec = AgentTaskHandleCodec(),
       now: @escaping @Sendable () -> Date = Date.init
     ) {
@@ -93,6 +156,8 @@
       self.profileStore = profileStore
       self.capabilityAuthority = capabilityAuthority
       self.activityStore = activityStore
+      self.eventService = eventService
+      self.eventRuntime = eventRuntime
       self.taskHandleCodec = taskHandleCodec
       self.now = now
     }
@@ -102,8 +167,44 @@
       credential: Data,
       command: AgentWorkspaceCommand
     ) async throws -> AgentWorkspaceResponse {
+      try await executeWithResponseDisposition(
+        profileID: profileID,
+        credential: credential,
+        command: command,
+        deferResponseDisposition: false
+      ).response
+    }
+
+    func executeForIPC(
+      profileID: UUID,
+      credential: Data,
+      command: AgentWorkspaceCommand
+    ) async throws -> AgentIPCServer.ExecutionResult {
+      try await executeWithResponseDisposition(
+        profileID: profileID,
+        credential: credential,
+        command: command,
+        deferResponseDisposition: true
+      )
+    }
+
+    private func executeWithResponseDisposition(
+      profileID: UUID,
+      credential: Data,
+      command: AgentWorkspaceCommand,
+      deferResponseDisposition: Bool
+    ) async throws -> AgentIPCServer.ExecutionResult {
       do {
-        return try await enqueue { [self] in
+        let cancellationAware: Bool
+        if case .prepareEventSubscription = command {
+          cancellationAware = true
+        } else {
+          cancellationAware = false
+        }
+        return try await enqueue(
+          cancellationAware: cancellationAware
+        ) { [self] releaseCommandQueue in
+          let responseLeaseHolder = ResponseLeaseHolder()
           var request: (id: UUID, profileID: UUID)?
 
           @MainActor func beginRequest(profileID: UUID) {
@@ -144,14 +245,17 @@
               displayName: profile.displayName
             )
             try reconcile()
+            let requestContext = captureRequestContext()
             let snapshot = try await capabilityAuthority.snapshot(
               profileID: profile.id,
-              workspace: state.workspace
+              workspace: requestContext.workspace
             )
+            try requireRequestContext(requestContext)
             try requireCapability(for: command, snapshot: snapshot)
-            try await capabilityAuthority.assertCurrent(
+            try await assertCurrent(
               profileID: profile.id,
-              grantRevision: snapshot.grantRevision
+              snapshot: snapshot,
+              requestContext: requestContext
             )
             if let operationID = command.operationID,
               let receipt = activityStore.priorReceipt(
@@ -161,39 +265,103 @@
             {
               _ = try authorizedNote(
                 receipt.noteID,
-                noteIDs: snapshot.writableNoteIDs
+                noteIDs: snapshot.writableNoteIDs,
+                in: requestContext.workspace
               )
-              try await capabilityAuthority.assertCurrent(
+              try await assertCurrent(
                 profileID: profile.id,
-                grantRevision: snapshot.grantRevision
+                snapshot: snapshot,
+                requestContext: requestContext
               )
               beginRequest(profileID: profile.id)
               let response: AgentWorkspaceResponse =
                 command.isUndo ? .undo(receipt: receipt) : .write(receipt: receipt)
+              try requireRequestContext(requestContext)
               finishRequest(.succeeded)
-              return response
+              return AgentIPCServer.ExecutionResult(response: response)
             }
             let response = try await perform(
               command,
               actor: actor,
               profileID: profile.id,
+              credential: credential,
               snapshot: snapshot,
-              beginRequest: { beginRequest(profileID: profile.id) }
+              requestContext: requestContext,
+              beginRequest: { beginRequest(profileID: profile.id) },
+              releaseCommandQueue: releaseCommandQueue,
+              responseLeaseHolder: responseLeaseHolder
             )
+            if command.operationID == nil {
+              if case .prepareEventSubscription = command {
+                try requireRequestAvailabilityAndExclusion(requestContext)
+              } else {
+                try requireRequestContext(requestContext)
+              }
+            } else {
+              try requireRequestAvailabilityAndExclusion(requestContext)
+            }
+            try Task.checkCancellation()
             finishRequest(.succeeded)
-            return response
+            if deferResponseDisposition {
+              return AgentIPCServer.ExecutionResult(
+                response: response,
+                responseDisposition: responseLeaseHolder.takeDisposition()
+              )
+            }
+            await responseLeaseHolder.complete(delivered: true)
+            return AgentIPCServer.ExecutionResult(response: response)
           } catch let cancellation as CancellationError {
+            await responseLeaseHolder.complete(delivered: false)
             finishRequest(.cancelled)
             throw cancellation
+          } catch let error as AgentEventCallbackVerificationError where error == .cancelled {
+            await responseLeaseHolder.complete(delivered: false)
+            finishRequest(.cancelled)
+            throw error
           } catch {
+            await responseLeaseHolder.complete(delivered: false)
             finishRequest(.failed)
             throw error
           }
         }
       } catch let error as AgentWorkspaceError {
         throw error
+      } catch let error as AgentEventSubscriptionError {
+        switch error {
+        case .invalidConfiguration:
+          throw AgentWorkspaceError(code: .invalidPayload)
+        case .capacityExceeded:
+          throw AgentWorkspaceError(code: .writeTooLarge)
+        case .storageFailure:
+          throw AgentWorkspaceError(code: .internalSaveFailure)
+        }
+      } catch let error as AgentEventCallbackVerificationError where error == .cancelled {
+        throw CancellationError()
+      } catch let error as AgentEventCallbackVerificationError {
+        throw try Self.mapCallbackVerificationFailure(error)
       } catch {
         throw AgentWorkspaceError(code: .internalSaveFailure)
+      }
+    }
+
+    static func mapCallbackVerificationFailure(
+      _ failure: AgentEventCallbackVerificationError
+    ) throws -> AgentWorkspaceError {
+      switch failure {
+      case .notAuthorized:
+        return AgentWorkspaceError(code: .capabilityDenied)
+      case .verificationInProgress, .keyUnavailable, .randomUnavailable, .busy, .storageFailure:
+        return AgentWorkspaceError(code: .internalSaveFailure)
+      case .capacityExceeded:
+        return AgentWorkspaceError(code: .writeTooLarge)
+      case .verificationFailed:
+        return AgentWorkspaceError.callbackEndpointFailure(reason: .challengeFailed)
+      case .timedOut:
+        return AgentWorkspaceError.callbackEndpointFailure(reason: .timedOut)
+      case .transportFailure:
+        return AgentWorkspaceError.callbackEndpointFailure(reason: .connectionFailed)
+      case .cancelled:
+        throw CancellationError()
       }
     }
 
@@ -255,16 +423,34 @@
       }
     }
 
-    private func enqueue(
-      _ operation: @escaping @MainActor () async throws -> AgentWorkspaceResponse
-    ) async throws -> AgentWorkspaceResponse {
+    private func enqueue<Result: Sendable>(
+      _ operation: @escaping @MainActor () async throws -> Result
+    ) async throws -> Result {
+      try await enqueue(cancellationAware: false) { _ in try await operation() }
+    }
+
+    private func enqueue<Result: Sendable>(
+      cancellationAware: Bool,
+      _ operation: @escaping @MainActor (@Sendable () -> Void) async throws -> Result
+    ) async throws -> Result {
       let predecessor = commandTail
+      let release = AgentCommandQueueRelease()
       let task = Task { @MainActor in
         await predecessor.value
-        return try await operation()
+        defer { release.release() }
+        if cancellationAware { try Task.checkCancellation() }
+        let releaseCommandQueue: @Sendable () -> Void = { release.release() }
+        return try await operation(releaseCommandQueue)
       }
       commandTail = Task { @MainActor in
-        _ = try? await task.value
+        await release.wait()
+      }
+      if cancellationAware {
+        return try await withTaskCancellationHandler {
+          try await task.value
+        } onCancel: {
+          task.cancel()
+        }
       }
       return try await task.value
     }
@@ -273,15 +459,19 @@
       _ command: AgentWorkspaceCommand,
       actor: AgentActivityActor,
       profileID: UUID,
+      credential: Data,
       snapshot: AgentAuthorizationSnapshot,
-      beginRequest: () -> Void
+      requestContext: RequestContext,
+      beginRequest: () -> Void,
+      releaseCommandQueue: @Sendable () -> Void,
+      responseLeaseHolder: ResponseLeaseHolder
     ) async throws -> AgentWorkspaceResponse {
       switch command {
       case .listSharedNotes:
         beginRequest()
         return try await checkedRead(
           .sharedNotes(
-            notes: state.workspace.notes
+            notes: requestContext.workspace.notes
               .filter { snapshot.readableNoteIDs.contains($0.id) }
               .map {
                 AgentNoteSummary(
@@ -291,31 +481,36 @@
                   modifiedAt: $0.modifiedAt
                 )
               }
-            ),
+          ),
           profileID: profileID,
-          snapshot: snapshot
+          snapshot: snapshot,
+          requestContext: requestContext
         )
       case .readNote(let request):
         let note = try authorizedNote(
           request.noteID,
-          noteIDs: snapshot.readableNoteIDs
+          noteIDs: snapshot.readableNoteIDs,
+          in: requestContext.workspace
         )
         beginRequest()
         return try await checkedRead(
           .note(page: try notePage(note, request: request)),
           profileID: profileID,
-          snapshot: snapshot
+          snapshot: snapshot,
+          requestContext: requestContext
         )
       case .listTasks(let request):
         let note = try authorizedNote(
           request.noteID,
-          noteIDs: snapshot.readableNoteIDs
+          noteIDs: snapshot.readableNoteIDs,
+          in: requestContext.workspace
         )
         beginRequest()
         return try await checkedRead(
           .tasks(tasks: try taskSummaries(note)),
           profileID: profileID,
-          snapshot: snapshot
+          snapshot: snapshot,
+          requestContext: requestContext
         )
       case .listActivity:
         beginRequest()
@@ -326,7 +521,7 @@
         return try await checkedRead(
           .activity(
             entries: records.map { record in
-              let note = state.workspace.notes.first {
+              let note = requestContext.workspace.notes.first {
                 $0.id == record.noteID
               }
               return AgentActivitySummary(
@@ -349,7 +544,8 @@
             }
           ),
           profileID: profileID,
-          snapshot: snapshot
+          snapshot: snapshot,
+          requestContext: requestContext
         )
       case .undoChange(let request):
         return try await performAuthorizedUndo(
@@ -357,10 +553,9 @@
           actor: actor,
           profileID: profileID,
           snapshot: snapshot,
+          requestContext: requestContext,
           beginRequest: beginRequest
         )
-      case .listEvents, .prepareEventSubscription, .removeEventSubscription:
-        throw AgentWorkspaceError(code: .invalidOperation)
       case .getCapabilities:
         beginRequest()
         return try await checkedRead(
@@ -371,14 +566,167 @@
             )
           ),
           profileID: profileID,
-          snapshot: snapshot
+          snapshot: snapshot,
+          requestContext: requestContext
         )
+      case .listEvents:
+        beginRequest()
+        let events: [AgentEventDescriptor]
+        if let eventRuntime {
+          events = try await eventRuntime.listEvents(
+            profileID: profileID,
+            workspace: requestContext.workspace
+          )
+        } else if let eventService {
+          events = try await eventService.listEvents(
+            profileID: profileID,
+            workspace: requestContext.workspace
+          )
+        } else {
+          throw AgentWorkspaceError(code: .invalidOperation)
+        }
+        let response = try await checkedRead(
+          .events(events: events),
+          profileID: profileID,
+          snapshot: snapshot,
+          requestContext: requestContext
+        )
+        try await reauthorize(profileID: profileID, credential: credential)
+        try requireRequestContext(requestContext)
+        return try await checkedRead(
+          response,
+          profileID: profileID,
+          snapshot: snapshot,
+          requestContext: requestContext
+        )
+      case .prepareEventSubscription(let request):
+        guard eventRuntime != nil || eventService != nil else {
+          throw AgentWorkspaceError(code: .invalidOperation)
+        }
+        beginRequest()
+        let state = self.state
+        let workspaceProvider: AgentEventWorkspaceProvider = {
+          try await state.flushPendingPersistenceForAgent()
+          try await MainActor.run {
+            if self.eventRuntime == nil {
+              try self.requireRequestContext(requestContext)
+            } else {
+              try self.requireRequestAvailabilityAndExclusion(requestContext)
+            }
+          }
+          try await self.reauthorize(profileID: profileID, credential: credential)
+          return try await MainActor.run {
+            if self.eventRuntime == nil {
+              try self.requireRequestContext(requestContext)
+              return requestContext.workspace
+            }
+            try self.requireRequestAvailabilityAndExclusion(requestContext)
+            return state.workspace
+          }
+        }
+        if let eventRuntime {
+          releaseCommandQueue()
+          let verification = try await eventRuntime.prepareAndVerifySubscription(
+            profileID: profileID,
+            event: request.event,
+            scope: request.scope,
+            callbackURL: request.callbackURL,
+            signingSecret: request.signingSecret,
+            requestedTTLSeconds: request.ttl.requestedSeconds,
+            expectedGrantRevision: snapshot.grantRevision,
+            expectedTemporaryExclusionGeneration: requestContext.temporaryExclusionGeneration,
+            workspaceProvider: workspaceProvider
+          )
+          responseLeaseHolder.install(verification.responseLease)
+          await state.refreshAgentEventMonitoring()
+          try await reauthorize(profileID: profileID, credential: credential)
+          let scopeMembership = try await eventRuntime.assertCurrentEventScope(
+            profileID: profileID,
+            scope: request.scope,
+            expectedGrantRevision: snapshot.grantRevision,
+            expectedTemporaryExclusionGeneration: requestContext.temporaryExclusionGeneration,
+            workspaceProvider: workspaceProvider
+          )
+          try await capabilityAuthority.assertCurrent(
+            profileID: profileID,
+            grantRevision: snapshot.grantRevision,
+            expectedTemporaryExclusionGeneration: requestContext.temporaryExclusionGeneration
+          )
+          guard scopeMembership.matches(scope: request.scope, in: state.workspace) else {
+            throw AgentWorkspaceError(code: .capabilityDenied)
+          }
+          guard verification.isCurrent() else {
+            throw AgentWorkspaceError(code: .capabilityDenied)
+          }
+          try requireRequestAvailabilityAndExclusion(requestContext)
+          return .verifiedEventSubscription(receipt: verification.receipt)
+        }
+        guard let eventService else {
+          throw AgentWorkspaceError(code: .invalidOperation)
+        }
+        let receipt = try await eventService.createPending(
+          profileID: profileID,
+          event: request.event,
+          scope: request.scope,
+          callbackURL: request.callbackURL,
+          signingSecret: request.signingSecret,
+          requestedTTLSeconds: request.ttl.requestedSeconds,
+          workspaceProvider: workspaceProvider,
+          now: now()
+        )
+        try requireRequestContext(requestContext)
+        try await assertCurrent(
+          profileID: profileID,
+          snapshot: snapshot,
+          requestContext: requestContext
+        )
+        return .pendingEventSubscription(
+          receipt: AgentEventPendingReceipt(
+            subscriptionID: receipt.subscriptionID,
+            expiresAt: receipt.expiresAt,
+            revision: receipt.revision,
+            grantRevision: receipt.grantRevision
+          )
+        )
+      case .removeEventSubscription(let request):
+        guard eventRuntime != nil || eventService != nil else {
+          throw AgentWorkspaceError(code: .invalidOperation)
+        }
+        beginRequest()
+        let callbackURL = try AgentEventSubscriptionIdentity.canonicalCallbackURL(
+          request.callbackURL
+        )
+        let subscriptionID = AgentEventSubscriptionIdentity.subscriptionID(
+          profileID: profileID,
+          event: request.event,
+          scope: request.scope,
+          callbackURL: callbackURL
+        )
+        if let eventRuntime {
+          try await eventRuntime.removeSubscription(subscriptionID: subscriptionID)
+        } else if let eventService {
+          try await eventService.remove(
+            profileID: profileID,
+            subscriptionID: subscriptionID
+          )
+        }
+        await state.refreshAgentEventMonitoring()
+        try requireRequestContext(requestContext)
+        try await reauthorize(profileID: profileID, credential: credential)
+        try requireRequestContext(requestContext)
+        try await assertCurrent(
+          profileID: profileID,
+          snapshot: snapshot,
+          requestContext: requestContext
+        )
+        return .eventUnsubscribed
       default:
         return try await performWrite(
           command,
           actor: actor,
           profileID: profileID,
           snapshot: snapshot,
+          requestContext: requestContext,
           beginRequest: beginRequest
         )
       }
@@ -389,11 +737,13 @@
       actor: AgentActivityActor,
       profileID: UUID,
       snapshot: AgentAuthorizationSnapshot,
+      requestContext: RequestContext,
       beginRequest: () -> Void
     ) async throws -> AgentWorkspaceResponse {
       try await state.flushPendingPersistenceForAgent()
+      try requireRequestContext(requestContext)
       let generation = state.persistenceGeneration
-      let workspace = state.workspace
+      let workspace = requestContext.workspace
       let context = try command.writeContext
       let note = try authorizedNote(
         context.noteID,
@@ -479,7 +829,8 @@
         expectedRevision: context.expectedRevision,
         responseIsUndo: false,
         profileID: profileID,
-        grantRevision: snapshot.grantRevision
+        grantRevision: snapshot.grantRevision,
+        requestContext: requestContext
       )
     }
 
@@ -488,9 +839,11 @@
       actor: AgentActivityActor,
       profileID: UUID,
       snapshot: AgentAuthorizationSnapshot,
+      requestContext: RequestContext,
       beginRequest: () -> Void
     ) async throws -> AgentWorkspaceResponse {
       try await state.flushPendingPersistenceForAgent()
+      try requireRequestContext(requestContext)
       let generation = state.persistenceGeneration
       guard
         let record = activityStore.record(id: request.changeID),
@@ -501,7 +854,8 @@
       }
       let note = try authorizedNote(
         record.noteID,
-        noteIDs: snapshot.writableNoteIDs
+        noteIDs: snapshot.writableNoteIDs,
+        in: requestContext.workspace
       )
       guard note.revision == request.expectedRevision else {
         throw AgentWorkspaceError(code: .revisionConflict)
@@ -518,7 +872,7 @@
         sourceOperation: sourceOperation,
         checklistFormatting: checklistFormatting(forUndoing: sourceOperation),
         note: note,
-        workspace: state.workspace,
+        workspace: requestContext.workspace,
         preferences: state.preferences
       )
       return try await commit(
@@ -527,7 +881,8 @@
         expectedRevision: request.expectedRevision,
         responseIsUndo: true,
         profileID: profileID,
-        grantRevision: snapshot.grantRevision
+        grantRevision: snapshot.grantRevision,
+        requestContext: requestContext
       )
     }
 
@@ -597,6 +952,7 @@
         resultingRevision: changed.revision,
         bodySHA256: transaction.resultingBodySHA256,
         actor: actor,
+        originatingActor: transaction.originatingActor,
         operationID: operationID,
         expiresAt: transaction.expiresAt
       )
@@ -638,13 +994,22 @@
       expectedRevision: UInt64,
       responseIsUndo: Bool,
       profileID: UUID? = nil,
-      grantRevision: UInt64? = nil
+      grantRevision: UInt64? = nil,
+      requestContext: RequestContext? = nil
     ) async throws -> AgentWorkspaceResponse {
       if let profileID, let grantRevision {
-        try await capabilityAuthority.assertCurrent(
-          profileID: profileID,
-          grantRevision: grantRevision
-        )
+        if let requestContext {
+          try await assertCurrent(
+            profileID: profileID,
+            grantRevision: grantRevision,
+            requestContext: requestContext
+          )
+        } else {
+          try await capabilityAuthority.assertCurrent(
+            profileID: profileID,
+            grantRevision: grantRevision
+          )
+        }
       }
       do {
         try activityStore.prepare(pending.transaction)
@@ -657,10 +1022,21 @@
       var workspaceCommitted = false
       do {
         if let profileID, let grantRevision {
-          try await capabilityAuthority.assertCurrent(
-            profileID: profileID,
-            grantRevision: grantRevision
-          )
+          if let requestContext {
+            try await assertCurrent(
+              profileID: profileID,
+              grantRevision: grantRevision,
+              requestContext: requestContext
+            )
+          } else {
+            try await capabilityAuthority.assertCurrent(
+              profileID: profileID,
+              grantRevision: grantRevision
+            )
+          }
+        }
+        if let requestContext {
+          try requireRequestContext(requestContext)
         }
         guard
           state.persistenceGeneration == capturedGeneration,
@@ -722,16 +1098,87 @@
       }
     }
 
+    private func reauthorize(profileID: UUID, credential: Data) async throws {
+      do {
+        let profile = try await profileStore.authorize(
+          profileID: profileID,
+          credential: credential
+        )
+        guard profile.id == profileID else {
+          throw AgentWorkspaceError(code: .permissionRevoked)
+        }
+      } catch let error as AgentWorkspaceError {
+        throw error
+      } catch {
+        throw AgentWorkspaceError(code: .permissionRevoked)
+      }
+    }
+
     private func checkedRead(
       _ response: AgentWorkspaceResponse,
       profileID: UUID,
-      snapshot: AgentAuthorizationSnapshot
+      snapshot: AgentAuthorizationSnapshot,
+      requestContext: RequestContext
     ) async throws -> AgentWorkspaceResponse {
-      try await capabilityAuthority.assertCurrent(
+      try await assertCurrent(
         profileID: profileID,
-        grantRevision: snapshot.grantRevision
+        snapshot: snapshot,
+        requestContext: requestContext
       )
       return response
+    }
+
+    private func captureRequestContext() -> RequestContext {
+      RequestContext(
+        workspace: state.workspace,
+        temporaryExclusionGeneration: capabilityAuthority
+          .temporaryExclusionGeneration
+      )
+    }
+
+    private func requireRequestContext(_ requestContext: RequestContext) throws {
+      try requireRequestAvailabilityAndExclusion(requestContext)
+      guard state.workspace == requestContext.workspace else {
+        throw AgentWorkspaceError(code: .capabilityDenied)
+      }
+    }
+
+    private func requireRequestAvailabilityAndExclusion(
+      _ requestContext: RequestContext
+    ) throws {
+      try requireAvailable()
+      guard
+        capabilityAuthority.temporaryExclusionGeneration
+          == requestContext.temporaryExclusionGeneration
+      else {
+        throw AgentWorkspaceError(code: .capabilityDenied)
+      }
+    }
+
+    private func assertCurrent(
+      profileID: UUID,
+      snapshot: AgentAuthorizationSnapshot,
+      requestContext: RequestContext
+    ) async throws {
+      try await assertCurrent(
+        profileID: profileID,
+        grantRevision: snapshot.grantRevision,
+        requestContext: requestContext
+      )
+    }
+
+    private func assertCurrent(
+      profileID: UUID,
+      grantRevision: UInt64,
+      requestContext: RequestContext
+    ) async throws {
+      try await capabilityAuthority.assertCurrent(
+        profileID: profileID,
+        grantRevision: grantRevision,
+        expectedTemporaryExclusionGeneration: requestContext
+          .temporaryExclusionGeneration
+      )
+      try requireRequestContext(requestContext)
     }
 
     private func reconcile() throws {

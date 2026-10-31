@@ -18,6 +18,7 @@ var packageDependencies: [Package.Dependency] = [
 var appDependencies: [Target.Dependency] = [
     "FleckCore",
     "FleckAgentProtocol",
+    "CFleckEventHTTP",
 ]
 var appExcludes = [
     "Info.plist",
@@ -106,6 +107,16 @@ let package = Package(
             dependencies: ["FleckCore"]
         ),
         .target(
+            name: "CFleckEventHTTP",
+            path: "Sources/CFleckEventHTTP",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedLibrary("curl"),
+                .linkedFramework("CFNetwork"),
+                .linkedFramework("CoreFoundation"),
+            ]
+        ),
+        .target(
             name: "FleckModelEvaluation",
             dependencies: ["FleckCore"]
         ),
@@ -158,8 +169,24 @@ let package = Package(
         ),
         .testTarget(
             name: "FleckAppTests",
-            dependencies: ["FleckApp", "FleckMCPFixtureSupport"],
+            dependencies: [
+                "FleckApp",
+                "FleckAgentBridge",
+                "CFleckEventHTTPTestSupport",
+                "FleckMCPFixtureSupport",
+            ],
             swiftSettings: appTestSwiftSettings
+        ),
+        .target(
+            name: "CFleckEventHTTPTestSupport",
+            path: "Tests/CFleckEventHTTPTestSupport",
+            publicHeadersPath: "include",
+            cSettings: [
+                .headerSearchPath("../../Sources/CFleckEventHTTP/include"),
+            ],
+            linkerSettings: [
+                .linkedLibrary("curl"),
+            ]
         ),
         .testTarget(
             name: "FleckAgentBridgeTests",
@@ -169,5 +196,6 @@ let package = Package(
             name: "FleckCaptureLabTests",
             dependencies: ["FleckCaptureLab", "FleckCore"]
         ),
-    ]
+    ],
+    cLanguageStandard: .c11
 )
