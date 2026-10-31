@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.36-beta.1] - 2026-11-01
+
+Private development candidate only; this correction is not an accepted build or public release.
+
+### Fixed
+
+- Allow queued resize reconciliation to reuse a synchronously aligned native frame while retaining
+  the downstream readiness, ownership, geometry and commit fences.
+
 ## [1.4.32-beta.1] - 2026-10-31
 
 Private development candidate only; this correction is not an accepted build or public release.
