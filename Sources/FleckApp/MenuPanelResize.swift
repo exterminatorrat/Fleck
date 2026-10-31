@@ -1430,7 +1430,7 @@
       in window: NSWindow
     ) -> MenuPanelResizeBeginReadiness {
       guard isLiveResizeEligible(in: window) else { return .blocked }
-      guard queuedRevision == nil else { return .reconciling }
+      if queuedRevision != nil, alignedFrame != window.frame { return .reconciling }
       guard let attachmentID,
         controller.isPresentationOwner(attachmentID),
         let statusButton = geometryStore?.resolveStatusButton(),
