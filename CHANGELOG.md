@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.29-beta.1] - 2026-10-31
+
+Development CI repair candidate only; this is not an accepted build or public release.
+
+### Fixed
+
+- Keep the activity scrollbar's visual knob within native knob geometry and preserve its
+  initial rectangle while tracking.
+
 ## [1.4.22-beta.1] - 2026-10-31
 
 Development CI repair candidate only; this is not an accepted build or public release.
