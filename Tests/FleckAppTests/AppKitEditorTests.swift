@@ -3798,7 +3798,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   #expect(style.contains("let accent: Color"))
   #expect(style.contains("let motion: AppMotion"))
   #expect(style.contains("@Environment(\\.isEnabled) private var isEnabled"))
-  #expect(style.contains(".font(.caption.weight(isSave ? .semibold : .medium))"))
+  #expect(style.contains(".fleckUIFont(.caption, weight: isSave ? .semibold : .medium)"))
   #expect(style.contains(".padding(.horizontal, 8)"))
   #expect(style.contains(".frame(height: 22)"))
   #expect(

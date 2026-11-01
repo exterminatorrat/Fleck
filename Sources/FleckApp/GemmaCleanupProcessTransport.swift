@@ -507,7 +507,7 @@ private final class GemmaCleanupProcessTransportSession:
     }
 
     var publicData: Data?
-    var finishAfterYield = false
+    var finishAfterDrain = false
     var invalid = false
 
     lock.lock()
@@ -541,7 +541,7 @@ private final class GemmaCleanupProcessTransportSession:
       }
       terminalSeen = true
       publicData = data
-      finishAfterYield = true
+      finishAfterDrain = true
     case .cancelAcknowledged:
       guard terminalSeen, cancellationWritten, !cancellationAcknowledged else {
         invalid = true
@@ -573,19 +573,25 @@ private final class GemmaCleanupProcessTransportSession:
         return
       }
       eventContinuation.yield(publicData)
-      if finishAfterYield {
-        finishPublic()
+      if finishAfterDrain {
+        Task {
+          let disposition = await self.runGraceful(requireCancellationAcknowledgement: nil)
+          if case .verified = disposition {
+            self.finishPublic()
+          } else {
+            self.fail(.protocolViolation)
+          }
+        }
       }
     }
   }
 
   private func runGraceful(
-    requireCancellationAcknowledgement: Bool
+    requireCancellationAcknowledgement: Bool?
   ) async -> GemmaCleanupTransportTerminationDisposition {
     let invalidInitialState = withStateLock {
       !terminalSeen || forceRequested || protocolFailed
-        || (requireCancellationAcknowledgement && !cancellationSent)
-        || (!requireCancellationAcknowledgement && cancellationSent)
+        || (requireCancellationAcknowledgement.map { $0 != cancellationSent } ?? false)
     }
     guard !invalidInitialState else {
       return await failGracefullyUnverifiable()
@@ -631,10 +637,12 @@ private final class GemmaCleanupProcessTransportSession:
   }
 
   private func gracefulProof(
-    requireCancellationAcknowledgement: Bool
+    requireCancellationAcknowledgement: Bool?
   ) -> GemmaCleanupTerminationProof? {
     lock.lock()
     defer { lock.unlock() }
+    let requireCancellationAcknowledgement = requireCancellationAcknowledgement
+      ?? cancellationSent
     guard readySeen, startedSeen, terminalSeen,
           shutdownAcknowledged,
           shutdownWritten,
@@ -856,7 +864,7 @@ private final class GemmaCleanupProcessTransportSession:
 
   private func finishPublic(throwing error: Error? = nil) {
     lock.lock()
-    guard !publicFinished else {
+    guard !publicFinished, error != nil || (!forceRequested && !protocolFailed) else {
       lock.unlock()
       return
     }

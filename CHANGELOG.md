@@ -3,6 +3,16 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.6-beta.1] - 2026-10-27
+
+### Fixed
+
+- Keep the selected interface font on explicitly styled Settings and Notes text while
+  preserving System defaults, semantic sizes, weights, symbol sizing, monospaced diagnostics
+  and editor fonts.
+
+Source-only review correction. Compilation, tests, visual/accessibility inspection and native
+behavior remain unverified locally.
 ## [1.4.43-beta.1] - 2026-11-01
 
 ### Fixed
@@ -11,33 +21,6 @@ public release log. Packaging unchanged source does not add a changelog entry.
   without depending on the first folder remaining exposed.
 
 Source checkpoint only; CI and native verification remain pending.
-## [1.4.26-beta.1] - 2026-10-31
-
-### Fixed
-
-- Integrate the reviewed Dictionary capture, folder overflow/focus, Settings spacing and Models
-  Backtab corrections while preserving capped, fading note-tab titles and full accessible labels.
-
-Source-only dependency integration; this checkpoint's CI and native validation remain pending.
-
-## [1.4.25-beta.1] - 2026-10-31
-
-### Fixed
-
-- Integrate the reviewed Dictionary capture, folder overflow/focus, Settings spacing and Models
-  Backtab corrections while preserving theme-matched banners, inline opt-out and native resizing.
-
-Source-only dependency integration; this checkpoint's CI and native validation remain pending.
-
-## [1.4.24-beta.1] - 2026-10-31
-
-### Fixed
-
-- Integrate the reviewed Settings spacing, Models Backtab and folder-row focus/School fixture
-  corrections while preserving native resize, scrollbar tracking and folder-creation guards.
-
-Source checkpoint only; this combined source's CI and native/visual verification remain pending.
-
 ## [1.4.42-beta.1] - 2026-11-01
 
 ### Fixed
@@ -115,6 +98,33 @@ Source checkpoint only; combined compilation and native verification remain pend
 - Preserve the initial visual knob rectangle when native tracking begins and retain held-size behavior.
 
 Source checkpoint only; compilation and native verification remain pending.
+
+## [1.4.26-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed Dictionary capture, folder overflow/focus, Settings spacing and Models
+  Backtab corrections while preserving capped, fading note-tab titles and full accessible labels.
+
+Source-only dependency integration; this checkpoint's CI and native validation remain pending.
+
+## [1.4.25-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed Dictionary capture, folder overflow/focus, Settings spacing and Models
+  Backtab corrections while preserving theme-matched banners, inline opt-out and native resizing.
+
+Source-only dependency integration; this checkpoint's CI and native validation remain pending.
+
+## [1.4.24-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed Settings spacing, Models Backtab and folder-row focus/School fixture
+  corrections while preserving native resize, scrollbar tracking and folder-creation guards.
+
+Source checkpoint only; this combined source's CI and native/visual verification remain pending.
 
 ## [1.4.23-beta.1] - 2026-10-31
 
@@ -197,6 +207,25 @@ tests, visual/accessibility inspection and native behavior remain unverified.
 Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
 tests, visual/accessibility inspection and native behavior remain unverified.
 
+## [1.4.13-beta.1] - 2026-10-26
+
+### Added
+
+- Add an optional installed-font preference for Fleck's interface while preserving the System
+  default and note-text formatting.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests, visual/accessibility inspection and native behavior remain unverified.
+
+## [1.4.12-beta.1] - 2026-10-26
+
+### Fixed
+
+- Cap note-tab title labels with a semantic trailing fade while preserving full accessible titles.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests, visual/accessibility inspection and native behavior remain unverified.
+
 ## [1.4.11-beta.1] - 2026-10-29
 
 ### Fixed
@@ -208,6 +237,16 @@ tests, visual/accessibility inspection and native behavior remain unverified.
 - Reject backing alignment or native adoption that changes an untouched resize axis.
 
 Source-only checkpoint; compilation, tests and native resize validation remain unrun.
+
+## [1.4.11-beta.1] - 2026-10-26
+
+### Fixed
+
+- Port theme-matched agent-update and capture-failure banner surfaces, plus an inline opt-out
+  wired to the existing agent-banner preference.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests, visual/accessibility inspection and native behavior remain unverified.
 
 ## [1.4.10-beta.1] - 2026-10-26
 

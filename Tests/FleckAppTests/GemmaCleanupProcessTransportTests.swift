@@ -76,8 +76,13 @@ func gemmaProcessTransportRejectsPrematureShutdownAcknowledgement() async throws
     }
   )
   let session = try transport.start(GemmaProcessTestRequest.make())
-  let events = try await withTimeout { try await collect(session.events) }
+  var iterator = session.events.makeAsyncIterator()
+  var events: [Data] = []
+  for _ in 0..<3 { events.append(try await next(&iterator)) }
   #expect(events.map { try? wireKind($0) } == ["ready", "started", "completed"])
+  await #expect(throws: Error.self) {
+    _ = try await withTimeout { try await collect(session.events) }
+  }
   try await fixture.waitForMarker("premature-ack-rejected")
   initialWriteGate.signal()
   try await fixture.waitForMarker("stdin-close-completed")
@@ -117,8 +122,13 @@ func gemmaProcessTransportRejectsPrematureCancellationAcknowledgement() async th
     }
   )
   let session = try transport.start(GemmaProcessTestRequest.make())
-  let events = try await withTimeout { try await collect(session.events) }
+  var iterator = session.events.makeAsyncIterator()
+  var events: [Data] = []
+  for _ in 0..<3 { events.append(try await next(&iterator)) }
   #expect(events.map { try? wireKind($0) } == ["ready", "started", "completed"])
+  await #expect(throws: Error.self) {
+    _ = try await withTimeout { try await collect(session.events) }
+  }
   try await fixture.waitForMarker("premature-ack-rejected")
   initialWriteGate.signal()
   try await fixture.waitForMarker("stdin-close-completed")
@@ -319,8 +329,13 @@ func gemmaProcessTransportRejectsMalformedTruncatedOversizedExtraAndLateOutput()
     useSandbox: false,
     timing: .short
   ).start(GemmaProcessTestRequest.make())
-  let lateEvents = try await withTimeout { try await collect(lateSession.events) }
+  var lateIterator = lateSession.events.makeAsyncIterator()
+  var lateEvents: [Data] = []
+  for _ in 0..<3 { lateEvents.append(try await next(&lateIterator)) }
   #expect(lateEvents.map { try? wireKind($0) } == ["ready", "started", "completed"])
+  await #expect(throws: Error.self) {
+    _ = try await withTimeout { try await collect(lateSession.events) }
+  }
   #expect(
     await lateSession.terminationAcknowledgement(
       for: .graceful(requireCancellationAcknowledgement: false)
@@ -347,7 +362,9 @@ func gemmaProcessTransportRejectsForeignAndNoncooperativeControlFlags() async th
   _ = try await next(&foreignIterator)
   foreignSession.requestCancellation()
   #expect(try wireKind(try await next(&foreignIterator)) == "cancelled")
-  #expect(try await foreignIterator.next() == nil)
+  await #expect(throws: Error.self) {
+    _ = try await withTimeout { try await collect(foreignSession.events) }
+  }
   try await Task.sleep(nanoseconds: 20_000_000)
   #expect(
     await foreignSession.terminationAcknowledgement(
@@ -442,6 +459,120 @@ func gemmaProcessTransportRejectsOversizedStderrWithoutRetainingIt() async throw
   }
   #expect(proof.processExited)
   #expect(proof.outputDrained)
+}
+
+@Test(arguments: ["stderr-after-terminal", "stderr-total-after-terminal"])
+func gemmaProcessTransportRejectsStderrOverflowAfterStreamingTerminal(mode: String) async throws {
+  let fixture = try GemmaHelperFixture(mode: mode)
+  let session = try fixture.makeTransport(useSandbox: false, timing: .short).start(
+    GemmaProcessTestRequest.make()
+  )
+  defer { session.forceTerminate() }
+  var iterator = session.events.makeAsyncIterator()
+  #expect(try wireKind(try await next(&iterator)) == "ready")
+  #expect(try wireKind(try await next(&iterator)) == "started")
+  #expect(try wireKind(try await next(&iterator)) == "completed")
+  fixture.mark("release-stderr")
+
+  await #expect(throws: Error.self) {
+    _ = try await withTimeout { try await collect(session.events) }
+  }
+  let disposition = await session.terminationAcknowledgement(for: .forced)
+  guard case .verified(let proof) = disposition else {
+    Issue.record("post-terminal stderr overflow did not drain: \(disposition)")
+    return
+  }
+  #expect(proof.processExited)
+  #expect(proof.outputDrained)
+  #expect(try !fixture.processIsAlive())
+}
+
+@Test
+func gemmaProcessTransportAcceptsStderrAtTheBoundAfterStreamingTerminal() async throws {
+  let fixture = try GemmaHelperFixture(mode: "stderr-boundary-after-terminal")
+  let session = try fixture.makeTransport(useSandbox: false).start(
+    GemmaProcessTestRequest.make()
+  )
+  defer { session.forceTerminate() }
+  var iterator = session.events.makeAsyncIterator()
+  #expect(try wireKind(try await next(&iterator)) == "ready")
+  #expect(try wireKind(try await next(&iterator)) == "started")
+  #expect(try wireKind(try await next(&iterator)) == "completed")
+  fixture.mark("release-stderr")
+  #expect(try await withTimeout { try await collect(session.events) }.isEmpty)
+
+  let disposition = await session.terminationAcknowledgement(
+    for: .graceful(requireCancellationAcknowledgement: false)
+  )
+  guard case .verified(let proof) = disposition else {
+    Issue.record("bounded post-terminal stderr did not drain gracefully: \(disposition)")
+    return
+  }
+  #expect(proof.cooperative)
+  #expect(proof.processExited)
+  #expect(proof.outputDrained)
+  #expect(try fixture.commands().map { try wireOperation($0) } == ["cleanup", "shutdown"])
+}
+
+@Test
+func gemmaProcessTransportBoundsPostTerminalDrainWhenHelperStalls() async throws {
+  let fixture = try GemmaHelperFixture(mode: "terminal-stall")
+  let session = try fixture.makeTransport(useSandbox: false, timing: .short).start(
+    GemmaProcessTestRequest.make()
+  )
+  defer { session.forceTerminate() }
+  var iterator = session.events.makeAsyncIterator()
+  #expect(try wireKind(try await next(&iterator)) == "ready")
+  #expect(try wireKind(try await next(&iterator)) == "started")
+  #expect(try wireKind(try await next(&iterator)) == "completed")
+  let streamFailed = try await withTimeout {
+    do {
+      _ = try await collect(session.events)
+      return false
+    } catch {
+      return true
+    }
+  }
+  #expect(streamFailed)
+  #expect(try fixture.commands().map { try wireOperation($0) } == ["cleanup", "shutdown"])
+  let disposition = await session.terminationAcknowledgement(for: .forced)
+  guard case .verified(let proof) = disposition else {
+    Issue.record("stalled post-terminal helper did not drain: \(disposition)")
+    return
+  }
+  #expect(proof.processExited)
+  #expect(proof.outputDrained)
+  #expect(try !fixture.processIsAlive())
+}
+
+@Test
+func gemmaProcessTransportAcknowledgesCancellationArrivingDuringTerminalDrain() async throws {
+  let fixture = try GemmaHelperFixture(mode: "cancel-during-drain")
+  let session = try fixture.makeTransport(useSandbox: false).start(GemmaProcessTestRequest.make())
+  defer { session.forceTerminate() }
+  var iterator = session.events.makeAsyncIterator()
+  #expect(try wireKind(try await next(&iterator)) == "ready")
+  #expect(try wireKind(try await next(&iterator)) == "started")
+  #expect(try wireKind(try await next(&iterator)) == "completed")
+  try await withTimeout { try await fixture.waitForMarker("shutdown-received") }
+  session.requestCancellation()
+  #expect(try await withTimeout { try await collect(session.events) }.isEmpty)
+
+  let disposition = await session.terminationAcknowledgement(
+    for: .graceful(requireCancellationAcknowledgement: true)
+  )
+  guard case .verified(let proof) = disposition else {
+    Issue.record("cancellation during terminal drain did not verify: \(disposition)")
+    return
+  }
+  #expect(proof.phase == .graceful(requireCancellationAcknowledgement: true))
+  #expect(proof.cancellationCommandID == "cancel-cleanup-test")
+  #expect(proof.cancellationTargetRequestID == "cleanup-test")
+  #expect(proof.shutdownCommandID == "shutdown-cleanup-test")
+  #expect(proof.cooperative)
+  #expect(proof.processExited)
+  #expect(proof.outputDrained)
+  #expect(try fixture.commands().map { try wireOperation($0) } == ["cleanup", "shutdown", "cancel"])
 }
 
 @Test
@@ -1188,7 +1319,7 @@ while IFS= read -r line; do
   if printf '%s' "$line" | grep -q '"operation":"cleanup"'; then
     emit_started "$request_id"
     case "$mode" in
-      normal|exit-before-command) emit_completed "$request_id"; [ "$mode" = "exit-before-command" ] && exit 0 ;;
+      normal|exit-before-command|terminal-stall|cancel-during-drain) emit_completed "$request_id"; [ "$mode" = "exit-before-command" ] && exit 0 ;;
       cancel|foreign-control|noncooperative|stall|ignore-term) : ;;
       close-stdin) exec 0<&-; : > "$model_directory/stdin-closed"; while :; do :; done ;;
       duplicate) /usr/bin/printf '%s\n' '{"schemaVersion":1,"kind":"completed","requestID":"'"$request_id"'","requestID":"'"$request_id"'","rawText":"{\"text\":\"bad\"}"}' ;;
@@ -1207,11 +1338,24 @@ while IFS= read -r line; do
         while [ "$i" -lt 66000 ]; do printf x >&2; i=$((i + 1)); done
         emit_completed "$request_id"
         ;;
+      stderr-after-terminal|stderr-total-after-terminal|stderr-boundary-after-terminal)
+        emit_completed "$request_id"
+        while [ ! -f "$model_directory/release-stderr" ]; do /bin/sleep 0.001; done
+        if [ "$mode" = "stderr-after-terminal" ]; then
+          printf '%66000s' x >&2
+        else
+          count=65
+          [ "$mode" = "stderr-boundary-after-terminal" ] && count=64
+          i=0
+          while [ "$i" -lt "$count" ]; do printf '%1023s\n' x >&2; i=$((i + 1)); done
+        fi
+        ;;
       early-exit) exit 7 ;;
     esac
   elif printf '%s' "$line" | grep -q '"operation":"cancel"'; then
     case "$mode" in
       cancel) emit_cancelled "$target_id"; emit_cancel_ack "$request_id" "$target_id" ;;
+      cancel-during-drain) emit_cancel_ack "$request_id" "$target_id"; emit_shutdown_ack "$shutdown_id"; exit 0 ;;
       foreign-control)
         emit_cancelled "$target_id"
         /usr/bin/printf '%s\n' '{"schemaVersion":1,"kind":"cancel-acknowledged","requestID":"foreign","targetRequestID":"'"$target_id"'","cooperative":true,"processTerminationMayBeRequired":false}'
@@ -1223,9 +1367,10 @@ while IFS= read -r line; do
     esac
   elif printf '%s' "$line" | grep -q '"operation":"shutdown"'; then
     case "$mode" in
-      normal|cancel|foreign-control|noncooperative|exit-before-command|stderr-large) emit_shutdown_ack "$request_id"; exit 0 ;;
+      normal|cancel|foreign-control|noncooperative|exit-before-command|stderr-large|stderr-after-terminal|stderr-total-after-terminal|stderr-boundary-after-terminal) emit_shutdown_ack "$request_id"; exit 0 ;;
       late) emit_shutdown_ack "$request_id"; /usr/bin/printf '%s\n' '{"schemaVersion":1,"kind":"ready"}'; exit 0 ;;
-      stall|ignore-term) while :; do :; done ;;
+      cancel-during-drain) shutdown_id="$request_id"; : > "$model_directory/shutdown-received" ;;
+      stall|ignore-term|terminal-stall) while :; do :; done ;;
       *) : ;;
     esac
   fi
