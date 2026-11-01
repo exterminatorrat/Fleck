@@ -126,11 +126,16 @@ public struct DictationInsertionReceipt: Equatable, Sendable {
   public let captureID: UUID
   public let noteID: UUID
   public let insertedSuffix: String
+  public let filing: DictationFilingCommit?
 
-  public init(captureID: UUID, noteID: UUID, insertedSuffix: String) {
+  public init(
+    captureID: UUID, noteID: UUID, insertedSuffix: String,
+    filing: DictationFilingCommit? = nil
+  ) {
     self.captureID = captureID
     self.noteID = noteID
     self.insertedSuffix = insertedSuffix
+    self.filing = filing
   }
 }
 

@@ -123,22 +123,32 @@ extension TranscriptDictionaryResolving {
   }
 }
 
+struct DictationRoutingHeading: Equatable, Sendable {
+  let id: String
+  let title: String
+  let level: Int
+  let insertionUTF16Offset: Int
+}
+
 struct DictationRoutingCandidate: Equatable, Sendable {
   let destination: DictationDestination
   let semanticContext: String
   let contentRevision: UInt64
   let presentationContext: String?
+  let headings: [DictationRoutingHeading]
 
   init(
     destination: DictationDestination,
     semanticContext: String,
     contentRevision: UInt64 = 0,
-    presentationContext: String? = nil
+    presentationContext: String? = nil,
+    headings: [DictationRoutingHeading] = []
   ) {
     self.destination = destination
     self.semanticContext = semanticContext
     self.contentRevision = contentRevision
     self.presentationContext = presentationContext
+    self.headings = headings
   }
 }
 
@@ -156,6 +166,7 @@ enum DictationRoutingDecision: Equatable, Sendable {
   case resolved(UUID)
   case ambiguous([DictationRoutingChoice])
   case inbox
+  case filing(DictationFilingPlan)
 }
 
 struct DictationRoutingAmbiguity: Equatable, Sendable {
@@ -220,6 +231,10 @@ protocol FocusedDictationEditing: AnyObject {
 @MainActor
 protocol DictationSaving: AnyObject {
   func activeDestinations() -> [DictationRoutingCandidate]
+  func saveSmartFiling(
+    _ plan: DictationFilingPlan,
+    captureID: UUID
+  ) async throws -> DictationInsertionReceipt
   func saveSmartCapture(
     text: String,
     captureID: UUID,
@@ -239,10 +254,24 @@ protocol DictationSaving: AnyObject {
 }
 
 extension DictationSaving {
+  func saveSmartFiling(
+    _ plan: DictationFilingPlan,
+    captureID: UUID
+  ) async throws -> DictationInsertionReceipt {
+    throw DictationFilingSaveError.unsupported
+  }
+
   func moveSmartCapture(
     _ receipt: DictationInsertionReceipt,
     to destinationID: UUID
   ) async -> DictationInsertionReceipt? {
     nil
   }
+}
+
+enum DictationFilingSaveError: Error {
+  case unsupported
+  case invalidPlan
+  case conflictingCapture
+  case superseded
 }

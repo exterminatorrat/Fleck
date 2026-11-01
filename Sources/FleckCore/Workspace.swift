@@ -83,21 +83,25 @@ public struct Workspace: Codable, Equatable, Sendable {
   public var notes: [Note]
   public var selectedNoteID: UUID?
   public var folders: [Folder]
+  public var dictationFilingLedger: DictationFilingLedger
 
   public init(
     notes: [Note] = [],
     selectedNoteID: UUID? = nil,
-    folders: [Folder] = []
+    folders: [Folder] = [],
+    dictationFilingLedger: DictationFilingLedger = .init()
   ) {
     self.notes = notes
     self.selectedNoteID = selectedNoteID
     self.folders = folders
+    self.dictationFilingLedger = dictationFilingLedger
   }
 
   private enum CodingKeys: String, CodingKey {
     case notes
     case selectedNoteID
     case folders
+    case dictationFilingLedger
   }
 
   public init(from decoder: Decoder) throws {
@@ -105,6 +109,19 @@ public struct Workspace: Codable, Equatable, Sendable {
     notes = try container.decode([Note].self, forKey: .notes)
     selectedNoteID = try container.decodeIfPresent(UUID.self, forKey: .selectedNoteID)
     folders = try container.decodeIfPresent([Folder].self, forKey: .folders) ?? []
+    if container.contains(.dictationFilingLedger) {
+      dictationFilingLedger = try container.decode(
+        DictationFilingLedger.self, forKey: .dictationFilingLedger
+      )
+    } else {
+      dictationFilingLedger = .init()
+    }
+    guard dictationFilingLedger.isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .dictationFilingLedger, in: container,
+        debugDescription: "Invalid dictation filing metadata"
+      )
+    }
   }
 
   @discardableResult

@@ -3155,6 +3155,49 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   #expect(fixture.coordinator.phase == .saved(fixture.inbox))
 }
 
+@Test(arguments: [false, true]) @MainActor
+func explicitInboxRoutingSavesWithoutOfferingUnrelatedManualDestinations(_ inboxExists: Bool)
+  async throws
+{
+  let fixture = try Fixture()
+  let unrelated = [
+    DictationDestination(noteID: UUID(), title: "Untitled"),
+    DictationDestination(noteID: UUID(), title: "Untitled"),
+    DictationDestination(noteID: UUID(), title: "Project"),
+  ]
+  fixture.saver.destinations = inboxExists ? [fixture.inbox] + unrelated : unrelated
+  fixture.saver.createdInboxID = fixture.inbox.noteID
+  fixture.standard.finalText = "Save directly to Inbox"
+  fixture.router.result = .inbox
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  #expect(fixture.saver.savedTexts == ["Save directly to Inbox"])
+  #expect(fixture.saver.destinationIDs == [inboxExists ? fixture.inbox.noteID : nil])
+  #expect(fixture.saver.savedFilingPlans.isEmpty)
+  #expect(fixture.coordinator.phase == .saved(fixture.inbox))
+  #expect(fixture.coordinator.routingAmbiguity == nil)
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  let receipt = try #require(fixture.coordinator.recoveryReceipt)
+  #expect(receipt.noteID == fixture.inbox.noteID)
+  let records = try await fixture.history.list()
+  #expect(records.count == 1)
+  #expect(records.first?.id == receipt.captureID)
+  #expect(records.first?.destination == fixture.inbox)
+  #expect(records.first?.insertionOutcome == .saved)
+  #expect(await fixture.coordinator.chooseDestination(
+    captureID: receipt.captureID, noteID: unrelated[0].noteID
+  ) == nil)
+  #expect(fixture.saver.moveCount == 0)
+  #expect(fixture.coordinator.recoveryReceipt == receipt)
+  #expect(await fixture.coordinator.performRecoveryAction() == .completed)
+  #expect(fixture.saver.undoReceipts == [receipt])
+  #expect(fixture.coordinator.recoveryReceipt == nil)
+  #expect(fixture.saver.savedTexts.isEmpty)
+  #expect(try await fixture.history.list().isEmpty)
+}
+
 @Test @MainActor func ordinaryInboxFallbackOffersEveryManualDestinationAndMovesGenericNote()
   async throws
 {
@@ -3169,7 +3212,7 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   ]
   fixture.saver.destinations += destinations
   fixture.standard.finalText = "Choose after fallback"
-  fixture.router.result = .inbox
+  fixture.router.result = .resolved(UUID())
 
   await fixture.coordinator.start(mode: .smartCapture)
   await fixture.coordinator.finish()
@@ -3195,7 +3238,7 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   let fixture = try Fixture()
   fixture.saver.destinations.append(.init(noteID: UUID(), title: "Note"))
   fixture.standard.finalText = "Leave in Inbox"
-  fixture.router.result = .inbox
+  fixture.router.result = .resolved(UUID())
 
   await fixture.coordinator.start(mode: .smartCapture)
   await fixture.coordinator.finish()
@@ -5423,6 +5466,105 @@ private func isRepairRequired(_ state: EnhancedModelState) -> Bool {
 }
 #endif
 
+@Test(arguments: [false, true]) @MainActor
+func aggregateFilingUsesOneSaveReceiptAndPreservesHistoryPreference(_ historyEnabled: Bool)
+  async throws
+{
+  let fixture = try Fixture(historyEnabled: historyEnabled)
+  let text = "Alpha task. Beta task."
+  let plan = try coordinatorFilingPlan(fixture, text: text)
+  fixture.standard.finalText = text
+  fixture.router.result = .filing(plan)
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  #expect(fixture.saver.savedFilingPlans == [plan])
+  #expect(fixture.saver.savedTexts == [text])
+  #expect(fixture.coordinator.recoveryReceipt?.filing?.insertions.count == 2)
+  #expect(fixture.coordinator.routingAmbiguity == nil)
+  #expect(try await fixture.history.list().count == (historyEnabled ? 1 : 0))
+}
+
+@Test(arguments: [false, true]) @MainActor
+func aggregateFilingCancellationCompensatesWholeReceiptOrPreservesRecovery(_ undoSucceeds: Bool)
+  async throws
+{
+  let fixture = try Fixture()
+  let text = "Alpha task. Beta task."
+  let plan = try coordinatorFilingPlan(fixture, text: text)
+  let gate = Gate()
+  fixture.standard.finalText = text
+  fixture.router.result = .filing(plan)
+  fixture.saver.saveGate = gate
+  fixture.saver.undoSucceeds = undoSucceeds
+  await fixture.coordinator.start(mode: .smartCapture)
+  let finishing = Task { await fixture.coordinator.finish() }
+  await gate.waitUntilWaiting()
+  let cancelling = Task { await fixture.coordinator.cancel() }
+  while fixture.coordinator.latestRuntimeMeasurements.cancellationRequestedAt == nil {
+    await Task.yield()
+  }
+  await gate.openGate()
+  await cancelling.value
+  await finishing.value
+  #expect(fixture.saver.undoCount == 1)
+  #expect(fixture.saver.undoReceipts.first?.filing?.insertions.count == 2)
+  if undoSucceeds {
+    #expect(fixture.saver.savedTexts.isEmpty)
+    #expect(try await fixture.history.list().isEmpty)
+    #expect(fixture.coordinator.phase == .idle)
+  } else {
+    #expect(fixture.saver.savedTexts == [text])
+    #expect(fixture.coordinator.copyableTranscript == text)
+    #expect(fixture.coordinator.recoveryReceipt?.filing?.insertions.count == 2)
+    #expect(fixture.coordinator.phase == .failed("Dictation was saved but could not be undone."))
+  }
+}
+
+@Test @MainActor func explicitFocusedCaptureNeverUsesSemanticFilingPlan() async throws {
+  let fixture = try Fixture()
+  let text = "Alpha task. Beta task."
+  fixture.router.result = .filing(try coordinatorFilingPlan(fixture, text: text))
+  fixture.standard.finalText = text
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  await fixture.coordinator.finish()
+  #expect(fixture.router.callCount == 0)
+  #expect(fixture.saver.savedFilingPlans.isEmpty)
+  #expect(fixture.editor.committedTexts == [text])
+  #expect(fixture.saver.flushCount == 1)
+}
+
+@Test @MainActor func staleAggregatePlanFallsBackToWholeCaptureWithoutPartialFiling() async throws {
+  let fixture = try Fixture()
+  let text = "Alpha task. Beta task."
+  let plan = try coordinatorFilingPlan(fixture, text: text)
+  fixture.saver.semanticContexts[plan.outputs[1].destinationID] = "changed after routing snapshot"
+  fixture.router.result = .filing(plan)
+  fixture.standard.finalText = text
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+  #expect(fixture.saver.savedFilingPlans.isEmpty)
+  #expect(fixture.saver.savedTexts == [text])
+  #expect(fixture.saver.destinationIDs == [fixture.inbox.noteID])
+}
+
+@MainActor
+private func coordinatorFilingPlan(_ fixture: Fixture, text: String) throws -> DictationFilingPlan {
+  let destinations = [
+    DictationDestination(noteID: UUID(), title: "Alpha"),
+    DictationDestination(noteID: UUID(), title: "Beta"),
+  ]
+  fixture.saver.destinations += destinations
+  let chunks = try #require(DictationFilingPlan.hostChunks(in: text))
+  try #require(chunks.count == destinations.count)
+  return try #require(DictationFilingPlan.make(
+    text: text,
+    fragments: zip(chunks, destinations).map {
+      .init(text: $0.0, destinationID: $0.1.noteID)
+    },
+    candidates: fixture.saver.activeDestinations(), inboxID: fixture.inbox.noteID
+  ))
+}
+
 @MainActor
 private final class Fixture {
   private let preference: PreferenceBox
@@ -6084,6 +6226,8 @@ private final class FakeSaver: DictationSaving {
   var flushGate: Gate?
   var flushError: Error?
   var savedTexts: [String] = []
+  var savedFilingPlans: [DictationFilingPlan] = []
+  var undoReceipts: [DictationInsertionReceipt] = []
   var destinationIDs: [UUID?] = []
   var flushCount = 0
   var undoCount = 0
@@ -6105,6 +6249,30 @@ private final class FakeSaver: DictationSaving {
     }
   }
 
+  func saveSmartFiling(
+    _ plan: DictationFilingPlan, captureID: UUID
+  ) async throws -> DictationInsertionReceipt {
+    if let saveGate { await saveGate.wait() }
+    if let saveError { throw saveError }
+    savedFilingPlans.append(plan)
+    savedTexts.append(plan.text)
+    let noteID = plan.outputs[0].destinationID
+    destinationIDs.append(noteID)
+    return DictationInsertionReceipt(
+      captureID: captureID, noteID: noteID, insertedSuffix: "",
+      filing: DictationFilingCommit(
+        captureID: captureID, inputDigest: DictationFilingLedger.digest(plan.text),
+        insertions: plan.outputs.map {
+          DictationFilingInsertion(
+            noteID: $0.destinationID, noteRevision: $0.contentRevision + 1,
+            location: 0, length: $0.text.utf16.count,
+            digest: DictationFilingLedger.digest($0.text)
+          )
+        }
+      )
+    )
+  }
+
   func saveSmartCapture(text: String, captureID: UUID, destinationID: UUID?) async throws -> DictationInsertionReceipt {
     if let saveGate { await saveGate.wait() }
     savedTexts.append(text)
@@ -6116,6 +6284,7 @@ private final class FakeSaver: DictationSaving {
 
   func undoSmartCapture(_ receipt: DictationInsertionReceipt) async -> Bool {
     undoCount += 1
+    undoReceipts.append(receipt)
     if let undoGate { await undoGate.wait() }
     if undoSucceeds, !savedTexts.isEmpty { savedTexts.removeLast() }
     return undoSucceeds
