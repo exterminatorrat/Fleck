@@ -270,6 +270,27 @@
     }
   }
 
+  enum SettingsWindowChromeLayout {
+    static let minimumTrafficLightInset: CGFloat = 14
+
+    static func trafficLightTopInset(
+      sidebarFrame: NSRect,
+      searchFrame: NSRect,
+      headingFrame: NSRect,
+      buttonHeight: CGFloat
+    ) -> CGFloat? {
+      guard !searchFrame.isEmpty, !headingFrame.isEmpty, buttonHeight > 0,
+        sidebarFrame.contains(searchFrame), sidebarFrame.contains(headingFrame),
+        searchFrame.minY >= headingFrame.maxY
+      else { return nil }
+      let lowerGap = searchFrame.minY - headingFrame.maxY
+      let buttonBottom = searchFrame.maxY + lowerGap
+      let inset = sidebarFrame.maxY - buttonBottom - buttonHeight
+      guard inset.isFinite, inset >= minimumTrafficLightInset else { return nil }
+      return inset
+    }
+  }
+
   private struct SettingsWindowChromeConfigurator: NSViewRepresentable {
     func makeNSView(context: Context) -> SettingsWindowChromeView {
       SettingsWindowChromeView()
@@ -283,6 +304,7 @@
   private final class SettingsWindowChromeView: NSView {
     private var adjustmentScheduled = false
     private var observedButtons: [NSButton] = []
+    private var trafficLightTopInset = SettingsWindowChromeLayout.minimumTrafficLightInset
 
     deinit {
       NotificationCenter.default.removeObserver(self)
@@ -291,6 +313,7 @@
     override func viewWillMove(toWindow newWindow: NSWindow?) {
       if newWindow !== window {
         stopObservingTrafficLights()
+        trafficLightTopInset = SettingsWindowChromeLayout.minimumTrafficLightInset
       }
       super.viewWillMove(toWindow: newWindow)
     }
@@ -339,7 +362,7 @@
     private func adjustTrafficLights() {
       guard let window,
         let contentView = window.contentView,
-        let sidebarSurface = settingsSidebarSurface(in: contentView)
+        let sidebarSurface = settingsView(identifier: "settings-sidebar-surface", in: contentView)
       else {
         return
       }
@@ -353,8 +376,32 @@
 
       let sidebarFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
       let buttonFrames = buttons.map { $0.convert($0.bounds, to: nil) }
+      if let searchField = settingsView(identifier: "settings-search-field", in: contentView)
+        as? NSSearchField,
+        let heading = settingsView(identifier: "settings-fleck-sidebar-heading", in: contentView),
+        heading.visibleRect.contains(heading.bounds),
+        let buttonHeight = buttonFrames.map(\.height).max()
+      {
+        let searchFrame = searchField.convert(searchField.bounds, to: nil)
+        let headingFrame = heading.convert(heading.bounds, to: nil)
+        var ancestor: NSView? = heading
+        while let view = ancestor, !(view is NSOutlineView) {
+          ancestor = view.superview
+        }
+        if let outline = ancestor as? NSOutlineView,
+          outline.visibleRect.minY <= outline.bounds.minY,
+          let inset = SettingsWindowChromeLayout.trafficLightTopInset(
+            sidebarFrame: sidebarFrame,
+            searchFrame: searchFrame,
+            headingFrame: headingFrame,
+            buttonHeight: buttonHeight
+          )
+        {
+          trafficLightTopInset = inset
+        }
+      }
       let targetMinX = sidebarFrame.minX + 14
-      let targetMaxY = sidebarFrame.maxY - 14
+      let targetMaxY = sidebarFrame.maxY - trafficLightTopInset
       guard let currentMinX = buttonFrames.map(\.minX).min() else { return }
       guard let currentMaxY = buttonFrames.map(\.maxY).max() else { return }
       let offsetX = targetMinX - currentMinX
@@ -403,12 +450,12 @@
       scheduleTrafficLightAdjustment()
     }
 
-    private func settingsSidebarSurface(in view: NSView) -> NSView? {
-      if view.accessibilityIdentifier() == "settings-sidebar-surface" {
+    private func settingsView(identifier: String, in view: NSView) -> NSView? {
+      if view.accessibilityIdentifier() == identifier {
         return view
       }
       for subview in view.subviews {
-        if let surface = settingsSidebarSurface(in: subview) {
+        if let surface = settingsView(identifier: identifier, in: subview) {
           return surface
         }
       }
@@ -913,11 +960,16 @@
     @EnvironmentObject private var appState: AppState
     @Environment(\.fleckThemeSnapshot) private var theme
     @Environment(\.fleckUIFont) private var uiFont
+    #if DEBUG
+    @Environment(\.settingsReadinessReturnObservationSource)
+      private var readinessReturnObservationSource: AnyObject?
+    #endif
     @ObservedObject var runtime: DictationRuntime
     @ObservedObject private var personalDictionarySettingsViewModel:
       PersonalDictionarySettingsViewModel
     @ObservedObject private var historyController: DictationHistoryController
     private let buildIdentity: BuildIdentity
+    private let openSystemSettingsAction: @MainActor (DictationSystemSettingsAction) -> Void
     private let updateController: AppUpdateController?
     @State private var selectedSection = SettingsSection.editing
     @State private var showsHistoryClearConfirmation = false
@@ -927,6 +979,8 @@
     @State private var isSettingsSearchFieldFocused = false
     @State private var searchQuery = ""
     @State private var isReadinessPopoverPresented = false
+    @State private var readinessKeyboardReturnRequest: SettingsKeyboardFocusReturnRequest?
+    @StateObject private var readinessReturnAttachment = SettingsKeyboardFocusReturnAttachment()
     @State private var searchFocusRequest: UUID?
     @State private var highlightedSearchTarget: SettingsSearchTarget?
     @State private var searchRequest: SettingsSearchRequest?
@@ -937,11 +991,15 @@
     init(
       runtime: DictationRuntime,
       buildIdentity: BuildIdentity = .current(),
-      updateController: AppUpdateController? = nil
+      updateController: AppUpdateController? = nil,
+      openSystemSettingsAction: (@MainActor (DictationSystemSettingsAction) -> Void)? = nil
     ) {
       self.runtime = runtime
       self.buildIdentity = buildIdentity
       self.updateController = updateController
+      self.openSystemSettingsAction = openSystemSettingsAction ?? { action in
+        runtime.openSystemSettings(action)
+      }
       _personalDictionarySettingsViewModel = ObservedObject(
         wrappedValue: runtime.personalDictionarySettingsViewModel
       )
@@ -1067,6 +1125,7 @@
         recordingSelection.transition(to: newSection)
         if newSection != .dictation {
           isReadinessPopoverPresented = false
+          readinessKeyboardReturnRequest = nil
         }
       }
       .onChange(of: searchQuery) { _, _ in
@@ -1482,8 +1541,38 @@
       .popover(isPresented: $isReadinessPopoverPresented, arrowEdge: .top) {
         dictationReadinessPopover
           .fleckPopoverTheme(theme)
+          .onExitCommand {
+            let inputID = SettingsSearchInputModality.shared.inputID
+            if selectedSection == .dictation {
+              readinessReturnAttachment.publishReturnRequest(
+                inputID: inputID, to: $readinessKeyboardReturnRequest
+              )
+            } else {
+              readinessKeyboardReturnRequest = nil
+            }
+            #if DEBUG
+            let returnRequest = readinessKeyboardReturnRequest
+            SettingsSearchInputModality.shared.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[F93-readiness-return:exit] pending=\(returnRequest != nil) windowPresent=\(returnRequest?.window != nil) keyMatch=\(returnRequest?.window != nil && NSApp.keyWindow != nil && returnRequest?.window === NSApp.keyWindow) parentMatch=\(returnRequest?.window != nil && NSApp.keyWindow?.parent != nil && returnRequest?.window === NSApp.keyWindow?.parent) inputMatch=\(returnRequest?.inputID == inputID)"
+            )
+            #endif
+            isReadinessPopoverPresented = false
+          }
+          #if DEBUG
+          .onDisappear {
+            let returnRequest = readinessKeyboardReturnRequest
+            SettingsSearchInputModality.shared.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[F93-readiness-return:disappear] pending=\(returnRequest != nil) dictation=\(selectedSection == .dictation)"
+            )
+          }
+          #endif
       }
-      .settingsSearchAnchor(.dictationStatus, request: searchRequest)
+      .settingsSearchAnchor(.dictationStatus, request: searchRequest) {
+        readinessReturnAttachment
+      }
+      .environment(\.settingsKeyboardFocusReturnRequest, $readinessKeyboardReturnRequest)
       .accessibilityLabel("Dictation readiness")
       .accessibilityValue(isReady ? "Ready" : "Needs attention")
       .accessibilityHint("Show dictation readiness and recovery actions.")
@@ -1498,7 +1587,7 @@
           Button("Enable Input Monitoring") {
             Task { @MainActor in
               guard let settings = await runtime.recoverModifierMonitoring() else { return }
-              runtime.openSystemSettings(settings)
+              openSystemSettingsAction(settings)
             }
           }
           .disabled(!dictationModifierPresentation.isPickerEnabled)
@@ -1542,7 +1631,7 @@
 
             ForEach(recoveryActions, id: \.pane) { action in
               Button(action.title) {
-                runtime.openSystemSettings(action)
+                openSystemSettingsAction(action)
               }
               .buttonStyle(.bordered)
             }
@@ -2937,7 +3026,6 @@
       presentationGeneration += 1
       searchPresentationSource = source
       isOptionsTriggerFocused = false
-      isSearchTriggerFocused = false
       withAnimation(motion.presentationAnimation(for: source)) {
         isSearchExpanded = true
         isSearchFocused = true
