@@ -281,8 +281,11 @@ private func nativeTabDragMaximumPixelComponentDelta(from source: NSImage, to re
 }
 
 @Test func tabStripAllocatesItsActualOverflowViewportAtSupportedWidths() throws {
-  #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 380) == 324)
-  #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 520) == 464)
+  #expect(!TabOverflowPresentation.overflows(contentWidth: 240, totalStripWidth: 240))
+  #expect(TabOverflowPresentation.overflows(contentWidth: 240.01, totalStripWidth: 240))
+  #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 380, showsOverflow: false) == 380)
+  #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 380, showsOverflow: true) == 324)
+  #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 520, showsOverflow: true) == 464)
 
   let source = try tabNotesPanelSource()
   let tabStrip = try #require(
@@ -294,7 +297,10 @@ private func nativeTabDragMaximumPixelComponentDelta(from source: NSImage, to re
   )
 
   #expect(tabStrip.contains("GeometryReader { proxy in"))
-  #expect(tabStrip.contains("TabOverflowPresentation.tabViewportWidth(totalStripWidth: proxy.size.width)"))
+  #expect(tabStrip.contains("TabOverflowPresentation.overflows("))
+  #expect(tabStrip.contains("TabOverflowPresentation.tabViewportWidth("))
+  #expect(tabStrip.contains("onPreferenceChange(TabStripContentWidthKey.self)"))
+  #expect(tabStrip.contains("if hasOverflow"))
   #expect(tabStrip.contains(".frame(width: tabViewportWidth, alignment: .leading)"))
   #expect(tabStrip.contains(".frame(height: 37)"))
   #expect(scrollViewport.contains("HStack(spacing: 6) {"))
@@ -322,9 +328,11 @@ private func nativeTabDragMaximumPixelComponentDelta(from source: NSImage, to re
   #expect(!tabStrip.contains("scrollProxy.scrollTo(lastNoteID, anchor: .trailing)"))
   #expect(tabStrip.contains("accessibilityLabel(\"Reveal earlier tabs\")"))
   #expect(tabStrip.contains("accessibilityLabel(\"Reveal later tabs\")"))
+  #expect(tabStrip.contains("accessibilityIdentifier(\"note-tab-overflow-earlier\")"))
+  #expect(tabStrip.contains("accessibilityIdentifier(\"note-tab-overflow-later\")"))
   #expect(tabStrip.contains(".help(\"Show earlier tabs\")"))
   #expect(tabStrip.contains(".help(\"Show later tabs\")"))
-  #expect(tabStrip.contains(".frame(width: 56, height: 37"))
+  #expect(tabStrip.contains("width: TabOverflowPresentation.tabOverflowRailWidth,"))
   #expect(tabStrip.components(separatedBy: ".frame(width: 28, height: 37)").count - 1 == 2)
   #expect(tabStrip.components(separatedBy: ".contentShape(Rectangle())").count - 1 == 2)
   #expect(!tabStrip.contains("accessibilityHidden(!hasHidden"))
@@ -515,6 +523,156 @@ func hostedNotesPanelTabOverflowLeftControlReturnsFromTrailingOffset() async thr
   window.contentView = nil
   window.orderOut(nil)
   await runtime.shutdown()
+}
+
+@Test(arguments: [0, 1, 3])
+@MainActor
+func noteTabOverflowControlsStayHiddenWhenShortCollectionsFit(noteCount: Int) async {
+  let notes = (0..<noteCount).map { Note(title: "Note \($0)") }
+  let fixture = await NotesPanelTitleFixture(notes: notes, width: 520)
+  defer { fixture.close() }
+
+  #expect(!fixture.hasOverflowControls)
+}
+
+@Test @MainActor
+func noteTabOverflowRecalculatesForResizeAndTitleChanges() async {
+  let longTitle = String(repeating: "Long title ", count: 4)
+  let notes = (0..<3).map { Note(title: "\($0) \(longTitle)") }
+  let fixture = await NotesPanelTitleFixture(notes: notes, width: 380)
+  defer { fixture.close() }
+
+  #expect(fixture.hasOverflowControls)
+  await fixture.resize(to: 1_200)
+  #expect(!fixture.hasOverflowControls)
+  await fixture.resize(to: 380)
+  #expect(fixture.hasOverflowControls)
+  await fixture.setNotes((0..<3).map { Note(title: "Note \($0)") })
+  #expect(!fixture.hasOverflowControls)
+}
+
+@Test @MainActor
+func noteTabOverflowTracksDynamicTypeAndKeepsRTLControlsAccessible() async throws {
+  let notes = (0..<6).map { Note(title: "Note \($0)") }
+  let fixture = await NotesPanelTitleFixture(
+    notes: notes,
+    width: 520,
+    dynamicTypeSize: .large
+  )
+  defer { fixture.close() }
+
+  #expect(!fixture.hasOverflowControls)
+  await fixture.setEnvironment(layoutDirection: .rightToLeft, dynamicTypeSize: .accessibility2)
+  #expect(fixture.hasOverflowControls)
+  #expect(fixture.accessibilityLabel(for: "note-tab-overflow-earlier") == "Reveal earlier tabs")
+  #expect(fixture.accessibilityLabel(for: "note-tab-overflow-later") == "Reveal later tabs")
+  await fixture.resize(to: 1_400)
+  #expect(!fixture.hasOverflowControls)
+}
+
+@Test @MainActor
+func hostedNotesPanelRTLTabOverflowControlsRevealSemanticEnds() async throws {
+  let notes = (0..<12).map { index in
+    Note(title: "Note " + String(index) + " " + String(repeating: "Long title ", count: 8))
+  }
+  let fixture = await NotesPanelTitleFixture(
+    notes: notes,
+    width: 380,
+    layoutDirection: .rightToLeft
+  )
+  defer { fixture.close() }
+
+  #expect(fixture.hasOverflowControls)
+  let scrollView = try #require(hostedTabScrollView(in: fixture.host))
+  let viewport = fixture.window.convertToScreen(
+    scrollView.contentView.convert(scrollView.contentView.bounds, to: nil)
+  )
+
+  func tabIsVisible(_ noteID: UUID) -> Bool {
+    guard let element = hostedPointerElement(
+      fixture.host,
+      identifier: "note-tab-\(noteID.uuidString)"
+    ),
+    let frame = (element.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue
+    else { return false }
+    return viewport.intersects(frame)
+  }
+
+  func clickControl(_ identifier: String) async throws {
+    let element = try #require(hostedPointerElement(fixture.host, identifier: identifier))
+    let frame = try #require(element.value(forKey: "accessibilityFrame") as? NSValue).rectValue
+    clickHostedPointer(
+      atScreen: NSPoint(x: frame.midX, y: frame.midY),
+      in: fixture.window
+    )
+    await settleTabStripHost(fixture.host)
+  }
+
+  try await clickControl("note-tab-overflow-later")
+  let laterOffset = scrollView.contentView.bounds.origin.x
+  #expect(tabIsVisible(notes[11].id))
+  try await clickControl("note-tab-overflow-earlier")
+  let earlierOffset = scrollView.contentView.bounds.origin.x
+  #expect(earlierOffset > laterOffset + 1)
+  #expect(tabIsVisible(notes[0].id))
+  try await clickControl("note-tab-overflow-later")
+  let returnedOffset = scrollView.contentView.bounds.origin.x
+  #expect(returnedOffset < earlierOffset - 1)
+  #expect(abs(returnedOffset - laterOffset) <= 1)
+  #expect(tabIsVisible(notes[11].id))
+}
+
+@Test @MainActor
+func hostedNotesPanelRTLTabOverflowControlsRevealSemanticEndsAtAccessibilitySize() async throws {
+  let notes = (0..<12).map { index in
+    Note(title: "Note " + String(index) + " " + String(repeating: "Long title ", count: 8))
+  }
+  let fixture = await NotesPanelTitleFixture(
+    notes: notes,
+    width: 380,
+    layoutDirection: .rightToLeft,
+    dynamicTypeSize: .accessibility2
+  )
+  defer { fixture.close() }
+
+  #expect(fixture.hasOverflowControls)
+  let scrollView = try #require(hostedTabScrollView(in: fixture.host))
+  let viewport = fixture.window.convertToScreen(
+    scrollView.contentView.convert(scrollView.contentView.bounds, to: nil)
+  )
+
+  func tabIsVisible(_ noteID: UUID) -> Bool {
+    guard let element = hostedPointerElement(
+      fixture.host,
+      identifier: "note-tab-\(noteID.uuidString)"
+    ),
+    let frame = (element.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue
+    else { return false }
+    return viewport.intersects(frame)
+  }
+
+  func clickControl(_ identifier: String) async throws {
+    let element = try #require(hostedPointerElement(fixture.host, identifier: identifier))
+    let frame = try #require(element.value(forKey: "accessibilityFrame") as? NSValue).rectValue
+    clickHostedPointer(
+      atScreen: NSPoint(x: frame.midX, y: frame.midY),
+      in: fixture.window
+    )
+    await settleTabStripHost(fixture.host)
+  }
+
+  try await clickControl("note-tab-overflow-later")
+  let laterOffset = scrollView.contentView.bounds.origin.x
+  #expect(tabIsVisible(notes[11].id))
+  try await clickControl("note-tab-overflow-earlier")
+  let earlierOffset = scrollView.contentView.bounds.origin.x
+  #expect(earlierOffset > laterOffset + 1)
+  #expect(tabIsVisible(notes[0].id))
+  try await clickControl("note-tab-overflow-later")
+  let returnedOffset = scrollView.contentView.bounds.origin.x
+  #expect(returnedOffset < earlierOffset - 1)
+  #expect(abs(returnedOffset - laterOffset) <= 1)
+  #expect(tabIsVisible(notes[11].id))
 }
 
 @Test func tabContextMenuExposesCurrentFolderMoveDestinations() throws {
@@ -932,6 +1090,16 @@ private final class NotesPanelTitleFixture {
     self.dynamicTypeSize = dynamicTypeSize
     host.rootView = makeRootView()
     await settle()
+  }
+
+  func setNotes(_ notes: [Note]) async {
+    state.workspace = Workspace(notes: notes, selectedNoteID: notes.first?.id)
+    await settle()
+  }
+
+  var hasOverflowControls: Bool {
+    hostedPointerElement(host, identifier: "note-tab-overflow-earlier") != nil
+      && hostedPointerElement(host, identifier: "note-tab-overflow-later") != nil
   }
 
   func accessibilityLabel(for identifier: String) -> String? {

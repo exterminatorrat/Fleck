@@ -41,6 +41,18 @@ real-event, display and pixel behavior in this source context remain unverified.
 Source-only candidate. Compiler checks, tests, native tracking, real-event behavior and
 pixel behavior remain unverified.
 
+## [1.7.2-beta.1] - 2026-10-29
+
+### Fixed
+
+- Ignore earlier and later folder overflow actions while a new folder is being composed,
+  including actions sent through retained accessibility controls.
+- Cover retained overflow actions from both scroll endpoints while preserving existing
+  pointer-path geometry and mounted scroll/document identity checks.
+
+Source-only repair checkpoint. Compilation, native behavior and full CI for this combined
+candidate remain unverified.
+
 ## [1.7.1-beta.1] - 2026-10-29
 
 ### Fixed
@@ -81,6 +93,16 @@ unrun; hosted verification is pending.
 
 This focused layer belongs to the retained-feature 1.7.0-beta.1 release cohort.
 Local compilation, tests and native visual/accessibility behavior remain unverified.
+- Use the native inline folder-name field for renaming, with Return/Escape, validated
+  focus-loss commits and deletion-safe editor ownership. Preserve the existing icon-based
+  new-folder controls and compact Unfiled layout while keeping keyboard navigation in its
+  owning host.
+- Show the tab navigation rail only when intrinsic tab content overflows, restore the
+  full viewport when it fits and return to the semantic leading edge as overflow ends.
+
+This focused change is part of the shared 1.7.0-beta.1 retained-feature release cohort,
+not a separate release. Source-only checkpoint: local compilation, tests and native
+keyboard, focus, IME, visual and accessibility behavior remain unverified.
 
 ## [1.5.13-beta.1] - 2026-10-31
 
