@@ -88,6 +88,15 @@ Local compilation, tests and native visual/accessibility behavior remain unverif
 This is one constituent of the shared 1.7.0-beta.1 retained-feature development cohort, not a
 separate release. Local compilation, tests and native behavior remain unrun; hosted checks are
 pending. Existing 1.6.x candidates and all earlier development history remain preserved.
+- Add native destination chooser actions to the dictation capsule menu, rejecting
+  stale items after a newer presentation, capture replacement, or choice change.
+- Align capsule accessibility fixtures with recovery routing, wait for matching live-pill
+  render receipts, and register runtime waiters before opening load gates.
+- Retain the controller's routing chooser only when its capture and context are
+  still displayable.
+
+Source-only validation. Tests, compilation, native/visual/accessibility validation,
+hosted CI, and packaging were not run.
 
 ## [1.7.0-beta.1] - 2026-10-27
 
@@ -165,6 +174,18 @@ Local compilation, tests and native capture behavior remain unrun; hosted verifi
 This checkpoint is part of the retained-feature 1.7.0-beta.1 development cohort, not a
 separate release. Local compilation, tests and native visual/accessibility behavior remain
 unrun; hosted verification is pending.
+- Keep raw fallback outcomes honest across cleanup service failure, OS/backend
+  unavailability, deadlines and cancellation while preserving dictionary-protected forms.
+- Carry insertion-versus-persistence failure provenance through dictation contexts
+  without changing receipt-backed recovery or successful-save standby.
+- Present session-bound dictation error recovery with guarded retry, copy and Settings
+  actions, and actual model-repair activity that does not interrupt an active capture.
+- Preserve bottom-only live-pill placement, direct saved-result standby, accessibility,
+  reduced motion and monotonic waveform behavior with retained synthetic regressions.
+
+Part of the shared retained-feature 1.7.0 cohort, not a separate release.
+Source-only preparation. Local compilation, tests, native/visual/accessibility behavior
+and packaging remain unverified; hosted verification is pending.
 
 ## [1.5.9-beta.1] - 2026-10-27
 

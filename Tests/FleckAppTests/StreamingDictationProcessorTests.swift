@@ -61,6 +61,12 @@ private func processorDictionaryContext(
 @MainActor
 private func makeProcessor(
   source: any StreamingSpeechSource,
+  dictionaryResolution: PersonalDictionaryResolution = .init(
+    baseline: "First",
+    protectedForms: [],
+    replacements: 0
+  ),
+  cleaner: IncrementalTranscriptCleaner? = nil,
   onConfiguration: ((DictationProcessingConfiguration) -> Void)? = nil,
   finalizationStartGate: (@MainActor @Sendable () async -> Void)? = nil,
   onCancellationInvalidated: (@MainActor @Sendable () -> Void)? = nil,
@@ -71,14 +77,8 @@ private func makeProcessor(
       onConfiguration?(configuration)
       return source
     },
-    dictionaryResolver: DictionaryResolverProbe(
-      resolution: .init(
-        baseline: "First",
-        protectedForms: [],
-        replacements: 0
-      )
-    ),
-    cleaner: IncrementalTranscriptCleaner(
+    dictionaryResolver: DictionaryResolverProbe(resolution: dictionaryResolution),
+    cleaner: cleaner ?? IncrementalTranscriptCleaner(
       generator: CleanupGeneratorProbe(result: "First"),
       clock: TestCleanupClock.immediate
     ),
@@ -89,6 +89,29 @@ private func makeProcessor(
     onCancellationInvalidated: onCancellationInvalidated,
     onCancellationDrained: onCancellationDrained
   )
+}
+
+@MainActor
+private func processFoundationCleanup(
+  raw: String,
+  dictation: FoundationModelDictation
+) async throws -> DictationProcessingResult {
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: FoundationModelCleanupGenerator(dictation: dictation),
+    clock: TestCleanupClock.immediate
+  )
+  let processor = makeProcessor(
+    source: StreamingSpeechSourceProbe(finalText: raw),
+    dictionaryResolution: .init(baseline: raw, protectedForms: [], replacements: 0),
+    cleaner: cleaner
+  )
+  let session = try await processor.begin(configuration: .init(
+    captureID: UUID(),
+    mode: .focused,
+    recognitionContext: .englishDefault
+  ), level: { _ in })
+
+  return try await session.finish(stopOrigin: testStopOrigin())
 }
 
 @MainActor
@@ -737,9 +760,177 @@ func processorMeasurementsRecordCleanupDecisionForRejectedCandidate() async thro
   let result = try await session.finish(stopOrigin: testStopOrigin())
 
   #expect(result.cleanupOutcome == .usedRaw)
+  #expect(result.cleanupFallbackProvenance == .serviceFallback)
   #expect(result.insertedText == "Do not cancel 2 meetings")
   #expect(session.runtimeMeasurements.cleanupDecisionCompletedAt == samples[5])
   #expect(result.measurements.cleanupDecisionCompletedAt == samples[5])
+}
+
+@Test @MainActor
+func processorCarriesFoundationOriginalFallbackThroughAdapterAndCleaner() async throws {
+  let raw = "Do not cancel the 2 meetings with Jordan Lee on July 29."
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    cleanupGenerator: { _, _ in "Cancel the meetings with Jordan." },
+    routingGenerator: { _, _ in .inbox }
+  )
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: FoundationModelCleanupGenerator(dictation: dictation),
+    clock: TestCleanupClock.immediate
+  )
+  let processor = makeProcessor(
+    source: StreamingSpeechSourceProbe(finalText: raw),
+    dictionaryResolution: .init(baseline: raw, protectedForms: [], replacements: 0),
+    cleaner: cleaner
+  )
+  let session = try await processor.begin(configuration: .init(
+    captureID: UUID(),
+    mode: .focused,
+    recognitionContext: .englishDefault
+  ), level: { _ in })
+
+  let result = try await session.finish(stopOrigin: testStopOrigin())
+
+  #expect(result.cleanedTranscript == nil)
+  #expect(result.cleanupOutcome == .usedRaw)
+  #expect(result.cleanupFallbackProvenance == .serviceFallback)
+  #expect(result.insertedText == raw)
+}
+
+@Test @MainActor
+func processorFaithfulUnchangedFoundationOutputHasNoFallbackProvenance() async throws {
+  let raw = "Send the report."
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    cleanupGenerator: { _, _ in raw },
+    routingGenerator: { _, _ in .inbox }
+  )
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: FoundationModelCleanupGenerator(dictation: dictation),
+    clock: TestCleanupClock.immediate
+  )
+  let processor = makeProcessor(
+    source: StreamingSpeechSourceProbe(finalText: raw),
+    dictionaryResolution: .init(baseline: raw, protectedForms: [], replacements: 0),
+    cleaner: cleaner
+  )
+  let session = try await processor.begin(configuration: .init(
+    captureID: UUID(),
+    mode: .focused,
+    recognitionContext: .englishDefault
+  ), level: { _ in })
+
+  let result = try await session.finish(stopOrigin: testStopOrigin())
+
+  #expect(result.cleanupOutcome == .cleaned)
+  #expect(result.cleanupFallbackProvenance == nil)
+  #expect(result.insertedText == raw)
+}
+
+@Test @MainActor
+func processorOSIneligibleNumericBaselineHasNoFallbackProvenance() async throws {
+  let raw = "send 1/0"
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 25 },
+    cleanupGenerator: { _, _ in "unused" },
+    routingGenerator: { _, _ in .inbox }
+  )
+
+  let result = try await processFoundationCleanup(raw: raw, dictation: dictation)
+
+  #expect(result.cleanupOutcome == .usedRaw)
+  #expect(result.cleanupFallbackProvenance == nil)
+  #expect(result.insertedText == raw)
+}
+
+@Test @MainActor
+func processorUnavailableFoundationNumericBaselineHasNoFallbackProvenance() async throws {
+  let raw = "send 1/0"
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    cleanupGenerator: { _, _ in throw FoundationModelCleanupError.unavailable },
+    routingGenerator: { _, _ in .inbox }
+  )
+
+  let result = try await processFoundationCleanup(raw: raw, dictation: dictation)
+
+  #expect(result.cleanupOutcome == .usedRaw)
+  #expect(result.cleanupFallbackProvenance == nil)
+  #expect(result.insertedText == raw)
+}
+
+@Test @MainActor
+func processorAvailableFoundationNumericRejectionRetainsFallbackProvenance() async throws {
+  let raw = "send 1/0"
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    cleanupGenerator: { request, _ in request.rawTranscript },
+    routingGenerator: { _, _ in .inbox }
+  )
+
+  let result = try await processFoundationCleanup(raw: raw, dictation: dictation)
+
+  #expect(result.cleanupOutcome == .usedRaw)
+  #expect(result.cleanupFallbackProvenance == .serviceFallback)
+  #expect(result.insertedText == raw)
+}
+
+@Test(arguments: [25, 26]) @MainActor
+func processorUnavailableFoundationValidBaselineRemainsUsedRaw(
+  osMajorVersion: Int
+) async throws {
+  let raw = "Send the report."
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { osMajorVersion },
+    cleanupGenerator: { _, _ in throw FoundationModelCleanupError.unavailable },
+    routingGenerator: { _, _ in .inbox }
+  )
+
+  let result = try await processFoundationCleanup(raw: raw, dictation: dictation)
+
+  #expect(result.rawTranscript == raw)
+  #expect(result.dictionaryBaseline == raw)
+  #expect(result.cleanedTranscript == nil)
+  #expect(result.cleanupOutcome == .usedRaw)
+  #expect(result.cleanupFallbackProvenance == nil)
+  #expect(result.insertedText == raw)
+}
+
+@Test @MainActor
+func processorOversizedInputKeepsRawTextWithoutFallbackProvenance() async throws {
+  let raw = String(repeating: "word ", count: 81).trimmingCharacters(in: .whitespaces)
+  let processor = makeProcessor(
+    source: StreamingSpeechSourceProbe(finalText: raw),
+    dictionaryResolution: .init(baseline: raw, protectedForms: [], replacements: 0)
+  )
+  let session = try await processor.begin(configuration: .init(
+    captureID: UUID(),
+    mode: .focused,
+    recognitionContext: .englishDefault
+  ), level: { _ in })
+
+  let result = try await session.finish(stopOrigin: testStopOrigin())
+
+  #expect(result.cleanupOutcome == .usedRaw)
+  #expect(result.cleanupFallbackProvenance == nil)
+  #expect(result.insertedText == raw)
+}
+
+@Test @MainActor
+func processorCancelledFoundationFallbackRemainsUsedRaw() async throws {
+  let raw = "Send the report."
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    cleanupGenerator: { _, _ in throw CancellationError() },
+    routingGenerator: { _, _ in .inbox }
+  )
+
+  let result = try await processFoundationCleanup(raw: raw, dictation: dictation)
+
+  #expect(result.cleanedTranscript == nil)
+  #expect(result.cleanupOutcome == .usedRaw)
+  #expect(result.cleanupFallbackProvenance == nil)
+  #expect(result.insertedText == raw)
 }
 
 @Test @MainActor
@@ -894,6 +1085,7 @@ func processorMeasurementsPreserveCompletedFailureBoundariesAndLeaveUnreachedSta
     let result = try await session.finish(stopOrigin: testStopOrigin())
 
     #expect(result.cleanupOutcome == .usedRaw)
+    #expect(result.cleanupFallbackProvenance == nil)
     #expect(result.insertedText == "First")
     #expect(session.runtimeMeasurements.dictionaryCompletedAt == samples[4])
     #expect(session.runtimeMeasurements.cleanupDecisionCompletedAt == nil)
@@ -1719,6 +1911,7 @@ func processorUsesRawRecoveryWhenDictionaryResolutionFails() async throws {
   #expect(result.cleanedTranscript == nil)
   #expect(result.insertedText == raw)
   #expect(result.cleanupOutcome == .usedRaw)
+  #expect(result.cleanupFallbackProvenance == nil)
 }
 
 @Test @MainActor
@@ -1999,6 +2192,7 @@ func processorDictionaryResolutionMismatchUsesExactRawBaseline() async throws {
 
   #expect(result.dictionaryBaseline == nil)
   #expect(result.insertedText == raw)
+  #expect(result.cleanupFallbackProvenance == nil)
   #expect(result.appliedDictionaryEntryIDs.isEmpty)
   #expect(result.captureContext == context)
 }
@@ -2022,6 +2216,7 @@ func processorCleanupRejectedDictionaryCandidateUsesPinnedBaselineAndEvidence() 
   ).finish(stopOrigin: testStopOrigin())
 
   #expect(result.cleanupOutcome == .usedRaw)
+  #expect(result.cleanupFallbackProvenance == .serviceFallback)
   #expect(result.insertedText == "open FleckApp")
   #expect(result.protectedDictionaryForms == ["FleckApp"])
   #expect(result.appliedDictionaryEntryIDs == context.snapshot.entries.map(\.id))
