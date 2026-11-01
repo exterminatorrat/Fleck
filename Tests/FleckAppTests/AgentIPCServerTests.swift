@@ -514,6 +514,7 @@ import Testing
   let socketURL = root.appendingPathComponent("bridge/fleck.sock")
   let gate = ServiceGate()
   let writes = LockedCounter()
+  let cancelled = LockedFlag()
   let server = AgentIPCServer(
     endpointURL: socketURL,
     responseWriter: { data, offset, _ in
@@ -521,8 +522,12 @@ import Testing
       return data.count - offset
     },
     execute: { _, _, _ in
-      await gate.execute()
-      return .sharedNotes(notes: [])
+      await withTaskCancellationHandler {
+        await gate.execute()
+        return .sharedNotes(notes: [])
+      } onCancel: {
+        cancelled.set()
+      }
     }
   )
   try server.start()
@@ -538,10 +543,440 @@ import Testing
   await gate.waitUntilStarted()
 
   server.stop()
+  #expect(!cancelled.value)
   Darwin.close(descriptor)
   gate.release()
   try await Task.sleep(for: .milliseconds(10))
   #expect(writes.value == 0)
+}
+
+@Test @MainActor func prepareEventSubscriptionResponseAllowsLaterRequests()
+  async throws
+{
+  let root = temporaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
+  let server = AgentIPCServer(
+    endpointURL: socketURL,
+    execute: { _, _, command in
+      if case .prepareEventSubscription = command {
+        return pendingEventSubscriptionResponse()
+      }
+      return .sharedNotes(notes: [])
+    }
+  )
+  try server.start()
+  defer { server.stop() }
+
+  let eventResponse = try await Task.detached {
+    try transact(validPrepareEventRequest(), at: socketURL)
+  }.value
+  let laterResponse = try await Task.detached {
+    try transact(validRequest(), at: socketURL)
+  }.value
+
+  #expect(eventResponse.error == nil)
+  #expect(eventResponse.result == pendingEventSubscriptionResponse())
+  #expect(laterResponse.result == .sharedNotes(notes: []))
+}
+
+@Test @MainActor func preparedResponseLeaseSucceedsOnlyAfterFullFrameWrite() async throws {
+  let root = temporaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
+  let prefixWritten = DispatchSemaphore(value: 0)
+  let allowRemainder = DispatchSemaphore(value: 0)
+  let dispositionFinished = DispatchSemaphore(value: 0)
+  let dispositions = LockedResponseDispositions()
+  let server = AgentIPCServer(
+    endpointURL: socketURL,
+    responseWriter: { data, offset, descriptor in
+      if offset == 0 {
+        let written = data.withUnsafeBytes {
+          Darwin.write(descriptor, $0.baseAddress!, 1)
+        }
+        prefixWritten.signal()
+        return written
+      }
+      guard allowRemainder.wait(timeout: .now() + 2) == .success else {
+        errno = EPIPE
+        return -1
+      }
+      return data.withUnsafeBytes {
+        Darwin.write(
+          descriptor,
+          $0.baseAddress!.advanced(by: offset),
+          $0.count - offset
+        )
+      }
+    },
+    executeWithDisposition: { _, _, _ in
+      AgentIPCServer.ExecutionResult(
+        response: pendingEventSubscriptionResponse(),
+        responseDisposition: { delivered in
+          dispositions.record(delivered)
+          dispositionFinished.signal()
+        }
+      )
+    }
+  )
+  try server.start()
+  defer { server.stop() }
+
+  let responseTask = Task.detached {
+    try transact(validPrepareEventRequest(), at: socketURL)
+  }
+  let wrotePrefix = await Task.detached {
+    waitForSemaphore(prefixWritten)
+  }.value
+  #expect(wrotePrefix)
+  #expect(dispositions.values.isEmpty)
+
+  allowRemainder.signal()
+  let response = try await responseTask.value
+  #expect(response.error == nil)
+  #expect(response.result == pendingEventSubscriptionResponse())
+  let didFinish = await Task.detached {
+    waitForSemaphore(dispositionFinished)
+  }.value
+  #expect(didFinish)
+  #expect(dispositions.values == [true])
+}
+
+@Test @MainActor func preparedResponseLeaseFailsOnPartialFrameWrite() async throws {
+  let root = temporaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
+  let dispositionFinished = DispatchSemaphore(value: 0)
+  let dispositions = LockedResponseDispositions()
+  let writes = LockedCounter()
+  let server = AgentIPCServer(
+    endpointURL: socketURL,
+    responseWriter: { data, offset, descriptor in
+      guard writes.value == 0 else {
+        errno = EPIPE
+        return -1
+      }
+      writes.increment()
+      return data.withUnsafeBytes {
+        Darwin.write(descriptor, $0.baseAddress!.advanced(by: offset), 1)
+      }
+    },
+    executeWithDisposition: { _, _, _ in
+      AgentIPCServer.ExecutionResult(
+        response: pendingEventSubscriptionResponse(),
+        responseDisposition: { delivered in
+          dispositions.record(delivered)
+          dispositionFinished.signal()
+        }
+      )
+    }
+  )
+  try server.start()
+  defer { server.stop() }
+
+  let failedRead = await Task.detached { () -> Bool in
+    do {
+      _ = try transact(validPrepareEventRequest(), at: socketURL)
+      return false
+    } catch {
+      return true
+    }
+  }.value
+  #expect(failedRead)
+  let didFinish = await Task.detached {
+    waitForSemaphore(dispositionFinished)
+  }.value
+  #expect(didFinish)
+  #expect(dispositions.values == [false])
+}
+
+@Test @MainActor func preparedResponseLeaseFailsWhenClientDisconnectsBeforeWrite()
+  async throws
+{
+  let root = temporaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
+  let writerEntered = DispatchSemaphore(value: 0)
+  let allowWrite = DispatchSemaphore(value: 0)
+  let dispositionFinished = DispatchSemaphore(value: 0)
+  let dispositions = LockedResponseDispositions()
+  let server = AgentIPCServer(
+    endpointURL: socketURL,
+    responseWriter: { data, offset, descriptor in
+      writerEntered.signal()
+      guard allowWrite.wait(timeout: .now() + 2) == .success else {
+        errno = EPIPE
+        return -1
+      }
+      return data.withUnsafeBytes {
+        Darwin.write(
+          descriptor,
+          $0.baseAddress!.advanced(by: offset),
+          $0.count - offset
+        )
+      }
+    },
+    executeWithDisposition: { _, _, _ in
+      AgentIPCServer.ExecutionResult(
+        response: pendingEventSubscriptionResponse(),
+        responseDisposition: { delivered in
+          dispositions.record(delivered)
+          dispositionFinished.signal()
+        }
+      )
+    }
+  )
+  try server.start()
+  defer { server.stop() }
+
+  let descriptor = try await Task.detached {
+    let descriptor = try connectedSocket(to: socketURL)
+    try writeRequest(validPrepareEventRequest(), to: descriptor)
+    return descriptor
+  }.value
+  let writerStarted = await Task.detached {
+    waitForSemaphore(writerEntered)
+  }.value
+  #expect(writerStarted)
+  Darwin.close(descriptor)
+  allowWrite.signal()
+
+  let didFinish = await Task.detached {
+    waitForSemaphore(dispositionFinished)
+  }.value
+  #expect(didFinish)
+  #expect(dispositions.values == [false])
+}
+
+@Test @MainActor func preparedResponseLeaseFailsAtResponseDeadline() async throws {
+  let root = temporaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
+  let dispositionFinished = DispatchSemaphore(value: 0)
+  let dispositions = LockedResponseDispositions()
+  let server = AgentIPCServer(
+    endpointURL: socketURL,
+    idleReadTimeout: 0.05,
+    responseWriter: { _, _, _ in
+      errno = EAGAIN
+      return -1
+    },
+    executeWithDisposition: { _, _, _ in
+      AgentIPCServer.ExecutionResult(
+        response: pendingEventSubscriptionResponse(),
+        responseDisposition: { delivered in
+          dispositions.record(delivered)
+          dispositionFinished.signal()
+        }
+      )
+    }
+  )
+  try server.start()
+  defer { server.stop() }
+
+  let failedRead = await Task.detached { () -> Bool in
+    do {
+      _ = try transact(validPrepareEventRequest(), at: socketURL)
+      return false
+    } catch {
+      return true
+    }
+  }.value
+  #expect(failedRead)
+  let didFinish = await Task.detached {
+    waitForSemaphore(dispositionFinished)
+  }.value
+  #expect(didFinish)
+  #expect(dispositions.values == [false])
+}
+
+@Test @MainActor func disconnectDuringPrepareEventSubscriptionCancelsService()
+  async throws
+{
+  let root = temporaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
+  let serviceStarted = DispatchSemaphore(value: 0)
+  let serviceCancelled = DispatchSemaphore(value: 0)
+  let writes = LockedCounter()
+  let server = AgentIPCServer(
+    endpointURL: socketURL,
+    responseWriter: { data, offset, _ in
+      writes.increment()
+      return data.count - offset
+    },
+    execute: { _, _, _ in
+      await withTaskCancellationHandler {
+        serviceStarted.signal()
+        try? await Task.sleep(for: .seconds(30))
+        return pendingEventSubscriptionResponse()
+      } onCancel: {
+        serviceCancelled.signal()
+      }
+    }
+  )
+  try server.start()
+  defer { server.stop() }
+
+  let descriptor = try await Task.detached {
+    let descriptor = try connectedSocket(to: socketURL)
+    try writeRequest(validPrepareEventRequest(), to: descriptor)
+    return descriptor
+  }.value
+  let didStart = await Task.detached {
+    waitForSemaphore(serviceStarted)
+  }.value
+  #expect(didStart)
+  Darwin.close(descriptor)
+
+  let didCancel = await Task.detached {
+    waitForSemaphore(serviceCancelled)
+  }.value
+  #expect(didCancel)
+  try await Task.sleep(for: .milliseconds(10))
+  #expect(writes.value == 0)
+}
+
+@Test @MainActor func trailingDataDuringPrepareEventSubscriptionCancelsService()
+  async throws
+{
+  let root = temporaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
+  let serviceStarted = DispatchSemaphore(value: 0)
+  let serviceCancelled = DispatchSemaphore(value: 0)
+  let writes = LockedCounter()
+  let server = AgentIPCServer(
+    endpointURL: socketURL,
+    responseWriter: { data, offset, _ in
+      writes.increment()
+      return data.count - offset
+    },
+    execute: { _, _, _ in
+      await withTaskCancellationHandler {
+        serviceStarted.signal()
+        try? await Task.sleep(for: .seconds(30))
+        return pendingEventSubscriptionResponse()
+      } onCancel: {
+        serviceCancelled.signal()
+      }
+    }
+  )
+  try server.start()
+  defer { server.stop() }
+
+  let descriptor = try await Task.detached {
+    let descriptor = try connectedSocket(to: socketURL)
+    try writeRequest(validPrepareEventRequest(), to: descriptor)
+    return descriptor
+  }.value
+  defer { Darwin.close(descriptor) }
+  let didStart = await Task.detached {
+    waitForSemaphore(serviceStarted)
+  }.value
+  #expect(didStart)
+  var trailingByte: UInt8 = 1
+  #expect(Darwin.write(descriptor, &trailingByte, 1) == 1)
+
+  let didCancel = await Task.detached {
+    waitForSemaphore(serviceCancelled)
+  }.value
+  #expect(didCancel)
+  try await Task.sleep(for: .milliseconds(10))
+  #expect(writes.value == 0)
+}
+
+@Test @MainActor func prepareEventSubscriptionDeadlineCancelsServiceAndLateWrite()
+  async throws
+{
+  let root = temporaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
+  let gate = ServiceGate()
+  let cancelled = LockedFlag()
+  let writes = LockedCounter()
+  let server = AgentIPCServer(
+    endpointURL: socketURL,
+    prepareEventSubscriptionExecutionTimeout: 0.05,
+    responseWriter: { data, offset, _ in
+      writes.increment()
+      return data.count - offset
+    },
+    execute: { _, _, _ in
+      await withTaskCancellationHandler {
+        await gate.execute()
+        return pendingEventSubscriptionResponse()
+      } onCancel: {
+        cancelled.set()
+      }
+    }
+  )
+  try server.start()
+  defer { server.stop() }
+
+  let descriptor = try await Task.detached {
+    let descriptor = try connectedSocket(to: socketURL)
+    try writeRequest(validPrepareEventRequest(), to: descriptor)
+    return descriptor
+  }.value
+  defer { Darwin.close(descriptor) }
+  await gate.waitUntilStarted()
+
+  let didCancel = await Task.detached {
+    for _ in 0..<200 {
+      if cancelled.value { return true }
+      usleep(5_000)
+    }
+    return cancelled.value
+  }.value
+  #expect(didCancel)
+  let peerClosed = await Task.detached {
+    readAfterDelay(descriptor)
+  }.value
+  #expect(peerClosed)
+  gate.release()
+  try await Task.sleep(for: .milliseconds(10))
+  #expect(writes.value == 0)
+}
+
+@Test @MainActor func stopCancelsActivePrepareEventSubscription() async throws {
+  let root = temporaryRoot()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let socketURL = root.appendingPathComponent("bridge/fleck.sock")
+  let gate = ServiceGate()
+  let cancelled = LockedFlag()
+  let writes = LockedCounter()
+  let server = AgentIPCServer(
+    endpointURL: socketURL,
+    responseWriter: { data, offset, _ in
+      writes.increment()
+      return data.count - offset
+    },
+    execute: { _, _, _ in
+      await withTaskCancellationHandler {
+        await gate.execute()
+        return pendingEventSubscriptionResponse()
+      } onCancel: {
+        cancelled.set()
+      }
+    }
+  )
+  try server.start()
+
+  let descriptor = try await Task.detached {
+    let descriptor = try connectedSocket(to: socketURL)
+    try writeRequest(validPrepareEventRequest(), to: descriptor)
+    return descriptor
+  }.value
+  await gate.waitUntilStarted()
+
+  server.stop()
+  #expect(cancelled.value)
+  gate.release()
+  try await Task.sleep(for: .milliseconds(10))
+  #expect(writes.value == 0)
+  Darwin.close(descriptor)
 }
 
 @Test @MainActor func canceledReadSourceCannotConsumeReusedDescriptor() async throws {
@@ -753,11 +1188,85 @@ private func validRequest() -> AgentWireRequest {
   )
 }
 
-private func temporaryRoot() -> URL {
-  URL(fileURLWithPath: "/private/tmp", isDirectory: true).appendingPathComponent(
-    "fleck-ipc-\(UUID().uuidString)",
-    isDirectory: true
+private func validPrepareEventRequest() -> AgentWireRequest {
+  AgentWireRequest(
+    protocolVersion: 2,
+    requestID: UUID(),
+    profileID: UUID(),
+    credentialBase64: Data(repeating: 3, count: 32).base64EncodedString(),
+    command: .prepareEventSubscription(
+      request: AgentEventSubscriptionRequest(
+        event: .noteUpdated,
+        scope: .note(noteID: UUID()),
+        callbackURL: "https://example.test/hook",
+        signingSecret:
+          "whsec_" + Data(repeating: 0x42, count: 24).base64EncodedString()
+      )
+    )
   )
+}
+
+private func pendingEventSubscriptionResponse() -> AgentWorkspaceResponse {
+  .pendingEventSubscription(
+    receipt: AgentEventPendingReceipt(
+      subscriptionID: "evt_" + String(repeating: "a", count: 64),
+      expiresAt: Date(timeIntervalSince1970: 1_000),
+      revision: 1,
+      grantRevision: 1
+    )
+  )
+}
+
+func canonicalAgentIPCPOSIXPath(_ path: String) -> String? {
+  guard let canonicalPath = path.withCString({ Darwin.realpath($0, nil) }) else { return nil }
+  defer { Darwin.free(canonicalPath) }
+  return String(cString: canonicalPath)
+}
+
+private func temporaryRoot() -> URL {
+  let environment = ProcessInfo.processInfo.environment
+  guard let packetMode = environment["FLECK_IPC_PACKET_MODE"] else {
+    return URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+      .appendingPathComponent("fleck-ipc-\(UUID().uuidString)", isDirectory: true)
+  }
+
+  guard packetMode == "current-source-35-body-packet-tmpdir-xctest-host-20261005",
+        let packetTemporaryDirectory = environment["FLECK_IPC_PACKET_TMPDIR"],
+        let configuredTemporaryDirectory = environment["TMPDIR"]
+  else {
+    preconditionFailure("packet TMPDIR is missing")
+  }
+  let root = URL(fileURLWithPath: packetTemporaryDirectory, isDirectory: true)
+  let configuredRoot = URL(fileURLWithPath: configuredTemporaryDirectory, isDirectory: true)
+  let rootName = root.lastPathComponent
+  let token = rootName.hasPrefix("f35-") ? String(rootName.dropFirst("f35-".count)) : ""
+  var status = stat()
+  guard root.deletingLastPathComponent().path == "/private/tmp",
+        rootName.hasPrefix("f35-"),
+        token.utf8.count == 12,
+        token.utf8.allSatisfy({ ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102) }),
+        canonicalAgentIPCPOSIXPath(root.path) == root.path,
+        lstat(root.path, &status) == 0,
+        status.st_mode & S_IFMT == S_IFDIR,
+        status.st_mode & 0o7777 == 0o700,
+        status.st_uid == 501,
+        status.st_dev != 0,
+        status.st_ino != 0
+  else {
+    preconditionFailure("packet TMPDIR is not a canonical private run root")
+  }
+  guard packetConfiguredTemporaryDirectoryIsPrivate(
+    configuredRoot, beneath: root, rootStatus: status
+  ) else {
+    preconditionFailure("configured TMPDIR is not the packet root or its private descendant")
+  }
+
+  let socketRoot = root.appendingPathComponent("fleck-ipc-\(UUID().uuidString)", isDirectory: true)
+  let socketPath = socketRoot.appendingPathComponent("bridge/fleck.sock").path
+  guard socketPath.utf8.count + 1 <= 104 else {
+    preconditionFailure("packet socket path exceeds sun_path capacity")
+  }
+  return socketRoot
 }
 
 private func temporarySocketURL() -> URL {
@@ -879,6 +1388,14 @@ private final class LockedCounter: @unchecked Sendable {
 
   var value: Int { lock.withLock { count } }
   func increment() { lock.withLock { count += 1 } }
+}
+
+private final class LockedResponseDispositions: @unchecked Sendable {
+  private let lock = NSLock()
+  private var recorded: [Bool] = []
+
+  var values: [Bool] { lock.withLock { recorded } }
+  func record(_ delivered: Bool) { lock.withLock { recorded.append(delivered) } }
 }
 
 private final class LockedFlag: @unchecked Sendable {

@@ -494,6 +494,12 @@ private func reviewedWireCommandName(
     "listActivity"
   case .undoChange:
     "undoChange"
+  case .listEvents:
+    "listEvents"
+  case .prepareEventSubscription:
+    "prepareEventSubscription"
+  case .removeEventSubscription:
+    "removeEventSubscription"
   }
 }
 
