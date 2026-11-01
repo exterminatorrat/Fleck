@@ -3,6 +3,75 @@
   import SwiftUI
   import FleckCore
   import UniformTypeIdentifiers
+  #if DEBUG
+  @MainActor
+  enum FolderNavigatorOverflowObservation {
+    enum Direction: Int, Equatable {
+      case earlier = 1
+      case later = 2
+    }
+
+    struct ButtonToken: Equatable {
+      let fixtureOrdinal: Int
+      let ordinal: Int
+      let direction: Direction
+      let identifier: String
+    }
+
+    enum SourceEvent {
+      case actionEntry(token: ButtonToken, creationGuard: Bool)
+      case actionExit(token: ButtonToken, creationGuard: Bool, requestedScroll: Bool)
+      case railReset(creationGuard: Bool)
+    }
+
+    @MainActor
+    protocol Observer: AnyObject {
+      func makeButtonToken(direction: Direction) -> ButtonToken?
+      func appendSourceEvent(_ event: SourceEvent)
+    }
+
+    private final class Registration {
+      weak var state: AppState?
+      weak var observer: (any Observer)?
+
+      init(state: AppState, observer: any Observer) {
+        self.state = state
+        self.observer = observer
+      }
+    }
+
+    private static var registrations: [ObjectIdentifier: Registration] = [:]
+
+    static func install(state: AppState, observer: any Observer) {
+      registrations[ObjectIdentifier(state)] = Registration(state: state, observer: observer)
+    }
+
+    static func observer(for state: AppState) -> (any Observer)? {
+      let key = ObjectIdentifier(state)
+      guard let registration = registrations[key] else { return nil }
+      guard registration.state === state, let observer = registration.observer else {
+        registrations.removeValue(forKey: key)
+        return nil
+      }
+      return observer
+    }
+
+    static func remove(state: AppState, observer: any Observer) {
+      let key = ObjectIdentifier(state)
+      guard let registration = registrations[key], registration.state === state,
+        registration.observer === observer
+      else { return }
+      registrations.removeValue(forKey: key)
+    }
+  }
+
+  private extension ModifiedContent where Modifier == AccessibilityAttachmentModifier {
+    func folderNavigatorObservationIdentifier(_ identifier: String?) -> Self {
+      guard let identifier else { return self }
+      return accessibilityIdentifier(identifier)
+    }
+  }
+  #endif
 
   enum NoteTabInk {
     static let selectedCapsuleOpacity = 0.22
@@ -2835,6 +2904,10 @@
           }
           .onChange(of: showsOverflowRail) { wasOverflowing, isOverflowing in
             if wasOverflowing && !isOverflowing {
+              #if DEBUG
+              FolderNavigatorOverflowObservation.observer(for: appState)?
+                .appendSourceEvent(.railReset(creationGuard: isCreatingFolder))
+              #endif
               scrollProxy.scrollTo(FolderScrollTarget.leading, anchor: .leading)
             }
           }
@@ -2845,10 +2918,40 @@
       }
     }
 
+    #if DEBUG
+    @ViewBuilder
+    #endif
     private func overflowControls(scrollProxy: ScrollViewProxy) -> some View {
+      #if DEBUG
+      let observation = FolderNavigatorOverflowObservation.observer(for: appState)
+      let earlierToken = observation?.makeButtonToken(direction: .earlier)
+      let laterToken = observation?.makeButtonToken(direction: .later)
+      #endif
       HStack(spacing: 0) {
         Button {
+          #if DEBUG
+          let creationGuardAtEntry = isCreatingFolder
+          var requestedScroll = false
+          defer {
+            if let earlierToken {
+              observation?.appendSourceEvent(.actionExit(
+                token: earlierToken,
+                creationGuard: isCreatingFolder,
+                requestedScroll: requestedScroll
+              ))
+            }
+          }
+          if let earlierToken {
+            observation?.appendSourceEvent(.actionEntry(
+              token: earlierToken,
+              creationGuard: creationGuardAtEntry
+            ))
+          }
+          #endif
           guard !isCreatingFolder else { return }
+          #if DEBUG
+          requestedScroll = true
+          #endif
           scrollProxy.scrollTo(FolderScrollTarget.leading, anchor: .leading)
         } label: {
           Image(systemName: "chevron.left")
@@ -2858,10 +2961,35 @@
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Reveal earlier folders")
+        #if DEBUG
+        .folderNavigatorObservationIdentifier(earlierToken?.identifier)
+        #endif
         .help("Show earlier folders")
 
         Button {
+          #if DEBUG
+          let creationGuardAtEntry = isCreatingFolder
+          var requestedScroll = false
+          defer {
+            if let laterToken {
+              observation?.appendSourceEvent(.actionExit(
+                token: laterToken,
+                creationGuard: isCreatingFolder,
+                requestedScroll: requestedScroll
+              ))
+            }
+          }
+          if let laterToken {
+            observation?.appendSourceEvent(.actionEntry(
+              token: laterToken,
+              creationGuard: creationGuardAtEntry
+            ))
+          }
+          #endif
           guard !isCreatingFolder else { return }
+          #if DEBUG
+          requestedScroll = true
+          #endif
           scrollProxy.scrollTo(FolderScrollTarget.trailing, anchor: .trailing)
         } label: {
           Image(systemName: "chevron.right")
@@ -2871,6 +2999,9 @@
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Reveal later folders")
+        #if DEBUG
+        .folderNavigatorObservationIdentifier(laterToken?.identifier)
+        #endif
         .help("Show later folders")
       }
     }

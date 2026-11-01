@@ -27,6 +27,13 @@ on:
         required: false
         type: boolean
         default: false
+      folder_composer_witness_only:
+        description: >-
+          Run only the exact Enhanced folder-composer witness selectors; required
+          macOS CI remains fail-closed and does not accept this diagnostic.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -34,6 +41,7 @@ permissions:
 jobs:
   detect-changes:
     name: Detect documentation-only changes
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.folder_composer_witness_only }}
     runs-on: namespace-profile-fleck
     timeout-minutes: 5
     permissions:
@@ -403,7 +411,7 @@ jobs:
 
   own-window-capture-probe:
     name: Supplemental own-window capture probe
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.own_window_capture_probe }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.own_window_capture_probe && !inputs.folder_composer_witness_only }}
     runs-on: namespace-profile-fleck
     timeout-minutes: 15
     permissions:
@@ -456,7 +464,7 @@ jobs:
 
   folder-navigator-diagnostic:
     name: Supplemental folder navigator diagnostic (ordinary)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe && !inputs.folder_composer_witness_only }}
     runs-on: namespace-profile-fleck
     timeout-minutes: 60
     permissions:
@@ -488,7 +496,7 @@ jobs:
 
   folder-navigator-diagnostic-enhanced:
     name: Supplemental folder navigator diagnostic (Enhanced)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe && !inputs.folder_composer_witness_only }}
     runs-on: namespace-profile-fleck
     timeout-minutes: 60
     permissions:
@@ -519,3 +527,80 @@ jobs:
         run: |
           Scripts/run-nonempty-enhanced-tests.sh '^.*FolderNavigatorPresentationTests.*$'
           git diff --exit-code -- Package.resolved
+
+  folder-composer-witness-enhanced:
+    name: Supplemental Enhanced folder-composer witness diagnostic
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_composer_witness_only }}
+    runs-on: namespace-profile-fleck
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC: "1"
+      FLECK_NATIVE_CAPTURE_QA: "0"
+    steps:
+      - name: Check out repository (actions/checkout v6.0.2, without credentials)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify exact Enhanced witness source pin
+        id: source
+        run: |
+          set -euo pipefail
+          source_commit="$(git rev-parse --verify 'HEAD^{commit}')"
+          source_tree="$(git rev-parse --verify 'HEAD^{tree}')"
+          product_version="$(cat VERSION)"
+          workflow_sha256="$(shasum -a 256 .github/workflows/ci.yml | cut -d ' ' -f 1)"
+          package_resolved_sha256="$(shasum -a 256 Package.resolved | cut -d ' ' -f 1)"
+          test "$source_commit" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          {
+            printf 'commit=%s\n' "$source_commit"
+            printf 'tree=%s\n' "$source_tree"
+            printf 'version=%s\n' "$product_version"
+            printf 'workflow_sha256=%s\n' "$workflow_sha256"
+            printf 'package_resolved_sha256=%s\n' "$package_resolved_sha256"
+          } | tee -a "$GITHUB_OUTPUT"
+      - name: Verify Enhanced witness host capabilities
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          xcode_version="$(xcodebuild -version)"
+          printf '%s\n' "$xcode_version"
+          test "$(printf '%s\n' "$xcode_version" | sed -n '1p')" = 'Xcode 26.4.1'
+          test "$(printf '%s\n' "$xcode_version" | sed -n '2p')" = 'Build version 17E202'
+          swift_version="$(swift --version)"
+          printf '%s\n' "$swift_version"
+          printf '%s\n' "$swift_version" | grep -Eq '^Apple Swift version 6\.3\.1([[:space:](]|$)'
+      - name: Install and verify ripgrep
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            brew install ripgrep
+          fi
+          rg --version
+      - name: Verify Enhanced Local candidate pin
+        run: Scripts/test-enhanced-candidate-pin.sh
+      - name: Run exact Enhanced folder-composer witness selectors
+        run: |
+          unset FLECK_FOLDER_CAPTURE_DIR
+          Scripts/run-nonempty-enhanced-tests.sh \
+            '^FleckAppTests\.FolderNavigatorPresentationTests/(composingPreservesOverflowRailAndScrolledFolderGeometry\(\)|composingRejectsRetainedOverflowAccessibilityActions\(startAtTrailing:\))$'
+      - name: Verify Enhanced witness source and lock remained pinned
+        if: always()
+        env:
+          EXPECTED_COMMIT: ${{ steps.source.outputs.commit }}
+          EXPECTED_TREE: ${{ steps.source.outputs.tree }}
+          EXPECTED_VERSION: ${{ steps.source.outputs.version }}
+          EXPECTED_WORKFLOW_SHA256: ${{ steps.source.outputs.workflow_sha256 }}
+          EXPECTED_PACKAGE_RESOLVED_SHA256: ${{ steps.source.outputs.package_resolved_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify 'HEAD^{commit}')" = "$GITHUB_SHA"
+          test "$(git rev-parse --verify 'HEAD^{commit}')" = "$EXPECTED_COMMIT"
+          test "$(git rev-parse --verify 'HEAD^{tree}')" = "$EXPECTED_TREE"
+          test "$(cat VERSION)" = "$EXPECTED_VERSION"
+          test "$(shasum -a 256 .github/workflows/ci.yml | cut -d ' ' -f 1)" = "$EXPECTED_WORKFLOW_SHA256"
+          test "$(shasum -a 256 Package.resolved | cut -d ' ' -f 1)" = "$EXPECTED_PACKAGE_RESOLVED_SHA256"
+          test -z "$(git status --porcelain)"

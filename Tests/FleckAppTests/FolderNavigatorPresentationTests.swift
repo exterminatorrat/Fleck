@@ -5,6 +5,424 @@ import Testing
 
 @testable import FleckApp
 
+private enum FolderNavigatorObservationCase: Int {
+  case geometry = 1
+  case retainedLeading = 2
+  case retainedTrailing = 3
+}
+
+#if DEBUG
+private enum FolderNavigatorObservationPhase: Int, Equatable {
+  case unspecified = 0
+  case initial = 1
+  case initialTrailingPress = 2
+  case composing = 3
+  case composedGeometry = 4
+  case composedEarlierPress = 5
+  case composedLaterPress = 6
+  case retainedEarlierPress = 7
+  case retainedLaterPress = 8
+  case retainedEarlierGeometry = 9
+  case retainedLaterGeometry = 10
+}
+
+private enum FolderNavigatorObservationRecordKind: Int {
+  case sourceEntry = 1
+  case sourceExit = 2
+  case railReset = 3
+  case retainedTarget = 5
+  case semanticTarget = 6
+  case pressBefore = 7
+  case pressAfter = 8
+  case frameLookup = 9
+  case scrollLookup = 10
+  case settledSnapshot = 11
+}
+
+private enum FolderNavigatorLinkState: Int, Equatable {
+  case unavailable = 0
+  case same = 1
+  case replaced = 2
+}
+
+private enum FolderNavigatorTreeState: Int {
+  case unavailable = -1
+  case absent = 0
+  case exact = 1
+  case presentNonExact = 2
+}
+
+private struct FolderNavigatorOverflowObjectLink {
+  let objectState: FolderNavigatorLinkState
+  let tokenState: FolderNavigatorLinkState
+  let bound: Bool
+}
+
+@MainActor
+private final class FolderNavigatorOverflowObservationBuffer:
+  FolderNavigatorOverflowObservation.Observer
+{
+  private static let maximumRecords = 64
+  private static let maximumBytes = 12 * 1024
+  private static let summaryReserve = 128
+  private static var nextFixtureOrdinal = 0
+
+  private final class WeakObject {
+    weak var value: NSObject?
+
+    init(_ value: NSObject) { self.value = value }
+  }
+
+  private let caseOrdinal: Int
+  private let fixtureOrdinal: Int
+  private var records: [[Int]] = []
+  private var bytes = 0
+  private var unavailableCode = 0
+  private var truncated = false
+  private var flushed = false
+  private var active = true
+  private var nextButtonOrdinal = 0
+  private var tokenExhausted = false
+  private var tokens: [Int: FolderNavigatorOverflowObservation.ButtonToken] = [:]
+  private var tokenBindings: [Int: WeakObject] = [:]
+  private var supersededTokens: Set<Int> = []
+  private var originalTargets: [Int: WeakObject] = [:]
+  private var originalTokens: [Int: Int] = [:]
+  private var retainedTokens: [Int: Int] = [:]
+
+  init(caseOrdinal: Int) {
+    self.caseOrdinal = caseOrdinal
+    guard (1...3).contains(caseOrdinal), Self.nextFixtureOrdinal < 1_000_000 else {
+      fixtureOrdinal = 0
+      unavailableCode = 1
+      active = false
+      return
+    }
+    Self.nextFixtureOrdinal += 1
+    fixtureOrdinal = Self.nextFixtureOrdinal
+  }
+
+  func makeButtonToken(
+    direction: FolderNavigatorOverflowObservation.Direction
+  ) -> FolderNavigatorOverflowObservation.ButtonToken? {
+    guard active else { return nil }
+    guard nextButtonOrdinal < 32 else {
+      if !tokenExhausted {
+        tokenExhausted = true
+        markUnavailable(3)
+      }
+      return nil
+    }
+    nextButtonOrdinal += 1
+    let token = FolderNavigatorOverflowObservation.ButtonToken(
+      fixtureOrdinal: fixtureOrdinal,
+      ordinal: nextButtonOrdinal,
+      direction: direction,
+      identifier: "fleck-overflow-observation-\(caseOrdinal)-\(fixtureOrdinal)-\(nextButtonOrdinal)"
+    )
+    tokens[token.ordinal] = token
+    return token
+  }
+
+  func token(for identifier: String) -> FolderNavigatorOverflowObservation.ButtonToken? {
+    guard active else { return nil }
+    guard let token = tokens.values.first(where: { $0.identifier == identifier }) else {
+      markUnavailable(4)
+      return nil
+    }
+    return token
+  }
+
+  func observe(
+    _ token: FolderNavigatorOverflowObservation.ButtonToken,
+    object: NSObject,
+    currentTreeMatch: Bool,
+    currentTreeAbsent: Bool,
+    allowInitialBinding: Bool
+  ) -> FolderNavigatorOverflowObjectLink {
+    guard active, unavailableCode == 0, tokens[token.ordinal] == token else {
+      markUnavailable(5)
+      return unavailableLink
+    }
+    let direction = token.direction.rawValue
+    guard let originalTarget = originalTargets[direction]?.value else {
+      guard originalTargets[direction] == nil, currentTreeMatch, allowInitialBinding else {
+        markUnavailable(7)
+        return unavailableLink
+      }
+      guard bind(token, to: object) else {
+        markUnavailable(7)
+        return unavailableLink
+      }
+      originalTargets[direction] = WeakObject(object)
+      originalTokens[direction] = token.ordinal
+      return FolderNavigatorOverflowObjectLink(
+        objectState: .same, tokenState: .same, bound: true
+      )
+    }
+
+    let objectState: FolderNavigatorLinkState = originalTarget === object ? .same : .replaced
+    guard let originalToken = originalTokens[direction] else {
+      markUnavailable(7)
+      return unavailableLink
+    }
+    let tokenState: FolderNavigatorLinkState = originalToken == token.ordinal ? .same : .replaced
+    guard objectState == .same else {
+      markUnavailable(7)
+      return FolderNavigatorOverflowObjectLink(
+        objectState: objectState, tokenState: tokenState, bound: false
+      )
+    }
+
+    let bound = currentTreeMatch
+      ? bind(token, to: object)
+      : currentTreeAbsent && isBound(token, to: object) && tokenState == .same
+    if !bound { markUnavailable(7) }
+    return FolderNavigatorOverflowObjectLink(
+      objectState: objectState, tokenState: tokenState, bound: bound
+    )
+  }
+
+  func stop() {
+    guard active else { return }
+    active = false
+    tokens.removeAll(keepingCapacity: false)
+    tokenBindings.removeAll(keepingCapacity: false)
+    supersededTokens.removeAll(keepingCapacity: false)
+    originalTargets.removeAll(keepingCapacity: false)
+    originalTokens.removeAll(keepingCapacity: false)
+  }
+
+  private var unavailableLink: FolderNavigatorOverflowObjectLink {
+    FolderNavigatorOverflowObjectLink(
+      objectState: .unavailable, tokenState: .unavailable, bound: false
+    )
+  }
+
+  private func bind(
+    _ token: FolderNavigatorOverflowObservation.ButtonToken,
+    to object: NSObject
+  ) -> Bool {
+    guard tokens[token.ordinal] == token, !supersededTokens.contains(token.ordinal) else {
+      return false
+    }
+    if let bound = tokenBindings[token.ordinal]?.value, bound !== object { return false }
+    let superseded = tokenBindings.compactMap { ordinal, binding in
+      ordinal != token.ordinal && binding.value === object ? ordinal : nil
+    }
+    for ordinal in superseded {
+      tokenBindings.removeValue(forKey: ordinal)
+      supersededTokens.insert(ordinal)
+    }
+    tokenBindings[token.ordinal] = WeakObject(object)
+    return true
+  }
+
+  private func isBound(
+    _ token: FolderNavigatorOverflowObservation.ButtonToken,
+    to object: NSObject
+  ) -> Bool {
+    guard tokens[token.ordinal] == token, !supersededTokens.contains(token.ordinal),
+      let bound = tokenBindings[token.ordinal]?.value
+    else { return false }
+    return bound === object
+  }
+
+  func appendSourceEvent(_ event: FolderNavigatorOverflowObservation.SourceEvent) {
+    guard active else { return }
+    switch event {
+    case .actionEntry(let token, let creationGuard):
+      let link = sourceLink(token)
+      add(.sourceEntry, token: token.ordinal, direction: token.direction.rawValue,
+        tokenDirection: token.direction.rawValue,
+        bound: link.bound ? 1 : 0, objectState: link.objectState.rawValue,
+        tokenState: link.tokenState.rawValue, guardValue: creationGuard ? 1 : 0)
+    case .actionExit(let token, let creationGuard, let requestedScroll):
+      let link = sourceLink(token)
+      add(.sourceExit, token: token.ordinal, direction: token.direction.rawValue,
+        tokenDirection: token.direction.rawValue,
+        bound: link.bound ? 1 : 0, objectState: link.objectState.rawValue,
+        tokenState: link.tokenState.rawValue, guardValue: creationGuard ? 1 : 0,
+        requested: requestedScroll ? 1 : 0)
+    case .railReset(let creationGuard):
+      add(.railReset, bound: 0, objectState: FolderNavigatorLinkState.unavailable.rawValue,
+        tokenState: FolderNavigatorLinkState.unavailable.rawValue,
+        guardValue: creationGuard ? 1 : 0, requested: 1)
+    }
+  }
+
+  private func sourceLink(
+    _ token: FolderNavigatorOverflowObservation.ButtonToken
+  ) -> FolderNavigatorOverflowObjectLink {
+    guard unavailableCode == 0, tokens[token.ordinal] == token,
+      !supersededTokens.contains(token.ordinal),
+      let originalToken = originalTokens[token.direction.rawValue],
+      let originalTarget = originalTargets[token.direction.rawValue]?.value,
+      let boundTarget = tokenBindings[token.ordinal]?.value
+    else {
+      markUnavailable(5)
+      return unavailableLink
+    }
+    let objectState: FolderNavigatorLinkState = boundTarget === originalTarget ? .same : .replaced
+    let tokenState: FolderNavigatorLinkState = originalToken == token.ordinal ? .same : .replaced
+    let bound = objectState == .same
+    if !bound { markUnavailable(7) }
+    return FolderNavigatorOverflowObjectLink(
+      objectState: objectState, tokenState: tokenState, bound: bound
+    )
+  }
+
+  func appendRetainedTarget(
+    phase: FolderNavigatorObservationPhase,
+    semanticDirection: FolderNavigatorOverflowObservation.Direction,
+    tokenOrdinal: Int?,
+    tokenDirection: Int?,
+    treeState: FolderNavigatorTreeState,
+    link: FolderNavigatorOverflowObjectLink
+  ) {
+    if link.bound, let tokenOrdinal, tokenDirection == semanticDirection.rawValue {
+      retainedTokens[semanticDirection.rawValue] = tokenOrdinal
+    } else if let tokenDirection, tokenDirection != semanticDirection.rawValue {
+      markUnavailable(12)
+    }
+    add(.retainedTarget, phase: phase.rawValue, token: tokenOrdinal ?? -1,
+      direction: semanticDirection.rawValue, tree: treeState.rawValue,
+      tokenDirection: tokenDirection ?? -1,
+      bound: link.bound ? 1 : 0, objectState: link.objectState.rawValue,
+      tokenState: link.tokenState.rawValue)
+  }
+
+  func appendSemanticTarget(
+    phase: FolderNavigatorObservationPhase,
+    semanticDirection: FolderNavigatorOverflowObservation.Direction,
+    tokenOrdinal: Int?,
+    tokenDirection: Int?,
+    treeState: FolderNavigatorTreeState,
+    link: FolderNavigatorOverflowObjectLink
+  ) {
+    if let tokenDirection, tokenDirection != semanticDirection.rawValue {
+      markUnavailable(12)
+    }
+    let retained = retainedTokens[semanticDirection.rawValue] ?? -1
+    add(.semanticTarget, phase: phase.rawValue, token: tokenOrdinal ?? -1,
+      direction: semanticDirection.rawValue, tree: treeState.rawValue,
+      tokenDirection: tokenDirection ?? -1,
+      bound: link.bound ? 1 : 0, objectState: link.objectState.rawValue,
+      tokenState: link.tokenState.rawValue, related: retained)
+  }
+
+  func appendPress(
+    before: Bool,
+    phase: FolderNavigatorObservationPhase,
+    token: FolderNavigatorOverflowObservation.ButtonToken?,
+    treeState: FolderNavigatorTreeState,
+    link: FolderNavigatorOverflowObjectLink,
+    composerCount: Int,
+    cancelPresent: Bool,
+    admitted: Bool,
+    offset: NSPoint?
+  ) {
+    let coordinates = boundedOffset(offset)
+    add(before ? .pressBefore : .pressAfter, phase: phase.rawValue,
+      token: token?.ordinal ?? -1, direction: token?.direction.rawValue ?? -1,
+      tokenDirection: token?.direction.rawValue ?? -1,
+      tree: treeState.rawValue, bound: link.bound ? 1 : 0,
+      objectState: link.objectState.rawValue, tokenState: link.tokenState.rawValue,
+      count: composerCount, cancel: cancelPresent ? 1 : 0,
+      admitted: admitted ? 1 : 0, x: coordinates.0, y: coordinates.1)
+  }
+
+  func appendSettledSnapshot(
+    phase: FolderNavigatorObservationPhase,
+    composerCount: Int,
+    cancelPresent: Bool,
+    admitted: Bool,
+    offset: NSPoint?
+  ) {
+    let coordinates = boundedOffset(offset)
+    add(.settledSnapshot, phase: phase.rawValue, count: composerCount,
+      cancel: cancelPresent ? 1 : 0, admitted: admitted ? 1 : 0,
+      x: coordinates.0, y: coordinates.1)
+  }
+
+  func appendFrameLookup(phase: FolderNavigatorObservationPhase, step: Int) {
+    add(.frameLookup, phase: phase.rawValue, token: step)
+  }
+
+  func appendScrollLookup(phase: FolderNavigatorObservationPhase) {
+    add(.scrollLookup, phase: phase.rawValue)
+  }
+
+  func markUnavailable(_ code: Int) {
+    if active, unavailableCode == 0 { unavailableCode = code }
+  }
+
+  func flush() {
+    guard !flushed else { return }
+    flushed = true
+    let summary = "FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC \(caseOrdinal),\(records.count),\(unavailableCode),\(truncated ? 1 : 0)"
+    let body = records.map { $0.map { String($0) }.joined(separator: ",") }
+      .joined(separator: ";")
+    let line = summary + (body.isEmpty ? "" : ";" + body)
+    if line.utf8.count + 1 <= Self.maximumBytes {
+      print(line)
+    } else {
+      print("FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC \(caseOrdinal),0,9,1")
+    }
+  }
+
+  private func add(
+    _ kind: FolderNavigatorObservationRecordKind,
+    phase: Int = 0,
+    token: Int = -1,
+    direction: Int = -1,
+    tokenDirection: Int = -1,
+    tree: Int = -1,
+    bound: Int = -1,
+    objectState: Int = -1,
+    tokenState: Int = -1,
+    guardValue: Int = -1,
+    requested: Int = -1,
+    count: Int = -1,
+    cancel: Int = -1,
+    admitted: Int = -1,
+    x: Int = -1,
+    y: Int = -1,
+    related: Int = -1
+  ) {
+    guard !flushed else { return }
+    let record = [kind.rawValue, phase, token, direction, tokenDirection, tree, bound, objectState,
+      tokenState, guardValue, requested, count, cancel, admitted, x, y, related]
+    let lineSize = record.map { String($0) }.joined(separator: ",").utf8.count + 1
+    guard records.count < Self.maximumRecords else {
+      markUnavailable(8)
+      truncated = true
+      return
+    }
+    guard bytes + lineSize + Self.summaryReserve <= Self.maximumBytes else {
+      markUnavailable(9)
+      truncated = true
+      return
+    }
+    records.append(record)
+    bytes += lineSize
+  }
+
+  private func boundedOffset(_ offset: NSPoint?) -> (Int, Int) {
+    guard let offset, offset.x.isFinite, offset.y.isFinite else {
+      if offset != nil { markUnavailable(13) }
+      return (-1, -1)
+    }
+    func bounded(_ value: CGFloat) -> Int {
+      let scaled = (value * 100).rounded()
+      if scaled < -1_000_000 || scaled > 1_000_000 { markUnavailable(13) }
+      return Int(max(-1_000_000, min(1_000_000, scaled)))
+    }
+    return (bounded(offset.x), bounded(offset.y))
+  }
+}
+#endif
+
 @Suite("FolderNavigatorPresentationTests")
 @MainActor
 struct FolderNavigatorPresentationTests {
@@ -306,24 +724,46 @@ struct FolderNavigatorPresentationTests {
   @Test func composingPreservesOverflowRailAndScrolledFolderGeometry() async throws {
     let fixture = try await FolderNavigatorFixture(
       width: 520,
+      observationCase: FolderNavigatorObservationCase.geometry.rawValue,
       names: ["One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight"]
     )
     defer { fixture.close() }
     let firstFolderID = try #require(fixture.state.workspace.folders.first?.id)
+    #if DEBUG
+    fixture.setObservationPhase(.initial)
+    #endif
     let scroll = try fixture.folderScrollView()
+    #if DEBUG
+    fixture.observeScrollView(scroll)
+    fixture.observeCurrentSemanticOverflowTargets()
+    #endif
     let document = try #require(scroll.documentView)
 
+    #if DEBUG
+    fixture.observeCurrentSemanticOverflowTargets()
+    fixture.setObservationPhase(.initialTrailingPress)
+    #endif
     try fixture.click(fixture.element(label: "Reveal later folders"))
     await fixture.settle()
     try fixture.captureIfRequested(name: "overflow-many-folders-520-resting")
+    #if DEBUG
+    fixture.setObservationPhase(.initial)
+    #endif
     let scrolledFrame = try fixture.frame(identifier: "folder-\(firstFolderID.uuidString)")
     let trashFrame = try fixture.frame(identifier: "folder-trash")
     let scrolledOffset = scroll.contentView.bounds.origin
     let viewport = scroll.contentView.bounds.size
     #expect(scrolledOffset.x > 0)
 
+    #if DEBUG
+    fixture.setObservationPhase(.composing)
+    #endif
     try fixture.click(fixture.element(label: "New folder"))
     await fixture.settle()
+    #if DEBUG
+    fixture.setObservationPhase(.composedGeometry)
+    fixture.observeSettledOverflowSnapshot()
+    #endif
     try fixture.captureIfRequested(name: "overflow-many-folders-520-composing")
     #expect(fixture.elementIfPresent(label: "Reveal earlier folders") != nil)
     #expect(
@@ -334,11 +774,23 @@ struct FolderNavigatorPresentationTests {
     #expect(scroll.documentView === document)
     #expect(scroll.contentView.bounds.origin == scrolledOffset)
     #expect(scroll.contentView.bounds.size == viewport)
+    #if DEBUG
+    fixture.setObservationPhase(.composedEarlierPress)
+    #endif
     try fixture.performAccessibilityPress(label: "Reveal earlier folders")
     await fixture.settle()
+    #if DEBUG
+    fixture.observeSettledOverflowSnapshot()
+    #endif
     #expect(scroll.contentView.bounds.origin == scrolledOffset)
+    #if DEBUG
+    fixture.setObservationPhase(.composedLaterPress)
+    #endif
     try fixture.performAccessibilityPress(label: "Reveal later folders")
     await fixture.settle()
+    #if DEBUG
+    fixture.observeSettledOverflowSnapshot()
+    #endif
     #expect(scroll.contentView.bounds.origin == scrolledOffset)
   }
 
@@ -346,31 +798,75 @@ struct FolderNavigatorPresentationTests {
   func composingRejectsRetainedOverflowAccessibilityActions(startAtTrailing: Bool) async throws {
     let fixture = try await FolderNavigatorFixture(
       width: 520,
+      observationCase: startAtTrailing
+        ? FolderNavigatorObservationCase.retainedTrailing.rawValue
+        : FolderNavigatorObservationCase.retainedLeading.rawValue,
       names: ["One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight"]
     )
     defer { fixture.close() }
+    #if DEBUG
+    fixture.setObservationPhase(.initial)
+    #endif
     let scroll = try fixture.folderScrollView()
+    #if DEBUG
+    fixture.observeScrollView(scroll)
+    #endif
     let document = try #require(scroll.documentView)
     let earlier = try fixture.element(label: "Reveal earlier folders")
     let later = try fixture.element(label: "Reveal later folders")
+    #if DEBUG
+    fixture.observeRetainedOverflowTargets(earlier: earlier, later: later)
+    #endif
     let press = NSSelectorFromString("accessibilityPerformPress")
     try #require(earlier.responds(to: press))
     try #require(later.responds(to: press))
 
     try #require(document.bounds.width > scroll.contentView.bounds.width)
     if startAtTrailing {
+      #if DEBUG
+      fixture.setObservationPhase(.initialTrailingPress)
+      #endif
       try fixture.performAccessibilityPress(label: "Reveal later folders")
       await fixture.settle()
+      #if DEBUG
+      fixture.observeSettledOverflowSnapshot()
+      #endif
     }
     let scrolledOffset = scroll.contentView.bounds.origin
+    #if DEBUG
+    fixture.setObservationPhase(.composing)
+    #endif
     try #require(startAtTrailing ? scrolledOffset.x > 0 : scrolledOffset.x == 0)
     try fixture.performAccessibilityPress(label: "New folder")
     await fixture.settle()
+    #if DEBUG
+    fixture.observeSettledOverflowSnapshot()
+    #endif
     _ = try #require(fixture.elementIfPresent(label: "Cancel new folder"))
+    #if DEBUG
+    fixture.setObservationPhase(.composing)
+    fixture.observeCurrentSemanticOverflowTargets()
+    #endif
 
     for control in [earlier, later] {
+      #if DEBUG
+      let phase: FolderNavigatorObservationPhase = control === earlier
+        ? .retainedEarlierPress
+        : .retainedLaterPress
+      fixture.setObservationPhase(phase)
+      fixture.observeOverflowActionBoundary(before: true, element: control)
+      #endif
       _ = control.perform(press)
+      #if DEBUG
+      fixture.observeOverflowActionBoundary(before: false, element: control)
+      #endif
       await fixture.settle()
+      #if DEBUG
+      fixture.setObservationPhase(control === earlier
+        ? .retainedEarlierGeometry
+        : .retainedLaterGeometry)
+      fixture.observeSettledOverflowSnapshot()
+      #endif
       #expect(try fixture.folderScrollView() === scroll)
       #expect(scroll.documentView === document)
       #expect(scroll.contentView.bounds.origin == scrolledOffset)
@@ -1298,6 +1794,11 @@ private final class FolderNavigatorNativeDiagnostics: NSObject, NSTextFieldDeleg
 private final class FolderNavigatorFixture {
   private static var nextMouseEventNumber = 1
   private var closeTask: Task<Void, Never>?
+  #if DEBUG
+  private var observationBuffer: FolderNavigatorOverflowObservationBuffer?
+  private var observationPhase: FolderNavigatorObservationPhase = .unspecified
+  private weak var observationScrollView: NSScrollView?
+  #endif
 
   let root: URL
   let state: AppState
@@ -1305,7 +1806,11 @@ private final class FolderNavigatorFixture {
   let window: NSWindow
   let host: NSHostingView<AnyView>
 
-  init(width: CGFloat, names: [String] = ["Work", "Personal"]) async throws {
+  init(
+    width: CGFloat,
+    observationCase: Int? = nil,
+    names: [String] = ["Work", "Personal"]
+  ) async throws {
     NSApplication.shared.accessibilitySetValue(
       true,
       forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
@@ -1326,6 +1831,15 @@ private final class FolderNavigatorFixture {
       selectedNoteID: selectedNoteID,
       folders: folders
     )
+    #if DEBUG
+    if let observationCase,
+      ProcessInfo.processInfo.environment["FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC"] == "1"
+    {
+      let buffer = FolderNavigatorOverflowObservationBuffer(caseOrdinal: observationCase)
+      observationBuffer = buffer
+      FolderNavigatorOverflowObservation.install(state: state, observer: buffer)
+    }
+    #endif
     runtime = DictationRuntime(appState: state, applicationSupportURL: root)
     host = NSHostingView(
       rootView: AnyView(
@@ -1350,6 +1864,13 @@ private final class FolderNavigatorFixture {
 
   func close() {
     guard closeTask == nil else { return }
+    #if DEBUG
+    if let observationBuffer {
+      observationBuffer.stop()
+      FolderNavigatorOverflowObservation.remove(state: state, observer: observationBuffer)
+      observationBuffer.flush()
+    }
+    #endif
     window.contentView = nil
     window.orderOut(nil)
     window.close()
@@ -1371,6 +1892,215 @@ private final class FolderNavigatorFixture {
     close()
     await closeTask?.value
   }
+
+  #if DEBUG
+  func setObservationPhase(_ phase: FolderNavigatorObservationPhase) {
+    observationPhase = phase
+  }
+
+  func observeScrollView(_ scrollView: NSScrollView) {
+    observationScrollView = scrollView
+  }
+
+  func observeRetainedOverflowTargets(earlier: NSObject, later: NSObject) {
+    guard let observationBuffer else { return }
+    let earlierObservation = inspectOverflowTarget(earlier)
+    observationBuffer.appendRetainedTarget(
+      phase: observationPhase,
+      semanticDirection: .earlier,
+      tokenOrdinal: earlierObservation.token?.ordinal,
+      tokenDirection: earlierObservation.token?.direction.rawValue,
+      treeState: earlierObservation.treeState,
+      link: earlierObservation.link
+    )
+    let laterObservation = inspectOverflowTarget(later)
+    observationBuffer.appendRetainedTarget(
+      phase: observationPhase,
+      semanticDirection: .later,
+      tokenOrdinal: laterObservation.token?.ordinal,
+      tokenDirection: laterObservation.token?.direction.rawValue,
+      treeState: laterObservation.treeState,
+      link: laterObservation.link
+    )
+  }
+
+  func observeCurrentSemanticOverflowTargets() {
+    guard let observationBuffer else { return }
+    observeCurrentSemanticOverflowTarget(
+      label: "Reveal earlier folders",
+      direction: .earlier
+    )
+    observeCurrentSemanticOverflowTarget(
+      label: "Reveal later folders",
+      direction: .later
+    )
+  }
+
+  func observeOverflowActionBoundary(before: Bool, element: NSObject) {
+    guard let observationBuffer else { return }
+    let target = inspectOverflowTarget(element)
+    let snapshot = overflowAdmissionSnapshot()
+    observationBuffer.appendPress(
+      before: before,
+      phase: observationPhase,
+      token: target.token,
+      treeState: target.treeState,
+      link: target.link,
+      composerCount: snapshot.composerCount,
+      cancelPresent: snapshot.cancelPresent,
+      admitted: snapshot.admitted,
+      offset: snapshot.offset
+    )
+  }
+
+  func observeSettledOverflowSnapshot() {
+    guard let observationBuffer else { return }
+    let snapshot = overflowAdmissionSnapshot()
+    observationBuffer.appendSettledSnapshot(
+      phase: observationPhase,
+      composerCount: snapshot.composerCount,
+      cancelPresent: snapshot.cancelPresent,
+      admitted: snapshot.admitted,
+      offset: snapshot.offset
+    )
+  }
+
+  private func overflowAdmissionSnapshot() -> (
+    composerCount: Int,
+    cancelPresent: Bool,
+    admitted: Bool,
+    offset: NSPoint?
+  ) {
+    let candidates = textFields.filter {
+      isLiveNativeFolderComposerCandidate($0, fixtureWindow: window, host: host)
+    }
+    if candidates.count > 1 { observationBuffer?.markUnavailable(11) }
+    let cancelPresent = elementIfPresent(label: "Cancel new folder") != nil
+    let offset = observationScrollView?.contentView.bounds.origin
+    if observationScrollView == nil { observationBuffer?.markUnavailable(14) }
+    return (min(candidates.count, 3), cancelPresent, candidates.count == 1 && cancelPresent, offset)
+  }
+
+  private struct OverflowTargetObservation {
+    let token: FolderNavigatorOverflowObservation.ButtonToken?
+    let treeState: FolderNavigatorTreeState
+    let link: FolderNavigatorOverflowObjectLink
+  }
+
+  private func inspectOverflowTarget(_ element: NSObject) -> OverflowTargetObservation {
+    guard let observationBuffer else {
+      return OverflowTargetObservation(
+        token: nil, treeState: .unavailable,
+        link: FolderNavigatorOverflowObjectLink(
+          objectState: .unavailable, tokenState: .unavailable, bound: false
+        )
+      )
+    }
+    let selector = NSSelectorFromString("accessibilityIdentifier")
+    guard element.responds(to: selector),
+      let identifier = element.perform(selector)?.takeUnretainedValue() as? String
+    else {
+      observationBuffer.markUnavailable(10)
+      return OverflowTargetObservation(
+        token: nil, treeState: .unavailable,
+        link: FolderNavigatorOverflowObjectLink(
+          objectState: .unavailable, tokenState: .unavailable, bound: false
+        )
+      )
+    }
+    guard let token = observationBuffer.token(for: identifier) else {
+      observationBuffer.markUnavailable(10)
+      return OverflowTargetObservation(
+        token: nil, treeState: .unavailable,
+        link: FolderNavigatorOverflowObjectLink(
+          objectState: .unavailable, tokenState: .unavailable, bound: false
+        )
+      )
+    }
+    let matches = deduplicated(
+      matchingElements(host, matching: "accessibilityIdentifier", value: identifier)
+    )
+    let currentTreeMatch = matches.count == 1 && matches[0] === element
+    if matches.count > 1 { observationBuffer.markUnavailable(6) }
+    let link = observationBuffer.observe(
+      token,
+      object: element,
+      currentTreeMatch: currentTreeMatch,
+      currentTreeAbsent: matches.isEmpty,
+      allowInitialBinding: observationPhase == .initial
+        || observationPhase == .initialTrailingPress
+    )
+    return OverflowTargetObservation(
+      token: token,
+      treeState: matches.isEmpty ? .absent : currentTreeMatch ? .exact : .presentNonExact,
+      link: link
+    )
+  }
+
+  private func observeCurrentSemanticOverflowTarget(
+    label: String,
+    direction: FolderNavigatorOverflowObservation.Direction
+  ) {
+    guard let observationBuffer else { return }
+    let matches = deduplicated(
+      matchingElements(host, matching: "accessibilityLabel", value: label)
+    )
+    guard !matches.isEmpty else {
+      observationBuffer.appendSemanticTarget(
+        phase: observationPhase,
+        semanticDirection: direction,
+        tokenOrdinal: nil,
+        tokenDirection: nil,
+        treeState: .absent,
+        link: FolderNavigatorOverflowObjectLink(
+          objectState: .unavailable, tokenState: .unavailable, bound: false
+        )
+      )
+      return
+    }
+    guard matches.count == 1, let element = matches.first else {
+      observationBuffer.markUnavailable(12)
+      observationBuffer.appendSemanticTarget(
+        phase: observationPhase,
+        semanticDirection: direction,
+        tokenOrdinal: nil,
+        tokenDirection: nil,
+        treeState: .unavailable,
+        link: FolderNavigatorOverflowObjectLink(
+          objectState: .unavailable, tokenState: .unavailable, bound: false
+        )
+      )
+      return
+    }
+    let target = inspectOverflowTarget(element)
+    observationBuffer.appendSemanticTarget(
+      phase: observationPhase,
+      semanticDirection: direction,
+      tokenOrdinal: target.token?.ordinal,
+      tokenDirection: target.token?.direction.rawValue,
+      treeState: target.treeState,
+      link: target.link
+    )
+  }
+
+  private func observeInitialOverflowTargetIfMarked(_ element: NSObject) {
+    guard observationBuffer != nil else { return }
+    let selector = NSSelectorFromString("accessibilityIdentifier")
+    guard element.responds(to: selector),
+      let identifier = element.perform(selector)?.takeUnretainedValue() as? String,
+      identifier.hasPrefix("fleck-overflow-observation-")
+    else { return }
+    _ = inspectOverflowTarget(element)
+  }
+
+  private func deduplicated(_ elements: [NSObject]) -> [NSObject] {
+    var unique: [NSObject] = []
+    for element in elements where !unique.contains(where: { $0 === element }) {
+      unique.append(element)
+    }
+    return unique
+  }
+  #endif
 
   func settle() async {
     for _ in 0..<40 {
@@ -1425,17 +2155,34 @@ private final class FolderNavigatorFixture {
   private func performAccessibilityPress(_ element: NSObject) throws {
     let selector = NSSelectorFromString("accessibilityPerformPress")
     #expect(element.responds(to: selector))
+    #if DEBUG
+    let observesOverflowTarget = observationBuffer != nil && observationPhase != .composing
+    if observesOverflowTarget { observeOverflowActionBoundary(before: true, element: element) }
+    #endif
     _ = element.perform(selector)
+    #if DEBUG
+    if observesOverflowTarget { observeOverflowActionBoundary(before: false, element: element) }
+    #endif
   }
 
   func frame(identifier: String) throws -> NSRect {
+    #if DEBUG
+    let frameStep = identifier == "folder-trash" ? 2 : 1
+    observationBuffer?.appendFrameLookup(phase: observationPhase, step: frameStep)
+    #endif
     let element = try #require(
       findElement(host, matching: "accessibilityIdentifier", value: identifier)
     )
+    #if DEBUG
+    observationBuffer?.appendFrameLookup(phase: observationPhase, step: frameStep + 10)
+    #endif
     return try #require(element.value(forKey: "accessibilityFrame") as? NSValue).rectValue
   }
 
   func folderScrollView() throws -> NSScrollView {
+    #if DEBUG
+    observationBuffer?.appendScrollLookup(phase: observationPhase)
+    #endif
     let folderFrame = try frame(identifier: "folder-\(state.workspace.folders[0].id.uuidString)")
     return try #require(
       descendants(in: host, as: NSScrollView.self)
@@ -1450,6 +2197,9 @@ private final class FolderNavigatorFixture {
   }
 
   func click(_ element: NSObject) throws {
+    #if DEBUG
+    observeInitialOverflowTargetIfMarked(element)
+    #endif
     let frame = try #require(element.value(forKey: "accessibilityFrame") as? NSValue).rectValue
     try click(screenPoint: NSPoint(x: frame.midX, y: frame.midY))
   }
