@@ -3608,6 +3608,7 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
     let fixture = try await RuntimeFixture(
       finalText: finalText,
       capsuleEnabled: true,
+      ambiguousRouting: true,
       capsuleSleeper: { duration in await sleeper.sleep(duration) }
     )
     await fixture.runtime.awaitStartupAssessment()
@@ -4003,6 +4004,7 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
     finalText: "Move this saved capture",
     capsuleEnabled: true,
     routingNotes: notes,
+    ambiguousRouting: true,
     capsuleSleeper: { duration in await sleeper.sleep(duration) }
   )
   await fixture.runtime.awaitStartupAssessment()
@@ -4188,6 +4190,7 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
     let fixture = try await RuntimeFixture(
       finalText: finalText,
       capsuleEnabled: false,
+      ambiguousRouting: true,
       capsuleSleeper: { duration in await sleeper.sleep(duration) }
     )
     await fixture.runtime.awaitStartupAssessment()
@@ -4247,6 +4250,7 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
     let fixture = try await RuntimeFixture(
       finalText: finalText,
       capsuleEnabled: true,
+      ambiguousRouting: true,
       capsuleSleeper: { duration in await sleeper.sleep(duration) }
     )
     await fixture.runtime.awaitStartupAssessment()
