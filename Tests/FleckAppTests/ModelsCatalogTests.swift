@@ -1180,7 +1180,7 @@ private func modelLibraryDescriptor(
           try await settleModelBrowser(host)
           #expect(window.firstResponder != nil)
           #expect(searchField.currentEditor() == nil)
-          try sendModelKey(48, characters: "\t", modifierFlags: [.shift], to: window)
+          try sendModelKey(48, characters: "\u{19}", modifierFlags: [.shift], to: window)
           try await settleModelBrowser(host)
           let returnedEditor = try #require(searchField.currentEditor())
           #expect(window.firstResponder === returnedEditor)
