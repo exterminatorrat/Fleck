@@ -128,6 +128,16 @@ This is one constituent of the shared 1.7.0-beta.1 development cohort, not a sep
 release or a qualified alternative model. No alternative availability or selection UI is
 added. Local compilation, tests and native/model behavior remain unverified.
 
+## [1.7.0-beta.1] - 2026-10-28
+
+### Fixed
+
+- Keep process-transport completion open until bounded stderr validation and graceful drain
+  finish, while streaming request lifecycle events without waiting for process shutdown.
+
+Part of the approved substantial development cohort. Source-only correction; compilation,
+process tests and native behavior remain unverified locally.
+
 ## [1.5.13-beta.1] - 2026-10-31
 
 ### Fixed
