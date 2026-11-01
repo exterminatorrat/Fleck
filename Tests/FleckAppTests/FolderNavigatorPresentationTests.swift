@@ -286,8 +286,8 @@ private final class FolderNavigatorOverflowObservationBuffer:
       markUnavailable(12)
     }
     add(.retainedTarget, phase: phase.rawValue, token: tokenOrdinal ?? -1,
-      direction: semanticDirection.rawValue, tree: treeState.rawValue,
-      tokenDirection: tokenDirection ?? -1,
+      direction: semanticDirection.rawValue, tokenDirection: tokenDirection ?? -1,
+      tree: treeState.rawValue,
       bound: link.bound ? 1 : 0, objectState: link.objectState.rawValue,
       tokenState: link.tokenState.rawValue)
   }
@@ -305,8 +305,8 @@ private final class FolderNavigatorOverflowObservationBuffer:
     }
     let retained = retainedTokens[semanticDirection.rawValue] ?? -1
     add(.semanticTarget, phase: phase.rawValue, token: tokenOrdinal ?? -1,
-      direction: semanticDirection.rawValue, tree: treeState.rawValue,
-      tokenDirection: tokenDirection ?? -1,
+      direction: semanticDirection.rawValue, tokenDirection: tokenDirection ?? -1,
+      tree: treeState.rawValue,
       bound: link.bound ? 1 : 0, objectState: link.objectState.rawValue,
       tokenState: link.tokenState.rawValue, related: retained)
   }
