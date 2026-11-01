@@ -3,6 +3,93 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.43-beta.1] - 2026-11-01
+
+### Fixed
+
+- Use the Trash row's accessibility frame to locate the native folder-scroll band
+  without depending on the first folder remaining exposed.
+
+Source checkpoint only; CI and native verification remain pending.
+
+## [1.4.42-beta.1] - 2026-11-01
+
+### Fixed
+
+- Integrate the reviewed retained folder-overflow action guards and complete fixture changes
+  while preserving the existing editor and native resize checkpoints.
+
+Source prerequisite only; the new combined source is uncompiled and runtime verification is unrun.
+Recovery of the composition failure and full native behavior remain unverified.
+
+## [1.4.39-beta.1] - 2026-11-01
+
+### Fixed
+
+- Ignore retained folder-overflow actions while creating a folder.
+- Carry the retained-action regression and await once-only folder-fixture teardown after runtime shutdown.
+
+Source prerequisite only; new source is uncompiled and runtime verification is unrun.
+No recovery of another source's composition failure is claimed.
+
+## [1.4.38-beta.1] - 2026-11-01
+
+### Fixed
+
+- Integrate the reviewed aligned-geometry resize reentry guard with the existing editor
+  and native fractional-resize checkpoints.
+
+Source checkpoint only; compilation and native verification remain pending. Recovery of the
+predecessor's failures and direct nil/nonfinite event-adapter injection coverage remain unverified.
+
+## [1.4.35-beta.1] - 2026-11-01
+
+### Fixed
+
+- Allow panel-resize reentry when native geometry is already aligned while deferred reconciliation remains queued.
+
+Source repair candidate only; this guard remains uncompiled and native verification is unrun.
+Recovery of the predecessor's rollback/restart failures and direct nil/nonfinite event-adapter
+coverage remain unverified.
+
+## [1.4.34-beta.1] - 2026-11-01
+
+### Fixed
+
+- Integrate the reviewed legacy-compatible native fractional-resize correction with the
+  existing editor and activity scrollbar checkpoints.
+
+Source checkpoint only; compilation and native verification remain pending. Direct nil/nonfinite
+event-adapter injection coverage remains open.
+
+## [1.4.31-beta.1] - 2026-10-31
+
+### Fixed
+
+- Preserve canonical pointer coordinates and native size readback during fractional panel resizing.
+- Fence resize publication, rollback and commit against stale interaction revisions and ownership.
+
+Source checkpoint only; compilation and native verification remain pending. Direct nil/nonfinite
+event-adapter coverage remains open.
+
+## [1.4.30-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed activity scrollbar geometry and tracking correction while preserving
+  the native Tab and bullet-caret editor checkpoint and its prior parent corrections.
+
+Source checkpoint only; combined compilation and native verification remain pending.
+
+## [1.4.27-beta.1] - 2026-10-31
+
+### Fixed
+
+- Keep the activity scrollbar's visual knob within native knob geometry at fractional positions.
+- Preserve the initial visual knob rectangle when native tracking begins and retain held-size behavior.
+
+Source checkpoint only; compilation and native verification remain pending.
+
 ## [1.4.26-beta.1] - 2026-10-31
 
 ### Fixed
