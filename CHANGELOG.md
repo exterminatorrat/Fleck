@@ -3,6 +3,20 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.5-beta.1] - 2026-11-01
+
+### Fixed
+
+- Keep keyboard focus in the vocabulary search field when search is reopened; clearing the
+  trigger focus in the same update could leave the Settings window itself focused.
+- Refuse an event-subscription refresh at the maximum stored revision before staging a new
+  signing key, instead of overflowing after the key is written.
+- Delete note-tab title fixture storage only after runtime shutdown completes.
+- Keep the Namespace macOS runner display awake during AppKit-hosted CI tests.
+
+Combined development candidate integrating the open pull-request stack (#68–#93) with these
+repairs. Not an accepted release.
+
 ## [1.7.4-beta.1] - 2026-10-30
 
 ### Fixed
