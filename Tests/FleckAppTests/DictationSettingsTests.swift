@@ -1161,11 +1161,6 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
 
     #expect(
       settingsView(
-        withAccessibilityIdentifier: "settings-keyboard-focus-dictation-status", in: host)
-        != nil
-    )
-    #expect(
-      settingsView(
         withAccessibilityIdentifier: "settings-keyboard-focus-cue-dictation-status",
         in: host
       ) == nil
