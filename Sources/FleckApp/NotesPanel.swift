@@ -2966,6 +2966,7 @@
     private func overflowControls(scrollProxy: ScrollViewProxy) -> some View {
       HStack(spacing: 0) {
         Button {
+          guard !isCreatingFolder else { return }
           scrollProxy.scrollTo(FolderScrollTarget.leading, anchor: .leading)
         } label: {
           Image(systemName: "chevron.left")
@@ -2978,6 +2979,7 @@
         .help("Show earlier folders")
 
         Button {
+          guard !isCreatingFolder else { return }
           scrollProxy.scrollTo(FolderScrollTarget.trailing, anchor: .trailing)
         } label: {
           Image(systemName: "chevron.right")
