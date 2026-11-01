@@ -997,7 +997,8 @@
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
-                .background(.quaternary.opacity(0.35))
+                .foregroundStyle(theme.color(.textPrimary))
+                .background(theme.color(.raised))
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel("Dictation unavailable")
               }
@@ -1012,6 +1013,9 @@
                   presentation: banner,
                   motion: motion,
                   onUndo: { Task { await appState.undoLatestAgentChange() } },
+                  onDoNotShowAgain: {
+                    appState.updatePreferences { $0.showAgentUpdateBanners = false }
+                  },
                   onDismiss: { dismissBanner(occurrence) }
                 )
                 .animation(motion.quick, value: banner)
