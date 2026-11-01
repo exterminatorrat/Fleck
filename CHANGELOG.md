@@ -3,6 +3,16 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.39-beta.1] - 2026-11-01
+
+### Fixed
+
+- Ignore retained folder-overflow actions while creating a folder.
+- Carry the retained-action regression and await once-only folder-fixture teardown after runtime shutdown.
+
+Source prerequisite only; new source is uncompiled and runtime verification is unrun.
+No recovery of another source's composition failure is claimed.
+
 ## [1.4.35-beta.1] - 2026-11-01
 
 ### Fixed
