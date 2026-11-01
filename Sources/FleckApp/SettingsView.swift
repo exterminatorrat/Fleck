@@ -2909,7 +2909,6 @@
       presentationGeneration += 1
       searchPresentationSource = source
       isOptionsTriggerFocused = false
-      isSearchTriggerFocused = false
       withAnimation(motion.presentationAnimation(for: source)) {
         isSearchExpanded = true
         isSearchFocused = true
