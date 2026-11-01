@@ -3,6 +3,16 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.6-beta.1] - 2026-11-02
+
+### Fixed
+
+- Embed and sign the already-linked Sparkle framework in development packages, and bind the
+  staged executable to its embedded copy so an extracted app does not depend on build paths.
+- Preserve framework-free packages when the executable does not link Sparkle.
+
+Development candidate only; not an accepted or notarized release.
+
 ## [1.7.5-beta.1] - 2026-11-01
 
 ### Fixed

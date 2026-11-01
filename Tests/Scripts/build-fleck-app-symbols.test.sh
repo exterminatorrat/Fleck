@@ -103,6 +103,34 @@ done
 /bin/mkdir -p .build/release
 case "$product" in
   Fleck)
+    if [[ "${FLECK_TEST_LINK_SPARKLE:-0}" == 1 ]]; then
+      framework='.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework'
+      /bin/mkdir -p "$framework/Versions/B/Resources"
+      /bin/ln -s B "$framework/Versions/Current"
+      /bin/ln -s Versions/Current/Sparkle "$framework/Sparkle"
+      /bin/ln -s Versions/Current/Resources "$framework/Resources"
+      cat > "$framework/Versions/B/Resources/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleExecutable</key><string>Sparkle</string>
+  <key>CFBundleIdentifier</key><string>test.fleck.sparkle</string>
+  <key>CFBundlePackageType</key><string>FMWK</string>
+  <key>CFBundleVersion</key><string>1</string>
+</dict></plist>
+PLIST
+      /usr/bin/xcrun clang -dynamiclib -x c - -o "$framework/Versions/B/Sparkle" \
+        -install_name '@rpath/Sparkle.framework/Versions/B/Sparkle' <<'C'
+int sparkle_fixture_value(void) { return 42; }
+C
+      /usr/bin/xcrun clang -x c - -o .build/release/Fleck \
+        -F "$(/usr/bin/dirname "$framework")" -framework Sparkle \
+        -Wl,-rpath,@loader_path <<'C'
+extern int sparkle_fixture_value(void);
+int main(void) { return sparkle_fixture_value() == 42 ? 0 : 1; }
+C
+      exit 0
+    fi
     printf '#!/bin/sh\nDEBUG_SYMBOLS\n/bin/touch %q\n' "$FLECK_TEST_LAUNCH_SENTINEL" > .build/release/Fleck
     /bin/chmod 755 .build/release/Fleck
     ;;
@@ -132,8 +160,22 @@ fi
 if [[ "$1" == 'strip' && "$2" == '-S' && $# == 3 ]]; then
   printf '%s\n' "$3" >> "$FLECK_TEST_STRIP_LOG"
   [[ "${FLECK_TEST_STRIP_FAIL:-0}" != 1 ]] || exit 42
+  if [[ "${FLECK_TEST_LINK_SPARKLE:-0}" == 1 ]]; then
+    exec /usr/bin/strip -S "$3"
+  fi
   /usr/bin/sed -i '' '/^DEBUG_SYMBOLS$/d' "$3"
   exit 0
+fi
+if [[ "$1" == 'otool' && "$2" == '-L' && $# == 3 ]]; then
+  if [[ "${FLECK_TEST_LINK_SPARKLE:-0}" == 1 ]]; then
+    exec /usr/bin/otool -L "$3"
+  fi
+  printf '%s:\n' "$3"
+  exit 0
+fi
+if [[ "$1" == 'install_name_tool' ]]; then
+  shift
+  exec /usr/bin/install_name_tool "$@"
 fi
 exit 2
 SCRIPT
@@ -197,5 +239,27 @@ fi
 [[ "$(/usr/bin/shasum -a 256 "$packaged" | /usr/bin/awk '{print $1}')" == "$packaged_hash" ]] \
   || fail 'failed strip replaced the existing packaged app'
 test ! -e "$launch_sentinel" || fail 'failed strip path launched the executable'
+
+test ! -e "$packaged_app/Contents/Frameworks" \
+  || fail 'packager embedded an unlinked framework'
+sparkle_result="$results/sparkle.json"
+run_packager "$sparkle_result" FLECK_TEST_LINK_SPARKLE=1 >/dev/null
+sparkle_app="$("$fixture_root/Scripts/fleck-build-identity.py" read-result \
+  --repo "$fixture_root" --result-file "$sparkle_result" --flavor development)"
+test -f "$sparkle_app/Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle" \
+  || fail 'packager omitted a linked framework'
+/usr/bin/otool -L "$sparkle_app/Contents/MacOS/Fleck" \
+  | /usr/bin/grep -Fq '@executable_path/../Frameworks/Sparkle.framework/Versions/B/Sparkle ' \
+  || fail 'packaged executable does not resolve its embedded framework'
+/usr/bin/otool -L "$fixture_root/.build/release/Fleck" \
+  | /usr/bin/grep -Fq '@rpath/Sparkle.framework/Versions/B/Sparkle ' \
+  || fail 'packager changed the source executable dependency'
+/usr/bin/codesign --verify --deep --strict "$sparkle_app"
+/usr/bin/ditto -c -k --sequesterRsrc --keepParent "$sparkle_app" "$test_root/sparkle.zip"
+/usr/bin/ditto -x -k "$test_root/sparkle.zip" "$test_root/extracted"
+extracted_app="$test_root/extracted/$(/usr/bin/basename "$sparkle_app")"
+/usr/bin/codesign --verify --deep --strict "$extracted_app"
+"$extracted_app/Contents/MacOS/Fleck" \
+  || fail 'archive-extracted fixture cannot load the embedded framework'
 
 printf 'build-fleck-app debug-symbol packaging tests passed.\n'
