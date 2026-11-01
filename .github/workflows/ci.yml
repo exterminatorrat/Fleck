@@ -7,57 +7,71 @@ permissions:
   contents: read
 
 jobs:
-  diag:
-    name: Native readiness diagnostic (scratch, not required CI)
+  observe:
+    name: Observe frontmost app during full ordinary graph (scratch)
     runs-on: namespace-profile-fleck
-    timeout-minutes: 100
+    timeout-minutes: 80
     env:
       FLECK_NATIVE_CAPTURE_QA: "0"
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
-      - name: Check out repository (actions/checkout v6.0.2)
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-      - name: Environment
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Session settings
         run: |
-          sw_vers
-          xcodebuild -version
-          launchctl managername || true
-          id -u; stat -f '%u' /dev/console || true
-          lsappinfo front || true
-          lsappinfo list 2>/dev/null | grep -E '^ *[0-9]+\) "|bundleID=|type=' | head -120 || true
-          system_profiler SPDisplaysDataType 2>/dev/null | sed -n 1,40p || true
-      - name: Build tests
+          pmset -g || true
+          defaults -currentHost read com.apple.screensaver 2>&1 || true
+          defaults read com.apple.screensaver 2>&1 || true
+          sysadminctl -screenLock status 2>&1 || true
+          sudo -n true && echo "passwordless sudo available" || echo "no passwordless sudo"
+      - name: Full ordinary graph with frontmost observer
         run: |
           if ! command -v rg >/dev/null 2>&1; then brew install ripgrep; fi
-          swift build --build-tests --disable-automatic-resolution 2>&1 | grep -vE 'warning:|^ *[0-9]+ \||^ *\||`-' | tail -20
-      - name: Isolated and ordered selectors
-        run: |
-          set +e
-          run() {
-            echo "::group::$1"
-            lsappinfo info -only name "$(lsappinfo front)" 2>/dev/null || true
-            Scripts/run-nonempty-swift-tests.sh "$1" > /tmp/sel.log 2>&1
-            status=$?
-            grep -E 'DIAG|admission|appActive|windowIsKey|matched test count|✘|Test run with|^error' /tmp/sel.log | cut -c1-400
-            echo "exit=$status"
-            lsappinfo info -only name "$(lsappinfo front)" 2>/dev/null || true
-            echo "::endgroup::"
-          }
-          run '^FleckAppTests\.personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal\(\)$'
-          run '^FleckAppTests\.personalDictionaryToolbarUsesPaddedTargetsInlineSearchAndKeyboardDismissal\(\)$'
-          run '^FleckAppTests\.settingsGlassOpacitySliderRespondsToThumbDragAndTrackClickAtAnchoredSettingsRow\(\)$'
-          run '^FleckAppTests\.settingsSearchAnchorFocusCueDistinguishesTabFromPointer\(\)$'
-          run '^FleckAppTests\.DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize\(\)$'
-          for i in 1 2 3; do
-            run '^FleckAppTests\.FolderNavigatorPresentationTests/composingPreservesOverflowRailAndScrolledFolderGeometry\(\)$'
-          done
-          run '^FleckAppTests\.(FleckPanel[A-Za-z]*|personalDictionary[A-Za-z]*)\(\)$'
-          run '^FleckAppTests\.(settings[A-Za-z]*)\(\)$'
-      - name: Full ordinary graph with diagnostics
-        run: |
+          (
+            start=$(date +%s)
+            while true; do
+              idle=$(ioreg -c IOHIDSystem | awk '/HIDIdleTime/ {print int($NF/1000000000); exit}')
+              front=$(lsappinfo info -only name "$(lsappinfo front)" 2>/dev/null | tr -d '\n')
+              echo "[observer t=$(( $(date +%s) - start ))s idle=${idle}s] $front"
+              sleep 30
+            done
+          ) &
+          observer=$!
           set +e
           Scripts/run-nonempty-swift-tests.sh '^.+$' > /tmp/full.log 2>&1
           status=$?
-          grep -E 'DIAG|admission|appActive|✘|Test run with|^error' /tmp/full.log | cut -c1-400
+          kill $observer
+          grep -E '✘|Test run with|^error' /tmp/full.log | cut -c1-300
+          echo "exit=$status"
+          exit 0
+  mitigated:
+    name: Full ordinary graph with idle lock disabled (scratch)
+    runs-on: namespace-profile-fleck
+    timeout-minutes: 80
+    env:
+      FLECK_NATIVE_CAPTURE_QA: "0"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Full ordinary graph with idle lock disabled
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then brew install ripgrep; fi
+          defaults -currentHost write com.apple.screensaver idleTime -int 0
+          sudo -n pmset -a displaysleep 0 sleep 0 || true
+          (
+            start=$(date +%s)
+            while true; do
+              idle=$(ioreg -c IOHIDSystem | awk '/HIDIdleTime/ {print int($NF/1000000000); exit}')
+              front=$(lsappinfo info -only name "$(lsappinfo front)" 2>/dev/null | tr -d '\n')
+              echo "[observer t=$(( $(date +%s) - start ))s idle=${idle}s] $front"
+              sleep 30
+            done
+          ) &
+          observer=$!
+          set +e
+          caffeinate -dimsu -w $$ &
+          Scripts/run-nonempty-swift-tests.sh '^.+$' > /tmp/full.log 2>&1
+          status=$?
+          kill $observer
+          grep -E '✘|Test run with|^error' /tmp/full.log | cut -c1-300
           echo "exit=$status"
           exit 0
