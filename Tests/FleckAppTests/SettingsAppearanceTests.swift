@@ -977,6 +977,15 @@ func settingsGlassOpacitySliderRespondsToThumbDragAndTrackClickAtAnchoredSetting
       else { return false }
       return slider.bounds.width > 0 && slider.bounds.height > 0
     }
+    if !windowReady {
+      let diagnosticSlider = settingsNativeSlider(in: host)
+      let diagnostic = "[F93-6178:slider-postwait] ready=\(windowReady) rtl=\(layoutDirection == .rightToLeft) active=\(NSApp.isActive)"
+        + " key=\(window.isKeyWindow) keyOwned=\(NSApp.keyWindow === window) visible=\(window.isVisible)"
+        + " hostOwned=\(host.window === window) sliderPresent=\(diagnosticSlider != nil)"
+        + " sliderOwned=\(diagnosticSlider?.window === window) hidden=\(diagnosticSlider?.isHiddenOrHasHiddenAncestor ?? true)"
+        + " bounds=\(diagnosticSlider?.bounds ?? .zero)"
+      print(String(decoding: diagnostic.utf8.prefix(1000), as: UTF8.self) + " truncated=\(diagnostic.utf8.count > 1000)")
+    }
     try #require(windowReady)
 
     let slider = try #require(settingsNativeSlider(in: host))
@@ -1214,6 +1223,17 @@ func settingsSearchAnchorFocusCueDistinguishesTabFromPointer() async throws {
       !searchField.isHiddenOrHasHiddenAncestor
     else { return false }
     return searchField.bounds.width > 0 && searchField.bounds.height > 0
+  }
+  if !windowReady {
+    let diagnosticSearchField = settingsNativeView(
+      withAccessibilityIdentifier: "settings-search-field", in: host
+    ) as? NSSearchField
+    let diagnostic = "[F93-6178:search-postwait] ready=\(windowReady) active=\(NSApp.isActive)"
+      + " key=\(window.isKeyWindow) keyOwned=\(NSApp.keyWindow === window) visible=\(window.isVisible)"
+      + " hostOwned=\(host.window === window) fieldPresent=\(diagnosticSearchField != nil)"
+      + " fieldOwned=\(diagnosticSearchField?.window === window) hidden=\(diagnosticSearchField?.isHiddenOrHasHiddenAncestor ?? true)"
+      + " bounds=\(diagnosticSearchField?.bounds ?? .zero)"
+    print(String(decoding: diagnostic.utf8.prefix(1000), as: UTF8.self) + " truncated=\(diagnostic.utf8.count > 1000)")
   }
   try #require(windowReady)
 

@@ -1488,6 +1488,71 @@ struct AgentEventSubscriptionTests {
     #expect(fixture.secrets.values().count == 1)
   }
 
+  @Test func refreshAtMaximumRevisionFailsBeforeStagingAKey() async throws {
+    let fixture = try EventSubscriptionFixture()
+    defer { fixture.remove() }
+    let profileID = eventTestUUID("00000000-0000-4000-8000-0000000003a1")
+    let noteID = eventTestUUID("00000000-0000-4000-8000-0000000003a2")
+    let workspace = Workspace(notes: [Note(id: noteID)])
+    let now = Date(timeIntervalSince1970: 1_790_755_200)
+    _ = try await fixture.createProfile(
+      profileID: profileID,
+      workspace: workspace,
+      allowed: [.readNotes],
+      grants: [AgentResourceGrant(scope: .note(noteID: noteID), authority: .read)],
+      observation: true
+    )
+    let callbackURL = "https://example.com/maximum-revision"
+    let receipt = try await fixture.service.createPending(
+      profileID: profileID,
+      event: .noteUpdated,
+      scope: .note(noteID: noteID),
+      callbackURL: callbackURL,
+      signingSecret: eventSecret(byte: 0x31, count: 24),
+      workspace: workspace,
+      now: now
+    )
+    var document = try #require(
+      JSONSerialization.jsonObject(with: Data(contentsOf: fixture.subscriptionURL))
+        as? [String: Any]
+    )
+    var subscriptions = try #require(document["subscriptions"] as? [[String: Any]])
+    subscriptions[0]["revision"] = NSNumber(value: UInt64.max)
+    var control = try #require(subscriptions[0]["deliveryControl"] as? [String: Any])
+    var binding = try #require(control["binding"] as? [String: Any])
+    binding["subscriptionRevision"] = NSNumber(value: UInt64.max)
+    control["binding"] = binding
+    subscriptions[0]["deliveryControl"] = control
+    document["subscriptions"] = subscriptions
+    let saturated = try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys])
+    try saturated.write(to: fixture.subscriptionURL, options: .atomic)
+    let stored = try #require(
+      try await fixture.pendingStore.currentSubscription(id: receipt.subscriptionID)
+    )
+    try #require(stored.revision == UInt64.max)
+
+    await #expect(throws: AgentEventSubscriptionError.storageFailure) {
+      _ = try await fixture.service.createPending(
+        profileID: profileID,
+        event: .noteUpdated,
+        scope: .note(noteID: noteID),
+        callbackURL: callbackURL,
+        signingSecret: eventSecret(byte: 0x32, count: 24),
+        workspace: workspace,
+        now: now.addingTimeInterval(1)
+      )
+    }
+    let afterRefusal = try #require(
+      JSONSerialization.jsonObject(with: Data(contentsOf: fixture.subscriptionURL))
+        as? [String: Any]
+    )
+    #expect((afterRefusal["stagedSigningKeyReferences"] as? [Any])?.isEmpty == true)
+    #expect(fixture.secrets.values().count == 1)
+    #expect(
+      try await fixture.pendingStore.currentSubscription(id: receipt.subscriptionID) == stored
+    )
+  }
+
   @Test func schemaFiveRejectsNullAndUnknownPreviousSigningKeyFields() async throws {
     let fixture = try EventSubscriptionFixture()
     defer { fixture.remove() }

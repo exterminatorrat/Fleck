@@ -217,6 +217,9 @@ struct AgentEventSubscriptionService: Sendable {
     )
     let secretData = try signingKeyStore.validatedSecretData(from: signingSecret)
     let previous = try await store.currentSubscription(id: subscriptionID)
+    guard previous?.revision != UInt64.max else {
+      throw AgentEventSubscriptionError.storageFailure
+    }
     let canPreserveKey = previous.map {
       $0.expiresAt > operationTime && $0.grantRevision == grantRevision
     } ?? false
