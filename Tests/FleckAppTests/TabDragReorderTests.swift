@@ -953,8 +953,12 @@ private final class NotesPanelTitleFixture {
     window.contentView = nil
     window.orderOut(nil)
     window.close()
-    Task { await runtime.shutdown() }
-    try? FileManager.default.removeItem(at: root)
+    let runtime = self.runtime
+    let root = self.root
+    Task {
+      await runtime.shutdown()
+      try? FileManager.default.removeItem(at: root)
+    }
   }
 
   private func makeRootView() -> AnyView {
