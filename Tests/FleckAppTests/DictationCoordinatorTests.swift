@@ -2757,6 +2757,94 @@ private func waitForCompletion(
   #expect(smartSaveEvents.last?.context?.failureStage == .save)
 }
 
+@Test @MainActor
+func focusedAndSmartSaveFailuresCarryTypedRecoveryProvenance() async throws {
+  let insertion = try Fixture(historyEnabled: false)
+  insertion.standard.finalText = "Recover this insertion"
+  insertion.editor.commitResult = false
+  var insertionEvents: [DictationCoordinatorEvent] = []
+  insertion.coordinator.setEventObserver { insertionEvents.append($0) }
+  await insertion.coordinator.start(mode: .focused, editor: insertion.editor)
+  await insertion.coordinator.finish()
+
+  #expect(insertionEvents.last?.context?.failureProvenance == .insertion)
+  let insertionCapsule = DictationRuntime.capsuleContext(
+    for: try #require(insertionEvents.last)
+  )
+  #expect(insertionCapsule.failureProvenance == .insertion)
+  #expect(insertionCapsule.failureKind == .save)
+  #expect(FleckErrorKind.resolve(context: insertionCapsule, action: .copy) == .insertion)
+  #expect(insertion.coordinator.recoveryAction == .copy)
+  #expect(insertion.coordinator.copyableTranscript == "Recover this insertion")
+
+  let persistence = try Fixture(historyEnabled: false)
+  persistence.standard.finalText = "Recover this save"
+  persistence.saver.flushError = TestError.failed
+  var persistenceEvents: [DictationCoordinatorEvent] = []
+  persistence.coordinator.setEventObserver { persistenceEvents.append($0) }
+  await persistence.coordinator.start(mode: .focused, editor: persistence.editor)
+  await persistence.coordinator.finish()
+
+  #expect(persistenceEvents.last?.context?.failureProvenance == .persistence)
+  let persistenceCapsule = DictationRuntime.capsuleContext(
+    for: try #require(persistenceEvents.last)
+  )
+  #expect(persistenceCapsule.failureProvenance == .persistence)
+  #expect(persistenceCapsule.failureKind == .save)
+  #expect(FleckErrorKind.resolve(context: persistenceCapsule, action: .copy) == .attention)
+  #expect(
+    DictationCapsulePresentation(
+      status: persistenceCapsule.status,
+      context: persistenceCapsule
+    ).visibleText == "Couldn't save"
+  )
+  #expect(persistence.coordinator.recoveryAction == .copy)
+  #expect(persistence.coordinator.copyableTranscript == "Recover this save")
+
+  let smartSave = try Fixture(historyEnabled: false)
+  smartSave.standard.finalText = "Recover this smart save"
+  smartSave.saver.saveError = TestError.failed
+  var smartSaveEvents: [DictationCoordinatorEvent] = []
+  smartSave.coordinator.setEventObserver { smartSaveEvents.append($0) }
+  await smartSave.coordinator.start(mode: .smartCapture)
+  await smartSave.coordinator.finish()
+
+  #expect(smartSaveEvents.last?.context?.failureProvenance == .persistence)
+  let smartSaveCapsule = DictationRuntime.capsuleContext(
+    for: try #require(smartSaveEvents.last)
+  )
+  #expect(smartSaveCapsule.failureProvenance == .persistence)
+  #expect(smartSaveCapsule.failureKind == .save)
+  #expect(FleckErrorKind.resolve(context: smartSaveCapsule, action: .copy) == .attention)
+  #expect(
+    DictationCapsulePresentation(
+      status: smartSaveCapsule.status,
+      context: smartSaveCapsule
+    ).visibleText == "Couldn't save"
+  )
+  #expect(smartSave.coordinator.recoveryAction == .copy)
+  #expect(smartSave.coordinator.copyableTranscript == "Recover this smart save")
+}
+
+@Test @MainActor
+func cleanedSmartCaptureKeepsUndoRecoveryAfterTerminalSuccess() async throws {
+  let fixture = try Fixture()
+  fixture.standard.finalText = "Quiet clean success"
+  var recoveryAtTerminal: DictationRecoveryAction?
+  fixture.coordinator.setEventObserver { event in
+    if event.terminal != nil {
+      recoveryAtTerminal = fixture.coordinator.recoveryAction
+    }
+  }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  #expect(fixture.coordinator.phase == .saved(fixture.inbox))
+  #expect(fixture.coordinator.recoveryAction == .undo)
+  #expect(recoveryAtTerminal == .undo)
+}
+
 @Test @MainActor func finishingHandsFreeDuringEngineStartupCancelsWithoutNoSpeech()
   async throws
 {
@@ -3111,6 +3199,7 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
     cleanup: .usedRaw,
     destination: nil
   ))
+  #expect(focusedEvents.last?.context?.cleanupFallbackProvenance == nil)
 
   let failed = try Fixture()
   failed.standard.finalText = nil
@@ -3121,6 +3210,79 @@ func processingResultContextMismatchPublishesCaptureProvenance() async throws {
   await failed.coordinator.finish()
 
   #expect(failedEvents.last?.terminal == .noSpeech)
+}
+
+@Test @MainActor func coordinatorPublishesFoundationOriginalFallbackOnlyAfterServiceFallback() async throws {
+  let raw = "Do not cancel the 2 meetings with Jordan Lee on July 29."
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    cleanupGenerator: { _, _ in "Cancel the meetings with Jordan." },
+    routingGenerator: { _, _ in .inbox }
+  )
+  let fixture = try Fixture(transcriptCleaner: dictation)
+  fixture.standard.finalText = raw
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  #expect(fixture.saver.savedTexts == [raw])
+  #expect(events.last?.terminal == .saved(
+    mode: .smartCapture,
+    cleanup: .usedRaw,
+    destination: fixture.inbox
+  ))
+  #expect(events.last?.context?.cleanupFallbackProvenance == .serviceFallback)
+  #expect(fixture.cleaner.calls == 0)
+}
+
+@Test @MainActor func coordinatorKeepsOSUnavailableOriginalFallbackUnproven() async throws {
+  let raw = "This is very very important."
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 25 },
+    cleanupGenerator: { _, _ in "unused" },
+    routingGenerator: { _, _ in .inbox }
+  )
+  let fixture = try Fixture(transcriptCleaner: dictation)
+  fixture.standard.finalText = raw
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .smartCapture)
+  await fixture.coordinator.finish()
+
+  #expect(fixture.saver.savedTexts == [raw])
+  #expect(events.last?.terminal == .saved(
+    mode: .smartCapture,
+    cleanup: .usedRaw,
+    destination: fixture.inbox
+  ))
+  #expect(events.last?.context?.cleanupFallbackProvenance == nil)
+  #expect(fixture.cleaner.calls == 0)
+}
+
+@Test @MainActor func coordinatorPersistenceFailureNeverCompletesOriginalFallbackSave() async throws {
+  let raw = "Do not cancel the 2 meetings with Jordan Lee on July 29."
+  let dictation = FoundationModelDictation(
+    osMajorVersion: { 26 },
+    cleanupGenerator: { _, _ in "Cancel the meetings with Jordan." },
+    routingGenerator: { _, _ in .inbox }
+  )
+  let fixture = try Fixture(transcriptCleaner: dictation)
+  fixture.standard.finalText = raw
+  fixture.saver.flushError = TestError.failed
+  var events: [DictationCoordinatorEvent] = []
+  fixture.coordinator.setEventObserver { events.append($0) }
+
+  await fixture.coordinator.start(mode: .focused, editor: fixture.editor)
+  await fixture.coordinator.finish()
+
+  #expect(events.last?.terminal == .failed("Unable to save dictation."))
+  #expect(events.last?.context?.cleanupOutcome == .usedRaw)
+  #expect(events.last?.context?.cleanupFallbackProvenance == .serviceFallback)
+  #expect(events.last?.context?.failureProvenance == .persistence)
+  #expect(fixture.coordinator.recoveryAction == .openHistory)
 }
 
 @Test @MainActor func coordinatorObserverDetachesAndTerminalStateAllowsShortcutConfiguration()
@@ -5584,6 +5746,7 @@ private final class Fixture {
   let coordinator: DictationCoordinator
 
   init(
+    transcriptCleaner: (any TranscriptCleaning)? = nil,
     processing: (any DictationProcessing)? = nil,
     captureContextProvider: (@MainActor (
       UUID, UInt64, DictationSpeechEngine
@@ -5647,7 +5810,7 @@ private final class Fixture {
     coordinator = DictationCoordinator(
       engineProvider: provider,
       preferredEngine: { [preference] in preference.value },
-      cleaner: cleaner,
+      cleaner: transcriptCleaner ?? cleaner,
       router: router,
       saver: saver,
       historyController: historyController,
