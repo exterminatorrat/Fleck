@@ -51,6 +51,33 @@ import Testing
   #expect(decoded.pinnedLocalModelKeys == sortedPinKeys)
 }
 
+@Test func pendingModelSelectionsDefaultToLegacyAndRoundTrip() throws {
+  let defaults = AppPreferences()
+  #expect(defaults.pendingDictationModelID == nil)
+  #expect(defaults.pendingCleanupModelID == nil)
+
+  let legacy = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: Data(#"{"fontFamily":"Menlo"}"#.utf8)
+  )
+  #expect(legacy.pendingDictationModelID == nil)
+  #expect(legacy.pendingCleanupModelID == nil)
+
+  let pending = AppPreferences(
+    pendingDictationModelID: "FluidInference/parakeet-tdt-0.6b-v2-coreml",
+    pendingCleanupModelID: "mlx-community/gemma-3-1b-it-8bit"
+  )
+  let encoded = try JSONEncoder().encode(pending)
+  let json = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+  #expect(
+    json["pendingDictationModelID"] as? String == "FluidInference/parakeet-tdt-0.6b-v2-coreml"
+  )
+  #expect(json["pendingCleanupModelID"] as? String == "mlx-community/gemma-3-1b-it-8bit")
+  #expect(
+    try JSONDecoder().decode(AppPreferences.self, from: encoded) == pending
+  )
+}
+
 @Test func newPreferencesUseAvenirReadingDefaults() {
   let value = AppPreferences()
 

@@ -126,24 +126,28 @@ enum ParakeetTDTTestActivation {
   static func make(
     applicationSupportURL: URL,
     modelMutationWillBegin: @escaping @Sendable () async -> Void = {},
-    configurationFactory: @escaping ConfigurationFactory = { baseRoot, hooks in
-      try ParakeetTDTTestConfiguration.make(
-        admittedBaseRoot: baseRoot,
-        modelMutationWillBegin: hooks.modelMutationWillBegin,
-        startup: hooks.startup,
-        calibrate: hooks.calibrate
-      )
-    },
+    configurationFactory: ConfigurationFactory? = nil,
     makeInference: @escaping InferenceFactory = {
       FluidEnhancedSpeechInference()
-    }
+    },
+    pendingDictationModelID: String? = nil
   ) -> Result {
     let admittedBaseRoot = applicationSupportURL
       .appendingPathComponent("DictationModels", isDirectory: true)
     let runtime = Runtime(makeInference: makeInference)
+    let selectedConfigurationFactory: ConfigurationFactory = configurationFactory ?? {
+      baseRoot, hooks in
+      try ParakeetTDTTestConfiguration.make(
+        admittedBaseRoot: baseRoot,
+        modelMutationWillBegin: hooks.modelMutationWillBegin,
+        startup: hooks.startup,
+        calibrate: hooks.calibrate,
+        pendingDictationModelID: pendingDictationModelID
+      )
+    }
 
     do {
-      let configuration = try configurationFactory(
+      let configuration = try selectedConfigurationFactory(
         admittedBaseRoot,
         ConfigurationHooks(
           startup: { try await runtime.startup() },
