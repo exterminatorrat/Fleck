@@ -1408,6 +1408,25 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
         withAccessibilityIdentifier: "settings-keyboard-focus-cue-dictation-status", in: host
       ) != nil
     )
+    if let captureDirectory = ProcessInfo.processInfo.environment[
+      "FLECK_SETTINGS_WINDOW_CAPTURE_DIR"
+    ] {
+      let cgImage = try #require(
+        CGWindowListCreateImage(
+          .null,
+          .optionIncludingWindow,
+          CGWindowID(window.windowNumber),
+          .bestResolution
+        ))
+      let bitmap = NSBitmapImageRep(cgImage: cgImage)
+      let png = try #require(bitmap.representation(using: .png, properties: [:]))
+      let captureURL = URL(fileURLWithPath: captureDirectory, isDirectory: true)
+        .appendingPathComponent("settings-dictation-readiness-focused-trigger.png")
+      try png.write(to: captureURL)
+      print(
+        "[F93-readiness-capture] focused-trigger pixels=\(cgImage.width)x\(cgImage.height)"
+      )
+    }
     try sendSettingsKey(49, characters: " ", ownedWindows: [window])
     await settleSettingsHost(host)
     let reopenedWindow = try #require(
