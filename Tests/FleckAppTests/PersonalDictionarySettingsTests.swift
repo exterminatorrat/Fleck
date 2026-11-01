@@ -1690,6 +1690,7 @@ func personalDictionaryToolbarUsesPaddedTargetsInlineSearchAndKeyboardDismissal(
     let reopenedEditor = try #require(reopenedSearchField.currentEditor() as? NSTextView)
     #expect(window.firstResponder === reopenedEditor)
 
+    print("[DIAG before-sort] fr=\(String(describing: window.firstResponder.map { type(of: $0) })) appKeyIsWindow=\(NSApp.keyWindow === window) key=\(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "nil") children=\(window.childWindows?.count ?? 0) appActive=\(NSApp.isActive)")
     viewModel.query = "Synthetic"
     try clickPersonalDictionaryControlAtPaddedEdge(
       "settings-search-target-vocabulary-sort",
@@ -1699,6 +1700,7 @@ func personalDictionaryToolbarUsesPaddedTargetsInlineSearchAndKeyboardDismissal(
     await settlePersonalDictionarySettingsHost(host)
     #expect(!(window.childWindows ?? []).isEmpty)
 
+    print("[DIAG sort-open] fr=\(String(describing: window.firstResponder.map { type(of: $0) })) appKeyIsWindow=\(NSApp.keyWindow === window) key=\(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "nil") children=\(window.childWindows?.count ?? 0) appActive=\(NSApp.isActive)")
     let sortWindow = NSApp.keyWindow ?? window
     sortWindow.sendEvent(try #require(personalDictionaryEscapeEvent(for: sortWindow)))
     await settlePersonalDictionarySettingsHost(host)
@@ -1706,9 +1708,11 @@ func personalDictionaryToolbarUsesPaddedTargetsInlineSearchAndKeyboardDismissal(
     #expect(localSearchFields().count == 1)
     #expect(viewModel.query == "Synthetic")
 
+    print("[DIAG sort-closed] fr=\(String(describing: window.firstResponder.map { type(of: $0) })) appKeyIsWindow=\(NSApp.keyWindow === window) key=\(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "nil") children=\(window.childWindows?.count ?? 0) appActive=\(NSApp.isActive)")
     window.sendEvent(try #require(personalDictionaryEscapeEvent(for: window)))
     await settlePersonalDictionarySettingsHost(host)
     try await Task.sleep(for: .milliseconds(80))
+    print("[DIAG after-escape] fr=\(String(describing: window.firstResponder.map { type(of: $0) })) appKeyIsWindow=\(NSApp.keyWindow === window) key=\(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "nil") children=\(window.childWindows?.count ?? 0) appActive=\(NSApp.isActive)")
     #expect(localSearchFields().isEmpty)
     #expect(viewModel.query.isEmpty)
 
@@ -1728,6 +1732,7 @@ func personalDictionaryToolbarUsesPaddedTargetsInlineSearchAndKeyboardDismissal(
     window.sendEvent(try #require(personalDictionaryEscapeEvent(for: window)))
     await settlePersonalDictionarySettingsHost(host)
     try await Task.sleep(for: .milliseconds(80))
+    print("[DIAG after-escape] fr=\(String(describing: window.firstResponder.map { type(of: $0) })) appKeyIsWindow=\(NSApp.keyWindow === window) key=\(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "nil") children=\(window.childWindows?.count ?? 0) appActive=\(NSApp.isActive)")
     #expect(localSearchFields().isEmpty)
     #expect(viewModel.query.isEmpty)
 
@@ -1872,6 +1877,7 @@ func personalDictionaryPriorityStarStaysVisibleWithoutHoverAndDeleteRemainsHidde
       ) > 3
     )
 
+    print("[DIAG before-star] fr=\(String(describing: window.firstResponder.map { type(of: $0) })) appKeyIsWindow=\(NSApp.keyWindow === window) key=\(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "nil") children=\(window.childWindows?.count ?? 0) appActive=\(NSApp.isActive)")
     try clickPersonalDictionaryTrailingStarAtPaddedEdge(
       in: host,
       rowFrame: starredRowFrame,
