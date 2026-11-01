@@ -3,48 +3,6 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-## [1.5.13-beta.1] - 2026-10-31
-
-### Fixed
-
-- Source readiness Escape-return requests from the trigger's bound native attachment and
-  hand them directly to the existing guarded focus consumer before dismissing the popover.
-- Add regression coverage for bound-window/current-input publication and clearing stale
-  requests when the producer's native attachment is unbound or detached.
-
-Source-only CI repair candidate. Compilation, tests and hosted keyboard/accessibility
-behavior remain unrun; prior public CI is red and Dictionary/Appearance failures remain open.
-No passing CI, unchanged-head recovery or test-build delivery is claimed.
-
-## [1.5.12-beta.1] - 2026-10-30
-
-### Fixed
-
-- Explicitly dismiss the existing readiness popover on Escape and request return to its
-  trigger through the existing public focus state only while its native attachment,
-  active key window and original keyboard-input generation remain current.
-- Add regression coverage for stale native attachments and intervening pointer/key input,
-  and bounded diagnostic observations for existing Dictionary and Appearance CI failures.
-
-Source-only CI repair candidate. Compilation, regression execution, native keyboard and
-accessibility restoration remain unverified; no passing CI or test-build delivery is claimed.
-
-## [1.5.10-beta.1] - 2026-10-30
-
-### Fixed
-
-- Correct the readiness-popover fixture's unsupported trigger-focus retention assumption
-  with semantic coverage of existing keyboard entry, actions, traversal, dismissal and return.
-- Make the existing System Settings actions recordable in that fixture while preserving
-  their original default runtime delegation; no actions or production focus policy change.
-
-Source-only CI repair candidate. Compilation, tests, native keyboard/accessibility and
-current-context checks remain unrun for this change; no passing behavior, CI or test-build
-delivery is claimed.
-## [1.5.10-beta.1] - 2026-10-29
-=======
 ## [1.7.4-beta.1] - 2026-10-30
 
 ### Fixed
@@ -92,13 +50,10 @@ pixel behavior remain unverified.
 
 Source-only correction. Compilation, tests and native visual behavior remain unverified.
 
-=======
->>>>>>> refs/remotes/origin/capy/mcp-owner-approved-delivery-public
 ## [1.7.0-beta.1] - 2026-10-27
 
 ### Added
 
-<<<<<<< HEAD
 - Add native status-menu actions for Notes, Settings and About while preserving Quit,
   secondary-click behavior and an explicitly unavailable update check.
 - Add explicit signed update-information checks shared by About and the status menu,
@@ -107,7 +62,6 @@ Source-only correction. Compilation, tests and native visual behavior remain unv
 
 This focused layer belongs to the retained-feature 1.7.0-beta.1 release cohort.
 Local compilation, tests and native visual/accessibility behavior remain unverified.
-=======
 - Add bounded MCP stdio transport and modern request dispatch while retaining legacy tools,
   request ownership, cancellation, output ordering and EOF settlement.
 - Add strict version-2 event contracts and wire compatibility checks. Subscription execution
@@ -134,10 +88,64 @@ Local compilation, tests and native visual/accessibility behavior remain unverif
 This is one constituent of the shared 1.7.0-beta.1 retained-feature development cohort, not a
 separate release. Local compilation, tests and native behavior remain unrun; hosted checks are
 pending. Existing 1.6.x candidates and all earlier development history remain preserved.
->>>>>>> refs/remotes/origin/capy/mcp-owner-approved-delivery-public
+
+## [1.7.0-beta.1] - 2026-10-27
+
+### Fixed
+
+- Use the native inline folder-name field for renaming, with Return/Escape, validated
+  focus-loss commits and deletion-safe editor ownership. Preserve the existing icon-based
+  new-folder controls and compact Unfiled layout while keeping keyboard navigation in its
+  owning host.
+- Show the tab navigation rail only when intrinsic tab content overflows, restore the
+  full viewport when it fits and return to the semantic leading edge as overflow ends.
+
+This focused change is part of the shared 1.7.0-beta.1 retained-feature release cohort,
+not a separate release. Source-only checkpoint: local compilation, tests and native
+keyboard, focus, IME, visual and accessibility behavior remain unverified.
+
+## [1.5.13-beta.1] - 2026-10-31
+
+### Fixed
+
+- Source readiness Escape-return requests from the trigger's bound native attachment and
+  hand them directly to the existing guarded focus consumer before dismissing the popover.
+- Add regression coverage for bound-window/current-input publication and clearing stale
+  requests when the producer's native attachment is unbound or detached.
+
+Source-only CI repair candidate. Compilation, tests and hosted keyboard/accessibility
+behavior remain unrun; prior public CI is red and Dictionary/Appearance failures remain open.
+No passing CI, unchanged-head recovery or test-build delivery is claimed.
+
+## [1.5.12-beta.1] - 2026-10-30
+
+### Fixed
+
+- Explicitly dismiss the existing readiness popover on Escape and request return to its
+  trigger through the existing public focus state only while its native attachment,
+  active key window and original keyboard-input generation remain current.
+- Add regression coverage for stale native attachments and intervening pointer/key input,
+  and bounded diagnostic observations for existing Dictionary and Appearance CI failures.
+
+Source-only CI repair candidate. Compilation, regression execution, native keyboard and
+accessibility restoration remain unverified; no passing CI or test-build delivery is claimed.
+
+## [1.5.10-beta.1] - 2026-10-30
+
+### Fixed
+
+- Correct the readiness-popover fixture's unsupported trigger-focus retention assumption
+  with semantic coverage of existing keyboard entry, actions, traversal, dismissal and return.
+- Make the existing System Settings actions recordable in that fixture while preserving
+  their original default runtime delegation; no actions or production focus policy change.
+
+Source-only CI repair candidate. Compilation, tests, native keyboard/accessibility and
+current-context checks remain unrun for this change; no passing behavior, CI or test-build
+delivery is claimed.
+
+## [1.5.10-beta.1] - 2026-10-29
 
 ## [1.5.9-beta.1] - 2026-10-27
->>>>>>> refs/remotes/origin/capy/update-information-public
 
 ### Fixed
 
@@ -198,6 +206,74 @@ and native behavior remain unverified; hosted verification is pending.
 
 Source-only review correction. Compilation, tests, visual/accessibility inspection and native
 behavior remain unverified locally.
+
+## [1.5.5-beta.1] - 2026-10-27
+
+### Fixed
+
+- Propagate the filing codec and formatting-popover compiler repairs through the bottom-only
+  dictation pill stack while preserving its reviewed source and regression guards.
+
+Source-only integration checkpoint. Local compilation, tests and native pill behavior remain
+unrun; hosted verification is pending.
+
+## [1.5.4-beta.1] - 2026-10-27
+
+### Fixed
+
+- Bind formatting-toolbar popovers to the existing theme snapshot and integrate the filing
+  rich-text codec compiler repair.
+
+Source-only compiler repair checkpoint. Local compilation, tests and native appearance remain
+unrun; hosted verification is pending.
+
+## [1.5.3-beta.1] - 2026-10-27
+
+### Fixed
+
+- Include the existing bounded rich-text codec required by semantic-section filing without
+  replacing ordinary note-appending behavior.
+- Add codec round-trip and invalid-metadata regression source.
+
+Source-only compiler repair checkpoint. Local compilation, tests and native behavior remain
+unrun; hosted verification is pending.
+
+## [1.5.2-beta.1] - 2026-10-27
+
+### Fixed
+
+- Return confirmed clean and raw dictation saves directly to standby without a success message,
+  result actions, chooser or success-return timer.
+- Keep the dictation capsule bottom-only and restore the existing live-pill artwork with
+  session-bound rendered-frame receipts and control-safe hit testing.
+- Reconcile standby, placement and live-artwork test source while retaining recovery and
+  ownership guards.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests, visual/accessibility inspection and native behavior remain unverified.
+
+## [1.5.1-beta.1] - 2026-10-27
+
+### Fixed
+
+- Propagate the selected theme to native window backing and app-owned surfaces while preserving
+  transparent material Notes and existing opaque accessibility policies.
+- Align Models page/detail headers with Settings and add neutral, disabled-aware button hover.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests, visual/accessibility inspection and native behavior remain unverified.
+
+## [1.5.0-beta.1] - 2026-10-27
+
+### Added
+
+- File smart captures into validated note and semantic-section destinations with bounded,
+  lossless chunks while preserving focused-caret insertion.
+- Persist atomic filing receipts for retry/restart recovery and guarded whole-capture undo.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests and native behavior remain unverified.
+
 ## [1.4.43-beta.1] - 2026-11-01
 
 ### Fixed
@@ -206,6 +282,7 @@ behavior remain unverified locally.
   without depending on the first folder remaining exposed.
 
 Source checkpoint only; CI and native verification remain pending.
+
 ## [1.4.42-beta.1] - 2026-11-01
 
 ### Fixed
@@ -372,73 +449,6 @@ Source-only dependency integration; this checkpoint's CI and native validation r
 
 Source propagation of the reviewed correction; this checkpoint's CI and native validation
 remain pending. Supporting paired CI passes on the existing dependency are not a complete-app pass.
-
-## [1.5.5-beta.1] - 2026-10-27
-
-### Fixed
-
-- Propagate the filing codec and formatting-popover compiler repairs through the bottom-only
-  dictation pill stack while preserving its reviewed source and regression guards.
-
-Source-only integration checkpoint. Local compilation, tests and native pill behavior remain
-unrun; hosted verification is pending.
-
-## [1.5.4-beta.1] - 2026-10-27
-
-### Fixed
-
-- Bind formatting-toolbar popovers to the existing theme snapshot and integrate the filing
-  rich-text codec compiler repair.
-
-Source-only compiler repair checkpoint. Local compilation, tests and native appearance remain
-unrun; hosted verification is pending.
-
-## [1.5.3-beta.1] - 2026-10-27
-
-### Fixed
-
-- Include the existing bounded rich-text codec required by semantic-section filing without
-  replacing ordinary note-appending behavior.
-- Add codec round-trip and invalid-metadata regression source.
-
-Source-only compiler repair checkpoint. Local compilation, tests and native behavior remain
-unrun; hosted verification is pending.
-
-## [1.5.2-beta.1] - 2026-10-27
-
-### Fixed
-
-- Return confirmed clean and raw dictation saves directly to standby without a success message,
-  result actions, chooser or success-return timer.
-- Keep the dictation capsule bottom-only and restore the existing live-pill artwork with
-  session-bound rendered-frame receipts and control-safe hit testing.
-- Reconcile standby, placement and live-artwork test source while retaining recovery and
-  ownership guards.
-
-Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
-tests, visual/accessibility inspection and native behavior remain unverified.
-
-## [1.5.1-beta.1] - 2026-10-27
-
-### Fixed
-
-- Propagate the selected theme to native window backing and app-owned surfaces while preserving
-  transparent material Notes and existing opaque accessibility policies.
-- Align Models page/detail headers with Settings and add neutral, disabled-aware button hover.
-
-Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
-tests, visual/accessibility inspection and native behavior remain unverified.
-
-## [1.5.0-beta.1] - 2026-10-27
-
-### Added
-
-- File smart captures into validated note and semantic-section destinations with bounded,
-  lossless chunks while preserving focused-caret insertion.
-- Persist atomic filing receipts for retry/restart recovery and guarded whole-capture undo.
-
-Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
-tests and native behavior remain unverified.
 
 ## [1.4.15-beta.1] - 2026-10-29
 
