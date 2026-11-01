@@ -142,6 +142,13 @@ accessibility restoration remain unverified; no passing CI or test-build deliver
 Source-only CI repair candidate. Compilation, tests, native keyboard/accessibility and
 current-context checks remain unrun for this change; no passing behavior, CI or test-build
 delivery is claimed.
+- Add opt-in, bounded Apple Speech lifecycle diagnostics with per-attempt cancellation,
+  reservation ownership, first-buffer and conversion receipts, without transcript or device data.
+- Retain the first failure, redact unknown error domains, and balance release receipts when
+  asynchronous teardown overlaps without changing capture ownership.
+
+Source-only capture/diagnostics constituent of the retained-feature 1.7 release cohort.
+Local compilation, tests and native capture behavior remain unrun; hosted verification is pending.
 
 ## [1.5.10-beta.1] - 2026-10-29
 - Align wrapped checklist content without changing paragraph formatting, preserve completion
