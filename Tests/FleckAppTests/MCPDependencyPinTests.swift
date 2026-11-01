@@ -58,6 +58,8 @@ import Testing
       "revision: \"\(mcpRevision)\""
     )
   )
+  #expect(manifest.contains(#".package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0")"#))
+  #expect(manifest.contains(#".product(name: "Sparkle", package: "sparkle")"#))
 
   let resolved = try JSONDecoder().decode(
     ResolvedFile.self,
@@ -96,6 +98,12 @@ import Testing
       version: "1.7.5"
     ),
   ]
+  if ProcessInfo.processInfo.environment["FLECK_BUILD_WITHOUT_SPARKLE"] != "1" {
+    expectedPins["sparkle"] = .init(
+      revision: "eef1a539a373c1f1a320624b1130fc5de7b2e100",
+      version: "2.10.0"
+    )
+  }
   if ProcessInfo.processInfo.environment["FLECK_ENHANCED_CANDIDATE"] == "1" {
     expectedPins["fluidaudio"] = .init(
       revision: "19600a485baa4998812e4654b70d2bab8f2c9949",
