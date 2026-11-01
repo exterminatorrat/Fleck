@@ -173,6 +173,16 @@ This is one constituent of the shared 1.7.0-beta.1 retained-feature development 
 separate release. Local compilation, tests and native behavior remain unrun; hosted checks are
 pending. Existing 1.6.x candidates and all earlier development history remain preserved.
 
+## [1.7.0-beta.1] - 2026-10-28
+
+### Fixed
+
+- Keep process-transport completion open until bounded stderr validation and graceful drain
+  finish, while streaming request lifecycle events without waiting for process shutdown.
+
+Part of the approved substantial development cohort. Source-only correction; compilation,
+process tests and native behavior remain unverified locally.
+
 ## [1.5.13-beta.1] - 2026-10-31
 
 ### Fixed
