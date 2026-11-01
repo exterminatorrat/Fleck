@@ -1436,7 +1436,7 @@ private final class FolderNavigatorFixture {
   }
 
   func folderScrollView() throws -> NSScrollView {
-    let folderFrame = try frame(identifier: "folder-\(state.workspace.folders[0].id.uuidString)")
+    let folderFrame = try frame(identifier: "folder-trash")
     return try #require(
       descendants(in: host, as: NSScrollView.self)
         .filter { scroll in
