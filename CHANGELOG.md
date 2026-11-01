@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.43-beta.1] - 2026-11-01
+
+### Fixed
+
+- Use the Trash row's accessibility frame to locate the native folder-scroll band
+  without depending on the first folder remaining exposed.
+
+Source checkpoint only; CI and native verification remain pending.
+
 ## [1.4.24-beta.1] - 2026-10-31
 
 ### Fixed
