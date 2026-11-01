@@ -124,6 +124,13 @@ keyboard, focus, IME, visual and accessibility behavior remain unverified.
 Part of the shared retained-feature 1.7.0 cohort, not a separate release.
 Source-only preparation. Local compilation, tests, native/visual/accessibility behavior
 and packaging remain unverified; hosted verification is pending.
+- Add opt-in, bounded Apple Speech lifecycle diagnostics with per-attempt cancellation,
+  reservation ownership, first-buffer and conversion receipts, without transcript or device data.
+- Retain the first failure, redact unknown error domains, and balance release receipts when
+  asynchronous teardown overlaps without changing capture ownership.
+
+Source-only capture/diagnostics constituent of the retained-feature 1.7 release cohort.
+Local compilation, tests and native capture behavior remain unrun; hosted verification is pending.
 
 ## [1.5.13-beta.1] - 2026-10-31
 
