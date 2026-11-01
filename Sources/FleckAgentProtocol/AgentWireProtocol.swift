@@ -151,9 +151,26 @@ public struct AgentWireResponse: Codable, Equatable, Sendable {
         debugDescription: "Response must contain exactly one of result or error."
       )
     }
+    guard error?.isSupported(wireVersion: protocolVersion) ?? true else {
+      throw DecodingError.dataCorrupted(
+        DecodingError.Context(
+          codingPath: container.codingPath,
+          debugDescription: "This workspace error is not supported by the wire version."
+        )
+      )
+    }
   }
 
   public func encode(to encoder: any Encoder) throws {
+    if let error, !error.isSupported(wireVersion: protocolVersion) {
+      throw EncodingError.invalidValue(
+        error,
+        EncodingError.Context(
+          codingPath: encoder.codingPath,
+          debugDescription: "This workspace error is not supported by the wire version."
+        )
+      )
+    }
     var container = encoder.container(keyedBy: AgentWireCodingKey.self)
     try container.encode(
       protocolVersion,

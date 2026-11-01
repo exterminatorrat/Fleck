@@ -146,6 +146,32 @@ Local compilation, tests and native capture behavior remain unrun; hosted verifi
 This is one constituent of the shared 1.7.0-beta.1 development cohort, not a separate
 release or a qualified alternative model. No alternative availability or selection UI is
 added. Local compilation, tests and native/model behavior remain unverified.
+- Add bounded MCP stdio transport and modern request dispatch while retaining legacy tools,
+  request ownership, cancellation, output ordering and EOF settlement.
+- Add strict version-2 event contracts and wire compatibility checks. Subscription execution
+  and callback delivery remain unavailable in this foundational layer.
+- Add the content-free event journal with snapshot integrity/history fencing, default-off
+  scoped observation authority, global privacy exclusions and pending subscription/key lifecycle
+  persistence. Event commands and callback delivery remain unavailable until the next layer.
+- Connect owner-approved event subscriptions, verified HTTPS callbacks, signed delivery,
+  bounded outbox/receipt handling and global privacy controls. Observation remains off by
+  default and delivery requires current authorization, endpoint verification and owner consent.
+
+### Fixed
+
+- Handle closed output pipes without SIGPIPE termination, forward legacy notification-only
+  batches without responses, preserve cancellation ownership and reject unsupported replay age.
+- Fail closed on interrupted privacy-policy generations and pending-subscription lookups
+  behind the persisted trusted-clock watermark.
+
+### Fixed - 2026-10-28
+
+- Bind renewal choices and owner approvals to the current subscription control generation,
+  so an expired or recreated subscription cannot reuse an earlier checked renewal choice.
+
+This is one constituent of the shared 1.7.0-beta.1 retained-feature development cohort, not a
+separate release. Local compilation, tests and native behavior remain unrun; hosted checks are
+pending. Existing 1.6.x candidates and all earlier development history remain preserved.
 
 ## [1.5.13-beta.1] - 2026-10-31
 
@@ -195,6 +221,8 @@ delivery is claimed.
 
 Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
 and native behavior remain unverified; hosted verification is pending.
+
+## [1.5.9-beta.1] - 2026-10-27
 
 ## [1.5.9-beta.1] - 2026-10-29
 
