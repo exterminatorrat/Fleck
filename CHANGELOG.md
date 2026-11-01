@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.40-beta.1] - 2026-11-01
+
+Private development candidate only; this correction is not an accepted build or public release.
+
+### Fixed
+
+- Ignore retained overflow actions during folder creation, preserving the existing regression and
+  once-only fixture teardown prerequisite. Folder-offset recovery remains unverified.
+
 ## [1.4.36-beta.1] - 2026-11-01
 
 Private development candidate only; this correction is not an accepted build or public release.
