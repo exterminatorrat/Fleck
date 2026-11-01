@@ -132,6 +132,21 @@ and packaging remain unverified; hosted verification is pending.
 Source-only capture/diagnostics constituent of the retained-feature 1.7 release cohort.
 Local compilation, tests and native capture behavior remain unrun; hosted verification is pending.
 
+## [1.7.0-beta.1] - 2026-10-27
+
+### Changed
+
+- Preserve pending dictation and cleanup model requests for startup-only application,
+  retaining the existing Parakeet v2 and Gemma 4-bit defaults and coupled cleanup/filing.
+- Bind the retained Gemma 8-bit specification to exact metadata and fail-closed identity,
+  license, cleanup/filing evidence, measured RAM and storage requirements.
+- Label model settings from the actual descriptor instead of assigning a known model's
+  name to an unknown identity.
+
+This is one constituent of the shared 1.7.0-beta.1 development cohort, not a separate
+release or a qualified alternative model. No alternative availability or selection UI is
+added. Local compilation, tests and native/model behavior remain unverified.
+
 ## [1.5.13-beta.1] - 2026-10-31
 
 ### Fixed

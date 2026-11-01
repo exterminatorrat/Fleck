@@ -29,23 +29,27 @@ final class GemmaCleanupCandidateComposition {
 
   convenience init(
     applicationSupportURL: URL,
+    pendingCleanupModelID: String? = nil,
     foundationIsAvailable: @escaping @Sendable () -> Bool,
     foundationGenerator: any BoundedCleanupGenerating,
     foundationRouter: any DestinationRouting,
     prepareForGeneration: @escaping @Sendable () async throws -> Void,
     verifiedLoadState: (@MainActor () -> EnhancedModelVerifiedLoadState)? = nil,
-    makeActivation: ActivationFactory = { applicationSupportURL, mutation in
-      GemmaCleanupTestActivation.make(
-        applicationSupportURL: applicationSupportURL,
-        modelMutationWillBegin: mutation
-      )
-    }
+    makeActivation: ActivationFactory? = nil
   ) {
     let gate = GemmaCleanupLeaseGate()
     let mutationRelay = GemmaCleanupMutationRelay()
-    let activation = makeActivation(applicationSupportURL) {
+    let modelMutationWillBegin: @Sendable () async -> Void = {
       await mutationRelay.beginMutation()
     }
+    let activation = makeActivation?(
+      applicationSupportURL,
+      modelMutationWillBegin
+    ) ?? GemmaCleanupTestActivation.make(
+      applicationSupportURL: applicationSupportURL,
+      modelMutationWillBegin: modelMutationWillBegin,
+      pendingCleanupModelID: pendingCleanupModelID
+    )
     self.init(
       activation: activation,
       foundationIsAvailable: foundationIsAvailable,
