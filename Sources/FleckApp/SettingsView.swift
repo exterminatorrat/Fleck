@@ -470,32 +470,36 @@
     let section: SettingsSection
     let searchRequest: SettingsSearchRequest?
     let title: String?
+    let description: String?
+    let titleAccessibilityIdentifier: String?
+    let searchAnchorEnabled: Bool
     let accessory: AnyView?
 
     init(
       section: SettingsSection,
       title: String? = nil,
+      description: String? = nil,
+      titleAccessibilityIdentifier: String? = nil,
+      searchAnchorEnabled: Bool = true,
       searchRequest: SettingsSearchRequest?,
       accessory: AnyView? = nil
     ) {
       self.section = section
       self.title = title
+      self.description = description
+      self.titleAccessibilityIdentifier = titleAccessibilityIdentifier
+      self.searchAnchorEnabled = searchAnchorEnabled
       self.searchRequest = searchRequest
       self.accessory = accessory
     }
 
+    @ViewBuilder
     var body: some View {
-      HStack(alignment: .top, spacing: 12) {
+      let header = HStack(alignment: .top, spacing: 12) {
         VStack(alignment: .leading, spacing: 4) {
-          Text(title ?? section.title)
-            .font(
-              section == .editing
-                ? uiFont.font(size: generalTitleSize, weight: .semibold)
-                : uiFont.font(.title2, weight: .semibold)
-            )
-            .background(SettingsPageHeaderProbe())
+          headerTitle
           if section != .editing {
-            Text(section.description)
+            Text(description ?? section.description)
               .fleckUIFont(.callout)
               .foregroundStyle(theme.color(.textSecondary))
               .fixedSize(horizontal: false, vertical: true)
@@ -505,7 +509,28 @@
         if let accessory { accessory }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
-      .settingsSearchAnchor(.section(section), request: searchRequest)
+
+      if searchAnchorEnabled {
+        header.settingsSearchAnchor(.section(section), request: searchRequest)
+      } else {
+        header
+      }
+    }
+
+    @ViewBuilder
+    private var headerTitle: some View {
+      let titleView = Text(title ?? section.title)
+        .font(
+          section == .editing
+            ? uiFont.font(size: generalTitleSize, weight: .semibold)
+            : uiFont.font(.title2, weight: .semibold)
+        )
+        .background(SettingsPageHeaderProbe())
+      if let titleAccessibilityIdentifier {
+        titleView.accessibilityIdentifier(titleAccessibilityIdentifier)
+      } else {
+        titleView
+      }
     }
   }
 
@@ -935,11 +960,16 @@
     @EnvironmentObject private var appState: AppState
     @Environment(\.fleckThemeSnapshot) private var theme
     @Environment(\.fleckUIFont) private var uiFont
+    #if DEBUG
+    @Environment(\.settingsReadinessReturnObservationSource)
+      private var readinessReturnObservationSource: AnyObject?
+    #endif
     @ObservedObject var runtime: DictationRuntime
     @ObservedObject private var personalDictionarySettingsViewModel:
       PersonalDictionarySettingsViewModel
     @ObservedObject private var historyController: DictationHistoryController
     private let buildIdentity: BuildIdentity
+    private let openSystemSettingsAction: @MainActor (DictationSystemSettingsAction) -> Void
     @State private var selectedSection = SettingsSection.editing
     @State private var showsHistoryClearConfirmation = false
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
@@ -948,6 +978,8 @@
     @State private var isSettingsSearchFieldFocused = false
     @State private var searchQuery = ""
     @State private var isReadinessPopoverPresented = false
+    @State private var readinessKeyboardReturnRequest: SettingsKeyboardFocusReturnRequest?
+    @StateObject private var readinessReturnAttachment = SettingsKeyboardFocusReturnAttachment()
     @State private var searchFocusRequest: UUID?
     @State private var highlightedSearchTarget: SettingsSearchTarget?
     @State private var searchRequest: SettingsSearchRequest?
@@ -955,9 +987,16 @@
     @State private var isDictationPrivacyExpanded = false
     @State private var isUIFontPickerPresented = false
 
-    init(runtime: DictationRuntime, buildIdentity: BuildIdentity = .current()) {
+    init(
+      runtime: DictationRuntime,
+      buildIdentity: BuildIdentity = .current(),
+      openSystemSettingsAction: (@MainActor (DictationSystemSettingsAction) -> Void)? = nil
+    ) {
       self.runtime = runtime
       self.buildIdentity = buildIdentity
+      self.openSystemSettingsAction = openSystemSettingsAction ?? { action in
+        runtime.openSystemSettings(action)
+      }
       _personalDictionarySettingsViewModel = ObservedObject(
         wrappedValue: runtime.personalDictionarySettingsViewModel
       )
@@ -1072,6 +1111,7 @@
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .ignoresSafeArea(.container, edges: .top)
       .background(theme.color(.window))
+      .background(FleckWindowTheme().frame(width: 0, height: 0))
       .background(SettingsWindowChromeConfigurator())
       .environment(\.fleckChromeAppearance, appState.preferences.chromeAppearance)
       .tint(theme.color(.accent))
@@ -1079,6 +1119,7 @@
         recordingSelection.transition(to: newSection)
         if newSection != .dictation {
           isReadinessPopoverPresented = false
+          readinessKeyboardReturnRequest = nil
         }
       }
       .onChange(of: searchQuery) { _, _ in
@@ -1287,6 +1328,7 @@
               onCancel: { isUIFontPickerPresented = false }
             )
             .frame(width: 280, height: 320)
+            .fleckPopoverTheme(theme)
           }
         }
         SettingsPreferenceRow(
@@ -1492,8 +1534,39 @@
       .controlSize(.small)
       .popover(isPresented: $isReadinessPopoverPresented, arrowEdge: .top) {
         dictationReadinessPopover
+          .fleckPopoverTheme(theme)
+          .onExitCommand {
+            let inputID = SettingsSearchInputModality.shared.inputID
+            if selectedSection == .dictation {
+              readinessReturnAttachment.publishReturnRequest(
+                inputID: inputID, to: $readinessKeyboardReturnRequest
+              )
+            } else {
+              readinessKeyboardReturnRequest = nil
+            }
+            #if DEBUG
+            let returnRequest = readinessKeyboardReturnRequest
+            SettingsSearchInputModality.shared.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[F93-readiness-return:exit] pending=\(returnRequest != nil) windowPresent=\(returnRequest?.window != nil) keyMatch=\(returnRequest?.window != nil && NSApp.keyWindow != nil && returnRequest?.window === NSApp.keyWindow) parentMatch=\(returnRequest?.window != nil && NSApp.keyWindow?.parent != nil && returnRequest?.window === NSApp.keyWindow?.parent) inputMatch=\(returnRequest?.inputID == inputID)"
+            )
+            #endif
+            isReadinessPopoverPresented = false
+          }
+          #if DEBUG
+          .onDisappear {
+            let returnRequest = readinessKeyboardReturnRequest
+            SettingsSearchInputModality.shared.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[F93-readiness-return:disappear] pending=\(returnRequest != nil) dictation=\(selectedSection == .dictation)"
+            )
+          }
+          #endif
       }
-      .settingsSearchAnchor(.dictationStatus, request: searchRequest)
+      .settingsSearchAnchor(.dictationStatus, request: searchRequest) {
+        readinessReturnAttachment
+      }
+      .environment(\.settingsKeyboardFocusReturnRequest, $readinessKeyboardReturnRequest)
       .accessibilityLabel("Dictation readiness")
       .accessibilityValue(isReady ? "Ready" : "Needs attention")
       .accessibilityHint("Show dictation readiness and recovery actions.")
@@ -1508,7 +1581,7 @@
           Button("Enable Input Monitoring") {
             Task { @MainActor in
               guard let settings = await runtime.recoverModifierMonitoring() else { return }
-              runtime.openSystemSettings(settings)
+              openSystemSettingsAction(settings)
             }
           }
           .disabled(!dictationModifierPresentation.isPickerEnabled)
@@ -1552,7 +1625,7 @@
 
             ForEach(recoveryActions, id: \.pane) { action in
               Button(action.title) {
-                runtime.openSystemSettings(action)
+                openSystemSettingsAction(action)
               }
               .buttonStyle(.bordered)
             }
@@ -2215,7 +2288,7 @@
           .padding(6)
           .contentShape(Rectangle())
       }
-      .buttonStyle(.plain)
+      .buttonStyle(FleckQuietButtonStyle(cornerRadius: 7))
       .contentShape(Rectangle())
       .focusEffectDisabled()
       .keyboardShortcut("f", modifiers: .command)
@@ -2241,7 +2314,7 @@
           toggleOptions()
         }
         .fleckUIFont(.footnote)
-        .buttonStyle(.plain)
+        .buttonStyle(FleckQuietButtonStyle(cornerRadius: 7))
         .foregroundStyle(theme.color(.textSecondary))
         .focused($isOptionsTriggerFocused)
         .accessibilityIdentifier("settings-vocabulary-options-trigger")
@@ -2249,6 +2322,7 @@
         .id(SettingsSearchTarget.vocabularyTransferFooter)
         .popover(isPresented: optionsPresentation, arrowEdge: .bottom) {
           optionsPopover
+            .fleckPopoverTheme(theme)
         }
         Spacer(minLength: 0)
       }
@@ -2358,7 +2432,7 @@
       }
       .padding(8)
       .frame(width: 196)
-      .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .fleckThemedSurface(cornerRadius: 12)
       .overlay {
         RoundedRectangle(cornerRadius: 12, style: .continuous)
           .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.8)
@@ -2449,7 +2523,7 @@
           .padding(6)
           .contentShape(Rectangle())
       }
-      .buttonStyle(.plain)
+      .buttonStyle(FleckQuietButtonStyle(cornerRadius: 7))
       .contentShape(Rectangle())
       .help("Sort \(sortOrderForCurrentFilter.rawValue)")
       .accessibilityLabel("Sort vocabulary")
@@ -2462,6 +2536,7 @@
       .settingsSearchAnchor(.vocabularySort, request: visibleSearchRequest)
       .popover(isPresented: $isSortPresented, arrowEdge: .bottom) {
         sortPopover
+          .fleckPopoverTheme(theme)
       }
     }
 
@@ -2480,7 +2555,7 @@
             .contentShape(Rectangle())
         }
       }
-      .buttonStyle(.plain)
+      .buttonStyle(FleckQuietButtonStyle(cornerRadius: 7))
       .contentShape(Rectangle())
       .disabled(isReloading)
       .help("Refresh dictionary")

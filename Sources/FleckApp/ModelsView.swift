@@ -324,7 +324,8 @@
           }
           .frame(minHeight: 0)
         }
-        .padding(geometry.size.width < 680 ? 12 : 24)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
       .background(theme.color(.window))
@@ -381,30 +382,15 @@
     }
 
     private var header: some View {
-      ViewThatFits(in: .horizontal) {
-        HStack(alignment: .center, spacing: 24) {
-          headerTitle
-            .frame(maxWidth: .infinity, alignment: .leading)
-          searchField
-            .frame(width: 370)
-        }
-        VStack(alignment: .leading, spacing: 12) {
-          headerTitle
-          searchField
-        }
-      }
-    }
-
-    private var headerTitle: some View {
-      VStack(alignment: .leading, spacing: 4) {
-        Text("Models")
-          .font(.title2.weight(.semibold))
-        Text(
-          "Optional models run locally on this Mac. Fleck returns to its built-in local paths whenever a model is not installed and healthy."
+      VStack(alignment: .leading, spacing: 14) {
+        SettingsPageHeader(
+          section: .models,
+          title: "Models",
+          description:
+            "Optional models run locally on this Mac. Fleck returns to its built-in local paths whenever a model is not installed and healthy.",
+          searchRequest: nil
         )
-        .font(.callout)
-        .foregroundStyle(theme.color(.textSecondary))
-        .fixedSize(horizontal: false, vertical: true)
+        searchField
       }
     }
 
@@ -863,18 +849,17 @@
             .buttonStyle(.plain)
             .accessibilityIdentifier("models-back")
 
-            HStack(alignment: .top, spacing: 12) {
-              VStack(alignment: .leading, spacing: 5) {
-                Text(entry.title)
-                  .font(.title2.weight(.semibold))
-                  .accessibilityIdentifier("models-detail-title")
-                Text("\(entry.provider.rawValue) · \(entry.typeTitle)")
-                  .font(.callout)
-                  .foregroundStyle(theme.color(.textSecondary))
-              }
-              Spacer(minLength: 4)
-              pinButton(entry)
-            }
+            SettingsPageHeader(
+              section: .models,
+              title: entry.title,
+              description: "\(entry.provider.rawValue) · \(entry.typeTitle)",
+              titleAccessibilityIdentifier: "models-detail-title",
+              searchAnchorEnabled: false,
+              searchRequest: nil,
+              accessory: AnyView(pinButton(entry))
+            )
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("models-detail-header")
 
             Text(entry.purpose)
               .font(.body)
