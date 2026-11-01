@@ -1843,6 +1843,7 @@ func personalDictionaryPriorityStarStaysVisibleWithoutHoverAndDeleteRemainsHidde
       host,
       name: "dictionary-priority-star-\(appearance == .dark ? "dark" : "light")"
     )
+    #expect(screenshot.size == host.bounds.size)
     let goldFrame = CGRect(
       x: host.bounds.maxX - 64,
       y: host.bounds.minY,
@@ -2968,6 +2969,7 @@ private func capturePersonalDictionaryHost(
       bitsPerPixel: 0
     )
   )
+  image.size = host.bounds.size
   host.cacheDisplay(in: host.bounds, to: image)
 
   if let directory = ProcessInfo.processInfo.environment[
