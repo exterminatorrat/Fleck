@@ -2,14 +2,20 @@
   import AppKit
   import SwiftUI
 
+  @MainActor
   struct AboutSettingsView: View {
     let identity: BuildIdentity
+    @ObservedObject private var updateController: AppUpdateController
     @Environment(\.settingsSearchRequest) private var searchRequest
     @State private var copyConfirmation: String?
     @State private var isMetadataExpanded = false
 
-    init(identity: BuildIdentity = .current()) {
+    init(
+      identity: BuildIdentity = .current(),
+      updateController: AppUpdateController? = nil
+    ) {
       self.identity = identity
+      self.updateController = updateController ?? AppUpdateController()
     }
 
     var body: some View {
@@ -61,6 +67,22 @@
           }
           .settingsSearchAnchor(.aboutBuild, request: searchRequest)
         }
+
+        SettingsPreferenceRow(
+          "Updates",
+          detail: updateController.statusText
+        ) {
+          Button("Check for Updates…") {
+            updateController.checkForUpdates()
+          }
+          .disabled(!updateController.canCheckForUpdates)
+          .accessibilityIdentifier("settings-about-check-for-updates")
+          .accessibilityHint("Checks signed release information without downloading or installing an update")
+        }
+
+        Text("Update checks report signed release information only. Automatic installation is unavailable.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
 
         DisclosureGroup("Full build metadata", isExpanded: $isMetadataExpanded) {
           Text(identity.copyText)

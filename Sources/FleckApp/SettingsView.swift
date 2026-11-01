@@ -970,6 +970,7 @@
     @ObservedObject private var historyController: DictationHistoryController
     private let buildIdentity: BuildIdentity
     private let openSystemSettingsAction: @MainActor (DictationSystemSettingsAction) -> Void
+    private let updateController: AppUpdateController?
     @State private var selectedSection = SettingsSection.editing
     @State private var showsHistoryClearConfirmation = false
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
@@ -990,10 +991,12 @@
     init(
       runtime: DictationRuntime,
       buildIdentity: BuildIdentity = .current(),
+      updateController: AppUpdateController? = nil,
       openSystemSettingsAction: (@MainActor (DictationSystemSettingsAction) -> Void)? = nil
     ) {
       self.runtime = runtime
       self.buildIdentity = buildIdentity
+      self.updateController = updateController
       self.openSystemSettingsAction = openSystemSettingsAction ?? { action in
         runtime.openSystemSettings(action)
       }
@@ -1069,7 +1072,10 @@
                   case .agents:
                     AgentSettingsView()
                   case .about:
-                    AboutSettingsView(identity: buildIdentity)
+                    AboutSettingsView(
+                      identity: buildIdentity,
+                      updateController: updateController
+                    )
                   }
                 }
                 .environment(\.settingsSearchRequest, searchRequest)
