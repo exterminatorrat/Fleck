@@ -977,6 +977,7 @@ func settingsGlassOpacitySliderRespondsToThumbDragAndTrackClickAtAnchoredSetting
       else { return false }
       return slider.bounds.width > 0 && slider.bounds.height > 0
     }
+    if !windowReady { diagActivation("appearance-slider", window: window) }
     try #require(windowReady)
 
     let slider = try #require(settingsNativeSlider(in: host))
@@ -1215,6 +1216,7 @@ func settingsSearchAnchorFocusCueDistinguishesTabFromPointer() async throws {
     else { return false }
     return searchField.bounds.width > 0 && searchField.bounds.height > 0
   }
+  if !windowReady { diagActivation("appearance-anchor", window: window) }
   try #require(windowReady)
 
   let focusIdentifier =

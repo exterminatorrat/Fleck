@@ -319,12 +319,14 @@ struct FolderNavigatorPresentationTests {
     let scrolledFrame = try fixture.frame(identifier: "folder-\(firstFolderID.uuidString)")
     let trashFrame = try fixture.frame(identifier: "folder-trash")
     let scrolledOffset = scroll.contentView.bounds.origin
+    fixture.diagScrolls("resting")
     let viewport = scroll.contentView.bounds.size
     #expect(scrolledOffset.x > 0)
 
     try fixture.click(fixture.element(label: "New folder"))
     await fixture.settle()
     try fixture.captureIfRequested(name: "overflow-many-folders-520-composing")
+    fixture.diagScrolls("composing scrolledOffset=\(scrolledOffset) chosen=\(ObjectIdentifier(scroll).hashValue)")
     #expect(fixture.elementIfPresent(label: "Reveal earlier folders") != nil)
     #expect(
       try fixture.frame(identifier: "folder-\(firstFolderID.uuidString)") == scrolledFrame
@@ -1433,6 +1435,16 @@ private final class FolderNavigatorFixture {
       findElement(host, matching: "accessibilityIdentifier", value: identifier)
     )
     return try #require(element.value(forKey: "accessibilityFrame") as? NSValue).rectValue
+  }
+
+  func diagScrolls(_ tag: String) {
+    for scroll in descendants(in: host, as: NSScrollView.self) {
+      let screenFrame = window.convertToScreen(scroll.convert(scroll.bounds, to: nil))
+      print("[DIAG folder \(tag)] scroll=\(ObjectIdentifier(scroll).hashValue) screen=\(screenFrame) origin=\(scroll.contentView.bounds.origin) doc=\(scroll.documentView?.bounds.size ?? .zero)")
+    }
+    for id in ["folder-trash", "folder-\(state.workspace.folders[0].id.uuidString)"] {
+      print("[DIAG folder \(tag)] \(id) frame=\((try? frame(identifier: id)).map { "\($0)" } ?? "missing")")
+    }
   }
 
   func folderScrollView() throws -> NSScrollView {

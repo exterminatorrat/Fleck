@@ -294,6 +294,7 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
       )
     )
   }
+  diagActivation("dict-delete-admission", window: window)
   try #require(windowIsActiveAndKey && initialGeometryIsVisible)
 
   let pointerOutsideRows = NSPoint(
@@ -1687,6 +1688,7 @@ func personalDictionaryToolbarUsesPaddedTargetsInlineSearchAndKeyboardDismissal(
     )
     #expect(!(reopenedSearchField is NSSearchField))
     #expect(reopenedSearchField.placeholderString == "Search vocabulary")
+    diagActivation("dict-reopen-search fieldWindow=\(reopenedSearchField.window === window)", window: window)
     let reopenedEditor = try #require(reopenedSearchField.currentEditor() as? NSTextView)
     #expect(window.firstResponder === reopenedEditor)
 
