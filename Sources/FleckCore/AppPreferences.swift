@@ -46,7 +46,9 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     set { legacyDictationShortcut = newValue }
   }
   public var dictationModifierKey: DictationModifierKey
-  public var dictationCapsuleDock: DictationCapsuleDock
+  public var dictationCapsuleDock: DictationCapsuleDock {
+    didSet { dictationCapsuleDock = dictationCapsuleDock.supportedPlacement }
+  }
   public var dictationHistoryEnabled: Bool
   public var dictationCapsuleEnabled: Bool
   public var showDictationShortcutGuide: Bool
@@ -111,7 +113,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       : .standard
     self.legacyDictationShortcut = dictationShortcut
     self.dictationModifierKey = dictationModifierKey
-    self.dictationCapsuleDock = dictationCapsuleDock
+    self.dictationCapsuleDock = dictationCapsuleDock.supportedPlacement
     self.dictationHistoryEnabled = dictationHistoryEnabled
     self.dictationCapsuleEnabled = dictationCapsuleEnabled
     self.showDictationShortcutGuide = showDictationShortcutGuide

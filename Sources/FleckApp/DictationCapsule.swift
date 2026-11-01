@@ -116,6 +116,11 @@
       self.failureKind = failureKind
     }
 
+    func presentationContext() -> Self {
+      guard status.isSavedResult else { return self }
+      return Self(status: .idle, sessionID: sessionID)
+    }
+
   }
 
   enum DictationCapsuleFailureKind: Equatable {
@@ -168,12 +173,17 @@
       chooser: DictationCapsuleChooser? = nil,
       context: DictationCapsuleContext? = nil
     ) {
-      let context = context ?? DictationCapsuleContext(status: status)
+      let inputContext = context ?? DictationCapsuleContext(status: status)
+      let isSavedResult = inputContext.status.isSavedResult
+      let context = inputContext.presentationContext()
+      let presentationStatus = context.status
+      let presentationAction = isSavedResult ? nil : action
+      let presentationChooser = isSavedResult ? nil : chooser
       let treatments = FleckRailStageTreatment.forContext(context)
-      let copy = Self.copy(for: status, context: context)
+      let copy = Self.copy(for: presentationStatus, context: context)
       let visualMode: DictationCapsuleVisualMode
       let symbolName: String
-      switch status {
+      switch presentationStatus {
       case .idle:
         visualMode = .idle
         symbolName = "square.grid.2x2"
@@ -207,15 +217,15 @@
       }
 
       let widthCeiling = Self.widthCeiling(
-        for: status,
-        action: action,
-        chooser: chooser
+        for: presentationStatus,
+        action: presentationAction,
+        chooser: presentationChooser
       )
       let measuredWidth = Self.measuredWidth(
         for: copy,
-        status: status,
-        action: action,
-        chooser: chooser,
+        status: presentationStatus,
+        action: presentationAction,
+        chooser: presentationChooser,
         ceiling: widthCeiling
       )
       self.visibleText = copy.visible
@@ -268,14 +278,8 @@
         return ("Organizing", "Organizing dictation")
       case .saving:
         return ("Saving", "Saving dictation")
-      case .saved(let destination):
-        let destination = tailTruncated(destination, maxCharacters: 30)
-        let text = "Saved to \(destination)"
-        return (text, text)
-      case .savedWithoutCleanup(let destination):
-        let destination = tailTruncated(destination, maxCharacters: 27)
-        let text = "Saved original to \(destination)"
-        return (text, text)
+      case .saved, .savedWithoutCleanup:
+        return (nil, "Fleck dictation ready")
       case .noSpeech:
         return ("No speech heard", "No speech heard")
       case .repairingModel:
@@ -1201,11 +1205,13 @@
       },
       announcementHandler: @escaping @MainActor (String) -> Void = { _ in }
     ) {
-      self.context = context
-      self.dock = dock
+      let isSavedResult = context.status.isSavedResult
+      let presentationContext = context.presentationContext()
+      self.context = presentationContext
+      self.dock = dock.supportedPlacement
       self.colors = colors
-      self.action = action
-      self.chooser = chooser
+      self.action = isSavedResult ? nil : action
+      self.chooser = isSavedResult ? nil : chooser
       self.actionHandler = onAction
       self.choiceHandler = onChoice
       self.stopHandler = onStop
@@ -1213,17 +1219,17 @@
       self.dismissHandler = onDismiss
       self.announcementHandler = announcementHandler
       self.processingLabelSleeper = processingLabelSleeper
-      switch context.status {
+      switch presentationContext.status {
       case .idle, .arming, .listening, .saved, .savedWithoutCleanup, .noSpeech,
         .routingFailure, .failed:
         self.voiceOverLabel = DictationCapsulePresentation(
-          status: context.status,
-          context: context
+          status: presentationContext.status,
+          context: presentationContext
         ).voiceOverText
       default:
         break
       }
-      if context.status != .listening || !context.isHandsFree {
+      if presentationContext.status != .listening || !presentationContext.isHandsFree {
         isListeningHover = false
       }
     }
@@ -1238,29 +1244,31 @@
       onCancel: (@MainActor () -> Void)? = nil
     ) {
       let previousContext = self.context
+      let isSavedResult = context.status.isSavedResult
+      let presentationContext = context.presentationContext()
       presentationGeneration &+= 1
       processingLabelTask?.cancel()
       processingLabelTask = nil
       showsProcessingLabel = false
-      self.context = context
-      self.action = action
-      self.chooser = chooser
+      self.context = presentationContext
+      self.action = isSavedResult ? nil : action
+      self.chooser = isSavedResult ? nil : chooser
       self.actionHandler = onAction
       self.choiceHandler = onChoice
       if let onStop { self.stopHandler = onStop }
       if let onCancel { self.cancelHandler = onCancel }
-      if context.status != .listening || !context.isHandsFree {
+      if presentationContext.status != .listening || !presentationContext.isHandsFree {
         isListeningHover = false
       }
-      if context.status != .idle {
+      if isSavedResult || presentationContext.status != .idle {
         isDragActive = false
       }
-      updateVoiceOverLabel(from: previousContext, to: context)
-      scheduleProcessingLabel(for: context)
+      updateVoiceOverLabel(from: previousContext, to: presentationContext)
+      scheduleProcessingLabel(for: presentationContext)
     }
 
     func updateDock(_ dock: DictationCapsuleDock) {
-      self.dock = dock
+      self.dock = dock.supportedPlacement
     }
 
     func updateTheme(_ theme: FleckThemeSnapshot) {
@@ -1440,6 +1448,7 @@
 
   @MainActor
   final class DictationCapsuleController {
+    nonisolated static let livePillHostSize = CGSize(width: 180, height: 39)
     nonisolated static let idleSize = CGSize(width: 46, height: 24)
     nonisolated static let startingSize = CGSize(width: 104, height: 36)
     nonisolated static let listeningSize = CGSize(width: 176, height: 36)
@@ -1454,13 +1463,20 @@
     let panel: DictationCapsulePanel
     let waveformModel: DictationWaveformModel
     let presentationModel: DictationCapsulePresentationModel
+    let fleckPillModel: FleckPillLivePresentationModel
     private let inputRouter: DictationCapsuleInputRouter
+    private let monotonicNow: @MainActor () -> TimeInterval
+    private let reduceMotionProvider: @MainActor () -> Bool
+    private let automaticallyAdvancesLivePill: Bool
     private var hostingView: DictationCapsuleHostingView!
     private(set) var currentDock = DictationCapsuleDock.bottom
     private(set) var currentChooser: DictationCapsuleChooser?
     private var currentChoiceHandler: @MainActor (UUID, UUID?) -> Void = { _, _ in }
     private(set) var currentContext = DictationCapsuleContext(status: .idle)
     private var currentScreen: NSScreen?
+    private var lastCoordinatorEvent: DictationCoordinatorEvent?
+    private var retiredCoordinatorSessionIDs: Set<UUID> = []
+    private var retiredCoordinatorSessionOrder: [UUID] = []
     private var onDockChanged: (@MainActor (DictationCapsuleDock) -> Void)?
     private var screenParametersObserver: DictationCapsuleObserverToken?
     private var dragOrigin: CGPoint?
@@ -1469,6 +1485,13 @@
     init(
       panel: DictationCapsulePanel = DictationCapsulePanel(),
       waveformModel: DictationWaveformModel = DictationWaveformModel(),
+      monotonicNow: @escaping @MainActor () -> TimeInterval = {
+        ProcessInfo.processInfo.systemUptime
+      },
+      automaticallyAdvancesLivePill: Bool = true,
+      reduceMotionProvider: @escaping @MainActor () -> Bool = {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+      },
       theme: FleckThemeSnapshot = .initial,
       markLoader: @escaping @MainActor () -> NSImage? = {
         guard case .image(let image) = FleckMark.load(template: true) else {
@@ -1481,6 +1504,10 @@
     ) {
       self.panel = panel
       self.waveformModel = waveformModel
+      self.monotonicNow = monotonicNow
+      self.reduceMotionProvider = reduceMotionProvider
+      self.automaticallyAdvancesLivePill = automaticallyAdvancesLivePill
+      self.fleckPillModel = FleckPillLivePresentationModel()
       let persistentPanel = panel
       self.presentationModel = DictationCapsulePresentationModel(
         colors: FleckRailColors(theme: theme),
@@ -1505,9 +1532,12 @@
       let hostingView = DictationCapsuleHostingView(
         model: presentationModel,
         waveformModel: waveformModel,
+        fleckPillModel: fleckPillModel,
         markImage: markLoader(),
         inputRouter: inputRouter,
-        onDockSelected: { [weak self] dock in self?.selectDock(dock) }
+        automaticallyAdvancesLivePill: automaticallyAdvancesLivePill,
+        onDockSelected: { [weak self] dock in self?.selectDock(dock) },
+        onLivePillAnimationFrame: { [weak self] in self?.advanceLivePillAnimation() }
       )
       self.hostingView = hostingView
       panel.contentView = hostingView
@@ -1517,6 +1547,10 @@
       inputRouter.onDragEnded = { [weak self] point, cancelled in
         self?.dragEnded(at: point, cancelled: cancelled)
       }
+    }
+
+    private var effectiveReduceMotion: Bool {
+      reduceMotionProvider()
     }
 
     private static func postAnnouncement(_ panel: NSWindow, _ message: String) {
@@ -1536,9 +1570,24 @@
       onOpenFleck: @escaping @MainActor () -> Void,
       onDockChanged: @escaping @MainActor (DictationCapsuleDock) -> Void
     ) {
+      let dock = dock.supportedPlacement
       let previousStatus = currentContext.status
+      let now = monotonicNow()
+      let renderedFrame = currentContext.sessionID.flatMap(fleckPillModel.displayedFrame(for:))
+      retireCoordinatorSession(currentContext.sessionID)
       currentDock = dock
       currentContext = DictationCapsuleContext(status: .idle)
+      lastCoordinatorEvent = nil
+      if dock == .bottom {
+        fleckPillModel.presentStandby(
+          at: now,
+          renderedFrame: renderedFrame,
+          animated: panel.isVisible,
+          reduceMotion: effectiveReduceMotion
+        )
+      } else {
+        hideLivePillImmediately()
+      }
       waveformModel.reset()
       currentChooser = nil
       currentChoiceHandler = { _, _ in }
@@ -1559,6 +1608,7 @@
       presentationModel.updateIdleAccessibilityLabel(accessibilityLabel)
       inputRouter.onOpenFleck = onOpenFleck
       hostingView.refreshMenu()
+      panel.hasShadow = !fleckPillModel.isVisible
       applyCurrentFrame(
         animated: panel.isVisible,
         from: previousStatus
@@ -1591,6 +1641,7 @@
       _ status: DictationCapsuleStatus,
       action: DictationCapsuleAction? = nil,
       chooser: DictationCapsuleChooser? = nil,
+      coordinatorEvent: DictationCoordinatorEvent? = nil,
       onAction: @escaping @MainActor () -> Void = {},
       onChoice: @escaping @MainActor (UUID, UUID?) -> Void = { _, _ in }
     ) {
@@ -1599,6 +1650,7 @@
         context,
         action: action,
         chooser: chooser,
+        coordinatorEvent: coordinatorEvent,
         onAction: onAction,
         onChoice: onChoice
       )
@@ -1608,34 +1660,79 @@
       _ context: DictationCapsuleContext,
       action: DictationCapsuleAction? = nil,
       chooser: DictationCapsuleChooser? = nil,
+      coordinatorEvent: DictationCoordinatorEvent? = nil,
       onAction: @escaping @MainActor () -> Void = {},
       onChoice: @escaping @MainActor (UUID, UUID?) -> Void = { _, _ in }
     ) {
+      if let coordinatorEvent,
+        let sessionID = coordinatorEvent.context?.sessionID,
+        retiredCoordinatorSessionIDs.contains(sessionID)
+      {
+        guard
+          sessionID == currentContext.sessionID,
+          coordinatorEvent.terminal != nil || chooser != nil || context.status.isTerminalResult
+        else { return }
+      }
+      let isSavedResult = context.status.isSavedResult
+      let presentationContext = context.presentationContext()
+      let presentationAction = isSavedResult ? nil : action
+      let presentationChooser = isSavedResult ? nil : chooser
       let previousStatus = currentContext.status
       let previousSessionID = currentContext.sessionID
+      if let eventSessionID = coordinatorEvent?.context?.sessionID,
+        eventSessionID != previousSessionID
+      {
+        retireCoordinatorSession(previousSessionID)
+      }
       let wasListening = previousStatus == .listening
-      currentContext = context
-      if context.status == .listening {
-        let isSameListeningSession = wasListening && previousSessionID == context.sessionID
+      let now = monotonicNow()
+      let displayedSessionID = presentationContext.sessionID
+        ?? currentContext.sessionID
+        ?? fleckPillModel.sessionID
+      let renderedFrame = displayedSessionID.flatMap(fleckPillModel.displayedFrame(for:))
+      var displayedEnergy = displayedWaveformEnergy(at: Date())
+      currentContext = presentationContext
+      lastCoordinatorEvent = coordinatorEvent
+      if presentationContext.status == .listening {
+        let isSameListeningSession = wasListening
+          && previousSessionID == presentationContext.sessionID
         if !isSameListeningSession {
           waveformModel.beginListening()
+          displayedEnergy = 0
         }
       } else {
         waveformModel.reset()
       }
-      currentChooser = chooser
+      let reduceMotion = effectiveReduceMotion
+      let visibleAction = presentationContext.status == .idle ? nil : presentationAction
+      updateFleckPillPresentation(
+        context: presentationContext,
+        event: coordinatorEvent,
+        renderedFrame: renderedFrame,
+        displayedEnergy: displayedEnergy,
+        now: now,
+        reduceMotion: reduceMotion,
+        animated: panel.isVisible
+      )
+      if coordinatorEvent?.terminal != nil {
+        retireCoordinatorSession(coordinatorEvent?.context?.sessionID)
+      }
+      currentChooser = presentationChooser
       currentChoiceHandler = onChoice
-      panel.allowsActions = action != nil
-        || chooser?.choices.isEmpty == false
-        || chooser?.allowsKeepInInbox == true
+      panel.allowsActions = presentationAction != nil
+        || presentationChooser?.choices.isEmpty == false
+        || presentationChooser?.allowsKeepInInbox == true
       presentationModel.update(
-        context: context,
-        action: action,
+        context: presentationContext,
+        action: visibleAction,
         onAction: onAction,
-        chooser: chooser,
-        onChoice: onChoice
+        chooser: presentationChooser,
+        onChoice: { [weak self] captureID, noteID in
+          self?.selectRoutingChoice(captureID: captureID, noteID: noteID)
+        }
       )
       hostingView.refreshMenu()
+      panel.hasShadow = !fleckPillModel.isVisible
       applyCurrentFrame(
         animated: panel.isVisible,
         from: previousStatus
@@ -1644,9 +1741,21 @@
     }
 
     func setDock(_ dock: DictationCapsuleDock) {
+      let dock = dock.supportedPlacement
       currentDock = dock
       presentationModel.updateDock(dock)
+      let now = monotonicNow()
+      updateFleckPillPresentation(
+        context: currentContext,
+        event: lastCoordinatorEvent,
+        renderedFrame: currentContext.sessionID.flatMap(fleckPillModel.displayedFrame(for:)),
+        displayedEnergy: displayedWaveformEnergy(at: Date()),
+        now: now,
+        reduceMotion: effectiveReduceMotion,
+        animated: panel.isVisible
+      )
       hostingView.refreshMenu()
+      panel.hasShadow = !fleckPillModel.isVisible
       applyCurrentFrame(
         animated: panel.isVisible,
         from: currentContext.status,
@@ -1665,6 +1774,8 @@
 
     func dismiss() {
       waveformModel.reset()
+      hideLivePillImmediately()
+      lastCoordinatorEvent = nil
       currentChooser = nil
       currentChoiceHandler = { _, _ in }
       panel.allowsActions = false
@@ -1700,14 +1811,129 @@
       else {
         return
       }
+      let now = monotonicNow()
+      let waveformNow = Date()
+      let reduceMotion = effectiveReduceMotion
       waveformModel.receive(
         level: level,
-        reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        now: waveformNow,
+        reduceMotion: reduceMotion
       )
+      if currentDock == .bottom, fleckPillModel.sessionID == currentContext.sessionID,
+        let sessionID = currentContext.sessionID
+      {
+        fleckPillModel.presentListening(
+          sessionID: sessionID,
+          at: now,
+          displayedEnergy: displayedWaveformEnergy(at: waveformNow),
+          reduceMotion: reduceMotion
+        )
+      }
     }
 
     func updateAudioLevel(_ level: Float, generation: UInt64) {
       updateAudioLevel(level, presentationGeneration: generation)
+    }
+
+    private func updateFleckPillPresentation(
+      context: DictationCapsuleContext,
+      event: DictationCoordinatorEvent?,
+      renderedFrame: FleckPillArtworkFrame?,
+      displayedEnergy: Double,
+      now: TimeInterval,
+      reduceMotion: Bool,
+      animated: Bool
+    ) {
+      guard currentDock == .bottom else {
+        hideLivePillImmediately()
+        return
+      }
+      if context.status == .idle {
+        fleckPillModel.presentStandby(
+          at: now,
+          renderedFrame: renderedFrame,
+          animated: animated,
+          reduceMotion: reduceMotion
+        )
+        return
+      }
+      guard
+        let event,
+        event.terminal == nil,
+        let sessionID = context.sessionID,
+        event.context?.sessionID == sessionID
+      else {
+        hideLivePillImmediately()
+        return
+      }
+      switch context.status {
+      case .arming where event.phase == .arming:
+        fleckPillModel.presentArming(
+          sessionID: sessionID,
+          at: now,
+          reduceMotion: reduceMotion
+        )
+      case .listening:
+        guard case .listening = event.phase else {
+          hideLivePillImmediately()
+          return
+        }
+        fleckPillModel.presentListening(
+          sessionID: sessionID,
+          at: now,
+          displayedEnergy: displayedEnergy,
+          reduceMotion: reduceMotion
+        )
+      case .finalizing where event.phase == .finalizing,
+        .cleaning where event.phase == .cleaning,
+        .routing where event.phase == .routing,
+        .saving where event.context?.pipelineStage == .save:
+        fleckPillModel.presentProcessing(
+          sessionID: sessionID,
+          at: now,
+          renderedFrame: renderedFrame,
+          displayedEnergy: displayedEnergy,
+          reduceMotion: reduceMotion
+        )
+      default:
+        hideLivePillImmediately()
+      }
+    }
+
+    private func hideLivePillImmediately() {
+      if fleckPillModel.isVisible { fleckPillModel.hide() }
+      panel.hasShadow = true
+    }
+
+    private func advanceLivePillAnimation() {
+      guard automaticallyAdvancesLivePill, fleckPillModel.needsAnimation else { return }
+      let previousState = fleckPillModel.state
+      let previousHost = fleckPillModel.usesFixedHost
+      let now = monotonicNow()
+      fleckPillModel.tick(
+        at: now,
+        displayedEnergy: displayedWaveformEnergy(at: Date()),
+        reduceMotion: effectiveReduceMotion
+      )
+      if previousState != fleckPillModel.state
+        || previousHost != fleckPillModel.usesFixedHost
+      {
+        panel.hasShadow = !fleckPillModel.isVisible
+        applyCurrentFrame(animated: false, from: currentContext.status)
+      }
+    }
+
+    private func retireCoordinatorSession(_ sessionID: UUID?) {
+      guard let sessionID, retiredCoordinatorSessionIDs.insert(sessionID).inserted else { return }
+      retiredCoordinatorSessionOrder.append(sessionID)
+      if retiredCoordinatorSessionOrder.count > 64 {
+        retiredCoordinatorSessionIDs.remove(retiredCoordinatorSessionOrder.removeFirst())
+      }
+    }
+
+    private func displayedWaveformEnergy(at date: Date) -> Double {
+      let levels = waveformModel.barLevels(at: date, reduceMotion: false)
+      return Double(levels[DictationWaveformModel.barCount / 2])
     }
 
     private func dragChanged(to point: CGPoint) {
@@ -1757,10 +1983,8 @@
         ceiling = listeningSize
       case .finalizing, .cleaning, .routing, .saving:
         ceiling = activeSize
-      case .saved:
-        ceiling = savedSize
-      case .savedWithoutCleanup:
-        ceiling = savedWithoutCleanupSize
+      case .saved, .savedWithoutCleanup:
+        ceiling = idleSize
       case .noSpeech:
         ceiling = noSpeechSize
       case .repairingModel:
@@ -1832,17 +2056,22 @@
       return CGRect(origin: origin, size: fittedSize)
     }
 
+    nonisolated static func livePillFrame(in visibleFrame: CGRect) -> CGRect {
+      let width = min(max(livePillHostSize.width, 0), max(visibleFrame.width, 0))
+      let height = min(max(livePillHostSize.height, 0), max(visibleFrame.height, 0))
+      return CGRect(
+        x: visibleFrame.midX - width / 2,
+        y: visibleFrame.minY,
+        width: width,
+        height: height
+      )
+    }
+
     static func nearestDock(
       to point: CGPoint,
       in visibleFrame: CGRect
     ) -> DictationCapsuleDock {
-      let bottomDistance = abs(point.y - visibleFrame.minY)
-      let leftDistance = abs(point.x - visibleFrame.minX)
-      let rightDistance = abs(point.x - visibleFrame.maxX)
-      if bottomDistance <= leftDistance, bottomDistance <= rightDistance {
-        return .bottom
-      }
-      return leftDistance <= rightDistance ? .left : .right
+      .bottom
     }
 
     static func preferredDisplay<T>(
@@ -1910,24 +2139,23 @@
         chooser: currentChooser,
         context: currentContext
       )
-      let finalFrame = Self.frame(
-        for: currentDock,
-        size: Self.size(
-          for: currentContext.status,
-          measuredWidth: presentation.measuredWidth,
-          widthCeiling: presentation.widthCeiling
-        ),
-        in: screen.visibleFrame
-      )
-      let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-      guard animated else {
-        panel.setFrame(finalFrame, display: true)
-        panel.alphaValue = 1
-        return
-      }
+      let usesLivePillHost = currentDock == .bottom && fleckPillModel.usesFixedHost
+      let finalFrame: CGRect = usesLivePillHost
+        ? Self.livePillFrame(in: screen.visibleFrame)
+        : Self.frame(
+          for: currentDock,
+          size: Self.size(
+            for: currentContext.status,
+            measuredWidth: presentation.measuredWidth,
+            widthCeiling: presentation.widthCeiling
+          ),
+          in: screen.visibleFrame
+        )
+      let reduceMotion = effectiveReduceMotion
       if reduceMotion {
         panel.setFrame(finalFrame, display: true)
         panel.alphaValue = 1
+        guard animated else { return }
         let duration = DictationCapsuleMotion.shellDuration(
           from: previousStatus,
           to: currentContext.status,
@@ -1944,6 +2172,11 @@
           transition,
           forKey: "fleck-dictation-content-crossfade"
         )
+        return
+      }
+      guard animated, !fleckPillModel.isVisible else {
+        panel.setFrame(finalFrame, display: true)
+        panel.alphaValue = 1
         return
       }
       let duration = DictationCapsuleMotion.shellDuration(
@@ -1977,9 +2210,21 @@
       _ dock: DictationCapsuleDock,
       on screen: NSScreen? = nil
     ) {
+      let dock = dock.supportedPlacement
       currentDock = dock
       if let screen { currentScreen = screen }
       presentationModel.updateDock(dock)
+      let now = monotonicNow()
+      updateFleckPillPresentation(
+        context: currentContext,
+        event: lastCoordinatorEvent,
+        renderedFrame: currentContext.sessionID.flatMap(fleckPillModel.displayedFrame(for:)),
+        displayedEnergy: displayedWaveformEnergy(at: Date()),
+        now: now,
+        reduceMotion: effectiveReduceMotion,
+        animated: panel.isVisible
+      )
+      panel.hasShadow = !fleckPillModel.isVisible
       applyCurrentFrame(
         animated: true,
         from: currentContext.status,
@@ -2017,9 +2262,14 @@
 
   private struct DictationCapsuleView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     @ObservedObject var model: DictationCapsulePresentationModel
     @ObservedObject var waveformModel: DictationWaveformModel
+    @ObservedObject var fleckPillModel: FleckPillLivePresentationModel
+    let automaticallyAdvancesLivePill: Bool
+    let onLivePillAnimationFrame: @MainActor () -> Void
     let markImage: NSImage?
 
     private var presentation: DictationCapsulePresentation {
@@ -2033,6 +2283,20 @@
 
     private var increaseContrast: Bool {
       model.colors.increasedContrast
+        || FleckRailAccessibility.usesIncreasedContrast(colorSchemeContrast)
+    }
+
+    private var usesLivePillPrimaryContent: Bool {
+      guard model.dock == .bottom, fleckPillModel.usesFixedHost else { return false }
+      if model.context.status == .idle {
+        return model.action == nil
+      }
+      return switch model.context.status {
+      case .arming, .listening, .finalizing, .cleaning, .routing, .saving:
+        true
+      default:
+        false
+      }
     }
 
     var body: some View {
@@ -2043,6 +2307,22 @@
               && model.context.status == .listening
               && model.context.isHandsFree
           )
+        }
+        .background(alignment: .topLeading) {
+          if automaticallyAdvancesLivePill {
+            TimelineView(
+              .animation(
+                minimumInterval: reduceMotion ? 1 / 15 : 1 / 60,
+                paused: !fleckPillModel.needsAnimation
+              )
+            ) { context in
+              Color.clear
+                .frame(width: 1, height: 1)
+                .onChange(of: context.date) { _, _ in onLivePillAnimationFrame() }
+            }
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
+          }
         }
     }
 
@@ -2073,23 +2353,40 @@
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
-          RoundedRectangle(
-            cornerRadius: presentation.visualMode == .idle || presentation.visualMode == .arming ? 10 : 12,
-            style: .continuous
-          )
-          .fill(model.colors.shellColor.opacity(model.colors.effectiveShellOpacity))
-          .overlay {
+          if fleckPillModel.isVisible {
+            FleckPillCanvas(
+              frame: fleckPillModel.frame,
+              layers: FleckPillCanvasLayers(
+                rim: true,
+                shoulders: !reduceTransparency,
+                signal: true,
+                halo: !reduceTransparency && !increaseContrast
+              ),
+              renderGeneration: fleckPillModel.renderGeneration,
+              renderSessionID: fleckPillModel.sessionID,
+              receipt: fleckPillModel.renderReceipt,
+              colors: model.colors
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+          } else {
             RoundedRectangle(
               cornerRadius: presentation.visualMode == .idle || presentation.visualMode == .arming ? 10 : 12,
               style: .continuous
             )
-            .stroke(model.colors.borderColor, lineWidth: increaseContrast ? 1.5 : 0.8)
-          }
-          .overlay(alignment: .top) {
-            Rectangle()
-              .fill(model.colors.borderColor.opacity(0.22))
-              .frame(height: 1)
-              .padding(.horizontal, 10)
+            .fill(model.colors.shellColor.opacity(model.colors.effectiveShellOpacity))
+            .overlay {
+              RoundedRectangle(
+                cornerRadius: presentation.visualMode == .idle || presentation.visualMode == .arming ? 10 : 12,
+                style: .continuous
+              )
+              .stroke(model.colors.borderColor, lineWidth: increaseContrast ? 1.5 : 0.8)
+            }
+            .overlay(alignment: .top) {
+              Rectangle()
+                .fill(model.colors.borderColor.opacity(0.22))
+                .frame(height: 1)
+                .padding(.horizontal, 10)
+            }
           }
         }
         .overlay {
@@ -2099,7 +2396,9 @@
         }
         .clipShape(
           RoundedRectangle(
-            cornerRadius: presentation.visualMode == .idle || presentation.visualMode == .arming ? 10 : 12,
+            cornerRadius: fleckPillModel.usesFixedHost
+              ? 0
+              : (presentation.visualMode == .idle || presentation.visualMode == .arming ? 10 : 12),
             style: .continuous
           )
         )
@@ -2122,14 +2421,6 @@
             .fill(colors.coreColor)
             .frame(width: 8, height: 2)
             .offset(y: 9)
-          Capsule()
-            .fill(colors.coreColor)
-            .frame(width: 2, height: 8)
-            .offset(x: -20)
-          Capsule()
-            .fill(colors.coreColor)
-            .frame(width: 2, height: 8)
-            .offset(x: 20)
         }
         .background(FleckRailFrameProbe(identifier: "fleck-dock-indicators"))
         .accessibilityHidden(true)
@@ -2139,23 +2430,49 @@
 
     @ViewBuilder
     private var railContent: some View {
-      switch model.context.status {
-      case .idle:
-        idleContent
-      case .arming:
-        startingContent
-      case .listening:
-        listeningContent
-      case .finalizing, .cleaning, .routing, .saving:
-        processingCore
-      default:
-        FleckRailLayout(
-          order: FleckRailContentOrder.markAndContent(for: model.dock),
-          spacing: 7
-        ) {
-          railMark
-          stateContent
+      if usesLivePillPrimaryContent {
+        livePillControls
+      } else {
+        switch model.context.status {
+        case .idle:
+          idleContent
+        case .arming:
+          startingContent
+        case .listening:
+          listeningContent
+        case .finalizing, .cleaning, .routing, .saving:
+          processingCore
+        default:
+          FleckRailLayout(
+            order: FleckRailContentOrder.markAndContent(for: model.dock),
+            spacing: 7
+          ) {
+            railMark
+            stateContent
+          }
         }
+      }
+    }
+
+    @ViewBuilder
+    private var livePillControls: some View {
+      if model.context.status == .listening {
+        TimelineView(
+          .periodic(
+            from: .now,
+            by: DictationWaveformRefreshSchedule.interval(reduceMotion: reduceMotion)
+          )
+        ) { context in
+          HStack {
+            Spacer(minLength: 0)
+            listeningActionZone(at: context.date)
+          }
+        }
+      } else {
+        Color.clear
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .accessibilityHidden(true)
+          .allowsHitTesting(false)
       }
     }
 
@@ -2564,6 +2881,7 @@
   @MainActor
   private final class DictationCapsuleHostingView: NSView {
     private let model: DictationCapsulePresentationModel
+    private let fleckPillModel: FleckPillLivePresentationModel
     private let inputRouter: DictationCapsuleInputRouter
     private let onDockSelected: @MainActor (DictationCapsuleDock) -> Void
     private let hostingView: DictationCapsuleEventHostingView
@@ -2571,17 +2889,24 @@
     init(
       model: DictationCapsulePresentationModel,
       waveformModel: DictationWaveformModel,
+      fleckPillModel: FleckPillLivePresentationModel,
       markImage: NSImage?,
       inputRouter: DictationCapsuleInputRouter,
-      onDockSelected: @escaping @MainActor (DictationCapsuleDock) -> Void
+      automaticallyAdvancesLivePill: Bool,
+      onDockSelected: @escaping @MainActor (DictationCapsuleDock) -> Void,
+      onLivePillAnimationFrame: @escaping @MainActor () -> Void
     ) {
       self.model = model
+      self.fleckPillModel = fleckPillModel
       self.inputRouter = inputRouter
       self.onDockSelected = onDockSelected
       self.hostingView = DictationCapsuleEventHostingView(
         rootView: DictationCapsuleView(
           model: model,
           waveformModel: waveformModel,
+          fleckPillModel: fleckPillModel,
+          automaticallyAdvancesLivePill: automaticallyAdvancesLivePill,
+          onLivePillAnimationFrame: onLivePillAnimationFrame,
           markImage: markImage
         ),
         model: model,
@@ -2607,13 +2932,45 @@
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
+      let localPoint = convert(point, from: superview)
+      guard bounds.contains(localPoint) else { return nil }
+      if fleckPillModel.isVisible {
+        let actionPoint = hostingView.convert(localPoint, from: self)
+        if hostingView.actionRegion(at: actionPoint) != nil {
+          return super.hitTest(point)
+        }
+        let shell = FleckPillGeometry.shell(expansion: fleckPillModel.frame.expansion)
+        let scale = FleckPillGeometry.artworkScale
+        func local(_ point: FleckPillPoint) -> NSPoint {
+          let transformed = shell.shellTransform.applying(to: point)
+          let x = (bounds.width - FleckPillGeometry.canvasSize.width) / 2
+            + scale * (8 + transformed.x)
+          let y = (bounds.height - FleckPillGeometry.canvasSize.height) / 2
+            + scale * (12 + transformed.y)
+          return NSPoint(x: bounds.minX + x, y: isFlipped ? bounds.minY + y : bounds.maxY - y)
+        }
+        let path = NSBezierPath()
+        for command in shell.fill.commands {
+          switch command {
+          case .move(let point):
+            path.move(to: local(point))
+          case .line(let point):
+            path.line(to: local(point))
+          case .cubic(let first, let second, let end):
+            path.curve(to: local(end), controlPoint1: local(first), controlPoint2: local(second))
+          case .close:
+            path.close()
+          }
+        }
+        return path.contains(localPoint) ? hostingView : nil
+      }
       let radius: CGFloat = model.context.status == .idle || model.context.status == .arming ? 10 : 12
       let path = NSBezierPath(
         roundedRect: bounds,
         xRadius: radius,
         yRadius: radius
       )
-      return path.contains(point) ? super.hitTest(point) : nil
+      return path.contains(localPoint) ? super.hitTest(point) : nil
     }
 
     func refreshMenu() {
@@ -2631,8 +2988,6 @@
       addItem("Dictation History", action: #selector(openHistory), to: menu)
       addItem("Dictation Settings", action: #selector(openSettings), to: menu)
       addItem("Dock Bottom", action: #selector(dockBottom), to: menu)
-      addItem("Dock Left", action: #selector(dockLeft), to: menu)
-      addItem("Dock Right", action: #selector(dockRight), to: menu)
 
       if model.context.status.isFailure || model.context.status.isTerminalResult {
         addItem("Dismiss", action: #selector(dismiss), to: menu)
@@ -2673,13 +3028,6 @@
       onDockSelected(.bottom)
     }
 
-    @objc private func dockLeft() {
-      onDockSelected(.left)
-    }
-
-    @objc private func dockRight() {
-      onDockSelected(.right)
-    }
   }
 
   @MainActor
@@ -2781,7 +3129,7 @@
       }
     }
 
-    private func actionRegion(at point: NSPoint) -> FleckRailInteractionRegion? {
+    func actionRegion(at point: NSPoint) -> FleckRailInteractionRegion? {
       let actions = FleckRailAccessibility.actions(for: model.context)
       let regions: [FleckRailInteractionRegion] = {
         var regions: [FleckRailInteractionRegion] = []

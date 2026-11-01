@@ -73,6 +73,10 @@ public enum DictationCapsuleDock: String, Codable, CaseIterable, Sendable {
   case bottom
   case left
   case right
+
+  public static var allCases: [Self] { [.bottom] }
+
+  public var supportedPlacement: Self { .bottom }
 }
 
 public struct DictationDestination: Codable, Equatable, Sendable {

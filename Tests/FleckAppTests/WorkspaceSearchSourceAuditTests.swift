@@ -118,6 +118,22 @@ func WorkspaceSearchSourceAuditDoesNotOutlineTheQueryFieldSeparatelyFromItsPanel
   #expect(queryField.contains(".accessibilityHint(\"Search note titles and bodies\")"))
   #expect(!queryField.contains(".fleckNeutralControlOutline("))
   #expect(searchView.contains(".fleckThemedSurface(cornerRadius: 10)"))
+  let themeSource = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/FleckThemeSnapshot.swift"),
+    encoding: .utf8
+  )
+  let surfaceStart = try #require(themeSource.range(of: "private struct FleckThemedSurface: ViewModifier"))
+  let surfaceEnd = try #require(
+    themeSource.range(
+      of: "struct FleckQuietButtonStyle: ButtonStyle",
+      range: surfaceStart.upperBound..<themeSource.endIndex
+    )
+  )
+  let surface = themeSource[surfaceStart.lowerBound..<surfaceEnd.lowerBound]
+  #expect(surface.contains("@Environment(\\.fleckThemeSnapshot) private var theme"))
+  #expect(surface.contains("content.background("))
+  #expect(surface.contains("theme.color(.card)"))
+  #expect(surface.contains("in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)"))
   #expect(searchView.contains(".strokeBorder(.quaternary)"))
 }
 

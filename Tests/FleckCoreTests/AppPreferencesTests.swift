@@ -261,6 +261,36 @@ import Testing
   #expect(roundTrip.dictationCapsuleDock == .bottom)
 }
 
+@Test func legacySideDockPreferencesNormalizeToBottomWithoutChangingOtherPreferences() throws {
+  #expect(DictationCapsuleDock.allCases == [.bottom])
+
+  for dock in [DictationCapsuleDock.left, .right] {
+    let data = Data(
+      """
+      {"fontFamily":"Menlo","fontSize":14,"uiFontFamily":"Avenir Next","panelOpacity":0.67,"dictationHistoryEnabled":false,"dictationCapsuleDock":"\(dock.rawValue)"}
+      """.utf8
+    )
+    let decoded = try JSONDecoder().decode(AppPreferences.self, from: data)
+    #expect(decoded.dictationCapsuleDock == .bottom)
+    #expect(decoded.fontFamily == "Menlo")
+    #expect(decoded.fontSize == 14)
+    #expect(decoded.uiFontFamily == "Avenir Next")
+    #expect(decoded.panelOpacity == 0.67)
+    #expect(!decoded.dictationHistoryEnabled)
+
+    #expect(AppPreferences(dictationCapsuleDock: dock).dictationCapsuleDock == .bottom)
+
+    var assigned = AppPreferences()
+    assigned.dictationCapsuleDock = dock
+    #expect(assigned.dictationCapsuleDock == .bottom)
+    let roundTrip = try JSONDecoder().decode(
+      AppPreferences.self,
+      from: JSONEncoder().encode(assigned)
+    )
+    #expect(roundTrip.dictationCapsuleDock == .bottom)
+  }
+}
+
 @Test func dictationShortcutGuideDefaultsVisibleAndPersistsDismissal() throws {
   #expect(AppPreferences().showDictationShortcutGuide)
 

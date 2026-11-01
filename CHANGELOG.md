@@ -41,6 +41,15 @@ accessibility restoration remain unverified; no passing CI or test-build deliver
 Source-only CI repair candidate. Compilation, tests, native keyboard/accessibility and
 current-context checks remain unrun for this change; no passing behavior, CI or test-build
 delivery is claimed.
+## [1.5.10-beta.1] - 2026-10-29
+
+### Fixed
+
+- Inherit the explicit interface-font correction while preserving theme/hover surfaces,
+  bottom-only live-pill standby and the reviewed dictation regression guards.
+
+Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
+and native behavior remain unverified; hosted verification is pending.
 
 ## [1.5.9-beta.1] - 2026-10-29
 
@@ -268,6 +277,16 @@ Source-only dependency integration; this checkpoint's CI and native validation r
 Source propagation of the reviewed correction; this checkpoint's CI and native validation
 remain pending. Supporting paired CI passes on the existing dependency are not a complete-app pass.
 
+## [1.5.5-beta.1] - 2026-10-27
+
+### Fixed
+
+- Propagate the filing codec and formatting-popover compiler repairs through the bottom-only
+  dictation pill stack while preserving its reviewed source and regression guards.
+
+Source-only integration checkpoint. Local compilation, tests and native pill behavior remain
+unrun; hosted verification is pending.
+
 ## [1.5.4-beta.1] - 2026-10-27
 
 ### Fixed
@@ -288,6 +307,20 @@ unrun; hosted verification is pending.
 
 Source-only compiler repair checkpoint. Local compilation, tests and native behavior remain
 unrun; hosted verification is pending.
+
+## [1.5.2-beta.1] - 2026-10-27
+
+### Fixed
+
+- Return confirmed clean and raw dictation saves directly to standby without a success message,
+  result actions, chooser or success-return timer.
+- Keep the dictation capsule bottom-only and restore the existing live-pill artwork with
+  session-bound rendered-frame receipts and control-safe hit testing.
+- Reconcile standby, placement and live-artwork test source while retaining recovery and
+  ownership guards.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests, visual/accessibility inspection and native behavior remain unverified.
 
 ## [1.5.1-beta.1] - 2026-10-27
 
