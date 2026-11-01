@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.41-beta.1] - 2026-11-01
+
+Development CI repair candidate only; this is not an accepted build or public release.
+
+### Fixed
+
+- Ignore folder-overflow accessibility actions while a folder is being created.
+- Extend folder-navigation regression coverage to later overflow actions and await the fixture's once-only teardown.
+
 ## [1.4.37-beta.1] - 2026-11-01
 
 Development CI repair candidate only; this is not an accepted build or public release.
