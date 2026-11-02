@@ -579,9 +579,12 @@ func noteTabOverflowRecalculatesForResizeAndTitleChanges() async {
   #expect(!fixture.hasOverflowControls)
 }
 
-@Test @MainActor
+@Test("Note tab overflow responds to interface-font metrics and keeps RTL controls accessible")
+@MainActor
 func noteTabOverflowTracksDynamicTypeAndKeepsRTLControlsAccessible() async throws {
-  let notes = (0..<6).map { Note(title: "Note \($0)") }
+  let notes = (0..<6).map {
+    Note(title: String(repeating: "i", count: 12) + String($0))
+  }
   let fixture = await NotesPanelTitleFixture(
     notes: notes,
     width: 520,
@@ -590,7 +593,29 @@ func noteTabOverflowTracksDynamicTypeAndKeepsRTLControlsAccessible() async throw
   defer { fixture.close() }
 
   #expect(!fixture.hasOverflowControls)
+  let firstTabIdentifier = "note-tab-\(notes[0].id.uuidString)"
+  let largeSystemFrame = try #require(fixture.accessibilityFrame(for: firstTabIdentifier))
   await fixture.setEnvironment(layoutDirection: .rightToLeft, dynamicTypeSize: .accessibility2)
+  #expect(!fixture.hasOverflowControls)
+  let accessibilitySystemFrame = try #require(
+    fixture.accessibilityFrame(for: firstTabIdentifier)
+  )
+  #expect(abs(accessibilitySystemFrame.width - largeSystemFrame.width) <= 1)
+
+  let menloFont = try #require(
+    NSFontManager.shared.font(withFamily: "Menlo", traits: [], weight: 5, size: 13)
+  )
+  #expect(menloFont.familyName == "Menlo")
+  let noteIDsBeforeFontChange = fixture.state.workspace.notes.map(\.id)
+  let noteTitlesBeforeFontChange = fixture.state.workspace.notes.map(\.title)
+  let contentWidthBeforeFontChange = fixture.host.bounds.width
+  #expect(contentWidthBeforeFontChange == 520)
+  await fixture.setInterfaceFontFamily("Menlo")
+  #expect(fixture.state.workspace.notes.map(\.id) == noteIDsBeforeFontChange)
+  #expect(fixture.state.workspace.notes.map(\.title) == noteTitlesBeforeFontChange)
+  #expect(fixture.host.bounds.width == contentWidthBeforeFontChange)
+  let menloFrame = try #require(fixture.accessibilityFrame(for: firstTabIdentifier))
+  #expect(menloFrame.width > accessibilitySystemFrame.width)
   #expect(fixture.hasOverflowControls)
   #expect(fixture.accessibilityLabel(for: "note-tab-overflow-earlier") == "Reveal earlier tabs")
   #expect(fixture.accessibilityLabel(for: "note-tab-overflow-later") == "Reveal later tabs")
@@ -1069,12 +1094,14 @@ private final class NotesPanelTitleFixture {
   private let previousAccessibilityValue: Any?
   private var layoutDirection: LayoutDirection
   private var dynamicTypeSize: DynamicTypeSize
+  private var interfaceFontFamily: String?
 
   init(
     notes: [Note],
     width: CGFloat,
     layoutDirection: LayoutDirection = .leftToRight,
-    dynamicTypeSize: DynamicTypeSize = .large
+    dynamicTypeSize: DynamicTypeSize = .large,
+    interfaceFontFamily: String? = nil
   ) async {
     let application = NSApplication.shared
     let accessibilityAttribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
@@ -1094,10 +1121,12 @@ private final class NotesPanelTitleFixture {
     runtime = DictationRuntime(appState: state, applicationSupportURL: root)
     self.layoutDirection = layoutDirection
     self.dynamicTypeSize = dynamicTypeSize
+    self.interfaceFontFamily = interfaceFontFamily
     let rootView = NotesPanel(dictationRuntime: runtime, sizing: .container)
       .environmentObject(state)
       .environment(\.layoutDirection, layoutDirection)
       .environment(\.dynamicTypeSize, dynamicTypeSize)
+      .fleckUIFontFamily(interfaceFontFamily)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     host = NSHostingView(rootView: AnyView(rootView))
     window = NSWindow(
@@ -1124,6 +1153,12 @@ private final class NotesPanelTitleFixture {
   ) async {
     self.layoutDirection = layoutDirection
     self.dynamicTypeSize = dynamicTypeSize
+    host.rootView = makeRootView()
+    await settle()
+  }
+
+  func setInterfaceFontFamily(_ family: String?) async {
+    interfaceFontFamily = family
     host.rootView = makeRootView()
     await settle()
   }
@@ -1175,6 +1210,7 @@ private final class NotesPanelTitleFixture {
         .environmentObject(state)
         .environment(\.layoutDirection, layoutDirection)
         .environment(\.dynamicTypeSize, dynamicTypeSize)
+        .fleckUIFontFamily(interfaceFontFamily)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     )
   }
