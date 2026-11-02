@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.5-beta.1] - 2026-11-02
+
+### Fixed
+
+- Embed the resolved Sparkle framework only when the app executable links it,
+  bind that executable to its bundled copy, and sign nested framework code first.
+
 ## [1.7.4-beta.1] - 2026-10-30
 
 ### Fixed
