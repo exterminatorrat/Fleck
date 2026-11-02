@@ -549,7 +549,7 @@ cat > "$expected_host_contents/Info.plist" <<'PLIST'
   <key>LSUIElement</key>
   <false/>
   <key>NSPrincipalClass</key>
-  <string>NSApplication</string>
+  <string>AppKitTestProbeApplication</string>
 </dict>
 </plist>
 PLIST
