@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.46-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
 ## [1.4.45-beta.1] - 2026-11-02
 
 ### Fixed
@@ -19,6 +25,12 @@ public release log. Packaging unchanged source does not add a changelog entry.
 - Keep the tab-title fade at the semantic trailing edge in right-to-left layouts
   without reversing the mirrored gradient twice.
 
+## [1.4.44-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve overflow rail scroll while composing a new folder.
+
 ## [1.4.43-beta.1] - 2026-11-01
 
 ### Fixed
@@ -27,6 +39,15 @@ public release log. Packaging unchanged source does not add a changelog entry.
   without depending on the first folder remaining exposed.
 
 Source checkpoint only; CI and native verification remain pending.
+
+## [1.4.24-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed Settings spacing, Models Backtab and folder-row focus/School fixture
+  corrections while preserving native resize, scrollbar tracking and folder-creation guards.
+
+Source checkpoint only; this combined source's CI and native/visual verification remain pending.
 
 ## [1.4.42-beta.1] - 2026-11-01
 
