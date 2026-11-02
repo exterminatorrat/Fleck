@@ -743,22 +743,15 @@
   struct NoteTabTitleFadeMask: View {
     @Environment(\.layoutDirection) private var layoutDirection
 
-    private var gradientStartPoint: UnitPoint {
-      layoutDirection == .leftToRight ? UnitPoint(x: 0, y: 0.5) : UnitPoint(x: 1, y: 0.5)
-    }
-
-    private var gradientEndPoint: UnitPoint {
-      layoutDirection == .leftToRight ? UnitPoint(x: 1, y: 0.5) : UnitPoint(x: 0, y: 0.5)
-    }
-
     var body: some View {
       HStack(spacing: 0) {
         Color.white
         LinearGradient(
           colors: [.white, .clear],
-          startPoint: gradientStartPoint,
-          endPoint: gradientEndPoint
+          startPoint: UnitPoint(x: layoutDirection == .leftToRight ? 0 : 1, y: 0.5),
+          endPoint: UnitPoint(x: layoutDirection == .leftToRight ? 1 : 0, y: 0.5)
         )
+        .environment(\.layoutDirection, .leftToRight)
         .frame(width: TabTitlePresentation.fadeWidth)
       }
       .frame(width: TabTitlePresentation.maximumWidth, alignment: .leading)
@@ -2911,6 +2904,7 @@
     private func overflowControls(scrollProxy: ScrollViewProxy) -> some View {
       HStack(spacing: 0) {
         Button {
+          guard !isCreatingFolder else { return }
           scrollProxy.scrollTo(FolderScrollTarget.leading, anchor: .leading)
         } label: {
           Image(systemName: "chevron.left")
@@ -2923,6 +2917,7 @@
         .help("Show earlier folders")
 
         Button {
+          guard !isCreatingFolder else { return }
           scrollProxy.scrollTo(FolderScrollTarget.trailing, anchor: .trailing)
         } label: {
           Image(systemName: "chevron.right")
@@ -5847,9 +5842,14 @@
     var animatesDisplacement = false
 
     func body(content: Content) -> some View {
-      ReorderDragHost(content: content, begin: begin, began: began, moved: moved,
+      let host = ReorderDragHost(content: content, begin: begin, began: began, moved: moved,
         activate: activate, noteID: noteID, displacement: displacement,
         animatesDisplacement: animatesDisplacement)
+      if noteID != nil {
+        host.accessibilityRepresentation { content }
+      } else {
+        host
+      }
     }
   }
 
