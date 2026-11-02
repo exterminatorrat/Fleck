@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import FleckCore
 import SwiftUI
 import Testing
@@ -395,6 +396,75 @@ struct FolderNavigatorPresentationTests {
     let duplicateEditor = try #require(renameField.currentEditor() as? NSTextView)
     #expect(duplicateEditor === fixture.window.firstResponder)
     #expect(duplicateEditor.string == "Personal")
+    #expect(fixture.state.saveError?.hasPrefix("Could not update folder:") == true)
+    await fixture.closeAndWait()
+  }
+
+  @Test
+  func folderRenameDuplicateErrorPersistsAfterInFlightSelectionSaveCompletes() async throws {
+    let saveGate = FolderNavigatorSelectionSaveGate()
+    let fixture = try await FolderNavigatorFixture(
+      width: 520,
+      names: ["Work", "Personal"],
+      saveOperation: { workspace, _, _, _ in
+        await saveGate.holdIfSelectionMatches(workspace.selectedNoteID)
+        return .committed
+      }
+    )
+    defer { fixture.close() }
+    defer { Task { await saveGate.release() } }
+
+    let folder = try #require(fixture.state.workspace.folders.first)
+    let unfiledNote = try #require(fixture.state.workspace.notes.first { $0.folderID == nil })
+    let renameIdentifier = "folder-rename-\(folder.id.uuidString)"
+    await saveGate.arm(for: unfiledNote.id)
+    let saveStatusObservation = fixture.state.$saveStatus.sink { status in
+      guard status == .saved else { return }
+      Task { await saveGate.appStateSaveDidComplete() }
+    }
+    defer { saveStatusObservation.cancel() }
+
+    try fixture.click(fixture.element(identifier: "folder-unfiled"))
+    await saveGate.waitUntilStarted()
+    try #require(fixture.state.workspace.selectedNoteID == unfiledNote.id)
+    try #require(fixture.state.saveStatus == .saving)
+    try #require(fixture.state.saveError == nil)
+
+    let down = String(UnicodeScalar(UInt32(NSDownArrowFunctionKey))!)
+    try fixture.sendKey(characters: down, keyCode: 125)
+    await fixture.settle()
+    let f2 = String(UnicodeScalar(UInt32(NSF2FunctionKey))!)
+    try fixture.sendKey(characters: f2, keyCode: 0x78)
+    try #require(await fixture.waitForRenameEditor(folderID: folder.id))
+    try #require(fixture.state.workspace.selectedNoteID == unfiledNote.id)
+    try #require(fixture.state.saveStatus == .saving)
+    let renameField = try #require(
+      fixture.textFields.first { $0.accessibilityIdentifier() == renameIdentifier }
+    )
+    try fixture.replaceFocusedTextFieldDraft(with: "Personal")
+    let duplicateEditor = try #require(renameField.currentEditor() as? NSTextView)
+    try #require(duplicateEditor === fixture.window.firstResponder)
+    #expect(duplicateEditor.string == "Personal")
+    try fixture.click(fixture.element(identifier: "folder-unfiled"))
+
+    let clock = ContinuousClock()
+    let errorDeadline = clock.now.advanced(by: .seconds(2))
+    while fixture.state.saveError?.hasPrefix("Could not update folder:") != true,
+      clock.now < errorDeadline
+    {
+      try Task.checkCancellation()
+      fixture.host.layoutSubtreeIfNeeded()
+      let remaining = clock.now.duration(to: errorDeadline)
+      if remaining > .zero { try await Task.sleep(for: min(.milliseconds(25), remaining)) }
+    }
+    try #require(fixture.state.saveError?.hasPrefix("Could not update folder:") == true)
+    #expect(fixture.state.workspace.folders.first?.name == "Work")
+    #expect(fixture.isRenameFieldVisible(identifier: renameIdentifier))
+    #expect(duplicateEditor === fixture.window.firstResponder)
+    #expect(fixture.state.saveStatus == .saving)
+
+    await saveGate.release()
+    await saveGate.waitUntilFinished()
     #expect(fixture.state.saveError?.hasPrefix("Could not update folder:") == true)
     await fixture.closeAndWait()
   }
@@ -1523,7 +1593,8 @@ private final class FolderNavigatorFixture {
   init(
     width: CGFloat,
     names: [String] = ["Work", "Personal"],
-    persistsWorkspace: Bool = false
+    persistsWorkspace: Bool = false,
+    saveOperation: AppState.SaveOperation? = nil
   ) async throws {
     NSApplication.shared.accessibilitySetValue(
       true,
@@ -1532,7 +1603,9 @@ private final class FolderNavigatorFixture {
     root = FileManager.default.temporaryDirectory
       .appendingPathComponent("folder-navigator-" + UUID().uuidString, isDirectory: true)
     let store = LocalStore(rootURL: root)
-    if persistsWorkspace {
+    if let saveOperation {
+      state = AppState(store: store, saveOperation: saveOperation)
+    } else if persistsWorkspace {
       state = AppState(store: store)
     } else {
       state = AppState(
@@ -2114,5 +2187,66 @@ private final class FolderNavigatorFixture {
       )
     }
     return matches
+  }
+}
+
+private actor FolderNavigatorSelectionSaveGate {
+  private var selectedNoteID: UUID?
+  private var started = false
+  private var released = false
+  private var finished = false
+  private var startWaiter: CheckedContinuation<Void, Never>?
+  private var releaseWaiter: CheckedContinuation<Void, Never>?
+  private var finishedWaiter: CheckedContinuation<Void, Never>?
+
+  func arm(for selectedNoteID: UUID) {
+    self.selectedNoteID = selectedNoteID
+  }
+
+  func holdIfSelectionMatches(_ candidateID: UUID?) async {
+    guard let selectedNoteID, candidateID == selectedNoteID else { return }
+    started = true
+    startWaiter?.resume()
+    startWaiter = nil
+    await withCheckedContinuation { continuation in
+      if released {
+        continuation.resume()
+      } else {
+        releaseWaiter = continuation
+      }
+    }
+  }
+
+  func waitUntilStarted() async {
+    await withCheckedContinuation { continuation in
+      if started {
+        continuation.resume()
+      } else {
+        startWaiter = continuation
+      }
+    }
+  }
+
+  func release() {
+    released = true
+    releaseWaiter?.resume()
+    releaseWaiter = nil
+  }
+
+  func appStateSaveDidComplete() {
+    guard started, released, !finished else { return }
+    finished = true
+    finishedWaiter?.resume()
+    finishedWaiter = nil
+  }
+
+  func waitUntilFinished() async {
+    await withCheckedContinuation { continuation in
+      if finished {
+        continuation.resume()
+      } else {
+        finishedWaiter = continuation
+      }
+    }
   }
 }

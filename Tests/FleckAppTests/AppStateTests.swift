@@ -86,6 +86,39 @@ private func waitForSaveCount(
   #expect(state.preferences.onboardingProgress == nil)
 }
 
+@Test @MainActor func successfulRetryClearsUnchangedPersistenceError() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let outcome = AppStateRetrySaveOutcome()
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in try await outcome.save() }
+  )
+  await state.waitUntilInitialLoad()
+  let progress = OnboardingProgress(status: .inProgress(step: .welcome))
+
+  await #expect(throws: AppStateTestError.self) {
+    try await state.persistOnboardingProgress(progress)
+  }
+  try #require(state.saveError != nil)
+  try await state.persistOnboardingProgress(progress)
+  #expect(state.preferences.onboardingProgress == progress)
+  #expect(state.saveError == nil)
+}
+
+private actor AppStateRetrySaveOutcome {
+  private var shouldFail = true
+
+  func save() throws -> LocalStoreSnapshotWriteResult {
+    if shouldFail {
+      shouldFail = false
+      throw AppStateTestError.failed
+    }
+    return .committed
+  }
+}
+
 @Test @MainActor func editingReportsSavingThenSaved() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)

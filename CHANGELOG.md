@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.4-beta.1] - 2026-11-02
+
+### Fixed
+
+- Keep newer folder-validation errors visible when an older unrelated save
+  completes, while still clearing an unchanged persistence error after retry.
+
 ## [1.7.3-beta.1] - 2026-11-02
 
 ### Fixed

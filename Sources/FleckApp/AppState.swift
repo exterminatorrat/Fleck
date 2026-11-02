@@ -96,7 +96,9 @@
       reduceTransparency: false,
       increasedContrast: false
     )
-    @Published var saveError: String?
+    @Published var saveError: String? {
+      didSet { saveErrorGeneration = UUID() }
+    }
     @Published private(set) var selectedNoteFileReferences: [NoteFileReferencePresentation] = []
     @Published private(set) var noteFileReferenceError: String?
     @Published private(set) var startupMigrationError: FleckProductMigrationError?
@@ -181,6 +183,7 @@
     private var persistenceTransactionWaiters: [CheckedContinuation<Void, Never>] = []
     private var initialLoadWaiters: [CheckedContinuation<Void, Never>] = []
     private var saveStatusResetTask: Task<Void, Never>?
+    private var saveErrorGeneration = UUID()
     private var themeSystemObserver: FleckThemeSystemObserver?
     private var agentConnectorStatusGeneration: UInt64 = 0
     private var pendingTrashNotes: [UUID: Note] = [:] {
@@ -2025,6 +2028,7 @@
     }
 
     private func persist(_ snapshot: SaveSnapshot, requiresCommit: Bool = false) async throws {
+      let saveErrorGenerationAtStart = saveErrorGeneration
       do {
         if let beforeSaveOperation {
           await beforeSaveOperation()
@@ -2062,7 +2066,9 @@
         }
       }
       guard !Task.isCancelled else { return }
-      saveError = trashRefreshError?.localizedDescription
+      if saveErrorGeneration == saveErrorGenerationAtStart {
+        saveError = trashRefreshError?.localizedDescription
+      }
       markSaveSucceeded()
     }
 
