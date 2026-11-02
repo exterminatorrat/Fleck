@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.7-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native slider input coverage and current parent repairs without dropping this feature layer.
+
 ## [1.7.6-beta.1] - 2026-11-02
 
 ### Fixed
@@ -76,6 +82,12 @@ Source-only correction. Compilation, tests and native visual behavior remain unv
 This focused layer belongs to the retained-feature 1.7.0-beta.1 release cohort.
 Local compilation, tests and native visual/accessibility behavior remain unverified.
 
+## [1.7.2-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native slider input coverage and current parent repairs without dropping this feature layer.
+
 ## [1.7.1-beta.1] - 2026-11-02
 
 ### Fixed
@@ -93,6 +105,12 @@ Local compilation, tests and native visual/accessibility behavior remain unverif
 This focused layer belongs to the retained-feature 1.7.0-beta.1 release cohort.
 Local compilation, tests and native visual/accessibility behavior remain unverified.
 
+## [1.5.21-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native slider input coverage and current parent repairs without dropping this feature layer.
+
 ## [1.5.20-beta.1] - 2026-11-02
 
 ### Fixed
@@ -106,6 +124,13 @@ Local compilation, tests and native visual/accessibility behavior remain unverif
 
 - Carry verified readiness, Models input, native font and right-to-left title repairs
   into the bottom-only pill source while preserving its standby and routing lifecycle.
+
+## [1.5.20-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native opacity-slider drag, track-click, right-to-left, and disabled
+  coverage when SwiftUI exposes an owned public accessibility slider instead of NSSlider.
 
 ## [1.5.19-beta.1] - 2026-11-02
 
