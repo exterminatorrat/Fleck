@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.18-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve process-validation history while integrating the verified current font parent.
+
 ## [1.7.0-beta.1] - 2026-10-28
 
 ### Fixed
@@ -12,6 +18,28 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 Part of the approved substantial development cohort. Source-only correction; compilation,
 process tests and native behavior remain unverified locally.
+
+## [1.5.17-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native note-tab accessibility activation and explicit physical title-gradient
+  coordinates when integrating the reviewed title parent, retaining optional interface
+  fonts and native font-picker Escape handling.
+
+## [1.5.8-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve the verified right-to-left tab-title fade correction alongside native
+  font-picker Escape handling when integrating the current parent source.
+
+## [1.5.7-beta.1] - 2026-11-02
+
+### Fixed
+
+- Route Escape from the native font-family table to its owning picker so cancelling
+  dismisses the picker without committing a font change.
 
 ## [1.5.6-beta.1] - 2026-10-27
 
@@ -23,6 +51,22 @@ process tests and native behavior remain unverified locally.
 
 Source-only review correction. Compilation, tests, visual/accessibility inspection and native
 behavior remain unverified locally.
+
+## [1.4.45-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve complete note-tab button accessibility through the native drag host,
+  including title labels and activation, without replacing folder drag semantics.
+- Resolve only the decorative fade gradient in physical coordinates so its semantic
+  trailing edge remains stable across native layout-direction handling.
+
+## [1.4.44-beta.1] - 2026-11-02
+
+### Fixed
+
+- Keep the tab-title fade at the semantic trailing edge in right-to-left layouts
+  without reversing the mirrored gradient twice.
 
 ## [1.4.43-beta.1] - 2026-11-01
 
