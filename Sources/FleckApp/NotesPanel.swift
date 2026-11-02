@@ -739,6 +739,41 @@
     }
   }
 
+  private struct TabStripContentWidthObserver: NSViewRepresentable {
+    let onWidthChange: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> WidthObserverView {
+      return WidthObserverView(onWidthChange: onWidthChange)
+    }
+
+    func updateNSView(_ view: WidthObserverView, context: Context) {
+      view.onWidthChange = onWidthChange
+    }
+
+    final class WidthObserverView: NSView {
+      var onWidthChange: (CGFloat) -> Void
+      private var measuredWidth: CGFloat?
+
+      init(onWidthChange: @escaping (CGFloat) -> Void) {
+        self.onWidthChange = onWidthChange
+        super.init(frame: .zero)
+      }
+
+      required init?(coder: NSCoder) { nil }
+
+      override func layout() {
+        super.layout()
+        let width = bounds.width
+        guard width.isFinite, measuredWidth != width else { return }
+        measuredWidth = width
+        DispatchQueue.main.async { [weak self] in
+          guard let self, self.measuredWidth == width else { return }
+          self.onWidthChange(width)
+        }
+      }
+    }
+  }
+
   enum TabTitlePresentation {
     static let maximumWidth: CGFloat = 160
     static let fadeWidth: CGFloat = 12
@@ -787,14 +822,6 @@
       .frame(maxWidth: TabTitlePresentation.maximumWidth, alignment: .leading)
       .fixedSize(horizontal: true, vertical: false)
       .accessibilityLabel(title)
-    }
-  }
-
-  private struct TabStripContentWidthKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-      value = max(value, nextValue())
     }
   }
 
@@ -1851,17 +1878,14 @@
                 }
               }
               .padding(.horizontal, 12)
+              .fixedSize(horizontal: true, vertical: false)
               .background {
-                GeometryReader { content in
-                  Color.clear.preference(
-                    key: TabStripContentWidthKey.self,
-                    value: content.size.width
-                  )
+                TabStripContentWidthObserver { width in
+                  tabStripContentWidth = width
                 }
               }
               .frame(height: 37, alignment: .center)
               .animation(motion.spatial, value: visibleNotes.map(\.id))
-              .fixedSize(horizontal: true, vertical: false)
               .frame(minWidth: tabViewportWidth, alignment: .leading)
               }
                 Color.clear
@@ -1915,9 +1939,6 @@
           if wasOverflowing && !isOverflowing {
             scrollProxy.scrollTo(TabScrollTarget.leading, anchor: .leading)
           }
-        }
-        .onPreferenceChange(TabStripContentWidthKey.self) {
-          tabStripContentWidth = $0
         }
         }
         .frame(height: 37)

@@ -3,6 +3,14 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.8-beta.1] - 2026-11-02
+
+### Fixed
+
+- Publish tab-strip content-width changes after AppKit layout instead of mutating SwiftUI
+  state from the preference callback during native resize constraints.
+- Restore the prior accessibility mode after the tab-strip native fixture closes.
+
 ## [1.7.7-beta.1] - 2026-11-02
 
 ### Fixed

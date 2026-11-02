@@ -299,7 +299,8 @@ private func nativeTabDragMaximumPixelComponentDelta(from source: NSImage, to re
   #expect(tabStrip.contains("GeometryReader { proxy in"))
   #expect(tabStrip.contains("TabOverflowPresentation.overflows("))
   #expect(tabStrip.contains("TabOverflowPresentation.tabViewportWidth("))
-  #expect(tabStrip.contains("onPreferenceChange(TabStripContentWidthKey.self)"))
+  #expect(tabStrip.contains("TabStripContentWidthObserver { width in"))
+  #expect(tabStrip.contains("tabStripContentWidth = width"))
   #expect(tabStrip.contains("if hasOverflow"))
   #expect(tabStrip.contains(".frame(width: tabViewportWidth, alignment: .leading)"))
   #expect(tabStrip.contains(".frame(height: 37)"))
@@ -1038,6 +1039,7 @@ private final class NotesPanelTitleFixture {
   let runtime: DictationRuntime
   let host: NSHostingView<AnyView>
   let window: NSWindow
+  private let previousAccessibilityValue: Any?
   private var layoutDirection: LayoutDirection
   private var dynamicTypeSize: DynamicTypeSize
 
@@ -1047,6 +1049,13 @@ private final class NotesPanelTitleFixture {
     layoutDirection: LayoutDirection = .leftToRight,
     dynamicTypeSize: DynamicTypeSize = .large
   ) async {
+    let application = NSApplication.shared
+    let accessibilityAttribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+    previousAccessibilityValue = application.accessibilityAttributeValue(accessibilityAttribute)
+    application.accessibilitySetValue(
+      true,
+      forAttribute: accessibilityAttribute
+    )
     root = FileManager.default.temporaryDirectory
       .appendingPathComponent("note-tab-title-" + UUID().uuidString, isDirectory: true)
     state = AppState(
@@ -1121,6 +1130,10 @@ private final class NotesPanelTitleFixture {
     window.contentView = nil
     window.orderOut(nil)
     window.close()
+    NSApplication.shared.accessibilitySetValue(
+      previousAccessibilityValue,
+      forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+    )
     let runtime = self.runtime
     let root = self.root
     Task {
