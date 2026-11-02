@@ -85,6 +85,8 @@ EOF
 </dict></plist>
 PLIST
 printf '%s\n' 'fixture mark' > "$fixture_root/Assets/fleck-mark.png"
+printf '%s\n' 'fixture light icon' > "$fixture_root/Assets/FleckAppIcon.icns"
+printf '%s\n' 'fixture dark icon' > "$fixture_root/Assets/FleckAppIconDark.icns"
 /bin/cat > "$fixture_root/Scripts/build-parakeet-test-app.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -330,8 +332,11 @@ printf '%s\n' 'Xcode fixture'
 EOF
 /bin/cat > "$development_tools/xcrun" <<'EOF'
 #!/usr/bin/env bash
-[[ "$1" == '--find' && "$2" == 'swift' ]]
-printf '%s\n' '/usr/bin/swift'
+if [[ "$1" == '--find' && "$2" == 'swift' ]]; then
+  printf '%s\n' '/usr/bin/swift'
+  exit 0
+fi
+exec /usr/bin/xcrun "$@"
 EOF
 /bin/cat > "$development_tools/swift" <<'EOF'
 #!/usr/bin/env bash
@@ -363,8 +368,12 @@ if /usr/bin/env \
   printf '%s\n' 'FAIL: development publication replacement failpoint did not stop the build' >&2
   exit 1
 fi
-/usr/bin/grep -Fq 'injected failure after development publication replacement' \
-  "$test_root/development-replaced.err"
+if ! /usr/bin/grep -Fq 'injected failure after development publication replacement' \
+  "$test_root/development-replaced.err"; then
+  /bin/cat "$test_root/development-replaced.err" >&2
+  printf '%s\n' 'FAIL: development packager failed before the publication failpoint' >&2
+  exit 1
+fi
 test ! -e "$development_result"
 development_replacement=''
 for candidate in "$fixture_root/.build"/Fleck\ *\ Build\ *.app; do
