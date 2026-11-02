@@ -1284,38 +1284,59 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
       #expect(try accessibilityFlag(readinessAction(index), "accessibilityEnabled"))
     }
     let keyboardWindows = [window, popoverWindow]
-    let firstActionIsFocused = try accessibilityFlag(readinessAction(0), "accessibilityFocused")
-    if !firstActionIsFocused {
+    let usesFullKeyboardAccess = application.isFullKeyboardAccessEnabled
+    print("Readiness full keyboard access: \(usesFullKeyboardAccess)")
+    if usesFullKeyboardAccess {
+      let firstActionIsFocused = try accessibilityFlag(readinessAction(0), "accessibilityFocused")
+      if !firstActionIsFocused {
+        try sendSettingsKey(48, characters: "\t", ownedWindows: keyboardWindows)
+        await settleSettingsHost(popover)
+      }
+      try #require(try accessibilityFlag(readinessAction(0), "accessibilityFocused"))
+      try sendSettingsKey(49, characters: " ", ownedWindows: keyboardWindows)
+      await settleSettingsHost(popover)
+      #expect(openedSettings.map(\.pane) == [.microphone])
+
       try sendSettingsKey(48, characters: "\t", ownedWindows: keyboardWindows)
       await settleSettingsHost(popover)
+      try #require(try accessibilityFlag(readinessAction(1), "accessibilityFocused"))
+      try sendSettingsKey(49, characters: " ", ownedWindows: keyboardWindows)
+      await settleSettingsHost(popover)
+      #expect(openedSettings.map(\.pane) == [.microphone, .speechRecognition])
+
+      try sendSettingsKey(
+        48, characters: "\u{19}", modifierFlags: [.shift], ownedWindows: keyboardWindows
+      )
+      await settleSettingsHost(popover)
+      #expect(try accessibilityFlag(readinessAction(0), "accessibilityFocused"))
+      try sendSettingsKey(48, characters: "\t", ownedWindows: keyboardWindows)
+      await settleSettingsHost(popover)
+      #expect(try accessibilityFlag(readinessAction(1), "accessibilityFocused"))
+      try sendSettingsKey(48, characters: "\t", ownedWindows: keyboardWindows)
+      await settleSettingsHost(popover)
+      try #require(try accessibilityFlag(readinessAction(2), "accessibilityFocused"))
+      try sendSettingsKey(49, characters: " ", ownedWindows: keyboardWindows)
+      await settleSettingsHost(popover)
+      #expect(fixture.monitor.requestCount == 1)
+      #expect(openedSettings.map(\.pane) == [.microphone, .speechRecognition, .inputMonitoring])
+    } else {
+      for index in actionTitles.indices {
+        let action = try readinessAction(index)
+        let selector = NSSelectorFromString("accessibilityPerformPress")
+        try #require(action.responds(to: selector))
+        _ = action.perform(selector)
+        await settleSettingsHost(popover)
+        switch index {
+        case 0:
+          #expect(openedSettings.map(\.pane) == [.microphone])
+        case 1:
+          #expect(openedSettings.map(\.pane) == [.microphone, .speechRecognition])
+        default:
+          #expect(openedSettings.map(\.pane) == [.microphone, .speechRecognition, .inputMonitoring])
+        }
+      }
+      #expect(fixture.monitor.requestCount == 1)
     }
-    try #require(try accessibilityFlag(readinessAction(0), "accessibilityFocused"))
-    try sendSettingsKey(49, characters: " ", ownedWindows: keyboardWindows)
-    await settleSettingsHost(popover)
-    #expect(openedSettings.map(\.pane) == [.microphone])
-
-    try sendSettingsKey(48, characters: "\t", ownedWindows: keyboardWindows)
-    await settleSettingsHost(popover)
-    try #require(try accessibilityFlag(readinessAction(1), "accessibilityFocused"))
-    try sendSettingsKey(49, characters: " ", ownedWindows: keyboardWindows)
-    await settleSettingsHost(popover)
-    #expect(openedSettings.map(\.pane) == [.microphone, .speechRecognition])
-
-    try sendSettingsKey(
-      48, characters: "\u{19}", modifierFlags: [.shift], ownedWindows: keyboardWindows
-    )
-    await settleSettingsHost(popover)
-    #expect(try accessibilityFlag(readinessAction(0), "accessibilityFocused"))
-    try sendSettingsKey(48, characters: "\t", ownedWindows: keyboardWindows)
-    await settleSettingsHost(popover)
-    #expect(try accessibilityFlag(readinessAction(1), "accessibilityFocused"))
-    try sendSettingsKey(48, characters: "\t", ownedWindows: keyboardWindows)
-    await settleSettingsHost(popover)
-    try #require(try accessibilityFlag(readinessAction(2), "accessibilityFocused"))
-    try sendSettingsKey(49, characters: " ", ownedWindows: keyboardWindows)
-    await settleSettingsHost(popover)
-    #expect(fixture.monitor.requestCount == 1)
-    #expect(openedSettings.map(\.pane) == [.microphone, .speechRecognition, .inputMonitoring])
 
     #if DEBUG
       let observationModality = SettingsSearchInputModality.shared
@@ -1373,15 +1394,17 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
     )
     try #require(!popoverWindow.isVisible)
     try #require(application.keyWindow === window)
-    #expect(
-      settingsView(
-        withAccessibilityIdentifier: "settings-keyboard-focus-dictation-status", in: host
-      ) != nil
-    )
+    if usesFullKeyboardAccess {
+      #expect(
+        settingsView(
+          withAccessibilityIdentifier: "settings-keyboard-focus-dictation-status", in: host
+        ) != nil
+      )
+    }
     let triggers = settingsAccessibilityElements(
       in: host, identifier: "settings-dictation-readiness-button"
     )
-    let focusedAXTarget: String = {
+    func focusedAXTarget() -> String {
       let focusSelector = NSSelectorFromString("accessibilityFocusedUIElement")
       let windowSelector = NSSelectorFromString("accessibilityWindow")
       let identifierSelector = NSSelectorFromString("accessibilityIdentifier")
@@ -1399,17 +1422,23 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
       case "settings-search-field": return "other"
       default: return "unavailable"
       }
-    }()
-    print("[F93-readiness-focused-ax] target=\(focusedAXTarget)")
+    }
+    print("[F93-readiness-focused-ax] target=\(focusedAXTarget())")
     try #require(triggers.count == 1)
     let trigger = try #require(triggers.first)
-    #expect(try accessibilityFlag(trigger, "accessibilityFocused"))
-    #expect(
-      settingsView(
-        withAccessibilityIdentifier: "settings-keyboard-focus-cue-dictation-status", in: host
-      ) != nil
+    let focusCue = settingsView(
+      withAccessibilityIdentifier: "settings-keyboard-focus-cue-dictation-status", in: host
     )
-    try sendSettingsKey(49, characters: " ", ownedWindows: [window])
+    if usesFullKeyboardAccess {
+      #expect(focusedAXTarget() == "readiness-trigger")
+      #expect(focusCue != nil)
+      try sendSettingsKey(49, characters: " ", ownedWindows: [window])
+    } else {
+      #expect(focusCue == nil)
+      let selector = NSSelectorFromString("accessibilityPerformPress")
+      try #require(trigger.responds(to: selector))
+      _ = trigger.perform(selector)
+    }
     await settleSettingsHost(host)
     let reopenedWindow = try #require(
       application.windows.first {
@@ -1430,8 +1459,15 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
       in: host, identifier: "settings-dictation-readiness-button"
     )
     try #require(returnedTriggers.count == 1)
-    let returnedTrigger = try #require(returnedTriggers.first)
-    #expect(try accessibilityFlag(returnedTrigger, "accessibilityFocused"))
+    let returnedFocusCue = settingsView(
+      withAccessibilityIdentifier: "settings-keyboard-focus-cue-dictation-status", in: host
+    )
+    if usesFullKeyboardAccess {
+      #expect(focusedAXTarget() == "readiness-trigger")
+      #expect(returnedFocusCue != nil)
+    } else {
+      #expect(returnedFocusCue == nil)
+    }
   }
 }
 
@@ -2129,11 +2165,35 @@ private func settingsSidebarSurface(of view: NSView) -> NSView? {
 private func settingsView(withAccessibilityIdentifier identifier: String, in view: NSView)
   -> NSView?
 {
-  if view.accessibilityIdentifier() == identifier {
+  if ((view as? SettingsSearchProbe.ProbeView)?.probeIdentifier
+    ?? view.accessibilityIdentifier()) == identifier
+  {
     return view
   }
   return settingsSidebarDescendants(of: view)
-    .first { $0.accessibilityIdentifier() == identifier }
+    .first {
+      (($0 as? SettingsSearchProbe.ProbeView)?.probeIdentifier
+        ?? $0.accessibilityIdentifier()) == identifier
+    }
+}
+
+@Test @MainActor
+func SettingsSearchProbeKeepsPrivateIdentityWhenAccessibilityIdentifierChanges() async throws {
+  let host = NSHostingView(
+    rootView: SettingsSearchProbe(identifier: "private-settings-probe")
+      .frame(width: 40, height: 20)
+  )
+  host.setFrameSize(NSSize(width: 40, height: 20))
+  await settleSettingsHost(host)
+  let probes = settingsSidebarDescendants(of: host).compactMap {
+    $0 as? SettingsSearchProbe.ProbeView
+  }
+  try #require(probes.count == 1)
+  let probe = try #require(probes.first)
+  probe.setAccessibilityIdentifier("public-ancestor")
+  #expect(probe.accessibilityIdentifier() == "public-ancestor")
+  #expect(settingsView(withAccessibilityIdentifier: "private-settings-probe", in: host) === probe)
+  #expect(settingsView(withAccessibilityIdentifier: "public-ancestor", in: host) == nil)
 }
 
 @MainActor
@@ -2369,7 +2429,7 @@ private func settingsColorDistance(_ lhs: NSColor, _ rhs: NSColor) -> CGFloat {
   #expect(settings.contains("ModelsBrowserView("))
   #expect(!settings.contains("openWindow(id: ModelLibraryLayout.windowIdentifier)"))
   #expect(!settings.contains("private var modelLibraryDestination: some View"))
-  #expect(settings.contains(".settingsSearchAnchor(.dictationStatus, request: searchRequest)"))
+  #expect(settings.contains(".dictationStatus, request: searchRequest,"))
   #expect(settings.contains("isReadinessPopoverPresented = result.target == .dictationStatus"))
   #expect(settings.contains("proxy.scrollTo(pageScrollAnchor, anchor: isTransferFooter ? .bottom : .center)"))
   #expect(settings.contains(".id(SettingsSearchTarget.vocabularyTransferFooter)"))
