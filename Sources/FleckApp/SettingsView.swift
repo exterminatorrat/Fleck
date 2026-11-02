@@ -2449,6 +2449,10 @@
       .onDisappear {
         hoveredSortOrder = nil
         focusedSortOrder = nil
+        guard isViewPresent, selectedSection == .vocabulary, isSearchExpanded,
+          !isOptionsPresented, !hasModalPresentation
+        else { return }
+        isSearchFocused = true
       }
     }
 

@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.10-beta.1] - 2026-11-02
+
+### Fixed
+
+- Return keyboard input to the expanded vocabulary search field after its sort popover
+  closes, provided that the vocabulary view still owns focus and no modal is presented.
+
 ## [1.7.9-beta.1] - 2026-11-02
 
 ### Fixed
