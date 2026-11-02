@@ -3,6 +3,14 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.17-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native note-tab accessibility activation and explicit physical title-gradient
+  coordinates when integrating the reviewed title parent, retaining optional interface
+  fonts and native font-picker Escape handling.
+
 ## [1.5.8-beta.1] - 2026-11-02
 
 ### Fixed
@@ -27,6 +35,15 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 Source-only review correction. Compilation, tests, visual/accessibility inspection and native
 behavior remain unverified locally.
+
+## [1.4.45-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve complete note-tab button accessibility through the native drag host,
+  including title labels and activation, without replacing folder drag semantics.
+- Resolve only the decorative fade gradient in physical coordinates so its semantic
+  trailing edge remains stable across native layout-direction handling.
 
 ## [1.4.44-beta.1] - 2026-11-02
 
