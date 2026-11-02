@@ -1138,6 +1138,11 @@
               readinessReturnObservationSource,
               "[SEAM-write] keyboard=\(isKeyboardFocused) accessibility=\(isFocused) native=\(nativeControlIdentifier != nil) keyMatches=\(NSApp.keyWindow === window) cancelled=\(Task.isCancelled)"
             )
+            await Task.yield()
+            inputModality.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[SEAM-after-suspension] keyboard=\(isKeyboardFocused) accessibility=\(isFocused) cancelled=\(Task.isCancelled)"
+            )
           }
           #endif
         }

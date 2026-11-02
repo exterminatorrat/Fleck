@@ -144,6 +144,8 @@ private struct ReadinessFocusSeamDiagnostic: View {
       SettingsSearchInputModality.shared.record(isKeyboardInput: true, windowNumber: window.windowNumber)
       nativeFocused = true
       print("SEAM-DELIVERY variant=6 focusedAfter=\(nativeFocused) cancelled=\(Task.isCancelled)")
+      await Task.yield()
+      print("SEAM-DELIVERY variant=6 afterSuspension focused=\(nativeFocused) cancelled=\(Task.isCancelled)")
     }
   }
 }

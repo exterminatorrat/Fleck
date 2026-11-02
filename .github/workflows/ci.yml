@@ -28,5 +28,5 @@ jobs:
       - name: Report diagnostic observations without final validation claim
         if: always()
         run: |
-          grep -E 'SEAM |matched test count|Test run with|^error:|✘' "$RUNNER_TEMP/readiness-seam.log" || true
+          grep -E 'SEAM|F93-readiness-return|matched test count|Test run with|^error:|✘' "$RUNNER_TEMP/readiness-seam.log" || true
           printf '%s\n' 'Diagnostic only: no required full graph, package, or product validation verdict.' >> "$GITHUB_STEP_SUMMARY"
