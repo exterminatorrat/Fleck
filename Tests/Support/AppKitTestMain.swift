@@ -3,6 +3,381 @@ import Darwin
 import Foundation
 import Testing
 
+private enum ModelsClickProbeNotification {
+  static let arm = Notification.Name("org.fleck.appkit-test-host.models-click.arm")
+  static let windowEvent = Notification.Name(
+    "org.fleck.appkit-test-host.models-click.window-event"
+  )
+  static let disarm = Notification.Name("org.fleck.appkit-test-host.models-click.disarm")
+  static let trackingMouseUpReceipt = Notification.Name(
+    "org.fleck.appkit-test-host.models-click.tracking-mouse-up-receipt"
+  )
+}
+
+@MainActor
+private struct ModelsClickProbeEvent {
+  let type: NSEvent.EventType
+  let windowNumber: Int
+  let eventNumber: Int
+  let timestamp: TimeInterval
+  let x: Double
+  let y: Double
+  let modifierFlags: NSEvent.ModifierFlags.RawValue
+  let clickCount: Int
+
+  init?(prefix: String, windowNumber: Int, userInfo: [AnyHashable: Any]) {
+    guard let rawType = userInfo["\(prefix).type"] as? NSNumber,
+      let eventNumber = userInfo["\(prefix).eventNumber"] as? NSNumber,
+      let timestamp = userInfo["\(prefix).timestamp"] as? NSNumber,
+      let x = userInfo["\(prefix).x"] as? NSNumber,
+      let y = userInfo["\(prefix).y"] as? NSNumber,
+      let modifierFlags = userInfo["\(prefix).flags"] as? NSNumber,
+      let clickCount = userInfo["\(prefix).clickCount"] as? NSNumber
+    else {
+      return nil
+    }
+
+    let expectedType: NSEvent.EventType
+    switch prefix {
+    case "down":
+      expectedType = .leftMouseDown
+    case "up":
+      expectedType = .leftMouseUp
+    case "event":
+      if rawType.intValue == Int(NSEvent.EventType.leftMouseDown.rawValue) {
+        expectedType = .leftMouseDown
+      } else if rawType.intValue == Int(NSEvent.EventType.leftMouseUp.rawValue) {
+        expectedType = .leftMouseUp
+      } else {
+        return nil
+      }
+    default:
+      return nil
+    }
+    guard rawType.intValue == Int(expectedType.rawValue) else { return nil }
+
+    type = expectedType
+    self.windowNumber = windowNumber
+    self.eventNumber = eventNumber.intValue
+    self.timestamp = timestamp.doubleValue
+    self.x = x.doubleValue
+    self.y = y.doubleValue
+    self.modifierFlags = modifierFlags.uintValue
+    self.clickCount = clickCount.intValue
+  }
+
+  func matches(_ event: NSEvent, in window: NSWindow) -> Bool {
+    guard event.type == type,
+      type == .leftMouseDown || type == .leftMouseUp,
+      event.window === window
+    else {
+      return false
+    }
+    return event.windowNumber == windowNumber
+      && window.windowNumber == windowNumber
+      && event.eventNumber == eventNumber
+      && event.timestamp == timestamp
+      && Double(event.locationInWindow.x) == x
+      && Double(event.locationInWindow.y) == y
+      && event.modifierFlags.rawValue == modifierFlags
+      && event.clickCount == clickCount
+  }
+
+  func hasSameIdentity(as other: ModelsClickProbeEvent) -> Bool {
+    type == other.type
+      && windowNumber == other.windowNumber
+      && eventNumber == other.eventNumber
+      && timestamp == other.timestamp
+      && x == other.x
+      && y == other.y
+      && modifierFlags == other.modifierFlags
+      && clickCount == other.clickCount
+  }
+
+  var typeName: String {
+    type == .leftMouseDown ? "leftMouseDown" : "leftMouseUp"
+  }
+
+  var diagnosticIdentity: String {
+    "type=\(typeName),eventNumber=\(eventNumber),timestamp=\(timestamp),"
+      + "point=\(x):\(y),flags=\(modifierFlags),clickCount=\(clickCount)"
+  }
+}
+
+@MainActor
+private struct ArmedModelsClick {
+  let generation: UUID
+  let scenario: String
+  let ordinal: Int
+  let targetKind: String
+  let window: NSWindow
+  let windowNumber: Int
+  let down: ModelsClickProbeEvent
+  let up: ModelsClickProbeEvent
+}
+
+@MainActor
+private struct ModelsClickProbeState {
+  var downDispatchActive = false
+  var downSuperDispatchReturned = false
+  var upSuperDispatchReturned = false
+  var nextEventUpSeen = false
+  var nextEventUpDequeued = false
+  var nextEventUpInTracking = false
+  var nextEventUpDuringDown = false
+  var nextEventUpDequeuedInTracking = false
+  var nextEventUpDequeuedDuringDown = false
+  var nextEventUpDequeuedInTrackingDuringDown = false
+  var trackingMouseUpEvent: NSEvent?
+  var qualifiedTrackingReceiptPosted = false
+}
+
+@MainActor
+@objc(AppKitTestProbeApplication)
+final class AppKitTestProbeApplication: NSApplication {
+  private var hasInstalledModelsClickObservers = false
+  private var armedModelsClick: ArmedModelsClick?
+  private var modelsClickState = ModelsClickProbeState()
+
+  func installModelsClickObservers() {
+    guard !hasInstalledModelsClickObservers else { return }
+    hasInstalledModelsClickObservers = true
+    let center = NotificationCenter.default
+    center.addObserver(
+      self,
+      selector: #selector(armModelsClick(_:)),
+      name: ModelsClickProbeNotification.arm,
+      object: nil
+    )
+    center.addObserver(
+      self,
+      selector: #selector(recordModelsWindowEvent(_:)),
+      name: ModelsClickProbeNotification.windowEvent,
+      object: nil
+    )
+    center.addObserver(
+      self,
+      selector: #selector(disarmModelsClick(_:)),
+      name: ModelsClickProbeNotification.disarm,
+      object: nil
+    )
+  }
+
+  override func nextEvent(
+    matching mask: NSEvent.EventTypeMask,
+    until expiration: Date?,
+    inMode mode: RunLoop.Mode,
+    dequeue: Bool
+  ) -> NSEvent? {
+    let event = super.nextEvent(
+      matching: mask,
+      until: expiration,
+      inMode: mode,
+      dequeue: dequeue
+    )
+    if let event,
+      let armedModelsClick,
+      armedModelsClick.up.matches(event, in: armedModelsClick.window)
+    {
+      modelsClickState.nextEventUpSeen = true
+      if dequeue {
+        modelsClickState.nextEventUpDequeued = true
+        if mode == .eventTracking {
+          modelsClickState.nextEventUpDequeuedInTracking = true
+        }
+        if modelsClickState.downDispatchActive {
+          modelsClickState.nextEventUpDequeuedDuringDown = true
+        }
+        if mode == .eventTracking && modelsClickState.downDispatchActive {
+          modelsClickState.nextEventUpDequeuedInTrackingDuringDown = true
+          if modelsClickState.trackingMouseUpEvent == nil {
+            modelsClickState.trackingMouseUpEvent = event
+          }
+        }
+      }
+      if mode == .eventTracking {
+        modelsClickState.nextEventUpInTracking = true
+      }
+      if modelsClickState.downDispatchActive {
+        modelsClickState.nextEventUpDuringDown = true
+      }
+      writeModelsClickProbe(
+        "scenario=\(armedModelsClick.scenario) ordinal=\(armedModelsClick.ordinal) "
+          + "target=\(armedModelsClick.targetKind) route=NSApplication.nextEvent "
+          + "type=leftMouseUp window=\(windowIdentity(armedModelsClick.window)) "
+          + "identity={\(armedModelsClick.up.diagnosticIdentity)} mask=\(mask.rawValue) "
+          + "dequeue=\(dequeue) mode=\(mode.rawValue) "
+          + "eventTracking=\(mode == .eventTracking) "
+          + "duringOwnedWindowSynchronousDown=\(modelsClickState.downDispatchActive) "
+          + "downSuperDispatchReturned=\(modelsClickState.downSuperDispatchReturned)"
+      )
+    }
+    return event
+  }
+
+  @objc private func armModelsClick(_ notification: Notification) {
+    guard let window = notification.object as? NSWindow,
+      let userInfo = notification.userInfo,
+      let generationValue = userInfo["generation"] as? String,
+      let generation = UUID(uuidString: generationValue),
+      let scenario = userInfo["scenario"] as? String,
+      let ordinal = (userInfo["ordinal"] as? NSNumber)?.intValue,
+      let targetKind = userInfo["targetKind"] as? String,
+      let windowNumber = (userInfo["windowNumber"] as? NSNumber)?.intValue,
+      windowNumber == window.windowNumber,
+      let down = ModelsClickProbeEvent(
+        prefix: "down",
+        windowNumber: windowNumber,
+        userInfo: userInfo
+      ),
+      let up = ModelsClickProbeEvent(
+        prefix: "up",
+        windowNumber: windowNumber,
+        userInfo: userInfo
+      ),
+      down.eventNumber > 0,
+      up.eventNumber > down.eventNumber
+    else {
+      writeModelsClickProbe("route=armRejected")
+      return
+    }
+    guard armedModelsClick == nil else {
+      writeModelsClickProbe("route=armRejected reason=clickAlreadyArmed")
+      return
+    }
+    armedModelsClick = ArmedModelsClick(
+      generation: generation,
+      scenario: scenario,
+      ordinal: ordinal,
+      targetKind: targetKind,
+      window: window,
+      windowNumber: windowNumber,
+      down: down,
+      up: up
+    )
+    modelsClickState = ModelsClickProbeState()
+    writeModelsClickProbe(
+      "scenario=\(scenario) ordinal=\(ordinal) target=\(targetKind) route=armed "
+        + "window=\(windowIdentity(window)) down={\(down.diagnosticIdentity)} "
+        + "up={\(up.diagnosticIdentity)}"
+    )
+  }
+
+  @objc private func recordModelsWindowEvent(_ notification: Notification) {
+    guard let armedModelsClick,
+      let window = notification.object as? NSWindow,
+      window === armedModelsClick.window,
+      let userInfo = notification.userInfo,
+      let phase = userInfo["phase"] as? String,
+      let generation = userInfo["generation"] as? String,
+      generation == armedModelsClick.generation.uuidString,
+      let windowNumber = (userInfo["windowNumber"] as? NSNumber)?.intValue,
+      let event = ModelsClickProbeEvent(
+        prefix: "event",
+        windowNumber: windowNumber,
+        userInfo: userInfo
+      ),
+      windowNumber == armedModelsClick.windowNumber,
+      event.hasSameIdentity(as: armedModelsClick.down)
+        || event.hasSameIdentity(as: armedModelsClick.up)
+    else {
+      return
+    }
+
+    let isDown = event.type == .leftMouseDown
+    switch phase {
+    case "entry":
+      if isDown {
+        modelsClickState.downDispatchActive = true
+      }
+    case "return":
+      if isDown {
+        modelsClickState.downDispatchActive = false
+        modelsClickState.downSuperDispatchReturned = true
+        if let event = modelsClickState.trackingMouseUpEvent,
+          modelsClickState.nextEventUpDequeuedInTrackingDuringDown,
+          modelsClickState.downSuperDispatchReturned,
+          !modelsClickState.qualifiedTrackingReceiptPosted
+        {
+          modelsClickState.qualifiedTrackingReceiptPosted = true
+          NotificationCenter.default.post(
+            name: ModelsClickProbeNotification.trackingMouseUpReceipt,
+            object: event,
+            userInfo: [
+              "generation": armedModelsClick.generation.uuidString,
+              "windowNumber": armedModelsClick.windowNumber,
+              "dequeue": true,
+              "mode": RunLoop.Mode.eventTracking.rawValue,
+              "dequeuedDuringOwnedWindowSynchronousDown": true,
+              "downSuperDispatchReturned": true,
+            ]
+          )
+          writeModelsClickProbe(
+            "scenario=\(armedModelsClick.scenario) ordinal=\(armedModelsClick.ordinal) "
+              + "target=\(armedModelsClick.targetKind) "
+              + "route=qualifiedTrackingReceipt "
+              + "generation=\(armedModelsClick.generation.uuidString) "
+              + "window=\(windowIdentity(armedModelsClick.window)) "
+              + "identity={\(armedModelsClick.up.diagnosticIdentity)} "
+              + "dequeue=true mode=\(RunLoop.Mode.eventTracking.rawValue) "
+              + "dequeuedDuringOwnedWindowSynchronousDown=true "
+              + "downSuperDispatchReturned=true"
+          )
+        }
+      } else {
+        modelsClickState.upSuperDispatchReturned = true
+      }
+    default:
+      return
+    }
+    writeModelsClickProbe(
+      "scenario=\(armedModelsClick.scenario) ordinal=\(armedModelsClick.ordinal) "
+        + "target=\(armedModelsClick.targetKind) route=NSWindow.sendEvent "
+        + "phase=\(phase) type=\(event.typeName) "
+        + "window=\(windowIdentity(window)) identity={\(event.diagnosticIdentity)} "
+        + "downDispatchActive=\(modelsClickState.downDispatchActive) "
+        + "downSuperDispatchReturned=\(modelsClickState.downSuperDispatchReturned) "
+        + "upSuperDispatchReturned=\(modelsClickState.upSuperDispatchReturned)"
+        + " qualifiedTrackingReceiptPosted=\(modelsClickState.qualifiedTrackingReceiptPosted)"
+    )
+  }
+
+  @objc private func disarmModelsClick(_ notification: Notification) {
+    guard let armedModelsClick,
+      let window = notification.object as? NSWindow,
+      window === armedModelsClick.window,
+      let generation = notification.userInfo?["generation"] as? String,
+      generation == armedModelsClick.generation.uuidString
+    else {
+      return
+    }
+    writeModelsClickProbe(
+      "scenario=\(armedModelsClick.scenario) ordinal=\(armedModelsClick.ordinal) "
+        + "target=\(armedModelsClick.targetKind) route=summary "
+        + "window=\(windowIdentity(window)) upNextEventSeen=\(modelsClickState.nextEventUpSeen) "
+        + "upDequeued=\(modelsClickState.nextEventUpDequeued) "
+        + "upInEventTracking=\(modelsClickState.nextEventUpInTracking) "
+        + "upDuringOwnedWindowSynchronousDown=\(modelsClickState.nextEventUpDuringDown) "
+        + "upDequeuedInEventTracking=\(modelsClickState.nextEventUpDequeuedInTracking) "
+        + "upDequeuedDuringOwnedWindowSynchronousDown=\(modelsClickState.nextEventUpDequeuedDuringDown) "
+        + "upDequeuedInEventTrackingDuringOwnedWindowSynchronousDown="
+        + "\(modelsClickState.nextEventUpDequeuedInTrackingDuringDown) "
+        + "downSuperDispatchReturned=\(modelsClickState.downSuperDispatchReturned) "
+        + "upSuperDispatchReturned=\(modelsClickState.upSuperDispatchReturned)"
+    )
+    self.armedModelsClick = nil
+    modelsClickState = ModelsClickProbeState()
+  }
+
+  private func writeModelsClickProbe(_ fields: String) {
+    FileHandle.standardError.write(Data("MODELS_CLICK_PROBE \(fields)\n".utf8))
+  }
+
+  private func windowIdentity(_ window: NSWindow) -> String {
+    "\(window.windowNumber):\(ObjectIdentifier(window))"
+  }
+}
+
 @main
 struct AppKitTestMain {
   @MainActor
@@ -27,6 +402,19 @@ struct AppKitTestMain {
       failBeforeConfiguration("failed to initialize the AppKit test host: \(error)")
     }
 
+    let sharedApplication = AppKitTestProbeApplication.shared
+    guard let application = sharedApplication as? AppKitTestProbeApplication else {
+      failAfterConfiguration(
+        "AppKit test host did not instantiate its configured diagnostic NSApplication class",
+        configuration: configuration
+      )
+    }
+    application.installModelsClickObservers()
+    configuration.writeDiagnostic(
+      "MODELS_CLICK_PROBE_INSTALL class=\(NSStringFromClass(type(of: application))) "
+        + "exactPrincipalClass=true beforeTestBundle=true"
+    )
+
     do {
       try loadTestBundle(at: parsedArguments.bundlePath)
     } catch {
@@ -41,7 +429,6 @@ struct AppKitTestMain {
       configuration.finish(status: status)
     }
 
-    let application = NSApplication.shared
     let delegate = AppKitTestApplicationDelegate(
       application: application,
       testingArguments: parsedArguments.testingArguments,
@@ -170,6 +557,10 @@ private struct HostConfiguration {
         Data("error: could not record host phase \(phase): \(error)\n".utf8)
       )
     }
+  }
+
+  func writeDiagnostic(_ message: String) {
+    FileHandle.standardError.write(Data("\(message)\n".utf8))
   }
 
   func finish(status: CInt) -> Never {
