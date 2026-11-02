@@ -2443,6 +2443,10 @@
       .onDisappear {
         hoveredSortOrder = nil
         focusedSortOrder = nil
+        guard isViewPresent, selectedSection == .vocabulary, isSearchExpanded,
+          !isOptionsPresented, !hasModalPresentation
+        else { return }
+        isSearchFocused = true
       }
     }
 
@@ -3020,7 +3024,6 @@
       presentationGeneration += 1
       searchPresentationSource = source
       isOptionsTriggerFocused = false
-      isSearchTriggerFocused = false
       withAnimation(motion.presentationAnimation(for: source)) {
         isSearchExpanded = true
         isSearchFocused = true
