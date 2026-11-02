@@ -323,7 +323,7 @@ struct FolderNavigatorPresentationTests {
     #expect(scrolledOffset.x > 0)
 
     try fixture.click(fixture.element(label: "New folder"))
-    await fixture.settle()
+    try #require(await fixture.waitForNewFolderComposer(isPresent: true))
     try fixture.captureIfRequested(name: "overflow-many-folders-520-composing")
     #expect(fixture.elementIfPresent(label: "Reveal earlier folders") != nil)
     #expect(
