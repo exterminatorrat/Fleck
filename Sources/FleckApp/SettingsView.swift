@@ -495,26 +495,26 @@
 
     @ViewBuilder
     var body: some View {
-      let header = HStack(alignment: .top, spacing: 12) {
-        VStack(alignment: .leading, spacing: 4) {
-          headerTitle
-          if section != .editing {
-            Text(description ?? section.description)
-              .fleckUIFont(.callout)
-              .foregroundStyle(theme.color(.textSecondary))
-              .fixedSize(horizontal: false, vertical: true)
-          }
+      let titleStack = VStack(alignment: .leading, spacing: 4) {
+        headerTitle
+        if section != .editing {
+          Text(description ?? section.description)
+            .fleckUIFont(.callout)
+            .foregroundStyle(theme.color(.textSecondary))
+            .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        if let accessory { accessory }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
 
-      if searchAnchorEnabled {
-        header.settingsSearchAnchor(.section(section), request: searchRequest)
-      } else {
-        header
+      HStack(alignment: .top, spacing: 12) {
+        if searchAnchorEnabled {
+          titleStack.settingsSearchAnchor(.section(section), request: searchRequest)
+        } else {
+          titleStack
+        }
+        if let accessory { accessory }
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -960,11 +960,16 @@
     @EnvironmentObject private var appState: AppState
     @Environment(\.fleckThemeSnapshot) private var theme
     @Environment(\.fleckUIFont) private var uiFont
+    #if DEBUG
+    @Environment(\.settingsReadinessReturnObservationSource)
+      private var readinessReturnObservationSource: AnyObject?
+    #endif
     @ObservedObject var runtime: DictationRuntime
     @ObservedObject private var personalDictionarySettingsViewModel:
       PersonalDictionarySettingsViewModel
     @ObservedObject private var historyController: DictationHistoryController
     private let buildIdentity: BuildIdentity
+    private let openSystemSettingsAction: @MainActor (DictationSystemSettingsAction) -> Void
     @State private var selectedSection = SettingsSection.editing
     @State private var showsHistoryClearConfirmation = false
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
@@ -973,6 +978,8 @@
     @State private var isSettingsSearchFieldFocused = false
     @State private var searchQuery = ""
     @State private var isReadinessPopoverPresented = false
+    @State private var readinessKeyboardReturnRequest: SettingsKeyboardFocusReturnRequest?
+    @StateObject private var readinessReturnAttachment = SettingsKeyboardFocusReturnAttachment()
     @State private var searchFocusRequest: UUID?
     @State private var highlightedSearchTarget: SettingsSearchTarget?
     @State private var searchRequest: SettingsSearchRequest?
@@ -980,9 +987,16 @@
     @State private var isDictationPrivacyExpanded = false
     @State private var isUIFontPickerPresented = false
 
-    init(runtime: DictationRuntime, buildIdentity: BuildIdentity = .current()) {
+    init(
+      runtime: DictationRuntime,
+      buildIdentity: BuildIdentity = .current(),
+      openSystemSettingsAction: (@MainActor (DictationSystemSettingsAction) -> Void)? = nil
+    ) {
       self.runtime = runtime
       self.buildIdentity = buildIdentity
+      self.openSystemSettingsAction = openSystemSettingsAction ?? { action in
+        runtime.openSystemSettings(action)
+      }
       _personalDictionarySettingsViewModel = ObservedObject(
         wrappedValue: runtime.personalDictionarySettingsViewModel
       )
@@ -1105,6 +1119,7 @@
         recordingSelection.transition(to: newSection)
         if newSection != .dictation {
           isReadinessPopoverPresented = false
+          readinessKeyboardReturnRequest = nil
         }
       }
       .onChange(of: searchQuery) { _, _ in
@@ -1520,8 +1535,38 @@
       .popover(isPresented: $isReadinessPopoverPresented, arrowEdge: .top) {
         dictationReadinessPopover
           .fleckPopoverTheme(theme)
+          .onExitCommand {
+            let inputID = SettingsSearchInputModality.shared.inputID
+            if selectedSection == .dictation {
+              readinessReturnAttachment.publishReturnRequest(
+                inputID: inputID, to: $readinessKeyboardReturnRequest
+              )
+            } else {
+              readinessKeyboardReturnRequest = nil
+            }
+            #if DEBUG
+            let returnRequest = readinessKeyboardReturnRequest
+            SettingsSearchInputModality.shared.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[F93-readiness-return:exit] pending=\(returnRequest != nil) windowPresent=\(returnRequest?.window != nil) keyMatch=\(returnRequest?.window != nil && NSApp.keyWindow != nil && returnRequest?.window === NSApp.keyWindow) parentMatch=\(returnRequest?.window != nil && NSApp.keyWindow?.parent != nil && returnRequest?.window === NSApp.keyWindow?.parent) inputMatch=\(returnRequest?.inputID == inputID)"
+            )
+            #endif
+            isReadinessPopoverPresented = false
+          }
+          #if DEBUG
+          .onDisappear {
+            let returnRequest = readinessKeyboardReturnRequest
+            SettingsSearchInputModality.shared.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[F93-readiness-return:disappear] pending=\(returnRequest != nil) dictation=\(selectedSection == .dictation)"
+            )
+          }
+          #endif
       }
-      .settingsSearchAnchor(.dictationStatus, request: searchRequest)
+      .settingsSearchAnchor(.dictationStatus, request: searchRequest) {
+        readinessReturnAttachment
+      }
+      .environment(\.settingsKeyboardFocusReturnRequest, $readinessKeyboardReturnRequest)
       .accessibilityLabel("Dictation readiness")
       .accessibilityValue(isReady ? "Ready" : "Needs attention")
       .accessibilityHint("Show dictation readiness and recovery actions.")
@@ -1536,7 +1581,7 @@
           Button("Enable Input Monitoring") {
             Task { @MainActor in
               guard let settings = await runtime.recoverModifierMonitoring() else { return }
-              runtime.openSystemSettings(settings)
+              openSystemSettingsAction(settings)
             }
           }
           .disabled(!dictationModifierPresentation.isPickerEnabled)
@@ -1580,7 +1625,7 @@
 
             ForEach(recoveryActions, id: \.pane) { action in
               Button(action.title) {
-                runtime.openSystemSettings(action)
+                openSystemSettingsAction(action)
               }
               .buttonStyle(.bordered)
             }
@@ -2398,6 +2443,10 @@
       .onDisappear {
         hoveredSortOrder = nil
         focusedSortOrder = nil
+        guard isViewPresent, selectedSection == .vocabulary, isSearchExpanded,
+          !isOptionsPresented, !hasModalPresentation
+        else { return }
+        isSearchFocused = true
       }
     }
 
@@ -2975,7 +3024,6 @@
       presentationGeneration += 1
       searchPresentationSource = source
       isOptionsTriggerFocused = false
-      isSearchTriggerFocused = false
       withAnimation(motion.presentationAnimation(for: source)) {
         isSearchExpanded = true
         isSearchFocused = true
