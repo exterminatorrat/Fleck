@@ -3,6 +3,27 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.9-beta.1] - 2026-11-02
+
+### Fixed
+
+- Inherit the verified tab-title fade and native font-picker Escape corrections while
+  preserving transactional filing, durable receipts and guarded undo.
+
+## [1.5.8-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve the verified right-to-left tab-title fade correction alongside native
+  font-picker Escape handling when integrating the current parent source.
+
+## [1.5.7-beta.1] - 2026-11-02
+
+### Fixed
+
+- Route Escape from the native font-family table to its owning picker so cancelling
+  dismisses the picker without committing a font change.
+
 ## [1.5.7-beta.1] - 2026-10-27
 
 ### Fixed
@@ -50,6 +71,13 @@ unrun; hosted verification is pending.
 
 Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
 tests and native behavior remain unverified.
+
+## [1.4.44-beta.1] - 2026-11-02
+
+### Fixed
+
+- Keep the tab-title fade at the semantic trailing edge in right-to-left layouts
+  without reversing the mirrored gradient twice.
 
 ## [1.4.43-beta.1] - 2026-11-01
 
