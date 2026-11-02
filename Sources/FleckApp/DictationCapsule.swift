@@ -1977,8 +1977,10 @@
     var allowsActions = false
 
     fileprivate var onRecoveryMouseUp: (NSEvent) -> Bool = { _ in false }
+    var eventDispatchObserverForTesting: (@MainActor (NSEvent) -> Void)?
 
     override func sendEvent(_ event: NSEvent) {
+      defer { eventDispatchObserverForTesting?(event) }
       if event.type == .leftMouseUp, onRecoveryMouseUp(event) { return }
       super.sendEvent(event)
     }

@@ -176,7 +176,7 @@ private func retryWitnessCoordinate(_ value: Double?) -> String {
   var posted: [NSEvent] = []
   var delivered: [Int] = []
   var prePostCoordinateSamples: [String] = []
-  var observedCoordinateSamples: [String] = []
+  var postDispatchCoordinateSamples: [String] = []
   var deliveredEventsForProbe: [Int: RetryPostedEvent] = [:]
   defer {
     let originalCGLocations = posted.map { event in
@@ -188,36 +188,35 @@ private func retryWitnessCoordinate(_ value: Double?) -> String {
     }
     print("posted-coordinate-probe v=1 stage=post-sequence"
       + " pre=\(prePostCoordinateSamples.joined(separator: ";"))"
-      + " monitor=\(observedCoordinateSamples.joined(separator: ";"))"
+      + " owned-window-post-dispatch=\(postDispatchCoordinateSamples.joined(separator: ";"))"
       + " originalCG=\(originalCGLocations.joined(separator: ";"))"
       + " deliveredCG=\(deliveredCGLocations.joined(separator: ";"))")
   }
-  let monitor = try #require(NSEvent.addLocalMonitorForEvents(
-    matching: [.leftMouseDown, .leftMouseUp], handler: { event in
-      let observed = RetryPostedEvent(event: event)
-      MainActor.assumeIsolated {
-        let event = observed.event
-        guard let expected = posted.first(where: { $0.eventNumber == event.eventNumber }) else { return }
-        observedCoordinateSamples.append(
-          "n=\(event.eventNumber) wn=\(event.windowNumber)"
-            + " windowMatchesPanel=\(event.window === panel ? 1 : 0)"
-            + " point=\(event.locationInWindow)"
-        )
-        deliveredEventsForProbe[event.eventNumber] = observed
-        #expect(event.eventNumber > 0)
-        #expect(event.windowNumber == panel.windowNumber)
-        #expect(event.windowNumber == expected.windowNumber)
-        #expect(event.window === panel)
-        #expect(event.type == expected.type)
-        #expect(event.locationInWindow == expected.locationInWindow)
-        #expect(event.timestamp == expected.timestamp)
-        #expect(event.modifierFlags == expected.modifierFlags)
-        #expect(event.clickCount == expected.clickCount)
-        delivered.append(event.eventNumber)
-      }
-      return event
-    }))
-  defer { NSEvent.removeMonitor(monitor) }
+  panel.eventDispatchObserverForTesting = { event in
+    guard event.type == .leftMouseDown || event.type == .leftMouseUp else { return }
+    let observed = RetryPostedEvent(event: event)
+    MainActor.assumeIsolated {
+      let event = observed.event
+      guard let expected = posted.first(where: { $0.eventNumber == event.eventNumber }) else { return }
+      postDispatchCoordinateSamples.append(
+        "n=\(event.eventNumber) wn=\(event.windowNumber)"
+          + " windowMatchesPanel=\(event.window === panel ? 1 : 0)"
+          + " point=\(event.locationInWindow)"
+      )
+      deliveredEventsForProbe[event.eventNumber] = observed
+      #expect(event.eventNumber > 0)
+      #expect(event.windowNumber == panel.windowNumber)
+      #expect(event.windowNumber == expected.windowNumber)
+      #expect(event.window === panel)
+      #expect(event.type == expected.type)
+      #expect(event.locationInWindow == expected.locationInWindow)
+      #expect(event.timestamp == expected.timestamp)
+      #expect(event.modifierFlags == expected.modifierFlags)
+      #expect(event.clickCount == expected.clickCount)
+      delivered.append(event.eventNumber)
+    }
+  }
+  defer { panel.eventDispatchObserverForTesting = nil }
 
   @MainActor func freezePostedDownWitness() {
     guard witnessArmed, !witnessFrozen else { return }
