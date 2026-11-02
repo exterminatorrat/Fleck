@@ -390,6 +390,9 @@ struct FolderNavigatorPresentationTests {
     try fixture.replaceFocusedTextFieldDraft(with: "Personal")
     try fixture.click(fixture.element(identifier: "folder-unfiled"))
     await fixture.settle()
+    try #require(await fixture.waitForRenameEditor(
+      folderID: folder.id, reportingValidationError: true
+    ))
 
     #expect(fixture.state.workspace.folders.first?.name == "Work")
     #expect(fixture.isRenameFieldVisible(identifier: renameIdentifier))
@@ -447,16 +450,9 @@ struct FolderNavigatorPresentationTests {
     #expect(duplicateEditor.string == "Personal")
     try fixture.click(fixture.element(identifier: "folder-unfiled"))
 
-    let clock = ContinuousClock()
-    let errorDeadline = clock.now.advanced(by: .seconds(2))
-    while fixture.state.saveError?.hasPrefix("Could not update folder:") != true,
-      clock.now < errorDeadline
-    {
-      try Task.checkCancellation()
-      fixture.host.layoutSubtreeIfNeeded()
-      let remaining = clock.now.duration(to: errorDeadline)
-      if remaining > .zero { try await Task.sleep(for: min(.milliseconds(25), remaining)) }
-    }
+    try #require(await fixture.waitForRenameEditor(
+      folderID: folder.id, reportingValidationError: true
+    ))
     try #require(fixture.state.saveError?.hasPrefix("Could not update folder:") == true)
     #expect(fixture.state.workspace.folders.first?.name == "Work")
     #expect(fixture.isRenameFieldVisible(identifier: renameIdentifier))
@@ -2083,7 +2079,10 @@ private final class FolderNavigatorFixture {
     try #require(await waitForRenameEditor(folderID: folderID))
   }
 
-  func waitForRenameEditor(folderID: UUID) async throws -> Bool {
+  func waitForRenameEditor(
+    folderID: UUID,
+    reportingValidationError: Bool = false
+  ) async throws -> Bool {
     let identifier = "folder-rename-\(folderID.uuidString)"
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: .seconds(2))
@@ -2095,7 +2094,9 @@ private final class FolderNavigatorFixture {
         field.window === window, !field.isHiddenOrHasHiddenAncestor,
         let editor = field.currentEditor() as? NSTextView,
         editor === window.firstResponder,
-        NSApp.keyWindow === window, window.isKeyWindow, NSApp.isActive
+        NSApp.keyWindow === window, window.isKeyWindow, NSApp.isActive,
+        !reportingValidationError
+          || state.saveError?.hasPrefix("Could not update folder:") == true
       {
         return true
       }
