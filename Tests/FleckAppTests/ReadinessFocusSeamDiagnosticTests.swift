@@ -62,8 +62,7 @@ private struct ReadinessFocusSeamDiagnostic: View {
       .accessibilityValue("Needs attention")
       .accessibilityHint("Show dictation readiness and recovery actions.")
       .settingsSearchAnchor(
-        .dictationStatus, request: initialRequest,
-        nativeControlIdentifier: "readiness-seam-trigger"
+        .dictationStatus, request: initialRequest
       ) { attachment }
       .environment(\.settingsKeyboardFocusReturnRequest, $returnRequest)
   }
@@ -74,8 +73,7 @@ private struct ReadinessFocusSeamDiagnostic: View {
       .accessibilityValue("Needs attention")
       .accessibilityHint("Show dictation readiness and recovery actions.")
       .settingsSearchAnchor(
-        .dictationStatus, request: initialRequest,
-        nativeControlIdentifier: "readiness-seam-trigger"
+        .dictationStatus, request: initialRequest
       ) { attachment }
       .environment(\.settingsKeyboardFocusReturnRequest, $returnRequest)
       .popover(isPresented: $isPresented) { popover }

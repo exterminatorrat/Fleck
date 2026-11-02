@@ -975,7 +975,6 @@
   private struct SettingsSearchAnchorModifier: ViewModifier {
     let target: SettingsSearchTarget
     let request: SettingsSearchRequest?
-    let nativeControlIdentifier: String?
     @Environment(\.settingsKeyboardFocusReturnRequest) private var keyboardReturnRequest
     #if DEBUG
     @Environment(\.settingsReadinessReturnObservationSource)
@@ -989,12 +988,10 @@
     init(
       target: SettingsSearchTarget,
       request: SettingsSearchRequest?,
-      returnAttachment: SettingsKeyboardFocusReturnAttachment? = nil,
-      nativeControlIdentifier: String? = nil
+      returnAttachment: SettingsKeyboardFocusReturnAttachment? = nil
     ) {
       self.target = target
       self.request = request
-      self.nativeControlIdentifier = nativeControlIdentifier
       _returnAttachment = StateObject(
         wrappedValue: returnAttachment ?? SettingsKeyboardFocusReturnAttachment()
       )
@@ -1009,21 +1006,14 @@
     }
 
     func body(content: Content) -> some View {
-      let anchoredContent = content
+      content
         .id(target)
-        .accessibilityIdentifier(nativeControlIdentifier ?? target.accessibilityIdentifier)
+        .accessibilityIdentifier(target.accessibilityIdentifier)
         .accessibilityLabel(target.focusLabel)
-      return Group {
-        if nativeControlIdentifier != nil {
-          anchoredContent.focused($isKeyboardFocused)
-        } else {
-          anchoredContent
-            .focusable()
-            .focused($isKeyboardFocused)
-            .accessibilityFocused($isFocused)
-        }
-      }
+        .focusable()
         .focusEffectDisabled()
+        .focused($isKeyboardFocused)
+        .accessibilityFocused($isFocused)
         .background {
           SettingsSearchProbe(
             identifier: target.accessibilityIdentifier,
@@ -1125,46 +1115,13 @@
           if target == .dictationStatus {
             inputModality.readinessReturnObservation?(
               readinessReturnObservationSource,
-              "[F93-readiness-return:accepted] accepted=true keyboardBefore=\(isKeyboardFocused) accessibilityBefore=\(isFocused) cancelled=\(Task.isCancelled)"
+              "[F93-readiness-return:accepted] accepted=true"
             )
           }
           #endif
           inputModality.record(isKeyboardInput: true, windowNumber: window.windowNumber)
           isKeyboardFocused = true
           isFocused = true
-          #if DEBUG
-          if target == .dictationStatus {
-            inputModality.readinessReturnObservation?(
-              readinessReturnObservationSource,
-              "[SEAM-write] keyboard=\(isKeyboardFocused) accessibility=\(isFocused) native=\(nativeControlIdentifier != nil) keyMatches=\(NSApp.keyWindow === window) cancelled=\(Task.isCancelled)"
-            )
-            await Task.yield()
-            inputModality.readinessReturnObservation?(
-              readinessReturnObservationSource,
-              "[SEAM-after-suspension] keyboard=\(isKeyboardFocused) accessibility=\(isFocused) cancelled=\(Task.isCancelled)"
-            )
-          }
-          #endif
-        }
-        .onChange(of: isKeyboardFocused) { oldValue, newValue in
-          #if DEBUG
-          if target == .dictationStatus {
-            inputModality.readinessReturnObservation?(
-              readinessReturnObservationSource,
-              "[SEAM-keyboard-state] old=\(oldValue) new=\(newValue) native=\(nativeControlIdentifier != nil) keyMatches=\(returnAttachment.view?.window != nil && NSApp.keyWindow === returnAttachment.view?.window)"
-            )
-          }
-          #endif
-        }
-        .onChange(of: isFocused) { oldValue, newValue in
-          #if DEBUG
-          if target == .dictationStatus {
-            inputModality.readinessReturnObservation?(
-              readinessReturnObservationSource,
-              "[SEAM-ax-state] old=\(oldValue) new=\(newValue) native=\(nativeControlIdentifier != nil)"
-            )
-          }
-          #endif
         }
         .onDisappear {
           returnAttachment.invalidate()
@@ -1181,6 +1138,7 @@
 
     func makeNSView(context: Context) -> ProbeView {
       let view = ProbeView()
+      view.probeIdentifier = identifier
       view.bind(to: returnAttachment)
       view.setAccessibilityElement(false)
       view.setAccessibilityIdentifier(identifier)
@@ -1188,6 +1146,7 @@
     }
 
     func updateNSView(_ view: ProbeView, context: Context) {
+      view.probeIdentifier = identifier
       view.bind(to: returnAttachment)
       view.setAccessibilityIdentifier(identifier)
     }
@@ -1197,6 +1156,7 @@
     }
 
     final class ProbeView: NSView {
+      var probeIdentifier = ""
       private weak var returnAttachment: SettingsKeyboardFocusReturnAttachment?
 
       func bind(to attachment: SettingsKeyboardFocusReturnAttachment?) {
@@ -1227,13 +1187,11 @@
     func settingsSearchAnchor(
       _ target: SettingsSearchTarget,
       request: SettingsSearchRequest?,
-      nativeControlIdentifier: String? = nil,
       returnAttachment: () -> SettingsKeyboardFocusReturnAttachment?
     ) -> some View {
       modifier(
         SettingsSearchAnchorModifier(
-          target: target, request: request, returnAttachment: returnAttachment(),
-          nativeControlIdentifier: nativeControlIdentifier
+          target: target, request: request, returnAttachment: returnAttachment()
         )
       )
     }
