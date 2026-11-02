@@ -24,9 +24,18 @@ jobs:
           git rev-parse HEAD HEAD^{tree}
       - name: Compare actual focus and anchored cue state
         run: |
+          export FLECK_SETTINGS_WINDOW_CAPTURE_DIR="$RUNNER_TEMP/readiness-seam-captures"
           Scripts/run-nonempty-swift-tests.sh '^FleckAppTests\.readinessFocusSeamDiagnostic\(\)$' > "$RUNNER_TEMP/readiness-seam.log" 2>&1
       - name: Report diagnostic observations without final validation claim
         if: always()
         run: |
           grep -E 'SEAM|F93-readiness-return|matched test count|Test run with|^error:|✘' "$RUNNER_TEMP/readiness-seam.log" || true
           printf '%s\n' 'Diagnostic only: no required full graph, package, or product validation verdict.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve synthetic seam captures and raw trace
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: readiness-seam-evidence
+          path: |
+            ${{ runner.temp }}/readiness-seam.log
+            ${{ runner.temp }}/readiness-seam-captures

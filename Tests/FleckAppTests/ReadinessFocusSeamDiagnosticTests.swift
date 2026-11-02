@@ -177,6 +177,11 @@ func readinessFocusSeamDiagnostic() async throws {
     view.accessibilityIdentifier() == "settings-keyboard-focus-cue-dictation-status"
       || view.subviews.contains(where: hasCue)
   }
+  func probeDetails(_ view: NSView) -> [String] {
+    let current = view is SettingsSearchProbe.ProbeView
+      ? ["id=\(view.accessibilityIdentifier() ?? "nil") frame=\(view.frame) hidden=\(view.isHiddenOrHasHiddenAncestor) window=\(view.window != nil)"] : []
+    return current + view.subviews.flatMap(probeDetails)
+  }
   func settle(_ host: NSView) async throws {
     for _ in 0..<20 {
       host.layoutSubtreeIfNeeded()
@@ -223,6 +228,7 @@ func readinessFocusSeamDiagnostic() async throws {
     let beforeWindows = Set(application.windows.map(ObjectIdentifier.init))
     let beforeCue = hasCue(host)
     print("SEAM variant=\(variant) stage=initial fullKeyboard=\(application.isFullKeyboardAccessEnabled) focus=\(identifier(focused(window))) cue=\(beforeCue)")
+    print("SEAM-PROBES variant=\(variant) stage=initial \(probeDetails(host))")
     try key(49, " ", window: window)
     try await settle(host)
     let popoverWindow = application.windows.first {
@@ -234,6 +240,7 @@ func readinessFocusSeamDiagnostic() async throws {
       try await settle(host)
       let afterCue = hasCue(host)
       print("SEAM variant=\(variant) stage=returned focus=\(identifier(focused(window))) cue=\(afterCue) closed=\(!popoverWindow.isVisible)")
+      print("SEAM-PROBES variant=\(variant) stage=returned \(probeDetails(host))")
       if let path = ProcessInfo.processInfo.environment["FLECK_SETTINGS_WINDOW_CAPTURE_DIR"] {
         let directory = URL(fileURLWithPath: path, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
