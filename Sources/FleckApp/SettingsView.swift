@@ -495,26 +495,26 @@
 
     @ViewBuilder
     var body: some View {
-      let header = HStack(alignment: .top, spacing: 12) {
-        VStack(alignment: .leading, spacing: 4) {
-          headerTitle
-          if section != .editing {
-            Text(description ?? section.description)
-              .fleckUIFont(.callout)
-              .foregroundStyle(theme.color(.textSecondary))
-              .fixedSize(horizontal: false, vertical: true)
-          }
+      let titleStack = VStack(alignment: .leading, spacing: 4) {
+        headerTitle
+        if section != .editing {
+          Text(description ?? section.description)
+            .fleckUIFont(.callout)
+            .foregroundStyle(theme.color(.textSecondary))
+            .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        if let accessory { accessory }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
 
-      if searchAnchorEnabled {
-        header.settingsSearchAnchor(.section(section), request: searchRequest)
-      } else {
-        header
+      HStack(alignment: .top, spacing: 12) {
+        if searchAnchorEnabled {
+          titleStack.settingsSearchAnchor(.section(section), request: searchRequest)
+        } else {
+          titleStack
+        }
+        if let accessory { accessory }
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder

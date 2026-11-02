@@ -1138,6 +1138,7 @@
 
     func makeNSView(context: Context) -> ProbeView {
       let view = ProbeView()
+      view.probeIdentifier = identifier
       view.bind(to: returnAttachment)
       view.setAccessibilityElement(false)
       view.setAccessibilityIdentifier(identifier)
@@ -1145,6 +1146,7 @@
     }
 
     func updateNSView(_ view: ProbeView, context: Context) {
+      view.probeIdentifier = identifier
       view.bind(to: returnAttachment)
       view.setAccessibilityIdentifier(identifier)
     }
@@ -1154,6 +1156,7 @@
     }
 
     final class ProbeView: NSView {
+      var probeIdentifier = ""
       private weak var returnAttachment: SettingsKeyboardFocusReturnAttachment?
 
       func bind(to attachment: SettingsKeyboardFocusReturnAttachment?) {
