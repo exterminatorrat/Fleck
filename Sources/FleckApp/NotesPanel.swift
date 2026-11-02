@@ -741,23 +741,13 @@
   }
 
   struct NoteTabTitleFadeMask: View {
-    @Environment(\.layoutDirection) private var layoutDirection
-
-    private var gradientStartPoint: UnitPoint {
-      layoutDirection == .leftToRight ? UnitPoint(x: 0, y: 0.5) : UnitPoint(x: 1, y: 0.5)
-    }
-
-    private var gradientEndPoint: UnitPoint {
-      layoutDirection == .leftToRight ? UnitPoint(x: 1, y: 0.5) : UnitPoint(x: 0, y: 0.5)
-    }
-
     var body: some View {
       HStack(spacing: 0) {
         Color.white
         LinearGradient(
           colors: [.white, .clear],
-          startPoint: gradientStartPoint,
-          endPoint: gradientEndPoint
+          startPoint: UnitPoint(x: 0, y: 0.5),
+          endPoint: UnitPoint(x: 1, y: 0.5)
         )
         .frame(width: TabTitlePresentation.fadeWidth)
       }
@@ -2911,6 +2901,7 @@
     private func overflowControls(scrollProxy: ScrollViewProxy) -> some View {
       HStack(spacing: 0) {
         Button {
+          guard !isCreatingFolder else { return }
           scrollProxy.scrollTo(FolderScrollTarget.leading, anchor: .leading)
         } label: {
           Image(systemName: "chevron.left")
@@ -2923,6 +2914,7 @@
         .help("Show earlier folders")
 
         Button {
+          guard !isCreatingFolder else { return }
           scrollProxy.scrollTo(FolderScrollTarget.trailing, anchor: .trailing)
         } label: {
           Image(systemName: "chevron.right")
@@ -3164,6 +3156,7 @@
       let unfiledNotes = appState.visibleNotes(in: nil)
       return HStack(spacing: 0) {
         Button {
+          focusedRow = .unfiled
           onSelect(nil)
         } label: {
           rowLabel(
@@ -3179,11 +3172,6 @@
           )
         }
         .buttonStyle(.plain)
-        .modifier(
-          FolderRowFocusPublisher(onFocusChange: { isFocused in
-            updateFocusedRow(.unfiled, isFocused: isFocused)
-          })
-        )
         .focusable()
         .focused($focusedRow, equals: .unfiled)
         .focusEffectDisabled()
@@ -3246,6 +3234,7 @@
         folderEditor(label: "Folder name", focus: .folder(folder.id))
       } else {
         Button {
+          focusedRow = .folder(folder.id)
           onSelect(folder.id)
         } label: {
           rowLabel(
@@ -3259,14 +3248,6 @@
           )
         }
         .buttonStyle(.plain)
-        .modifier(
-          FolderRowFocusPublisher(onFocusChange: { isFocused in
-            updateFocusedRow(.folder(folder.id), isFocused: isFocused)
-          })
-        )
-        .focusable()
-        .focused($focusedRow, equals: .folder(folder.id))
-        .focusEffectDisabled()
         .background(nativeNoteDropAnchor(.folder(folder.id)))
         .modifier(ReorderDropTarget(
           destinationID: folder.id, type: FolderDragPayload.folderType,
@@ -3293,6 +3274,9 @@
             folderReorder = nil
           })
         }))
+        .focusable()
+        .focused($focusedRow, equals: .folder(folder.id))
+        .focusEffectDisabled()
         .contextMenu {
           Button("Move Left", systemImage: "arrow.left") { moveFolder(folder.id, offset: -1) }
           Button("Move Right", systemImage: "arrow.right") { moveFolder(folder.id, offset: 1) }
@@ -3375,21 +3359,6 @@
           .accessibilityLabel("Cancel folder name")
       }
       .accessibilityElement(children: .contain)
-    }
-
-    private struct FolderRowFocusPublisher: ViewModifier {
-      @Environment(\.isFocused) private var isNativeFocused
-      let onFocusChange: (Bool) -> Void
-
-      init(onFocusChange: @escaping (Bool) -> Void) {
-        self.onFocusChange = onFocusChange
-      }
-
-      func body(content: Content) -> some View {
-        content.onChange(of: isNativeFocused) { _, isFocused in
-          onFocusChange(isFocused)
-        }
-      }
     }
 
     @ViewBuilder
@@ -3709,14 +3678,6 @@
       guard isCreatingFolder else { return false }
       return FolderNavigatorOcclusionPresentation(composerLeadingX: composerLeadingX)
         .covers(rowFrames[target])
-    }
-
-    private func updateFocusedRow(_ row: FocusedRow, isFocused: Bool) {
-      if isFocused {
-        focusedRow = row
-      } else if focusedRow == row {
-        focusedRow = nil
-      }
     }
 
     private func activateFocusedRow() {
