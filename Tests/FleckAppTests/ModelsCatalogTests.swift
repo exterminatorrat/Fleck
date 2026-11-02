@@ -318,7 +318,7 @@ private func modelLibraryDescriptor(
   }
 
   @MainActor
-  private func sendModelTrackedMouseClick(at screenPoint: NSPoint, to window: NSWindow) throws {
+  private func sendModelTrackedMouseClick(at screenPoint: NSPoint, to window: NSWindow) async throws {
     let windowPoint = window.convertPoint(fromScreen: screenPoint)
     let timestamp = ProcessInfo.processInfo.systemUptime
     let mouseUp = try #require(
@@ -334,6 +334,16 @@ private func modelLibraryDescriptor(
         pressure: 0
       )
     )
+    var didReceiveMouseUp = false
+    let windowNumber = window.windowNumber
+    let monitor = try #require(NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { event in
+      let matches = event.windowNumber == windowNumber && event.eventNumber == 1
+      MainActor.assumeIsolated {
+        if matches { didReceiveMouseUp = true }
+      }
+      return event
+    })
+    defer { NSEvent.removeMonitor(monitor) }
     NSApp.postEvent(mouseUp, atStart: true)
     let mouseDown = try #require(
       NSEvent.mouseEvent(
@@ -349,6 +359,12 @@ private func modelLibraryDescriptor(
       )
     )
     NSApp.sendEvent(mouseDown)
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(2))
+    while !didReceiveMouseUp, clock.now < deadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    try #require(didReceiveMouseUp)
   }
 
   @MainActor
@@ -483,12 +499,12 @@ private func modelLibraryDescriptor(
   }
 
   @MainActor
-  private func clickModelView(_ view: NSView, in window: NSWindow) throws {
+  private func clickModelView(_ view: NSView, in window: NSWindow) async throws {
     let windowPoint = view.convert(
       NSPoint(x: view.bounds.midX, y: view.bounds.midY),
       to: nil
     )
-    try sendModelTrackedMouseClick(at: window.convertPoint(toScreen: windowPoint), to: window)
+    try await sendModelTrackedMouseClick(at: window.convertPoint(toScreen: windowPoint), to: window)
   }
 
   @MainActor
@@ -1091,7 +1107,7 @@ private func modelLibraryDescriptor(
         #expect(searchFrame.height > 14)
 
         try writeModelFixture("models-search-\(scenario.name)-idle", in: host)
-        try clickModelView(searchField, in: window)
+        try await clickModelView(searchField, in: window)
         let fieldEditor = try #require(searchField.currentEditor())
         #expect(window.firstResponder === fieldEditor)
         let editor = try #require(fieldEditor as? NSTextView)
@@ -1173,14 +1189,14 @@ private func modelLibraryDescriptor(
           #expect(searchField.stringValue == query)
 
           window.recalculateKeyViewLoop()
-          try clickModelView(searchField, in: window)
+          try await clickModelView(searchField, in: window)
           let focusedEditor = try #require(searchField.currentEditor())
           #expect(window.firstResponder === focusedEditor)
           try sendModelKey(48, characters: "\t", to: window)
           try await settleModelBrowser(host)
           #expect(window.firstResponder != nil)
           #expect(searchField.currentEditor() == nil)
-          try sendModelKey(48, characters: "\t", modifierFlags: [.shift], to: window)
+          try sendModelKey(48, characters: "\u{19}", modifierFlags: [.shift], to: window)
           try await settleModelBrowser(host)
           let returnedEditor = try #require(searchField.currentEditor())
           #expect(window.firstResponder === returnedEditor)
@@ -1207,7 +1223,7 @@ private func modelLibraryDescriptor(
             ),
             to: nil
           )
-          try sendModelTrackedMouseClick(
+          try await sendModelTrackedMouseClick(
             at: window.convertPoint(toScreen: voiceSegmentPoint),
             to: window
           )
@@ -1223,7 +1239,7 @@ private func modelLibraryDescriptor(
             modelAccessibilityElements(in: host, identifier: "models-row-\(cleanupID)").isEmpty
           )
 
-          try clickModelView(searchField, in: window)
+          try await clickModelView(searchField, in: window)
           let emptySearchEditor = try #require(searchField.currentEditor())
           emptySearchEditor.selectAll(nil)
           try typeModelText("zzzz", in: window)
@@ -1248,7 +1264,7 @@ private func modelLibraryDescriptor(
           #expect(window.firstResponder !== emptySearchEditor)
           #expect(searchField.stringValue == "zzzz")
 
-          try clickModelView(searchField, in: window)
+          try await clickModelView(searchField, in: window)
           let refocusedEditor = try #require(searchField.currentEditor())
           #expect(window.firstResponder === refocusedEditor)
           try await settleModelBrowser(host)
