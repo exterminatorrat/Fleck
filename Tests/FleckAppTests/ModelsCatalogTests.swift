@@ -162,6 +162,206 @@ private func modelLibraryDescriptor(
     let event: NSEvent
   }
 
+  private enum ModelsClickProbeNotification {
+    static let arm = Notification.Name("org.fleck.appkit-test-host.models-click.arm")
+    static let windowEvent = Notification.Name(
+      "org.fleck.appkit-test-host.models-click.window-event"
+    )
+    static let disarm = Notification.Name("org.fleck.appkit-test-host.models-click.disarm")
+    static let localMouseUpReceipt = Notification.Name(
+      "org.fleck.appkit-test-host.models-click.local-mouse-up-receipt"
+    )
+  }
+
+  @MainActor
+  private var nextModelTrackedMouseEventNumber = 1
+
+  @MainActor
+  private struct ModelsClickProbeContext {
+    let scenario: String
+    let ordinal: Int
+    let targetKind: String
+  }
+
+  @MainActor
+  private struct ModelsMouseEventIdentity {
+    let type: NSEvent.EventType
+    let windowNumber: Int
+    let eventNumber: Int
+    let timestamp: TimeInterval
+    let x: Double
+    let y: Double
+    let modifierFlags: NSEvent.ModifierFlags.RawValue
+    let clickCount: Int
+
+    init?(event: NSEvent, window: NSWindow) {
+      guard event.type == .leftMouseDown || event.type == .leftMouseUp,
+        event.window === window,
+        event.windowNumber == window.windowNumber
+      else {
+        return nil
+      }
+      type = event.type
+      windowNumber = event.windowNumber
+      eventNumber = event.eventNumber
+      timestamp = event.timestamp
+      x = Double(event.locationInWindow.x)
+      y = Double(event.locationInWindow.y)
+      modifierFlags = event.modifierFlags.rawValue
+      clickCount = event.clickCount
+    }
+
+    func hasSameIdentity(as other: ModelsMouseEventIdentity) -> Bool {
+      type == other.type
+        && windowNumber == other.windowNumber
+        && eventNumber == other.eventNumber
+        && timestamp == other.timestamp
+        && x == other.x
+        && y == other.y
+        && modifierFlags == other.modifierFlags
+        && clickCount == other.clickCount
+    }
+
+    func notificationFields(prefix: String) -> [AnyHashable: Any] {
+      [
+        "\(prefix).type": Int(type.rawValue),
+        "\(prefix).eventNumber": eventNumber,
+        "\(prefix).timestamp": timestamp,
+        "\(prefix).x": x,
+        "\(prefix).y": y,
+        "\(prefix).flags": modifierFlags,
+        "\(prefix).clickCount": clickCount,
+      ]
+    }
+
+  }
+
+  @MainActor
+  private struct ModelsClickProbe {
+    let scenario: String
+    let ordinal: Int
+    let targetKind: String
+    let windowNumber: Int
+    let down: ModelsMouseEventIdentity
+    let up: ModelsMouseEventIdentity
+
+    var armFields: [AnyHashable: Any] {
+      var fields: [AnyHashable: Any] = [
+        "scenario": scenario,
+        "ordinal": ordinal,
+        "targetKind": targetKind,
+        "windowNumber": windowNumber,
+      ]
+      fields.merge(down.notificationFields(prefix: "down")) { _, new in new }
+      fields.merge(up.notificationFields(prefix: "up")) { _, new in new }
+      return fields
+    }
+
+    func eventFields(
+      _ event: ModelsMouseEventIdentity,
+      phase: String
+    ) -> [AnyHashable: Any] {
+      var fields = armFields
+      fields["phase"] = phase
+      fields.merge(event.notificationFields(prefix: "event")) { _, new in new }
+      return fields
+    }
+
+    func eventIdentity(for event: NSEvent, in window: NSWindow) -> ModelsMouseEventIdentity? {
+      guard let identity = ModelsMouseEventIdentity(event: event, window: window),
+        identity.hasSameIdentity(as: down) || identity.hasSameIdentity(as: up)
+      else {
+        return nil
+      }
+      return identity
+    }
+  }
+
+  @MainActor
+  private final class ModelsClickFixtureWindow: NSWindow {
+    private var armedClick: ModelsClickProbe?
+
+    func arm(_ click: ModelsClickProbe) {
+      armedClick = click
+      NotificationCenter.default.post(
+        name: ModelsClickProbeNotification.arm,
+        object: self,
+        userInfo: click.armFields
+      )
+    }
+
+    func disarm() {
+      guard let armedClick else { return }
+      NotificationCenter.default.post(
+        name: ModelsClickProbeNotification.disarm,
+        object: self,
+        userInfo: armedClick.armFields
+      )
+      self.armedClick = nil
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+      let click = armedClick
+      let identity = click?.eventIdentity(for: event, in: self)
+      if let click, let identity {
+        NotificationCenter.default.post(
+          name: ModelsClickProbeNotification.windowEvent,
+          object: self,
+          userInfo: click.eventFields(identity, phase: "entry")
+        )
+      }
+      super.sendEvent(event)
+      if let click, let identity {
+        NotificationCenter.default.post(
+          name: ModelsClickProbeNotification.windowEvent,
+          object: self,
+          userInfo: click.eventFields(identity, phase: "return")
+        )
+      }
+    }
+  }
+
+  @MainActor
+  private final class ModelsMouseUpReceiptObserver: NSObject {
+    private let window: NSWindow
+    private let windowNumber: Int
+    private let eventNumber: Int
+    private(set) var didReceiveMouseUp = false
+
+    init(window: NSWindow, eventNumber: Int) {
+      self.window = window
+      windowNumber = window.windowNumber
+      self.eventNumber = eventNumber
+      super.init()
+      NotificationCenter.default.addObserver(
+        self,
+        selector: #selector(receiveMouseUpReceipt(_:)),
+        name: ModelsClickProbeNotification.localMouseUpReceipt,
+        object: nil
+      )
+    }
+
+    func removeObserver() {
+      NotificationCenter.default.removeObserver(
+        self,
+        name: ModelsClickProbeNotification.localMouseUpReceipt,
+        object: nil
+      )
+    }
+
+    @objc private func receiveMouseUpReceipt(_ notification: Notification) {
+      guard let event = notification.object as? NSEvent,
+        event.type == .leftMouseUp,
+        event.window === window,
+        event.windowNumber == windowNumber,
+        event.eventNumber == eventNumber
+      else {
+        return
+      }
+      didReceiveMouseUp = true
+    }
+  }
+
   @MainActor
   private struct ModelBrowserFixture: View {
     let speechViewModel: AdmittedModelSettingsViewModel
@@ -318,23 +518,28 @@ private func modelLibraryDescriptor(
   }
 
   @MainActor
-  private func sendModelTrackedMouseClick(at screenPoint: NSPoint, to window: NSWindow) throws {
+  private func sendModelTrackedMouseClick(
+    at screenPoint: NSPoint,
+    to window: NSWindow,
+    probe: ModelsClickProbeContext? = nil
+  ) async throws {
     let windowPoint = window.convertPoint(fromScreen: screenPoint)
-    let timestamp = ProcessInfo.processInfo.systemUptime
+    let downEventNumber = nextModelTrackedMouseEventNumber
+    nextModelTrackedMouseEventNumber += 2
+    let timestamp = floor(ProcessInfo.processInfo.systemUptime * 512) / 512
     let mouseUp = try #require(
       NSEvent.mouseEvent(
         with: .leftMouseUp,
         location: windowPoint,
         modifierFlags: [],
-        timestamp: timestamp + 0.01,
+        timestamp: timestamp + 5.0 / 512.0,
         windowNumber: window.windowNumber,
         context: nil,
-        eventNumber: 1,
+        eventNumber: downEventNumber + 1,
         clickCount: 1,
         pressure: 0
       )
     )
-    NSApp.postEvent(mouseUp, atStart: true)
     let mouseDown = try #require(
       NSEvent.mouseEvent(
         with: .leftMouseDown,
@@ -343,12 +548,59 @@ private func modelLibraryDescriptor(
         timestamp: timestamp,
         windowNumber: window.windowNumber,
         context: nil,
-        eventNumber: 0,
+        eventNumber: downEventNumber,
         clickCount: 1,
         pressure: 1
       )
     )
+    let diagnosticWindow: ModelsClickFixtureWindow?
+    if let probe {
+      let probeWindow = try #require(window as? ModelsClickFixtureWindow)
+      let downIdentity = try #require(
+        ModelsMouseEventIdentity(event: mouseDown, window: probeWindow)
+      )
+      let upIdentity = try #require(
+        ModelsMouseEventIdentity(event: mouseUp, window: probeWindow)
+      )
+      let click = ModelsClickProbe(
+        scenario: probe.scenario,
+        ordinal: probe.ordinal,
+        targetKind: probe.targetKind,
+        windowNumber: probeWindow.windowNumber,
+        down: downIdentity,
+        up: upIdentity
+      )
+      probeWindow.arm(click)
+      diagnosticWindow = probeWindow
+    } else {
+      diagnosticWindow = nil
+    }
+    let receiptObserver = ModelsMouseUpReceiptObserver(
+      window: window,
+      eventNumber: mouseUp.eventNumber
+    )
+    defer { receiptObserver.removeObserver() }
+    defer { diagnosticWindow?.disarm() }
+    let monitor = try #require(
+      NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { event in
+        NotificationCenter.default.post(
+          name: ModelsClickProbeNotification.localMouseUpReceipt,
+          object: event
+        )
+        return event
+      }
+    )
+    defer { NSEvent.removeMonitor(monitor) }
+    NSApp.postEvent(mouseUp, atStart: true)
     NSApp.sendEvent(mouseDown)
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(2))
+    while !receiptObserver.didReceiveMouseUp {
+      let remaining = clock.now.duration(to: deadline)
+      guard remaining > .zero else { break }
+      try await Task.sleep(for: min(.milliseconds(10), remaining))
+    }
+    try #require(receiptObserver.didReceiveMouseUp)
   }
 
   @MainActor
@@ -483,12 +735,20 @@ private func modelLibraryDescriptor(
   }
 
   @MainActor
-  private func clickModelView(_ view: NSView, in window: NSWindow) throws {
+  private func clickModelView(
+    _ view: NSView,
+    in window: NSWindow,
+    probe: ModelsClickProbeContext? = nil
+  ) async throws {
     let windowPoint = view.convert(
       NSPoint(x: view.bounds.midX, y: view.bounds.midY),
       to: nil
     )
-    try sendModelTrackedMouseClick(at: window.convertPoint(toScreen: windowPoint), to: window)
+    try await sendModelTrackedMouseClick(
+      at: window.convertPoint(toScreen: windowPoint),
+      to: window,
+      probe: probe
+    )
   }
 
   @MainActor
@@ -527,6 +787,19 @@ private func modelLibraryDescriptor(
   @MainActor
   private func makeModelFixtureWindow(contentView: NSView) -> NSWindow {
     let window = NSWindow(
+      contentRect: contentView.frame,
+      styleMask: [.titled],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = contentView
+    window.makeKeyAndOrderFront(nil)
+    return window
+  }
+
+  @MainActor
+  private func makeModelsClickFixtureWindow(contentView: NSView) -> ModelsClickFixtureWindow {
+    let window = ModelsClickFixtureWindow(
       contentRect: contentView.frame,
       styleMask: [.titled],
       backing: .buffered,
@@ -1067,7 +1340,7 @@ private func modelLibraryDescriptor(
         name: "models-search-\(scenario.name)",
         size: scenario.size
       )
-      let window = makeModelFixtureWindow(contentView: host)
+      let window = makeModelsClickFixtureWindow(contentView: host)
       do {
         defer {
           window.orderOut(nil)
@@ -1091,7 +1364,15 @@ private func modelLibraryDescriptor(
         #expect(searchFrame.height > 14)
 
         try writeModelFixture("models-search-\(scenario.name)-idle", in: host)
-        try clickModelView(searchField, in: window)
+        try await clickModelView(
+          searchField,
+          in: window,
+          probe: ModelsClickProbeContext(
+            scenario: scenario.name,
+            ordinal: 1,
+            targetKind: "search-NSTextField"
+          )
+        )
         let fieldEditor = try #require(searchField.currentEditor())
         #expect(window.firstResponder === fieldEditor)
         let editor = try #require(fieldEditor as? NSTextView)
@@ -1173,7 +1454,15 @@ private func modelLibraryDescriptor(
           #expect(searchField.stringValue == query)
 
           window.recalculateKeyViewLoop()
-          try clickModelView(searchField, in: window)
+          try await clickModelView(
+            searchField,
+            in: window,
+            probe: ModelsClickProbeContext(
+              scenario: scenario.name,
+              ordinal: 3,
+              targetKind: "search-NSTextField"
+            )
+          )
           let focusedEditor = try #require(searchField.currentEditor())
           #expect(window.firstResponder === focusedEditor)
           try sendModelKey(48, characters: "\t", to: window)
@@ -1207,9 +1496,14 @@ private func modelLibraryDescriptor(
             ),
             to: nil
           )
-          try sendModelTrackedMouseClick(
+          try await sendModelTrackedMouseClick(
             at: window.convertPoint(toScreen: voiceSegmentPoint),
-            to: window
+            to: window,
+            probe: ModelsClickProbeContext(
+              scenario: scenario.name,
+              ordinal: 2,
+              targetKind: "NSSegmentedControl"
+            )
           )
           try await settleModelBrowser(host)
           let filteredTypeFilterControl = try #require(modelTypeFilterControl(in: host))
@@ -1223,7 +1517,15 @@ private func modelLibraryDescriptor(
             modelAccessibilityElements(in: host, identifier: "models-row-\(cleanupID)").isEmpty
           )
 
-          try clickModelView(searchField, in: window)
+          try await clickModelView(
+            searchField,
+            in: window,
+            probe: ModelsClickProbeContext(
+              scenario: scenario.name,
+              ordinal: 3,
+              targetKind: "search-NSTextField"
+            )
+          )
           let emptySearchEditor = try #require(searchField.currentEditor())
           emptySearchEditor.selectAll(nil)
           try typeModelText("zzzz", in: window)
@@ -1248,7 +1550,15 @@ private func modelLibraryDescriptor(
           #expect(window.firstResponder !== emptySearchEditor)
           #expect(searchField.stringValue == "zzzz")
 
-          try clickModelView(searchField, in: window)
+          try await clickModelView(
+            searchField,
+            in: window,
+            probe: ModelsClickProbeContext(
+              scenario: scenario.name,
+              ordinal: 4,
+              targetKind: "search-NSTextField"
+            )
+          )
           let refocusedEditor = try #require(searchField.currentEditor())
           #expect(window.firstResponder === refocusedEditor)
           try await settleModelBrowser(host)

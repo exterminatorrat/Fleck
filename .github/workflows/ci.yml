@@ -1,6 +1,14 @@
 name: CI
 on:
   workflow_dispatch:
+    inputs:
+      probe:
+        description: Diagnostic selector; neither mode replaces required CI
+        type: choice
+        default: readiness
+        options:
+          - readiness
+          - models-click
 permissions:
   contents: read
 jobs:
@@ -16,21 +24,33 @@ jobs:
       - name: Establish disposable runner keyboard test environment
         run: |
           sudo -n pmset -a displaysleep 0 sleep 0
-          defaults write -g AppleKeyboardUIMode -int 3
-          defaults read -g AppleKeyboardUIMode
+          if [[ '${{ inputs.probe }}' == readiness ]]; then
+            defaults write -g AppleKeyboardUIMode -int 3
+          fi
+          defaults read -g AppleKeyboardUIMode || true
           sw_vers
           xcodebuild -version
           swift --version
           git rev-parse HEAD HEAD^{tree}
       - name: Compare actual focus and anchored cue state
+        if: ${{ inputs.probe == 'readiness' }}
         run: |
           export FLECK_SETTINGS_WINDOW_CAPTURE_DIR="$RUNNER_TEMP/readiness-seam-captures"
           Scripts/run-nonempty-swift-tests.sh '^FleckAppTests\.(DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize\(\)|SettingsSearchProbeKeepsPrivateIdentityWhenAccessibilityIdentifierChanges\(\)|SettingsSearchConnectsGlobalResultsToExistingControlAnchors\(\)|DictationSettingsOpenModelsAndSearchNavigateIntoTheSamePane\(\)|settingsSearchAnchorFocusCueDistinguishesTabFromPointer\(\)|SettingsSearchTests/.+)$' > "$RUNNER_TEMP/readiness-seam.log" 2>&1
           grep -F 'Readiness full keyboard access: true' "$RUNNER_TEMP/readiness-seam.log"
+      - name: Observe the exact owned Models click route
+        if: ${{ inputs.probe == 'models-click' }}
+        run: |
+          Scripts/run-nonempty-swift-tests.sh '^FleckAppTests\.modelSearchBlursWithoutSwallowingActionsAcrossThemesAndSizes\(\)$' > "$RUNNER_TEMP/models-click-route.log" 2>&1
+          grep -F 'MODELS_CLICK_PROBE_INSTALL class=AppKitTestProbeApplication exactPrincipalClass=true beforeTestBundle=true' "$RUNNER_TEMP/models-click-route.log"
       - name: Report diagnostic observations without final validation claim
         if: always()
         run: |
-          grep -E 'SEAM|F93-readiness|Readiness full keyboard|matched test count|Test run with|^error:|✘|✔ Test' "$RUNNER_TEMP/readiness-seam.log" || true
+          for trace in "$RUNNER_TEMP/readiness-seam.log" "$RUNNER_TEMP/models-click-route.log"; do
+            if [[ -f "$trace" ]]; then
+              grep -E 'MODELS_CLICK_PROBE|SEAM|F93-readiness|Readiness full keyboard|matched test count|Test run with|^error:|✘|✔ Test' "$trace" || true
+            fi
+          done
           printf '%s\n' 'Diagnostic only: no required full graph, package, or product validation verdict.' >> "$GITHUB_STEP_SUMMARY"
       - name: Preserve synthetic seam captures and raw trace
         if: always()
@@ -40,3 +60,4 @@ jobs:
           path: |
             ${{ runner.temp }}/readiness-seam.log
             ${{ runner.temp }}/readiness-seam-captures
+            ${{ runner.temp }}/models-click-route.log
