@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.7-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
 ## [1.7.6-beta.1] - 2026-11-02
 
 ### Fixed
@@ -53,6 +59,12 @@ This focused change is part of the shared 1.7.0-beta.1 retained-feature release 
 not a separate release. Source-only checkpoint: local compilation, tests and native
 keyboard, focus, IME, visual and accessibility behavior remain unverified.
 
+## [1.5.24-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
 ## [1.5.22-beta.1] - 2026-11-02
 
 ### Fixed
@@ -78,6 +90,19 @@ keyboard, focus, IME, visual and accessibility behavior remain unverified.
 
 - Carry verified readiness, Models input, native font and right-to-left title repairs
   into the bottom-only pill source while preserving its standby and routing lifecycle.
+
+## [1.5.23-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
+## [1.5.22-beta.1] - 2026-11-02
+
+### Fixed
+
+- Qualify native Models mouse-up receipts by exact owned tracking consumption and
+  completed synchronous dispatch, retaining keyboard scenarios and rejection controls.
 
 ## [1.5.21-beta.1] - 2026-11-02
 
@@ -164,6 +189,12 @@ delivery is claimed.
 Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
 and native behavior remain unverified; hosted verification is pending.
 
+## [1.5.20-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
 ## [1.5.19-beta.1] - 2026-11-02
 
 ### Fixed
@@ -206,6 +237,12 @@ ownership remains unresolved.
 
 Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
 and native behavior remain unverified; hosted verification is pending.
+
+## [1.5.19-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
 
 ## [1.5.18-beta.1] - 2026-11-02
 
@@ -355,6 +392,12 @@ tests, visual/accessibility inspection and native behavior remain unverified.
 Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
 tests and native behavior remain unverified.
 
+## [1.4.46-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
 ## [1.4.45-beta.1] - 2026-11-02
 
 ### Fixed
@@ -371,6 +414,12 @@ tests and native behavior remain unverified.
 - Keep the tab-title fade at the semantic trailing edge in right-to-left layouts
   without reversing the mirrored gradient twice.
 
+## [1.4.44-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve overflow rail scroll while composing a new folder.
+
 ## [1.4.43-beta.1] - 2026-11-01
 
 ### Fixed
@@ -379,6 +428,15 @@ tests and native behavior remain unverified.
   without depending on the first folder remaining exposed.
 
 Source checkpoint only; CI and native verification remain pending.
+
+## [1.4.24-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed Settings spacing, Models Backtab and folder-row focus/School fixture
+  corrections while preserving native resize, scrollbar tracking and folder-creation guards.
+
+Source checkpoint only; this combined source's CI and native/visual verification remain pending.
 
 ## [1.4.42-beta.1] - 2026-11-01
 
