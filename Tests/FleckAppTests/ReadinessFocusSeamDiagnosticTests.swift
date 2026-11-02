@@ -38,17 +38,31 @@ private struct ReadinessFocusSeamDiagnostic: View {
     }
   }
 
+  private var anchoredTrigger: some View {
+    trigger
+      .popover(isPresented: $isPresented) { popover }
+      .settingsSearchAnchor(.dictationStatus, request: initialRequest) { attachment }
+      .environment(\.settingsKeyboardFocusReturnRequest, $returnRequest)
+  }
+
+  private var publiclyNamedTrigger: some View {
+    anchoredTrigger
+      .accessibilityLabel("Dictation readiness")
+      .accessibilityValue("Needs attention")
+      .accessibilityHint("Show dictation readiness and recovery actions.")
+      .accessibilityIdentifier("readiness-seam-trigger")
+  }
+
   var body: some View {
     VStack {
       if variant == 0 {
-        trigger
-          .popover(isPresented: $isPresented) { popover }
-          .settingsSearchAnchor(.dictationStatus, request: initialRequest) { attachment }
+        anchoredTrigger
       } else if variant == 1 {
         trigger
           .settingsSearchAnchor(.dictationStatus, request: initialRequest) { attachment }
           .popover(isPresented: $isPresented) { popover }
-      } else {
+          .environment(\.settingsKeyboardFocusReturnRequest, $returnRequest)
+      } else if variant == 2 {
         trigger
           .focused($nativeFocused)
           .popover(isPresented: $isPresented) { popover }
@@ -58,10 +72,17 @@ private struct ReadinessFocusSeamDiagnostic: View {
             }
           }
           .task { nativeFocused = true }
+      } else if variant == 3 {
+        publiclyNamedTrigger
+      } else {
+        HStack {
+          Text("Dictation section")
+          publiclyNamedTrigger
+        }
+        .settingsSearchAnchor(.section(.dictation), request: nil)
       }
     }
     .padding(40)
-    .environment(\.settingsKeyboardFocusReturnRequest, $returnRequest)
   }
 }
 
@@ -107,7 +128,7 @@ func readinessFocusSeamDiagnostic() async throws {
     window.sendEvent(event)
   }
 
-  for variant in 0...2 {
+  for variant in 0...4 {
     let host = NSHostingView(rootView: ReadinessFocusSeamDiagnostic(variant: variant))
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 420, height: 250),
