@@ -61,7 +61,7 @@ private struct ReadinessFocusSeamDiagnostic: View {
       .accessibilityHint("Show dictation readiness and recovery actions.")
       .settingsSearchAnchor(
         .dictationStatus, request: initialRequest,
-        accessibilityIdentifier: "readiness-seam-trigger"
+        nativeControlIdentifier: "readiness-seam-trigger"
       ) { attachment }
       .environment(\.settingsKeyboardFocusReturnRequest, $returnRequest)
   }

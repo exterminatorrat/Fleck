@@ -975,7 +975,7 @@
   private struct SettingsSearchAnchorModifier: ViewModifier {
     let target: SettingsSearchTarget
     let request: SettingsSearchRequest?
-    let publicIdentifier: String?
+    let nativeControlIdentifier: String?
     @Environment(\.settingsKeyboardFocusReturnRequest) private var keyboardReturnRequest
     #if DEBUG
     @Environment(\.settingsReadinessReturnObservationSource)
@@ -990,11 +990,11 @@
       target: SettingsSearchTarget,
       request: SettingsSearchRequest?,
       returnAttachment: SettingsKeyboardFocusReturnAttachment? = nil,
-      publicIdentifier: String? = nil
+      nativeControlIdentifier: String? = nil
     ) {
       self.target = target
       self.request = request
-      self.publicIdentifier = publicIdentifier
+      self.nativeControlIdentifier = nativeControlIdentifier
       _returnAttachment = StateObject(
         wrappedValue: returnAttachment ?? SettingsKeyboardFocusReturnAttachment()
       )
@@ -1009,14 +1009,21 @@
     }
 
     func body(content: Content) -> some View {
-      content
+      let anchoredContent = content
         .id(target)
-        .accessibilityIdentifier(publicIdentifier ?? target.accessibilityIdentifier)
+        .accessibilityIdentifier(nativeControlIdentifier ?? target.accessibilityIdentifier)
         .accessibilityLabel(target.focusLabel)
-        .focusable()
+      return Group {
+        if nativeControlIdentifier != nil {
+          anchoredContent.focused($isKeyboardFocused)
+        } else {
+          anchoredContent
+            .focusable()
+            .focused($isKeyboardFocused)
+            .accessibilityFocused($isFocused)
+        }
+      }
         .focusEffectDisabled()
-        .focused($isKeyboardFocused)
-        .accessibilityFocused($isFocused)
         .background {
           SettingsSearchProbe(
             identifier: target.accessibilityIdentifier,
@@ -1187,13 +1194,13 @@
     func settingsSearchAnchor(
       _ target: SettingsSearchTarget,
       request: SettingsSearchRequest?,
-      accessibilityIdentifier: String? = nil,
+      nativeControlIdentifier: String? = nil,
       returnAttachment: () -> SettingsKeyboardFocusReturnAttachment?
     ) -> some View {
       modifier(
         SettingsSearchAnchorModifier(
           target: target, request: request, returnAttachment: returnAttachment(),
-          publicIdentifier: accessibilityIdentifier
+          nativeControlIdentifier: nativeControlIdentifier
         )
       )
     }
