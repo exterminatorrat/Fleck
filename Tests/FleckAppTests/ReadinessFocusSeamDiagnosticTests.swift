@@ -68,6 +68,19 @@ private struct ReadinessFocusSeamDiagnostic: View {
       .environment(\.settingsKeyboardFocusReturnRequest, $returnRequest)
   }
 
+  private var nativeAnchorBeforePopover: some View {
+    trigger
+      .accessibilityLabel("Dictation readiness")
+      .accessibilityValue("Needs attention")
+      .accessibilityHint("Show dictation readiness and recovery actions.")
+      .settingsSearchAnchor(
+        .dictationStatus, request: initialRequest,
+        nativeControlIdentifier: "readiness-seam-trigger"
+      ) { attachment }
+      .environment(\.settingsKeyboardFocusReturnRequest, $returnRequest)
+      .popover(isPresented: $isPresented) { popover }
+  }
+
   var body: some View {
     VStack {
       if variant == 0 {
@@ -77,8 +90,9 @@ private struct ReadinessFocusSeamDiagnostic: View {
           .settingsSearchAnchor(.dictationStatus, request: initialRequest) { attachment }
           .popover(isPresented: $isPresented) { popover }
           .environment(\.settingsKeyboardFocusReturnRequest, $returnRequest)
-      } else if variant == 2 {
+      } else if variant == 2 || variant == 6 {
         trigger
+          .background(SettingsSearchProbe(identifier: "native-seam-attachment", returnAttachment: attachment))
           .focused($nativeFocused)
           .popover(isPresented: $isPresented) { popover }
           .background {
@@ -95,10 +109,16 @@ private struct ReadinessFocusSeamDiagnostic: View {
           publiclyNamedTrigger
         }
         .settingsSearchAnchor(.section(.dictation), request: nil)
-      } else {
+      } else if variant == 5 {
         HStack {
           Text("Dictation section")
           correctedTrigger
+        }
+        .settingsSearchAnchor(.section(.dictation), request: nil)
+      } else {
+        HStack {
+          Text("Dictation section")
+          nativeAnchorBeforePopover
         }
         .settingsSearchAnchor(.section(.dictation), request: nil)
       }
@@ -106,6 +126,24 @@ private struct ReadinessFocusSeamDiagnostic: View {
     .padding(40)
     .onChange(of: nativeFocused) { oldValue, newValue in
       print("SEAM-DIRECT-FOCUS variant=\(variant) old=\(oldValue) new=\(newValue)")
+    }
+    .task(id: returnRequest?.id) { @MainActor in
+      guard variant == 6, let request = returnRequest else { return }
+      let generation = attachment.generation
+      await Task.yield()
+      guard !Task.isCancelled, returnRequest?.id == request.id else { return }
+      returnRequest = nil
+      guard NSApp.isActive, let window = request.window,
+        attachment.matches(request, generation: generation, inputID: SettingsSearchInputModality.shared.inputID),
+        NSApp.keyWindow === window, window.isKeyWindow, window.isVisible
+      else {
+        print("SEAM-DELIVERY variant=6 accepted=false focused=\(nativeFocused)")
+        return
+      }
+      print("SEAM-DELIVERY variant=6 accepted=true focusedBefore=\(nativeFocused) cancelled=\(Task.isCancelled)")
+      SettingsSearchInputModality.shared.record(isKeyboardInput: true, windowNumber: window.windowNumber)
+      nativeFocused = true
+      print("SEAM-DELIVERY variant=6 focusedAfter=\(nativeFocused) cancelled=\(Task.isCancelled)")
     }
   }
 }
@@ -159,7 +197,7 @@ func readinessFocusSeamDiagnostic() async throws {
     print("SEAM-STATE variant=\(currentVariant) \(record)")
   }
   defer { modality.readinessReturnObservation = previousObservation }
-  for variant in 0...5 {
+  for variant in 0...7 {
     currentVariant = variant
     let host = NSHostingView(rootView: ReadinessFocusSeamDiagnostic(variant: variant))
     let window = NSWindow(

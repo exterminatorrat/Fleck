@@ -1125,7 +1125,7 @@
           if target == .dictationStatus {
             inputModality.readinessReturnObservation?(
               readinessReturnObservationSource,
-              "[F93-readiness-return:accepted] accepted=true"
+              "[F93-readiness-return:accepted] accepted=true keyboardBefore=\(isKeyboardFocused) accessibilityBefore=\(isFocused) cancelled=\(Task.isCancelled)"
             )
           }
           #endif
@@ -1136,7 +1136,7 @@
           if target == .dictationStatus {
             inputModality.readinessReturnObservation?(
               readinessReturnObservationSource,
-              "[SEAM-write] keyboard=\(isKeyboardFocused) accessibility=\(isFocused) native=\(nativeControlIdentifier != nil) keyMatches=\(NSApp.keyWindow === window)"
+              "[SEAM-write] keyboard=\(isKeyboardFocused) accessibility=\(isFocused) native=\(nativeControlIdentifier != nil) keyMatches=\(NSApp.keyWindow === window) cancelled=\(Task.isCancelled)"
             )
           }
           #endif
