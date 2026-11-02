@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.2-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this descendant feature layer while integrating the verified current parent repairs.
+
 ## [1.7.0-beta.1] - 2026-10-27
 
 ### Added
@@ -26,6 +32,30 @@ This is one constituent of the shared 1.7.0-beta.1 retained-feature development 
 separate release. Local compilation, tests and native behavior remain unrun; hosted checks are
 pending. Existing 1.6.x candidates and all earlier development history remain preserved.
 
+## [1.7.1-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve bounded MCP protocol behavior while integrating the verified parent repairs.
+
+## [1.7.0-beta.1] - 2026-10-27
+
+### Added
+
+- Add bounded MCP stdio transport and modern request dispatch while retaining legacy tools,
+  request ownership, cancellation, output ordering and EOF settlement.
+- Add strict version-2 event contracts and wire compatibility checks. Subscription execution
+  and callback delivery remain unavailable in this foundational layer.
+
+### Fixed
+
+- Handle closed output pipes without SIGPIPE termination, forward legacy notification-only
+  batches without responses, preserve cancellation ownership and reject unsupported replay age.
+
+This is one constituent of the shared 1.7.0-beta.1 retained-feature development cohort, not a
+separate release. Local compilation, tests and native behavior remain unrun; hosted checks are
+pending. Existing 1.6.x candidates and all earlier development history remain preserved.
+
 ## [1.5.9-beta.1] - 2026-10-27
 
 ### Fixed
@@ -35,6 +65,134 @@ pending. Existing 1.6.x candidates and all earlier development history remain pr
 
 Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
 and native behavior remain unverified; hosted verification is pending.
+
+## [1.5.20-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve capsule standby placement and its explicit native fixture cleanup while
+  integrating reviewed note-tab accessibility, physical gradients and parent Settings work.
+
+## [1.5.16-beta.1] - 2026-11-02
+
+### Fixed
+
+- Carry verified readiness, Models input, native font and right-to-left title repairs
+  into the bottom-only pill source while preserving its standby and routing lifecycle.
+
+## [1.5.19-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve the theme, Settings and Models work while integrating reviewed native
+  note-tab accessibility, physical title gradients and interface-font corrections.
+
+## [1.5.15-beta.1] - 2026-11-02
+
+### Fixed
+
+- Integrate the verified font and right-to-left title parent while preserving the
+  readiness accessibility correction, Models input lifecycle and complete filing history.
+
+## [1.5.14-beta.1] - 2026-11-02
+
+### Fixed
+
+- Keep Settings section-heading accessibility semantics separate from the readiness
+  action, preserving its public identity and keyboard return behavior.
+- Give private Settings focus probes an independent identity and verify returned
+  window accessibility focus with mode-appropriate native keyboard coverage.
+
+## [1.5.13-beta.1] - 2026-10-31
+
+### Fixed
+
+- Source readiness Escape-return requests from the trigger's bound native attachment and
+  hand them directly to the existing guarded focus consumer before dismissing the popover.
+- Add regression coverage for bound-window/current-input publication and clearing stale
+  requests when the producer's native attachment is unbound or detached.
+
+Source-only CI repair candidate. Compilation, tests and hosted keyboard/accessibility
+behavior remain unrun; prior public CI is red and Dictionary/Appearance failures remain open.
+No passing CI, unchanged-head recovery or test-build delivery is claimed.
+
+## [1.5.12-beta.1] - 2026-10-30
+
+### Fixed
+
+- Explicitly dismiss the existing readiness popover on Escape and request return to its
+  trigger through the existing public focus state only while its native attachment,
+  active key window and original keyboard-input generation remain current.
+- Add regression coverage for stale native attachments and intervening pointer/key input,
+  and bounded diagnostic observations for existing Dictionary and Appearance CI failures.
+
+Source-only CI repair candidate. Compilation, regression execution, native keyboard and
+accessibility restoration remain unverified; no passing CI or test-build delivery is claimed.
+
+## [1.5.10-beta.1] - 2026-10-30
+
+### Fixed
+
+- Correct the readiness-popover fixture's unsupported trigger-focus retention assumption
+  with semantic coverage of existing keyboard entry, actions, traversal, dismissal and return.
+- Make the existing System Settings actions recordable in that fixture while preserving
+  their original default runtime delegation; no actions or production focus policy change.
+
+Source-only CI repair candidate. Compilation, tests, native keyboard/accessibility and
+current-context checks remain unrun for this change; no passing behavior, CI or test-build
+delivery is claimed.
+
+## [1.5.10-beta.1] - 2026-10-29
+
+### Fixed
+
+- Inherit the explicit interface-font correction while preserving theme/hover surfaces,
+  bottom-only live-pill standby and the reviewed dictation regression guards.
+
+Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
+and native behavior remain unverified; hosted verification is pending.
+
+## [1.5.18-beta.1] - 2026-11-02
+
+### Fixed
+
+- Retain transactional multi-note filing while integrating reviewed native title
+  accessibility, physical gradient coordinates and interface-font picker corrections.
+
+## [1.5.9-beta.1] - 2026-11-02
+
+### Fixed
+
+- Inherit the verified tab-title fade and native font-picker Escape corrections while
+  preserving transactional filing, durable receipts and guarded undo.
+
+## [1.5.9-beta.1] - 2026-10-29
+
+### Fixed
+
+- Balance native Settings traffic lights against measured sidebar search and header frames,
+  retaining calibrated placement while the header is hidden.
+- Add geometry/cache regression coverage and encode the Models reverse-Tab fixture with
+  AppKit's backtab character.
+
+Source-only repair checkpoint. Compilation, tests and native/visual/accessibility validation
+remain unrun for this change; hosted CI has not run for this checkpoint. Readiness focus
+ownership remains unresolved.
+
+## [1.5.17-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native note-tab accessibility activation and explicit physical title-gradient
+  coordinates when integrating the reviewed title parent, retaining optional interface
+  fonts and native font-picker Escape handling.
+
+## [1.5.8-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve the verified right-to-left tab-title fade correction alongside native
+  font-picker Escape handling when integrating the current parent source.
 
 ## [1.5.8-beta.1] - 2026-10-27
 
@@ -49,6 +207,13 @@ and native behavior remain unverified; hosted verification is pending.
 Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
 and native behavior remain unverified; hosted verification is pending.
 
+## [1.5.7-beta.1] - 2026-11-02
+
+### Fixed
+
+- Route Escape from the native font-family table to its owning picker so cancelling
+  dismisses the picker without committing a font change.
+
 ## [1.5.7-beta.1] - 2026-10-27
 
 ### Fixed
@@ -58,6 +223,21 @@ and native behavior remain unverified; hosted verification is pending.
 - Keep mixed-marker fence closers from exposing code-block headings as filing destinations.
 - Reject backtick fence openers whose info contains a backtick while preserving valid
   backtick and tilde fences, including indented longer matching closers.
+
+Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
+and native behavior remain unverified; hosted verification is pending.
+
+## [1.5.7-beta.1] - 2026-10-27
+
+### Fixed
+
+- Inherit the explicit interface-font correction while preserving transactional multi-note
+  and semantic-section filing, durable receipts, guarded undo and filing regression coverage.
+- Keep mixed-marker fence closers from exposing code-block headings as filing destinations.
+- Reject backtick fence openers whose info contains a backtick while preserving valid
+  backtick and tilde fences, including indented longer matching closers.
+- 2026-10-29: Honor explicit Inbox routing without unrelated destination suggestions while
+  preserving ambiguous/invalid-route fallback, durable receipts, history and undo.
 
 Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
 and native behavior remain unverified; hosted verification is pending.
@@ -140,6 +320,217 @@ tests, visual/accessibility inspection and native behavior remain unverified.
 Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
 tests and native behavior remain unverified.
 
+## [1.4.45-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve complete note-tab button accessibility through the native drag host,
+  including title labels and activation, without replacing folder drag semantics.
+- Resolve only the decorative fade gradient in physical coordinates so its semantic
+  trailing edge remains stable across native layout-direction handling.
+
+## [1.4.44-beta.1] - 2026-11-02
+
+### Fixed
+
+- Keep the tab-title fade at the semantic trailing edge in right-to-left layouts
+  without reversing the mirrored gradient twice.
+
+## [1.4.43-beta.1] - 2026-11-01
+
+### Fixed
+
+- Use the Trash row's accessibility frame to locate the native folder-scroll band
+  without depending on the first folder remaining exposed.
+
+Source checkpoint only; CI and native verification remain pending.
+
+## [1.4.42-beta.1] - 2026-11-01
+
+### Fixed
+
+- Integrate the reviewed retained folder-overflow action guards and complete fixture changes
+  while preserving the existing editor and native resize checkpoints.
+
+Source prerequisite only; the new combined source is uncompiled and runtime verification is unrun.
+Recovery of the composition failure and full native behavior remain unverified.
+
+## [1.4.39-beta.1] - 2026-11-01
+
+### Fixed
+
+- Ignore retained folder-overflow actions while creating a folder.
+- Carry the retained-action regression and await once-only folder-fixture teardown after runtime shutdown.
+
+Source prerequisite only; new source is uncompiled and runtime verification is unrun.
+No recovery of another source's composition failure is claimed.
+
+## [1.4.38-beta.1] - 2026-11-01
+
+### Fixed
+
+- Integrate the reviewed aligned-geometry resize reentry guard with the existing editor
+  and native fractional-resize checkpoints.
+
+Source checkpoint only; compilation and native verification remain pending. Recovery of the
+predecessor's failures and direct nil/nonfinite event-adapter injection coverage remain unverified.
+
+## [1.4.35-beta.1] - 2026-11-01
+
+### Fixed
+
+- Allow panel-resize reentry when native geometry is already aligned while deferred reconciliation remains queued.
+
+Source repair candidate only; this guard remains uncompiled and native verification is unrun.
+Recovery of the predecessor's rollback/restart failures and direct nil/nonfinite event-adapter
+coverage remain unverified.
+
+## [1.4.34-beta.1] - 2026-11-01
+
+### Fixed
+
+- Integrate the reviewed legacy-compatible native fractional-resize correction with the
+  existing editor and activity scrollbar checkpoints.
+
+Source checkpoint only; compilation and native verification remain pending. Direct nil/nonfinite
+event-adapter injection coverage remains open.
+
+## [1.4.31-beta.1] - 2026-10-31
+
+### Fixed
+
+- Preserve canonical pointer coordinates and native size readback during fractional panel resizing.
+- Fence resize publication, rollback and commit against stale interaction revisions and ownership.
+
+Source checkpoint only; compilation and native verification remain pending. Direct nil/nonfinite
+event-adapter coverage remains open.
+
+## [1.4.30-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed activity scrollbar geometry and tracking correction while preserving
+  the native Tab and bullet-caret editor checkpoint and its prior parent corrections.
+
+Source checkpoint only; combined compilation and native verification remain pending.
+
+## [1.4.27-beta.1] - 2026-10-31
+
+### Fixed
+
+- Keep the activity scrollbar's visual knob within native knob geometry at fractional positions.
+- Preserve the initial visual knob rectangle when native tracking begins and retain held-size behavior.
+
+Source checkpoint only; compilation and native verification remain pending.
+
+## [1.4.26-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed Dictionary capture, folder overflow/focus, Settings spacing and Models
+  Backtab corrections while preserving capped, fading note-tab titles and full accessible labels.
+
+Source-only dependency integration; this checkpoint's CI and native validation remain pending.
+
+## [1.4.25-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed Dictionary capture, folder overflow/focus, Settings spacing and Models
+  Backtab corrections while preserving theme-matched banners, inline opt-out and native resizing.
+
+Source-only dependency integration; this checkpoint's CI and native validation remain pending.
+
+## [1.4.24-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed Settings spacing, Models Backtab and folder-row focus/School fixture
+  corrections while preserving native resize, scrollbar tracking and folder-creation guards.
+
+Source checkpoint only; this combined source's CI and native/visual verification remain pending.
+
+## [1.4.23-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed Settings chrome, Models Backtab and folder-row focus/School fixture
+  corrections while preserving the native Tab and bullet-caret editor checkpoint.
+
+Source checkpoint only; combined compilation and native verification remain pending.
+
+## [1.4.20-beta.1] - 2026-10-31
+
+### Fixed
+
+- Calibrate Settings traffic-light spacing against measured native sidebar search and header geometry.
+- Use the native Backtab character in the existing Models reverse-focus regression test.
+- Preserve folder-row focus through the reorder wrapper and associate the School fixture with its
+  explicit accessibility owner instead of an assumed row width.
+
+Source checkpoint only; compilation and native verification remain pending.
+
+## [1.4.19-beta.1] - 2026-10-31
+
+### Fixed
+
+- Ignore retained overflow-rail actions during folder creation so the scrolled folder
+  geometry stays in place, with both rail directions covered by the existing regression.
+- Inherit the Dictionary priority-star capture fixture's explicit logical bitmap size
+  without changing production appearance or assertion thresholds.
+
+Source checkpoint only; this combined source's CI, native interaction and visual validation
+remain pending.
+
+## [1.4.18-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed activity-scrollbar containment and held-entry correction while
+  preserving capped, fading note-tab titles and their full accessible labels.
+
+Source-only dependency integration; this checkpoint's CI and native validation remain pending.
+
+## [1.4.17-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed activity-scrollbar containment and held-entry correction while
+  preserving theme-matched banners and their existing inline opt-out behavior.
+
+Source-only dependency integration; this checkpoint's CI and native validation remain pending.
+
+## [1.4.16-beta.1] - 2026-10-31
+
+### Fixed
+
+- Constrain idle and released activity-scrollbar paint to the usable native knob and track
+  interval without changing its dimensions or weakening containment checks.
+- Preserve the corrected full knob rectangle when entering native tracking and retain its
+  proportional movement while the held length stays frozen.
+
+Source propagation of the reviewed correction; this checkpoint's CI and native validation
+remain pending. Supporting paired CI passes on the existing dependency are not a complete-app pass.
+
+## [1.4.15-beta.1] - 2026-10-29
+
+### Fixed
+
+- Cap note-tab title labels with a semantic trailing fade while preserving full accessible titles.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests, visual/accessibility inspection and native behavior remain unverified.
+
+## [1.4.14-beta.1] - 2026-10-29
+
+### Fixed
+
+- Port theme-matched agent-update and capture-failure banner surfaces, plus an inline opt-out
+  wired to the existing agent-banner preference.
+
+Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
+tests, visual/accessibility inspection and native behavior remain unverified.
+
 ## [1.4.13-beta.1] - 2026-10-26
 
 ### Added
@@ -158,6 +549,18 @@ tests, visual/accessibility inspection and native behavior remain unverified.
 
 Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
 tests, visual/accessibility inspection and native behavior remain unverified.
+
+## [1.4.11-beta.1] - 2026-10-29
+
+### Fixed
+
+- Adopt bounded actual native resize frames while preserving anchor, top, containment and
+  legal-preference checks.
+- Protect resize rollback and completion from newer interactions while preserving deferred
+  size publication during reentry.
+- Reject backing alignment or native adoption that changes an untouched resize axis.
+
+Source-only checkpoint; compilation, tests and native resize validation remain unrun.
 
 ## [1.4.11-beta.1] - 2026-10-26
 
