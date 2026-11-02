@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.7-beta.1] - 2026-11-02
+
+### Fixed
+
+- Advance the injected terminal-animation clock and await its real callback before
+  checking sampler quiescence, retaining native terminal and no-speech assertions.
+
 ## [1.7.6-beta.1] - 2026-11-02
 
 ### Fixed

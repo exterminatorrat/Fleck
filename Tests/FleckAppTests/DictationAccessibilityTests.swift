@@ -2721,6 +2721,7 @@ private actor AccessibilitySleepGate {
       return now
     }
   )
+  controller.setReduceMotionOverrideForTesting(false)
   defer { controller.dismiss() }
   controller.presentIdle(dock: .bottom, onOpenFleck: {}, onDockChanged: { _ in })
 
@@ -2786,6 +2787,13 @@ private actor AccessibilitySleepGate {
   let menu = try #require(host.menu)
   #expect(!menu.items.contains(where: { $0.title == "Undo" }))
   #expect(recoveryActions == 0)
+  now += 0.5
+  let animationClock = ContinuousClock()
+  let animationDeadline = animationClock.now.advanced(by: .seconds(2))
+  while controller.fleckPillModel.needsAnimation, animationClock.now < animationDeadline {
+    try await Task.sleep(for: .milliseconds(16))
+  }
+  try #require(!controller.fleckPillModel.needsAnimation)
   let terminalSamples = sampleCount
   try await Task.sleep(for: .milliseconds(100))
   #expect(sampleCount == terminalSamples)
