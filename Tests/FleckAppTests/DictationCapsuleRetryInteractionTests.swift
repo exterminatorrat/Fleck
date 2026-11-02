@@ -28,9 +28,11 @@ private func retryNativeEvents(_ controller: DictationCapsuleController, number:
   let target = try #require(host.hitTest(host.convert(point, to: host.superview)))
   #expect(target === host.subviews.first)
   let location = host.convert(point, to: nil)
+  let timestamp = (ProcessInfo.processInfo.systemUptime * 1_000_000_000).rounded(.down)
+    / 1_000_000_000
   func event(_ type: NSEvent.EventType, _ offset: Int) throws -> NSEvent {
     try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
-      timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+      timestamp: timestamp, windowNumber: panel.windowNumber,
       context: nil, eventNumber: number + offset, clickCount: 1, pressure: 0))
   }
   return (target, try event(.leftMouseDown, 0), try event(.leftMouseUp, 1))

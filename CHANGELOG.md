@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.2-beta.1] - 2026-11-02
+
+### Fixed
+
+- Keep capsule recovery mouse releases bound to the pressed recovery generation,
+  rejecting replacement actions instead of activating them after a state change.
+
 ## [1.7.1-beta.1] - 2026-10-29
 
 ### Fixed

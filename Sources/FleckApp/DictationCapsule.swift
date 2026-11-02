@@ -1976,6 +1976,13 @@
 
     var allowsActions = false
 
+    fileprivate var onRecoveryMouseUp: (NSEvent) -> Bool = { _ in false }
+
+    override func sendEvent(_ event: NSEvent) {
+      if event.type == .leftMouseUp, onRecoveryMouseUp(event) { return }
+      super.sendEvent(event)
+    }
+
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
   }
@@ -2095,6 +2102,9 @@
       )
       self.hostingView = hostingView
       panel.contentView = hostingView
+      panel.onRecoveryMouseUp = { [weak hostingView] event in
+        hostingView?.handleRecoveryMouseUp(event) ?? false
+      }
       inputRouter.onDragChanged = { [weak self] point in
         self?.dragChanged(to: point)
       }
@@ -4200,6 +4210,10 @@
       hostingView.cancelPointerGesture()
     }
 
+    func handleRecoveryMouseUp(_ event: NSEvent) -> Bool {
+      hostingView.handleRecoveryMouseUp(event)
+    }
+
     private func makeContextMenu() -> NSMenu {
       let menu = NSMenu()
       addItem("Open Fleck", action: #selector(openFleck), to: menu)
@@ -4478,6 +4492,12 @@
         }
         inputRouter.onDragEnded(screenPoint, false)
       }
+    }
+
+    func handleRecoveryMouseUp(_ event: NSEvent) -> Bool {
+      guard consumedGesture, consumedRegion == .recovery else { return false }
+      mouseUp(with: event)
+      return true
     }
 
     override func rightMouseDown(with event: NSEvent) {
