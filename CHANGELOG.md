@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.45-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve complete note-tab button accessibility through the native drag host,
+  including title labels and activation, without replacing folder drag semantics.
+
 ## [1.4.44-beta.1] - 2026-11-02
 
 ### Fixed
