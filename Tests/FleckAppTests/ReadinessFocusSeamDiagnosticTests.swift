@@ -53,6 +53,19 @@ private struct ReadinessFocusSeamDiagnostic: View {
       .accessibilityIdentifier("readiness-seam-trigger")
   }
 
+  private var correctedTrigger: some View {
+    trigger
+      .popover(isPresented: $isPresented) { popover }
+      .accessibilityLabel("Dictation readiness")
+      .accessibilityValue("Needs attention")
+      .accessibilityHint("Show dictation readiness and recovery actions.")
+      .settingsSearchAnchor(
+        .dictationStatus, request: initialRequest,
+        accessibilityIdentifier: "readiness-seam-trigger"
+      ) { attachment }
+      .environment(\.settingsKeyboardFocusReturnRequest, $returnRequest)
+  }
+
   var body: some View {
     VStack {
       if variant == 0 {
@@ -74,10 +87,16 @@ private struct ReadinessFocusSeamDiagnostic: View {
           .task { nativeFocused = true }
       } else if variant == 3 {
         publiclyNamedTrigger
-      } else {
+      } else if variant == 4 {
         HStack {
           Text("Dictation section")
           publiclyNamedTrigger
+        }
+        .settingsSearchAnchor(.section(.dictation), request: nil)
+      } else {
+        HStack {
+          Text("Dictation section")
+          correctedTrigger
         }
         .settingsSearchAnchor(.section(.dictation), request: nil)
       }
@@ -128,7 +147,7 @@ func readinessFocusSeamDiagnostic() async throws {
     window.sendEvent(event)
   }
 
-  for variant in 0...4 {
+  for variant in 0...5 {
     let host = NSHostingView(rootView: ReadinessFocusSeamDiagnostic(variant: variant))
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 420, height: 250),

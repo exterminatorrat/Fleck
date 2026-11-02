@@ -975,6 +975,7 @@
   private struct SettingsSearchAnchorModifier: ViewModifier {
     let target: SettingsSearchTarget
     let request: SettingsSearchRequest?
+    let publicIdentifier: String?
     @Environment(\.settingsKeyboardFocusReturnRequest) private var keyboardReturnRequest
     #if DEBUG
     @Environment(\.settingsReadinessReturnObservationSource)
@@ -988,10 +989,12 @@
     init(
       target: SettingsSearchTarget,
       request: SettingsSearchRequest?,
-      returnAttachment: SettingsKeyboardFocusReturnAttachment? = nil
+      returnAttachment: SettingsKeyboardFocusReturnAttachment? = nil,
+      publicIdentifier: String? = nil
     ) {
       self.target = target
       self.request = request
+      self.publicIdentifier = publicIdentifier
       _returnAttachment = StateObject(
         wrappedValue: returnAttachment ?? SettingsKeyboardFocusReturnAttachment()
       )
@@ -1008,7 +1011,7 @@
     func body(content: Content) -> some View {
       content
         .id(target)
-        .accessibilityIdentifier(target.accessibilityIdentifier)
+        .accessibilityIdentifier(publicIdentifier ?? target.accessibilityIdentifier)
         .accessibilityLabel(target.focusLabel)
         .focusable()
         .focusEffectDisabled()
@@ -1184,11 +1187,13 @@
     func settingsSearchAnchor(
       _ target: SettingsSearchTarget,
       request: SettingsSearchRequest?,
+      accessibilityIdentifier: String? = nil,
       returnAttachment: () -> SettingsKeyboardFocusReturnAttachment?
     ) -> some View {
       modifier(
         SettingsSearchAnchorModifier(
-          target: target, request: request, returnAttachment: returnAttachment()
+          target: target, request: request, returnAttachment: returnAttachment(),
+          publicIdentifier: accessibilityIdentifier
         )
       )
     }

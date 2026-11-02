@@ -1569,14 +1569,16 @@
           }
           #endif
       }
-      .settingsSearchAnchor(.dictationStatus, request: searchRequest) {
-        readinessReturnAttachment
-      }
-      .environment(\.settingsKeyboardFocusReturnRequest, $readinessKeyboardReturnRequest)
       .accessibilityLabel("Dictation readiness")
       .accessibilityValue(isReady ? "Ready" : "Needs attention")
       .accessibilityHint("Show dictation readiness and recovery actions.")
-      .accessibilityIdentifier("settings-dictation-readiness-button")
+      .settingsSearchAnchor(
+        .dictationStatus, request: searchRequest,
+        accessibilityIdentifier: "settings-dictation-readiness-button"
+      ) {
+        readinessReturnAttachment
+      }
+      .environment(\.settingsKeyboardFocusReturnRequest, $readinessKeyboardReturnRequest)
     }
 
     @ViewBuilder
