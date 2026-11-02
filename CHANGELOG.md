@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.12-beta.1] - 2026-11-02
+
+### Fixed
+
+- Scope Settings section search semantics to the heading so the readiness button keeps
+  its own accessible name and identifier beside it.
+
 ## [1.7.11-beta.1] - 2026-11-02
 
 ### Fixed
