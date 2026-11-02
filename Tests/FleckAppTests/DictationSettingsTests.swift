@@ -1450,6 +1450,10 @@ func DictationSettingsHostedSidebarSearchFitsBetweenTrafficLightsAndFleckHeaderA
       #expect(!searchFieldFrame.intersects(emptyResultsFrame))
       #expect(emptyResultsFrame.maxY <= searchFieldFrame.minY)
       #expect(sidebarSurfaceFrame.contains(emptyResultsFrame))
+      #expect(window.standardWindowButton(.closeButton) === closeButton)
+      #expect(window.standardWindowButton(.miniaturizeButton) === minimizeButton)
+      #expect(approximatelyEqual(closeButton.convert(closeButton.bounds, to: nil), trafficLightFrames[0]))
+      #expect(approximatelyEqual(minimizeButton.convert(minimizeButton.bounds, to: nil), trafficLightFrames[1]))
 
       searchField.stringValue = ""
       searchCoordinator.controlTextDidChange(
@@ -1457,6 +1461,8 @@ func DictationSettingsHostedSidebarSearchFitsBetweenTrafficLightsAndFleckHeaderA
       )
       await settleSettingsHost(host)
 
+      #expect(approximatelyEqual(closeButton.convert(closeButton.bounds, to: nil), trafficLightFrames[0]))
+      #expect(approximatelyEqual(minimizeButton.convert(minimizeButton.bounds, to: nil), trafficLightFrames[1]))
       for button in [closeButton, minimizeButton] {
         let superview = try #require(button.superview)
         let centerInSuperview = button.convert(
@@ -1530,6 +1536,46 @@ func DictationSettingsHostedSidebarSearchFitsBetweenTrafficLightsAndFleckHeaderA
       window.orderOut(nil)
     }
   }
+}
+
+@Test
+func DictationSettingsChromeBalancesSearchAgainstMeasuredNativeHeaderGeometry() throws {
+  for height in [CGFloat(520), 600] {
+    let sidebar = NSRect(x: 8, y: 8, width: 220, height: height - 16)
+    let search = NSRect(x: 20, y: height - 80, width: 196, height: 28)
+    for (headingTop, expectedInset) in [(height - 94.5, CGFloat(15.5)), (height - 92.5, 17.5)] {
+      let heading = NSRect(x: 34, y: headingTop - 18, width: 29.5, height: 18)
+      let inset = try #require(
+        SettingsWindowChromeLayout.trafficLightTopInset(
+          sidebarFrame: sidebar,
+          searchFrame: search,
+          headingFrame: heading,
+          buttonHeight: 14
+        )
+      )
+      let buttonBottom = sidebar.maxY - inset - 14
+      #expect(buttonBottom - search.maxY == search.minY - heading.maxY)
+      #expect(inset >= SettingsWindowChromeLayout.minimumTrafficLightInset)
+      #expect(inset == expectedInset)
+    }
+  }
+
+  #expect(
+    SettingsWindowChromeLayout.trafficLightTopInset(
+      sidebarFrame: NSRect(x: 8, y: 8, width: 220, height: 504),
+      searchFrame: NSRect(x: 20, y: 440, width: 196, height: 28),
+      headingFrame: NSRect(x: 34, y: 405.5, width: 29.5, height: 18),
+      buttonHeight: 14
+    ) == nil
+  )
+  #expect(
+    SettingsWindowChromeLayout.trafficLightTopInset(
+      sidebarFrame: NSRect(x: 8, y: 8, width: 220, height: 504),
+      searchFrame: .zero,
+      headingFrame: .zero,
+      buttonHeight: 14
+    ) == nil
+  )
 }
 
 @Test @MainActor

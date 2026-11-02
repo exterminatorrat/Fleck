@@ -5276,6 +5276,8 @@ private func withHostedTitleEditors(
 }
 
 @Test @MainActor func hostedUnfiledDisclosureKeepsFolderToolbarFramesStable() async throws {
+  let previousNavigatorAccessibility = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousNavigatorAccessibility) }
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)
   defer { try? FileManager.default.removeItem(at: root) }
@@ -5308,7 +5310,7 @@ private func withHostedTitleEditors(
   await settleHostedView(host)
 
   let before = hostedNavigatorKeyViewFrames(in: host)
-  let beforeFolderFrame = try #require(hostedSchoolFolderFrame(in: host))
+  let beforeFolderFrame = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
   let beforeHostSize = host.bounds.size
   let beforeEditorFrame = host.convert(editor.bounds, from: editor)
   let unfiledControl = try #require(hostedNavigatorKeyViews(in: host).first)
@@ -5321,7 +5323,7 @@ private func withHostedTitleEditors(
   #expect(window.makeFirstResponder(unfiledControl))
   await settleHostedView(host)
   let focused = hostedNavigatorKeyViewFrames(in: host)
-  let focusedFolderFrame = try #require(hostedSchoolFolderFrame(in: host))
+  let focusedFolderFrame = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
 
   #expect(state.preferences.isUnfiledCompact)
   #expect(focused.count == before.count)
@@ -5336,10 +5338,10 @@ private func withHostedTitleEditors(
     to: window
   )
   forceHostedViewUpdate(host)
-  let expandingFolderFrame = try #require(hostedSchoolFolderFrame(in: host))
+  let expandingFolderFrame = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
   try await Task.sleep(for: .milliseconds(300))
   await settleHostedView(host)
-  let expandedFolderFrame = try #require(hostedSchoolFolderFrame(in: host))
+  let expandedFolderFrame = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
 
   #expect(!state.preferences.isUnfiledCompact)
   #expect(expandingFolderFrame == expandedFolderFrame)
@@ -5443,6 +5445,88 @@ private func withHostedTitleEditors(
     await settleHostedView(host)
     #expect(state.workspace.selectedNoteID == folderNote.id)
   }
+}
+
+@Test @MainActor func hostedFolderRowAssociationDistinguishesVisualAndFocusLayers() async throws {
+  let previousNavigatorAccessibility = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousNavigatorAccessibility) }
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let folder = try Folder(id: UUID(), name: "School")
+  let unfiledNote = Note(title: "Unfiled", body: "Body")
+  let filedNote = Note(title: "Filed", body: "Body", folderID: folder.id)
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(
+      notes: [unfiledNote, filedNote],
+      selectedNoteID: unfiledNote.id,
+      folders: [folder]
+    )
+  )
+  let (window, host) = hostedPanel(root: root, state: state, commands: EditorCommands())
+  defer {
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+  await settleHostedView(host)
+  let identifier = "folder-\(folder.id.uuidString)"
+  let elements = hostedAccessibilityElements(in: host, identifier: identifier)
+  try #require(elements.count == 1)
+  let screenFrame = try #require(elements[0].value(forKey: "accessibilityFrame") as? NSValue)
+    .rectValue
+  let ownerFrame = host.convert(window.convertFromScreen(screenFrame), from: nil)
+  let candidates = hostedNavigatorKeyViews(in: host)
+  let visualRows = try #require(
+    hostedNavigatorVisualKeyViews(
+      ownerFrame: ownerFrame, candidates: candidates, in: host, isUnfiled: false
+    )
+  )
+  try #require(visualRows.count == 1)
+  let visual = visualRows[0]
+  let visualFrame = visual.convert(visual.bounds, to: host)
+  #expect(ownerFrame.contains(visualFrame))
+  #expect(visualFrame != ownerFrame)
+  #expect(hostedNavigatorKeyView(matchingAccessibilityIdentifier: identifier, in: host) === visual)
+
+  let owners = candidates.filter { $0.convert($0.bounds, to: host) == ownerFrame }
+  try #require(owners.count == 1)
+  #expect(
+    hostedNavigatorVisualKeyViews(
+      ownerFrame: ownerFrame, candidates: candidates.filter { $0 !== owners[0] },
+      in: host, isUnfiled: false
+    ) == nil
+  )
+  #expect(
+    hostedNavigatorVisualKeyViews(
+      ownerFrame: ownerFrame, candidates: candidates + [owners[0]], in: host, isUnfiled: false
+    ) == nil
+  )
+  #expect(
+    hostedNavigatorVisualKeyViews(
+      ownerFrame: ownerFrame, candidates: candidates.filter { $0 !== visual },
+      in: host, isUnfiled: false
+    ) == nil
+  )
+  let visualParent = try #require(visual.superview)
+  let conflictingVisual = NSView(frame: visual.frame.insetBy(dx: 1, dy: 1))
+  visualParent.addSubview(conflictingVisual)
+  defer { conflictingVisual.removeFromSuperview() }
+  #expect(conflictingVisual.convert(conflictingVisual.bounds, to: host) != visualFrame)
+  #expect(
+    hostedNavigatorVisualKeyViews(
+      ownerFrame: ownerFrame, candidates: candidates + [conflictingVisual],
+      in: host, isUnfiled: false
+    ) == nil
+  )
+  let unexplained = NSView(frame: ownerFrame.insetBy(dx: 1, dy: 1))
+  host.addSubview(unexplained)
+  defer { unexplained.removeFromSuperview() }
+  #expect(
+    hostedNavigatorVisualKeyViews(
+      ownerFrame: ownerFrame, candidates: candidates + [unexplained], in: host, isUnfiled: false
+    ) == nil
+  )
 }
 
 private struct HostedSelectionPillGeometry {
@@ -6250,8 +6334,12 @@ private func hostedNavigatorKeyViewFrames(in view: NSView) -> [CGRect] {
 }
 
 @MainActor
-private func hostedSchoolFolderFrame(in view: NSView) -> CGRect? {
-  hostedNavigatorKeyViewFrames(in: view).first { abs($0.width - 108) < 0.5 }
+private func hostedSchoolFolderFrame(folderID: UUID, in view: NSView) -> CGRect? {
+  guard let row = hostedNavigatorKeyView(
+    matchingAccessibilityIdentifier: "folder-\(folderID.uuidString)",
+    in: view
+  ) else { return nil }
+  return row.convert(row.bounds, to: view)
 }
 
 @MainActor
@@ -6312,15 +6400,75 @@ private func hostedNavigatorKeyView(
     return window.convertToScreen(windowFrame)
   }
   let accessibilityCenter = CGPoint(x: screenFrame.midX, y: screenFrame.midY)
-  let matchingKeyViews = zip(keyViews, candidateScreenFrames).filter {
+  let overlappingKeyViews = zip(keyViews, candidateScreenFrames).filter {
     $0.1.contains(accessibilityCenter)
   }.map(\.0)
+  #expect(!overlappingKeyViews.isEmpty)
+  let ownerFrame = view.convert(window.convertFromScreen(screenFrame), from: nil)
+  let associatedKeyViews = hostedNavigatorVisualKeyViews(
+    ownerFrame: ownerFrame,
+    candidates: keyViews,
+    in: view,
+    isUnfiled: identifier == "folder-unfiled"
+  )
+  #expect(associatedKeyViews != nil)
+  guard let matchingKeyViews = associatedKeyViews else { return nil }
   #expect(!matchingKeyViews.isEmpty)
-  guard let matchingKeyView = matchingKeyViews.first else { return nil }
+  guard !matchingKeyViews.isEmpty else { return nil }
+  let matchingKeyView = matchingKeyViews[0]
   let matchingFrames = matchingKeyViews.map { $0.convert($0.bounds, to: view) }
   let matchingFrame = matchingKeyView.convert(matchingKeyView.bounds, to: view)
   #expect(matchingFrames.allSatisfy { $0 == matchingFrame })
   return matchingKeyView
+}
+
+@MainActor
+private func hostedNavigatorVisualKeyViews(
+  ownerFrame: CGRect,
+  candidates: [NSView],
+  in host: NSView,
+  isUnfiled: Bool
+) -> [NSView]? {
+  guard let window = host.window, !ownerFrame.isEmpty else { return nil }
+  let center = NSPoint(x: ownerFrame.midX, y: ownerFrame.midY)
+  let overlapping = candidates.filter {
+    $0.convert($0.bounds, to: host).contains(center)
+  }
+  guard !overlapping.isEmpty,
+    overlapping.allSatisfy({
+      $0.window === window && !$0.isHiddenOrHasHiddenAncestor && $0.isDescendant(of: host)
+    })
+  else { return nil }
+  let roles = overlapping.map { candidate in
+    (
+      view: candidate,
+      frame: candidate.convert(candidate.bounds, to: host),
+      contentHosts: sequence(first: candidate, next: { $0 === host ? nil : $0.superview })
+        .dropFirst()
+        .compactMap { $0 as? ReorderSourceHostingView }
+    )
+  }
+  if isUnfiled {
+    guard roles.allSatisfy({ $0.contentHosts.isEmpty && $0.frame == ownerFrame }) else { return nil }
+    return roles.map(\.view)
+  }
+  let owners = roles.filter { $0.contentHosts.isEmpty && $0.frame == ownerFrame }
+  let visualRows = roles.filter { $0.contentHosts.count == 1 }
+  guard owners.count == 1, visualRows.count == 1, roles.count == 2 else { return nil }
+  let owner = owners[0].view
+  let visualRow = visualRows[0]
+  let contentHost = visualRow.contentHosts[0]
+  let contentFrame = contentHost.convert(contentHost.bounds, to: host)
+  guard let scroll = owner.enclosingScrollView,
+    contentHost.enclosingScrollView === scroll,
+    ownerFrame.contains(contentFrame),
+    contentFrame.contains(visualRow.frame),
+    ownerFrame.contains(visualRow.frame),
+    visualRow.frame.minX == ownerFrame.minX,
+    visualRow.frame.maxX == ownerFrame.maxX,
+    visualRow.frame.midY == ownerFrame.midY
+  else { return nil }
+  return [visualRow.view]
 }
 
 @MainActor

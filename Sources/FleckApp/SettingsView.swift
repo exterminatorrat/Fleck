@@ -270,6 +270,27 @@
     }
   }
 
+  enum SettingsWindowChromeLayout {
+    static let minimumTrafficLightInset: CGFloat = 14
+
+    static func trafficLightTopInset(
+      sidebarFrame: NSRect,
+      searchFrame: NSRect,
+      headingFrame: NSRect,
+      buttonHeight: CGFloat
+    ) -> CGFloat? {
+      guard !searchFrame.isEmpty, !headingFrame.isEmpty, buttonHeight > 0,
+        sidebarFrame.contains(searchFrame), sidebarFrame.contains(headingFrame),
+        searchFrame.minY >= headingFrame.maxY
+      else { return nil }
+      let lowerGap = searchFrame.minY - headingFrame.maxY
+      let buttonBottom = searchFrame.maxY + lowerGap
+      let inset = sidebarFrame.maxY - buttonBottom - buttonHeight
+      guard inset.isFinite, inset >= minimumTrafficLightInset else { return nil }
+      return inset
+    }
+  }
+
   private struct SettingsWindowChromeConfigurator: NSViewRepresentable {
     func makeNSView(context: Context) -> SettingsWindowChromeView {
       SettingsWindowChromeView()
@@ -283,6 +304,7 @@
   private final class SettingsWindowChromeView: NSView {
     private var adjustmentScheduled = false
     private var observedButtons: [NSButton] = []
+    private var trafficLightTopInset = SettingsWindowChromeLayout.minimumTrafficLightInset
 
     deinit {
       NotificationCenter.default.removeObserver(self)
@@ -291,6 +313,7 @@
     override func viewWillMove(toWindow newWindow: NSWindow?) {
       if newWindow !== window {
         stopObservingTrafficLights()
+        trafficLightTopInset = SettingsWindowChromeLayout.minimumTrafficLightInset
       }
       super.viewWillMove(toWindow: newWindow)
     }
@@ -339,7 +362,7 @@
     private func adjustTrafficLights() {
       guard let window,
         let contentView = window.contentView,
-        let sidebarSurface = settingsSidebarSurface(in: contentView)
+        let sidebarSurface = settingsView(identifier: "settings-sidebar-surface", in: contentView)
       else {
         return
       }
@@ -353,8 +376,32 @@
 
       let sidebarFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
       let buttonFrames = buttons.map { $0.convert($0.bounds, to: nil) }
+      if let searchField = settingsView(identifier: "settings-search-field", in: contentView)
+        as? NSSearchField,
+        let heading = settingsView(identifier: "settings-fleck-sidebar-heading", in: contentView),
+        heading.visibleRect.contains(heading.bounds),
+        let buttonHeight = buttonFrames.map(\.height).max()
+      {
+        let searchFrame = searchField.convert(searchField.bounds, to: nil)
+        let headingFrame = heading.convert(heading.bounds, to: nil)
+        var ancestor: NSView? = heading
+        while let view = ancestor, !(view is NSOutlineView) {
+          ancestor = view.superview
+        }
+        if let outline = ancestor as? NSOutlineView,
+          outline.visibleRect.minY <= outline.bounds.minY,
+          let inset = SettingsWindowChromeLayout.trafficLightTopInset(
+            sidebarFrame: sidebarFrame,
+            searchFrame: searchFrame,
+            headingFrame: headingFrame,
+            buttonHeight: buttonHeight
+          )
+        {
+          trafficLightTopInset = inset
+        }
+      }
       let targetMinX = sidebarFrame.minX + 14
-      let targetMaxY = sidebarFrame.maxY - 14
+      let targetMaxY = sidebarFrame.maxY - trafficLightTopInset
       guard let currentMinX = buttonFrames.map(\.minX).min() else { return }
       guard let currentMaxY = buttonFrames.map(\.maxY).max() else { return }
       let offsetX = targetMinX - currentMinX
@@ -403,12 +450,12 @@
       scheduleTrafficLightAdjustment()
     }
 
-    private func settingsSidebarSurface(in view: NSView) -> NSView? {
-      if view.accessibilityIdentifier() == "settings-sidebar-surface" {
+    private func settingsView(identifier: String, in view: NSView) -> NSView? {
+      if view.accessibilityIdentifier() == identifier {
         return view
       }
       for subview in view.subviews {
-        if let surface = settingsSidebarSurface(in: subview) {
+        if let surface = settingsView(identifier: identifier, in: subview) {
           return surface
         }
       }
