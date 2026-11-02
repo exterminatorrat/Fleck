@@ -2775,7 +2775,10 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
         fontPickerAccessibilityElements(host, label: $0.label).isEmpty
       })
       if width == 1_600 {
-        #expect(visibleCount == iconMenus.count)
+        #expect(
+          visibleCount == iconMenus.count,
+          "profile=\(profile.label) requested=\(width) host=\(host.bounds.size) content=\(window.contentView?.bounds.size ?? .zero) formatting=\(state.preferences.showFormattingBar) selected=\(state.selectedNote != nil) present=\(iconMenus.filter { !fontPickerAccessibilityElements(host, label: $0.label).isEmpty }.map(\.label))"
+        )
         #expect(fontPickerAccessibilityElements(host, label: "More formatting").isEmpty)
       } else {
         #expect(fontPickerAccessibilityElements(host, label: "More formatting").count == 1)
@@ -2822,14 +2825,11 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   ]
   let fullLabels = leadingLabels + ["Delete"]
   func accessibilitySnapshot() -> [String: [NSObject]] {
-    let labelSelector = NSSelectorFromString("accessibilityLabel")
     let childrenSelector = NSSelectorFromString("accessibilityChildren")
     var elementsByLabel: [String: [NSObject]] = [:]
     func collect(_ value: Any) {
       guard let element = value as? NSObject else { return }
-      if element.responds(to: labelSelector),
-        let label = element.perform(labelSelector)?.takeUnretainedValue() as? String
-      {
+      if let label = hostedAccessibilityLabel(element) {
         elementsByLabel[label, default: []].append(element)
       }
       let children = element.responds(to: childrenSelector)
@@ -2851,7 +2851,10 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
       .insetBy(dx: -1, dy: -1)
     for label in labels {
       let controls = snapshot[label] ?? []
-      #expect(controls.count == 1)
+      #expect(
+        controls.count == 1,
+        "label=\(label) requested=\(panelWidth) host=\(host.bounds.size) content=\(contentView.bounds.size) labels=\(snapshot.keys.sorted())"
+      )
       let control = try #require(controls.first)
       let frame = try #require(
         control.value(forKey: "accessibilityFrame") as? NSValue
@@ -3307,7 +3310,10 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
     previousCount = count
     width -= 1
   }
-  let measuredTransition = try #require(transition)
+  let measuredTransition = try #require(
+    transition,
+    "startingWidth=\(startingWidth) startingPrefix=\(startingCount) finalWidth=\(width) finalPrefix=\(previousCount)"
+  )
   await setWidth(measuredTransition.upper)
   let measuredUpperCount = visibleCount()
   await setWidth(measuredTransition.lower)
@@ -7007,14 +7013,24 @@ private func sendHostedKeyDown(
   }
 }
 
+@MainActor
+private func hostedAccessibilityLabel(_ element: NSObject) -> String? {
+  for attribute in ["accessibilityLabel", "accessibilityTitle"] {
+    let selector = NSSelectorFromString(attribute)
+    guard element.responds(to: selector),
+      let value = element.perform(selector)?.takeUnretainedValue()
+    else { continue }
+    if let text = value as? String, !text.isEmpty { return text }
+    if let text = value as? NSAttributedString, !text.string.isEmpty { return text.string }
+  }
+  return nil
+}
+
 // SwiftUI accessibility nodes expose the informal AppKit API, not NSAccessibilityProtocol.
 @MainActor private func fontPickerAccessibilityElement(_ value: Any, label: String) -> NSObject? {
   guard let element = value as? NSObject else { return nil }
-  let labelSelector = NSSelectorFromString("accessibilityLabel")
   let childrenSelector = NSSelectorFromString("accessibilityChildren")
-  let name = element.responds(to: labelSelector)
-    ? element.perform(labelSelector)?.takeUnretainedValue() as? String : nil
-  if name == label { return element }
+  if hostedAccessibilityLabel(element) == label { return element }
   let children = element.responds(to: childrenSelector)
     ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
   for child in children ?? [] {
@@ -7025,10 +7041,7 @@ private func sendHostedKeyDown(
 
 @MainActor private func fontPickerAccessibilityElements(_ value: Any, label: String) -> [NSObject] {
   guard let element = value as? NSObject else { return [] }
-  let labelSelector = NSSelectorFromString("accessibilityLabel")
-  let name = element.responds(to: labelSelector)
-    ? element.perform(labelSelector)?.takeUnretainedValue() as? String : nil
-  var matches = name == label ? [element] : []
+  var matches = hostedAccessibilityLabel(element) == label ? [element] : []
   let childrenSelector = NSSelectorFromString("accessibilityChildren")
   let children = element.responds(to: childrenSelector)
     ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
@@ -7218,7 +7231,10 @@ private func expectOneReachableFormattingActionAcrossVisibleWindows(owner: NSWin
     ["Highlight"], ["Bullets"], ["Numbers"], ["Checklist"], ["Delete"],
   ]
   for labels in actions {
-    #expect(visibleFormattingActionCount(labels: labels, owner: owner) == 1)
+    #expect(
+      visibleFormattingActionCount(labels: labels, owner: owner) == 1,
+      "labels=\(labels) ownerContent=\(owner.contentView?.bounds.size ?? .zero) visibleWindows=\(ownedWindowTree(owner).filter(\.isVisible).map(\.frame))"
+    )
   }
 }
 
