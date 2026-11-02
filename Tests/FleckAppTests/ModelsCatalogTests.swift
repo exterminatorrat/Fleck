@@ -162,6 +162,265 @@ private func modelLibraryDescriptor(
     let event: NSEvent
   }
 
+  private enum ModelsClickProbeNotification {
+    static let arm = Notification.Name("org.fleck.appkit-test-host.models-click.arm")
+    static let windowEvent = Notification.Name(
+      "org.fleck.appkit-test-host.models-click.window-event"
+    )
+    static let disarm = Notification.Name("org.fleck.appkit-test-host.models-click.disarm")
+    static let localMouseUpReceipt = Notification.Name(
+      "org.fleck.appkit-test-host.models-click.local-mouse-up-receipt"
+    )
+    static let trackingMouseUpReceipt = Notification.Name(
+      "org.fleck.appkit-test-host.models-click.tracking-mouse-up-receipt"
+    )
+  }
+
+  @MainActor
+  private var nextModelTrackedMouseEventNumber = 1
+
+  @MainActor
+  private struct ModelsClickProbeContext {
+    let scenario: String
+    let ordinal: Int
+    let targetKind: String
+  }
+
+  @MainActor
+  private struct ModelsMouseEventIdentity {
+    let type: NSEvent.EventType
+    let windowNumber: Int
+    let eventNumber: Int
+    let timestamp: TimeInterval
+    let x: Double
+    let y: Double
+    let modifierFlags: NSEvent.ModifierFlags.RawValue
+    let clickCount: Int
+
+    init?(event: NSEvent, window: NSWindow) {
+      guard event.type == .leftMouseDown || event.type == .leftMouseUp,
+        event.window === window,
+        event.windowNumber == window.windowNumber
+      else {
+        return nil
+      }
+      type = event.type
+      windowNumber = event.windowNumber
+      eventNumber = event.eventNumber
+      timestamp = event.timestamp
+      x = Double(event.locationInWindow.x)
+      y = Double(event.locationInWindow.y)
+      modifierFlags = event.modifierFlags.rawValue
+      clickCount = event.clickCount
+    }
+
+    func hasSameIdentity(as other: ModelsMouseEventIdentity) -> Bool {
+      type == other.type
+        && windowNumber == other.windowNumber
+        && eventNumber == other.eventNumber
+        && timestamp == other.timestamp
+        && x == other.x
+        && y == other.y
+        && modifierFlags == other.modifierFlags
+        && clickCount == other.clickCount
+    }
+
+    func notificationFields(prefix: String) -> [AnyHashable: Any] {
+      [
+        "\(prefix).type": Int(type.rawValue),
+        "\(prefix).eventNumber": eventNumber,
+        "\(prefix).timestamp": timestamp,
+        "\(prefix).x": x,
+        "\(prefix).y": y,
+        "\(prefix).flags": modifierFlags,
+        "\(prefix).clickCount": clickCount,
+      ]
+    }
+
+  }
+
+  @MainActor
+  private struct ModelsClickProbe {
+    let generation: UUID
+    let scenario: String
+    let ordinal: Int
+    let targetKind: String
+    let windowNumber: Int
+    let down: ModelsMouseEventIdentity
+    let up: ModelsMouseEventIdentity
+
+    var armFields: [AnyHashable: Any] {
+      var fields: [AnyHashable: Any] = [
+        "generation": generation.uuidString,
+        "scenario": scenario,
+        "ordinal": ordinal,
+        "targetKind": targetKind,
+        "windowNumber": windowNumber,
+      ]
+      fields.merge(down.notificationFields(prefix: "down")) { _, new in new }
+      fields.merge(up.notificationFields(prefix: "up")) { _, new in new }
+      return fields
+    }
+
+    func eventFields(
+      _ event: ModelsMouseEventIdentity,
+      phase: String
+    ) -> [AnyHashable: Any] {
+      var fields = armFields
+      fields["phase"] = phase
+      fields.merge(event.notificationFields(prefix: "event")) { _, new in new }
+      return fields
+    }
+
+    func eventIdentity(for event: NSEvent, in window: NSWindow) -> ModelsMouseEventIdentity? {
+      guard let identity = ModelsMouseEventIdentity(event: event, window: window),
+        identity.hasSameIdentity(as: down) || identity.hasSameIdentity(as: up)
+      else {
+        return nil
+      }
+      return identity
+    }
+  }
+
+  @MainActor
+  private final class ModelsClickFixtureWindow: NSWindow {
+    private var armedClick: ModelsClickProbe?
+
+    func arm(_ click: ModelsClickProbe) {
+      armedClick = click
+      NotificationCenter.default.post(
+        name: ModelsClickProbeNotification.arm,
+        object: self,
+        userInfo: click.armFields
+      )
+    }
+
+    func disarm() {
+      guard let armedClick else { return }
+      NotificationCenter.default.post(
+        name: ModelsClickProbeNotification.disarm,
+        object: self,
+        userInfo: armedClick.armFields
+      )
+      self.armedClick = nil
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+      let click = armedClick
+      let identity = click?.eventIdentity(for: event, in: self)
+      if let click, let identity {
+        NotificationCenter.default.post(
+          name: ModelsClickProbeNotification.windowEvent,
+          object: self,
+          userInfo: click.eventFields(identity, phase: "entry")
+        )
+      }
+      super.sendEvent(event)
+      if let click, let identity {
+        NotificationCenter.default.post(
+          name: ModelsClickProbeNotification.windowEvent,
+          object: self,
+          userInfo: click.eventFields(identity, phase: "return")
+        )
+      }
+    }
+  }
+
+  @MainActor
+  private final class ModelsMouseUpReceiptObserver: NSObject {
+    private let window: NSWindow
+    private let windowNumber: Int
+    private let generation: UUID
+    private let mouseUp: ModelsMouseEventIdentity
+    private let probe: ModelsClickProbeContext?
+    private(set) var didReceiveMouseUp = false
+
+    init(
+      window: NSWindow,
+      generation: UUID,
+      mouseUp: ModelsMouseEventIdentity,
+      probe: ModelsClickProbeContext?
+    ) {
+      self.window = window
+      windowNumber = window.windowNumber
+      self.generation = generation
+      self.mouseUp = mouseUp
+      self.probe = probe
+      super.init()
+      NotificationCenter.default.addObserver(
+        self,
+        selector: #selector(receiveMouseUpReceipt(_:)),
+        name: ModelsClickProbeNotification.localMouseUpReceipt,
+        object: nil
+      )
+      NotificationCenter.default.addObserver(
+        self,
+        selector: #selector(receiveMouseUpReceipt(_:)),
+        name: ModelsClickProbeNotification.trackingMouseUpReceipt,
+        object: nil
+      )
+    }
+
+    func removeObserver() {
+      NotificationCenter.default.removeObserver(
+        self,
+        name: ModelsClickProbeNotification.localMouseUpReceipt,
+        object: nil
+      )
+      NotificationCenter.default.removeObserver(
+        self,
+        name: ModelsClickProbeNotification.trackingMouseUpReceipt,
+        object: nil
+      )
+    }
+
+    @objc private func receiveMouseUpReceipt(_ notification: Notification) {
+      guard let userInfo = notification.userInfo,
+        let generationValue = userInfo["generation"] as? String,
+        let receiptGeneration = UUID(uuidString: generationValue),
+        receiptGeneration == generation,
+        let event = notification.object as? NSEvent,
+        let eventIdentity = ModelsMouseEventIdentity(event: event, window: window),
+        eventIdentity.hasSameIdentity(as: mouseUp)
+      else {
+        return
+      }
+
+      let route: String
+      if notification.name == ModelsClickProbeNotification.localMouseUpReceipt {
+        route = "localMouseUpReceipt"
+      } else if notification.name == ModelsClickProbeNotification.trackingMouseUpReceipt {
+        guard let receiptWindowNumber = (userInfo["windowNumber"] as? NSNumber)?.intValue,
+          receiptWindowNumber == windowNumber,
+          userInfo["dequeue"] as? Bool == true,
+          userInfo["mode"] as? String == RunLoop.Mode.eventTracking.rawValue,
+          userInfo["dequeuedDuringOwnedWindowSynchronousDown"] as? Bool == true,
+          userInfo["downSuperDispatchReturned"] as? Bool == true
+        else {
+          return
+        }
+        route = "qualifiedTrackingReceipt"
+      } else {
+        return
+      }
+
+      didReceiveMouseUp = true
+      let scenario = probe?.scenario ?? "unprobed"
+      let ordinal = probe.map { String($0.ordinal) } ?? "none"
+      let targetKind = probe?.targetKind ?? "none"
+      FileHandle.standardError.write(
+        Data(
+          (
+            "MODELS_CLICK_PROBE route=\(route) scenario=\(scenario) "
+            + "ordinal=\(ordinal) target=\(targetKind) "
+            + "generation=\(generation.uuidString) window=\(windowNumber) "
+            + "eventNumber=\(mouseUp.eventNumber)\n"
+          ).utf8
+        )
+      )
+    }
+  }
+
   @MainActor
   private struct ModelBrowserFixture: View {
     let speechViewModel: AdmittedModelSettingsViewModel
@@ -318,33 +577,28 @@ private func modelLibraryDescriptor(
   }
 
   @MainActor
-  private func sendModelTrackedMouseClick(at screenPoint: NSPoint, to window: NSWindow) async throws {
+  private func sendModelTrackedMouseClick(
+    at screenPoint: NSPoint,
+    to window: NSWindow,
+    probe: ModelsClickProbeContext? = nil
+  ) async throws {
     let windowPoint = window.convertPoint(fromScreen: screenPoint)
-    let timestamp = ProcessInfo.processInfo.systemUptime
+    let downEventNumber = nextModelTrackedMouseEventNumber
+    nextModelTrackedMouseEventNumber += 2
+    let timestamp = floor(ProcessInfo.processInfo.systemUptime * 512) / 512
     let mouseUp = try #require(
       NSEvent.mouseEvent(
         with: .leftMouseUp,
         location: windowPoint,
         modifierFlags: [],
-        timestamp: timestamp + 0.01,
+        timestamp: timestamp + 5.0 / 512.0,
         windowNumber: window.windowNumber,
         context: nil,
-        eventNumber: 1,
+        eventNumber: downEventNumber + 1,
         clickCount: 1,
         pressure: 0
       )
     )
-    var didReceiveMouseUp = false
-    let windowNumber = window.windowNumber
-    let monitor = try #require(NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { event in
-      let matches = event.windowNumber == windowNumber && event.eventNumber == 1
-      MainActor.assumeIsolated {
-        if matches { didReceiveMouseUp = true }
-      }
-      return event
-    })
-    defer { NSEvent.removeMonitor(monitor) }
-    NSApp.postEvent(mouseUp, atStart: true)
     let mouseDown = try #require(
       NSEvent.mouseEvent(
         with: .leftMouseDown,
@@ -353,18 +607,64 @@ private func modelLibraryDescriptor(
         timestamp: timestamp,
         windowNumber: window.windowNumber,
         context: nil,
-        eventNumber: 0,
+        eventNumber: downEventNumber,
         clickCount: 1,
         pressure: 1
       )
     )
+    let generation = UUID()
+    let mouseUpIdentity = try #require(
+      ModelsMouseEventIdentity(event: mouseUp, window: window)
+    )
+    let diagnosticWindow: ModelsClickFixtureWindow?
+    if let probe {
+      let probeWindow = try #require(window as? ModelsClickFixtureWindow)
+      let downIdentity = try #require(
+        ModelsMouseEventIdentity(event: mouseDown, window: probeWindow)
+      )
+      let click = ModelsClickProbe(
+        generation: generation,
+        scenario: probe.scenario,
+        ordinal: probe.ordinal,
+        targetKind: probe.targetKind,
+        windowNumber: probeWindow.windowNumber,
+        down: downIdentity,
+        up: mouseUpIdentity
+      )
+      probeWindow.arm(click)
+      diagnosticWindow = probeWindow
+    } else {
+      diagnosticWindow = nil
+    }
+    let receiptObserver = ModelsMouseUpReceiptObserver(
+      window: window,
+      generation: generation,
+      mouseUp: mouseUpIdentity,
+      probe: probe
+    )
+    defer { receiptObserver.removeObserver() }
+    defer { diagnosticWindow?.disarm() }
+    let monitor = try #require(
+      NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { event in
+        NotificationCenter.default.post(
+          name: ModelsClickProbeNotification.localMouseUpReceipt,
+          object: event,
+          userInfo: ["generation": generation.uuidString]
+        )
+        return event
+      }
+    )
+    defer { NSEvent.removeMonitor(monitor) }
+    NSApp.postEvent(mouseUp, atStart: true)
     NSApp.sendEvent(mouseDown)
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: .seconds(2))
-    while !didReceiveMouseUp, clock.now < deadline {
-      try await Task.sleep(for: .milliseconds(10))
+    while !receiptObserver.didReceiveMouseUp {
+      let remaining = clock.now.duration(to: deadline)
+      guard remaining > .zero else { break }
+      try await Task.sleep(for: min(.milliseconds(10), remaining))
     }
-    try #require(didReceiveMouseUp)
+    try #require(receiptObserver.didReceiveMouseUp)
   }
 
   @MainActor
@@ -499,12 +799,20 @@ private func modelLibraryDescriptor(
   }
 
   @MainActor
-  private func clickModelView(_ view: NSView, in window: NSWindow) async throws {
+  private func clickModelView(
+    _ view: NSView,
+    in window: NSWindow,
+    probe: ModelsClickProbeContext? = nil
+  ) async throws {
     let windowPoint = view.convert(
       NSPoint(x: view.bounds.midX, y: view.bounds.midY),
       to: nil
     )
-    try await sendModelTrackedMouseClick(at: window.convertPoint(toScreen: windowPoint), to: window)
+    try await sendModelTrackedMouseClick(
+      at: window.convertPoint(toScreen: windowPoint),
+      to: window,
+      probe: probe
+    )
   }
 
   @MainActor
@@ -554,6 +862,19 @@ private func modelLibraryDescriptor(
   }
 
   @MainActor
+  private func makeModelsClickFixtureWindow(contentView: NSView) -> ModelsClickFixtureWindow {
+    let window = ModelsClickFixtureWindow(
+      contentRect: contentView.frame,
+      styleMask: [.titled],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = contentView
+    window.makeKeyAndOrderFront(nil)
+    return window
+  }
+
+  @MainActor
   private func writeModelFixture(_ name: String, in host: NSView) throws {
     let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
     host.cacheDisplay(in: host.bounds, to: imageRep)
@@ -567,6 +888,109 @@ private func modelLibraryDescriptor(
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
       try image.write(to: directory.appendingPathComponent("\(name).png"))
     }
+  }
+
+  @Test @MainActor
+  func modelsMouseUpReceiptRejectsUnqualifiedTrackingEvents() throws {
+    let window = makeModelsClickFixtureWindow(
+      contentView: NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 120))
+    )
+    defer {
+      window.orderOut(nil)
+      window.contentView = nil
+    }
+    let otherWindow = makeModelsClickFixtureWindow(
+      contentView: NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 120))
+    )
+    defer {
+      otherWindow.orderOut(nil)
+      otherWindow.contentView = nil
+    }
+
+    let timestamp = ProcessInfo.processInfo.systemUptime
+    func mouseUp(in targetWindow: NSWindow, timestamp: TimeInterval) throws -> NSEvent {
+      try #require(
+        NSEvent.mouseEvent(
+          with: .leftMouseUp,
+          location: NSPoint(x: 40, y: 50),
+          modifierFlags: [],
+          timestamp: timestamp,
+          windowNumber: targetWindow.windowNumber,
+          context: nil,
+          eventNumber: 41,
+          clickCount: 1,
+          pressure: 0
+        )
+      )
+    }
+
+    let expectedMouseUp = try mouseUp(in: window, timestamp: timestamp)
+    let expectedIdentity = try #require(
+      ModelsMouseEventIdentity(event: expectedMouseUp, window: window)
+    )
+    let generation = UUID()
+    let receiptObserver = ModelsMouseUpReceiptObserver(
+      window: window,
+      generation: generation,
+      mouseUp: expectedIdentity,
+      probe: nil
+    )
+    defer { receiptObserver.removeObserver() }
+
+    let qualifiedReceiptInfo: [AnyHashable: Any] = [
+      "generation": generation.uuidString,
+      "windowNumber": window.windowNumber,
+      "dequeue": true,
+      "mode": RunLoop.Mode.eventTracking.rawValue,
+      "dequeuedDuringOwnedWindowSynchronousDown": true,
+      "downSuperDispatchReturned": true,
+    ]
+    func postTrackingReceipt(event: NSEvent, userInfo: [AnyHashable: Any]) {
+      NotificationCenter.default.post(
+        name: ModelsClickProbeNotification.trackingMouseUpReceipt,
+        object: event,
+        userInfo: userInfo
+      )
+    }
+
+    var wrongGeneration = qualifiedReceiptInfo
+    wrongGeneration["generation"] = UUID().uuidString
+    postTrackingReceipt(event: expectedMouseUp, userInfo: wrongGeneration)
+    #expect(!receiptObserver.didReceiveMouseUp)
+
+    var wrongWindow = qualifiedReceiptInfo
+    wrongWindow["windowNumber"] = otherWindow.windowNumber
+    postTrackingReceipt(
+      event: try mouseUp(in: otherWindow, timestamp: timestamp),
+      userInfo: wrongWindow
+    )
+    #expect(!receiptObserver.didReceiveMouseUp)
+
+    postTrackingReceipt(
+      event: try mouseUp(in: window, timestamp: timestamp + 0.1),
+      userInfo: qualifiedReceiptInfo
+    )
+    #expect(!receiptObserver.didReceiveMouseUp)
+
+    var peekedEvent = qualifiedReceiptInfo
+    peekedEvent["dequeue"] = false
+    postTrackingReceipt(event: expectedMouseUp, userInfo: peekedEvent)
+    #expect(!receiptObserver.didReceiveMouseUp)
+
+    var defaultMode = qualifiedReceiptInfo
+    defaultMode["mode"] = RunLoop.Mode.default.rawValue
+    postTrackingReceipt(event: expectedMouseUp, userInfo: defaultMode)
+    #expect(!receiptObserver.didReceiveMouseUp)
+
+    var outsideOwnedDown = qualifiedReceiptInfo
+    outsideOwnedDown["dequeuedDuringOwnedWindowSynchronousDown"] = false
+    postTrackingReceipt(event: expectedMouseUp, userInfo: outsideOwnedDown)
+    #expect(!receiptObserver.didReceiveMouseUp)
+
+    var beforeDownSuperReturn = qualifiedReceiptInfo
+    beforeDownSuperReturn["downSuperDispatchReturned"] = false
+    postTrackingReceipt(event: expectedMouseUp, userInfo: beforeDownSuperReturn)
+    #expect(!receiptObserver.didReceiveMouseUp)
   }
 
   @Test @MainActor
@@ -1083,7 +1507,7 @@ private func modelLibraryDescriptor(
         name: "models-search-\(scenario.name)",
         size: scenario.size
       )
-      let window = makeModelFixtureWindow(contentView: host)
+      let window = makeModelsClickFixtureWindow(contentView: host)
       do {
         defer {
           window.orderOut(nil)
@@ -1107,7 +1531,15 @@ private func modelLibraryDescriptor(
         #expect(searchFrame.height > 14)
 
         try writeModelFixture("models-search-\(scenario.name)-idle", in: host)
-        try await clickModelView(searchField, in: window)
+        try await clickModelView(
+          searchField,
+          in: window,
+          probe: ModelsClickProbeContext(
+            scenario: scenario.name,
+            ordinal: 1,
+            targetKind: "search-NSTextField"
+          )
+        )
         let fieldEditor = try #require(searchField.currentEditor())
         #expect(window.firstResponder === fieldEditor)
         let editor = try #require(fieldEditor as? NSTextView)
@@ -1189,7 +1621,15 @@ private func modelLibraryDescriptor(
           #expect(searchField.stringValue == query)
 
           window.recalculateKeyViewLoop()
-          try await clickModelView(searchField, in: window)
+          try await clickModelView(
+            searchField,
+            in: window,
+            probe: ModelsClickProbeContext(
+              scenario: scenario.name,
+              ordinal: 3,
+              targetKind: "search-NSTextField"
+            )
+          )
           let focusedEditor = try #require(searchField.currentEditor())
           #expect(window.firstResponder === focusedEditor)
           try sendModelKey(48, characters: "\t", to: window)
@@ -1225,7 +1665,12 @@ private func modelLibraryDescriptor(
           )
           try await sendModelTrackedMouseClick(
             at: window.convertPoint(toScreen: voiceSegmentPoint),
-            to: window
+            to: window,
+            probe: ModelsClickProbeContext(
+              scenario: scenario.name,
+              ordinal: 2,
+              targetKind: "NSSegmentedControl"
+            )
           )
           try await settleModelBrowser(host)
           let filteredTypeFilterControl = try #require(modelTypeFilterControl(in: host))
@@ -1239,7 +1684,15 @@ private func modelLibraryDescriptor(
             modelAccessibilityElements(in: host, identifier: "models-row-\(cleanupID)").isEmpty
           )
 
-          try await clickModelView(searchField, in: window)
+          try await clickModelView(
+            searchField,
+            in: window,
+            probe: ModelsClickProbeContext(
+              scenario: scenario.name,
+              ordinal: 3,
+              targetKind: "search-NSTextField"
+            )
+          )
           let emptySearchEditor = try #require(searchField.currentEditor())
           emptySearchEditor.selectAll(nil)
           try typeModelText("zzzz", in: window)
@@ -1264,7 +1717,15 @@ private func modelLibraryDescriptor(
           #expect(window.firstResponder !== emptySearchEditor)
           #expect(searchField.stringValue == "zzzz")
 
-          try await clickModelView(searchField, in: window)
+          try await clickModelView(
+            searchField,
+            in: window,
+            probe: ModelsClickProbeContext(
+              scenario: scenario.name,
+              ordinal: 4,
+              targetKind: "search-NSTextField"
+            )
+          )
           let refocusedEditor = try #require(searchField.currentEditor())
           #expect(window.firstResponder === refocusedEditor)
           try await settleModelBrowser(host)
