@@ -4938,6 +4938,7 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   let fixture = try await RuntimeFixture(
     finalText: "saved",
     capsuleEnabled: true,
+    ambiguousRouting: true,
     capsuleSleeper: { duration in await savedSleeper.sleep(duration) }
   )
   await fixture.runtime.awaitStartupAssessment()
@@ -7662,6 +7663,7 @@ private func clickRuntimeRetryThroughNativeHitTest(_ runtime: DictationRuntime, 
     finalText: "Move this saved capture",
     capsuleEnabled: true,
     routingNotes: notes,
+    ambiguousRouting: true,
     capsuleSleeper: { duration in await sleeper.sleep(duration) }
   )
   await fixture.runtime.awaitStartupAssessment()
