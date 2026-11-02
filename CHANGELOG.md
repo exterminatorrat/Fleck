@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.20-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native opacity-slider drag, track-click, right-to-left, and disabled
+  coverage when SwiftUI exposes an owned public accessibility slider instead of NSSlider.
+
 ## [1.5.19-beta.1] - 2026-11-02
 
 ### Fixed
