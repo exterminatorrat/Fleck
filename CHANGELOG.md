@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.7-beta.1] - 2026-11-02
+
+### Fixed
+
+- Route a pending capsule recovery mouse release through the pressed gesture's generation
+  guard, so replacing a recovery action between press and release cannot accept the new action.
+- Restore explicit ambiguous-routing inputs and nanosecond-aligned event timestamps in the
+  combined recovery fixtures without weakening their ownership or exact-event assertions.
+
 ## [1.7.6-beta.1] - 2026-11-02
 
 ### Fixed
