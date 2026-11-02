@@ -1533,6 +1533,10 @@ final class DictationCoordinator {
       destinationID = routedID
       suggestedChoices = nil
       filingPlan = nil
+    case .inbox:
+      destinationID = inbox?.destination.noteID
+      suggestedChoices = nil
+      filingPlan = nil
     case .ambiguous(let choices):
       destinationID = inbox?.destination.noteID
       suggestedChoices = choices
