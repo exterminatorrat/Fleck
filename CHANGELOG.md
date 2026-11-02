@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.2-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
+
 ## [1.7.1-beta.1] - 2026-11-02
 
 ### Fixed
@@ -25,6 +31,13 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 Part of the approved substantial development cohort. Source-only correction; compilation,
 process tests and native behavior remain unverified locally.
+
+## [1.5.18-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native folder composer before exercising retained overflow actions,
+  preserving strict scroll-position and geometry assertions.
 
 ## [1.5.17-beta.1] - 2026-11-02
 
