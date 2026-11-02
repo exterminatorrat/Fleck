@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.22-beta.1] - 2026-11-02
+
+### Fixed
+
+- Qualify native Models mouse-up receipts by exact owned tracking consumption and
+  completed synchronous dispatch, retaining keyboard scenarios and rejection controls.
+
 ## [1.5.21-beta.1] - 2026-11-02
 
 ### Fixed
