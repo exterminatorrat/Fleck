@@ -9,6 +9,8 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Preserve complete note-tab button accessibility through the native drag host,
   including title labels and activation, without replacing folder drag semantics.
+- Resolve only the decorative fade gradient in physical coordinates so its semantic
+  trailing edge remains stable across native layout-direction handling.
 
 ## [1.4.44-beta.1] - 2026-11-02
 
