@@ -3,12 +3,26 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.20-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve capsule standby placement and its explicit native fixture cleanup while
+  integrating reviewed note-tab accessibility, physical gradients and parent Settings work.
+
 ## [1.5.16-beta.1] - 2026-11-02
 
 ### Fixed
 
 - Carry verified readiness, Models input, native font and right-to-left title repairs
   into the bottom-only pill source while preserving its standby and routing lifecycle.
+
+## [1.5.19-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve the theme, Settings and Models work while integrating reviewed native
+  note-tab accessibility, physical title gradients and interface-font corrections.
 
 ## [1.5.15-beta.1] - 2026-11-02
 
@@ -75,6 +89,13 @@ delivery is claimed.
 Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
 and native behavior remain unverified; hosted verification is pending.
 
+## [1.5.18-beta.1] - 2026-11-02
+
+### Fixed
+
+- Retain transactional multi-note filing while integrating reviewed native title
+  accessibility, physical gradient coordinates and interface-font picker corrections.
+
 ## [1.5.9-beta.1] - 2026-11-02
 
 ### Fixed
@@ -94,6 +115,14 @@ and native behavior remain unverified; hosted verification is pending.
 Source-only repair checkpoint. Compilation, tests and native/visual/accessibility validation
 remain unrun for this change; hosted CI has not run for this checkpoint. Readiness focus
 ownership remains unresolved.
+
+## [1.5.17-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native note-tab accessibility activation and explicit physical title-gradient
+  coordinates when integrating the reviewed title parent, retaining optional interface
+  fonts and native font-picker Escape handling.
 
 ## [1.5.8-beta.1] - 2026-11-02
 
@@ -227,6 +256,15 @@ tests, visual/accessibility inspection and native behavior remain unverified.
 
 Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
 tests and native behavior remain unverified.
+
+## [1.4.45-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve complete note-tab button accessibility through the native drag host,
+  including title labels and activation, without replacing folder drag semantics.
+- Resolve only the decorative fade gradient in physical coordinates so its semantic
+  trailing edge remains stable across native layout-direction handling.
 
 ## [1.4.44-beta.1] - 2026-11-02
 
