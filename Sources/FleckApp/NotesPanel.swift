@@ -5959,10 +5959,14 @@
     var animatesDisplacement = false
 
     func body(content: Content) -> some View {
-      ReorderDragHost(content: content, begin: begin, began: began, moved: moved,
+      let host = ReorderDragHost(content: content, begin: begin, began: began, moved: moved,
         activate: activate, noteID: noteID, displacement: displacement,
         animatesDisplacement: animatesDisplacement)
-        .accessibilityRepresentation { content }
+      if noteID != nil {
+        host.accessibilityRepresentation { content }
+      } else {
+        host
+      }
     }
   }
 

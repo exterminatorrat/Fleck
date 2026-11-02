@@ -8,7 +8,8 @@ public release log. Packaging unchanged source does not add a changelog entry.
 ### Fixed
 
 - Preserve note-tab button accessibility semantics across the native drag host
-  without dropping its inherited appearance, typography, or layout environment.
+  without dropping its inherited appearance, typography, or layout environment,
+  while retaining the folder rows' separate accessible drag-source behavior.
 
 ## [1.7.13-beta.1] - 2026-11-02
 

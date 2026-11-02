@@ -430,6 +430,33 @@ func noteTabLongTitleIsCappedWhileShortTitleAndActivationRemainNatural() async t
 }
 
 @Test @MainActor
+func noteTabAccessibilityPressActivatesTheOriginalButtonInLTRAndRTL() async throws {
+  for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+    let notes = [Note(title: "First verification note"), Note(title: "Second verification note")]
+    let fixture = await NotesPanelTitleFixture(notes: notes, width: 520, layoutDirection: direction)
+    defer { fixture.close() }
+
+    let element = try #require(hostedPointerElement(
+      fixture.host,
+      identifier: "note-tab-\(notes[1].id.uuidString)"
+    ))
+    #expect(element.value(forKey: "accessibilityRole") as? String == NSAccessibility.Role.button.rawValue)
+    let selector = NSSelectorFromString("accessibilityPerformPress")
+    let method = try #require(class_getInstanceMethod(type(of: element), selector))
+    let encoding = try #require(method_getTypeEncoding(method))
+    let returnType = String(cString: encoding).first
+    try #require(returnType == "B" || returnType == "c")
+    let press = unsafeBitCast(
+      method_getImplementation(method),
+      to: (@convention(c) (AnyObject, Selector) -> Bool).self
+    )
+    #expect(press(element, selector))
+    await settleTabStripHost(fixture.host)
+    #expect(fixture.state.workspace.selectedNoteID == notes[1].id)
+  }
+}
+
+@Test @MainActor
 func noteTabLongTitleRemainsCappedAndAccessibleAtRTLAccessibilitySize() async throws {
   let title = String(repeating: "Long title ", count: 24)
   let notes = (0..<3).map { Note(title: "\($0) \(title)") }
