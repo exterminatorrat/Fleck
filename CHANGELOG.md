@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.4.44-beta.1] - 2026-11-02
+
+### Fixed
+
+- Keep the tab-title fade at the semantic trailing edge in right-to-left layouts
+  without reversing the mirrored gradient twice.
+
 ## [1.4.43-beta.1] - 2026-11-01
 
 ### Fixed

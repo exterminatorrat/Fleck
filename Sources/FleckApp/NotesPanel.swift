@@ -741,23 +741,13 @@
   }
 
   struct NoteTabTitleFadeMask: View {
-    @Environment(\.layoutDirection) private var layoutDirection
-
-    private var gradientStartPoint: UnitPoint {
-      layoutDirection == .leftToRight ? UnitPoint(x: 0, y: 0.5) : UnitPoint(x: 1, y: 0.5)
-    }
-
-    private var gradientEndPoint: UnitPoint {
-      layoutDirection == .leftToRight ? UnitPoint(x: 1, y: 0.5) : UnitPoint(x: 0, y: 0.5)
-    }
-
     var body: some View {
       HStack(spacing: 0) {
         Color.white
         LinearGradient(
           colors: [.white, .clear],
-          startPoint: gradientStartPoint,
-          endPoint: gradientEndPoint
+          startPoint: UnitPoint(x: 0, y: 0.5),
+          endPoint: UnitPoint(x: 1, y: 0.5)
         )
         .frame(width: TabTitlePresentation.fadeWidth)
       }
