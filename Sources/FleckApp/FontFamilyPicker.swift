@@ -124,6 +124,7 @@
       table.target = self
       table.action = #selector(commitSelection)
       table.onReturn = { [weak self] in self?.commitSelection() }
+      table.onCancel = { [weak self] in self?.cancelOperation(nil) }
       table.setAccessibilityLabel("Font families")
       let scroll = NSScrollView()
       scroll.documentView = table
@@ -260,10 +261,13 @@
 
   private final class FontFamilyTableView: NSTableView {
     var onReturn: (() -> Void)?
+    var onCancel: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {
       if event.keyCode == 36 || event.keyCode == 76 {
         onReturn?()
+      } else if event.keyCode == 53 {
+        onCancel?()
       } else {
         super.keyDown(with: event)
       }
