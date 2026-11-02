@@ -2429,7 +2429,7 @@ private func settingsColorDistance(_ lhs: NSColor, _ rhs: NSColor) -> CGFloat {
   #expect(settings.contains("ModelsBrowserView("))
   #expect(!settings.contains("openWindow(id: ModelLibraryLayout.windowIdentifier)"))
   #expect(!settings.contains("private var modelLibraryDestination: some View"))
-  #expect(settings.contains(".dictationStatus, request: searchRequest,"))
+  #expect(settings.contains(".settingsSearchAnchor(.dictationStatus, request: searchRequest)"))
   #expect(settings.contains("isReadinessPopoverPresented = result.target == .dictationStatus"))
   #expect(settings.contains("proxy.scrollTo(pageScrollAnchor, anchor: isTransferFooter ? .bottom : .center)"))
   #expect(settings.contains(".id(SettingsSearchTarget.vocabularyTransferFooter)"))
