@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.19-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
+
 ## [1.5.18-beta.1] - 2026-11-02
 
 ### Fixed
@@ -16,6 +22,13 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Inherit the verified tab-title fade and native font-picker Escape corrections while
   preserving transactional filing, durable receipts and guarded undo.
+
+## [1.5.18-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native folder composer before exercising retained overflow actions,
+  preserving strict scroll-position and geometry assertions.
 
 ## [1.5.17-beta.1] - 2026-11-02
 
