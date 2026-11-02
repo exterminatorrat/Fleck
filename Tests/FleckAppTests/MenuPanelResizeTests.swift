@@ -1402,149 +1402,707 @@ import Testing
   let sideMargin: CGFloat = 40
   let topMargin: CGFloat = 40
 
-  for fixedSide in [MenuPanelFixedSide.left, .right] {
-    for handle in [
-      MenuPanelResizeHandle.farSide,
-      .farBottomCorner,
-      .nearBottomCorner,
-    ] {
-      let buttonFrame = CGRect(
-        x: fixedSide == .left
-          ? screen.visibleFrame.minX + sideMargin
-          : screen.visibleFrame.maxX - sideMargin - 34,
-        y: screen.visibleFrame.maxY + 2,
-        width: 34,
-        height: 22
-      )
-      let initialFrame = CGRect(
-        x: fixedSide == .left ? buttonFrame.minX : buttonFrame.maxX - 540,
-        y: screen.visibleFrame.maxY - topMargin - 430,
-        width: 540,
-        height: 430
-      )
-      let window = NSWindow(
-        contentRect: initialFrame,
-        styleMask: .borderless,
-        backing: .buffered,
-        defer: false
-      )
-      let statusButton = PublicStatusButtonFixture(screenFrame: buttonFrame)
-      let geometryStore = MenuPanelGeometryStore(windows: { [statusButton.window] })
-      geometryStore.rememberCompletedSide(fixedSide)
-      let controller = MenuPanelResizeController()
-      var commits: [(CGSize, CGRect)] = []
-      let host = MenuPanelResizeHostView(controller: controller)
-      host.configure(
-        geometryStore: geometryStore,
-        preferredSize: initialFrame.size,
-        canResize: true,
-        onCommit: { commits.append(($0, window.frame)) }
-      )
-      window.contentView = host
-      window.orderFront(nil)
-      host.installIfNeeded()
-      defer {
-        host.uninstall()
-        window.contentView = nil
-        window.orderOut(nil)
-      }
-      await settleResizeHost(host)
-      await withCheckedContinuation { continuation in
-        DispatchQueue.main.async {
-          continuation.resume()
+  for roundsFramesOutward in [false, true] {
+    for fixedSide in [MenuPanelFixedSide.left, .right] {
+      for handle in [
+        MenuPanelResizeHandle.farSide,
+        .farBottomCorner,
+        .nearBottomCorner,
+      ] {
+        let buttonFrame = CGRect(
+          x: fixedSide == .left
+            ? screen.visibleFrame.minX + sideMargin
+            : screen.visibleFrame.maxX - sideMargin - 34,
+          y: screen.visibleFrame.maxY + 2,
+          width: 34,
+          height: 22
+        )
+        let initialFrame = CGRect(
+          x: fixedSide == .left ? buttonFrame.minX : buttonFrame.maxX - 540,
+          y: screen.visibleFrame.maxY - topMargin - 430,
+          width: 540,
+          height: 430
+        )
+        let window = MenuPanelNativeRoundingWindow(
+          contentRect: initialFrame,
+          styleMask: .borderless,
+          backing: .buffered,
+          defer: false
+        )
+        window.roundsFramesOutward = roundsFramesOutward
+        let statusButton = PublicStatusButtonFixture(screenFrame: buttonFrame)
+        let geometryStore = MenuPanelGeometryStore(windows: { [statusButton.window] })
+        geometryStore.rememberCompletedSide(fixedSide)
+        let controller = MenuPanelResizeController()
+        var commits: [(CGSize, CGRect)] = []
+        let host = MenuPanelResizeHostView(controller: controller)
+        host.configure(
+          geometryStore: geometryStore,
+          preferredSize: initialFrame.size,
+          canResize: true,
+          onCommit: { commits.append(($0, window.frame)) }
+        )
+        window.contentView = host
+        window.orderFront(nil)
+        host.installIfNeeded()
+        defer {
+          host.uninstall()
+          window.contentView = nil
+          window.orderOut(nil)
         }
+        await settleResizeHost(host)
+        await withCheckedContinuation { continuation in
+          DispatchQueue.main.async {
+            continuation.resume()
+          }
+        }
+        let startingFrame = window.frame
+        let anchoredButtonFrame = try #require(geometryStore.cachedStatusButton?.screenFrame)
+
+        let changesWidth = handle != .nearBottomCorner
+        let changesHeight = handle != .farSide
+        let availableWidth = fixedSide == .left
+          ? screen.visibleFrame.maxX - anchoredButtonFrame.minX
+          : anchoredButtonFrame.maxX - screen.visibleFrame.minX
+        let widthWhole = min(
+          CGFloat(160),
+          floor(availableWidth - startingFrame.width - 1.375)
+        )
+        let heightWhole = min(
+          CGFloat(80),
+          floor(startingFrame.minY - screen.visibleFrame.minY - 1.375)
+        )
+        try #require(widthWhole >= 0)
+        try #require(heightWhole >= 0)
+        let widthDelta = widthWhole + 0.375
+        let heightDelta = heightWhole + 0.375
+        let nearX: CGFloat = fixedSide == .left ? 0.625 : startingFrame.width - 0.625
+        let farX: CGFloat = fixedSide == .left ? startingFrame.width - 0.625 : 0.625
+        let mouseDown = CGPoint(
+          x: handle == .nearBottomCorner ? nearX : farX,
+          y: changesHeight ? 0.625 : 200.625
+        )
+        var release = window.convertPoint(toScreen: mouseDown)
+        if changesWidth {
+          release.x += fixedSide == .left ? widthDelta : -widthDelta
+        }
+        if changesHeight { release.y -= heightDelta }
+
+        guard try await requireResizeBeginReadiness(
+          host,
+          at: mouseDown,
+          in: window
+        ) else { return }
+        try Task.checkCancellation()
+        let mouseDownEventNumber = eventNumber
+        sendResizeMouseEvent(
+          .leftMouseDown, at: mouseDown, to: window, number: mouseDownEventNumber)
+        eventNumber += 1
+        try #require(controller.isTracking)
+        sendResizeMouseEvent(.leftMouseDragged, atScreen: release, to: window, number: eventNumber)
+        #expect(controller.isTracking)
+        let nativeProposal = try #require(controller.currentProposal)
+        #expect(nativeProposal.frame == window.frame)
+        #expect(nativeProposal.contentSize == window.contentRect(forFrameRect: window.frame).size)
+        eventNumber += 1
+        sendResizeMouseEvent(.leftMouseUp, atScreen: release, to: window, number: eventNumber)
+        eventNumber += 1
+
+        #expect(commits.count == 1)
+        let committed = try #require(commits.first)
+        let retainedFrame = window.frame
+        let retainedContentSize = window.contentRect(forFrameRect: retainedFrame).size
+        let rawTargetSize = CGSize(
+          width: startingFrame.width + (changesWidth ? widthDelta : 0),
+          height: startingFrame.height + (changesHeight ? heightDelta : 0)
+        )
+        let rawTargetFrame = CGRect(
+          x: fixedSide == .left
+            ? anchoredButtonFrame.minX
+            : anchoredButtonFrame.maxX - rawTargetSize.width,
+          y: startingFrame.maxY - rawTargetSize.height,
+          width: rawTargetSize.width,
+          height: rawTargetSize.height
+        )
+        let requestedFrame = screen.backingAlignedRect(
+          rawTargetFrame,
+          options: .alignAllEdgesOutward
+        )
+        let nativeReference = MenuPanelNativeRoundingWindow(
+          contentRect: startingFrame,
+          styleMask: .borderless,
+          backing: .buffered,
+          defer: false
+        )
+        nativeReference.roundsFramesOutward = roundsFramesOutward
+        nativeReference.setFrame(requestedFrame, display: false, animate: false)
+        let expectedFrame = nativeReference.frame
+        #expect(expectedFrame == requestedFrame || expectedFrame == requestedFrame.integral)
+        let expectedContentSize = window.contentRect(forFrameRect: expectedFrame).size
+        #expect(retainedFrame == expectedFrame)
+        #expect(retainedContentSize == expectedContentSize)
+        #expect(committed.0 == expectedContentSize)
+        #expect(committed.1 == expectedFrame)
+        #expect(retainedFrame.maxY == startingFrame.maxY)
+        if fixedSide == .left {
+          #expect(retainedFrame.minX == anchoredButtonFrame.minX)
+        } else {
+          #expect(retainedFrame.maxX == anchoredButtonFrame.maxX)
+        }
+        if !changesWidth { #expect(retainedFrame.width == startingFrame.width) }
+        if !changesHeight { #expect(retainedFrame.height == startingFrame.height) }
+
+        await settleResizeHost(host)
+        #expect(commits.count == 1)
+        #expect(window.frame == retainedFrame)
+        #expect(window.contentRect(forFrameRect: window.frame).size == retainedContentSize)
+        completedCases += 1
       }
-      let startingFrame = window.frame
-      let anchoredButtonFrame = try #require(geometryStore.cachedStatusButton?.screenFrame)
-
-      let changesWidth = handle != .nearBottomCorner
-      let changesHeight = handle != .farSide
-      let availableWidth = fixedSide == .left
-        ? screen.visibleFrame.maxX - anchoredButtonFrame.minX
-        : anchoredButtonFrame.maxX - screen.visibleFrame.minX
-      let widthWhole = min(
-        CGFloat(160),
-        floor(availableWidth - startingFrame.width - 1.375)
-      )
-      let heightWhole = min(
-        CGFloat(80),
-        floor(startingFrame.minY - screen.visibleFrame.minY - 1.375)
-      )
-      try #require(widthWhole >= 0)
-      try #require(heightWhole >= 0)
-      let widthDelta = widthWhole + 0.375
-      let heightDelta = heightWhole + 0.375
-      let nearX: CGFloat = fixedSide == .left ? 0.625 : startingFrame.width - 0.625
-      let farX: CGFloat = fixedSide == .left ? startingFrame.width - 0.625 : 0.625
-      let mouseDown = CGPoint(
-        x: handle == .nearBottomCorner ? nearX : farX,
-        y: changesHeight ? 0.625 : 200.625
-      )
-      var release = window.convertPoint(toScreen: mouseDown)
-      if changesWidth {
-        release.x += fixedSide == .left ? widthDelta : -widthDelta
-      }
-      if changesHeight { release.y -= heightDelta }
-
-      guard try await requireResizeBeginReadiness(
-        host,
-        at: mouseDown,
-        in: window
-      ) else { return }
-      try Task.checkCancellation()
-      let mouseDownEventNumber = eventNumber
-      sendResizeMouseEvent(
-        .leftMouseDown, at: mouseDown, to: window, number: mouseDownEventNumber)
-      eventNumber += 1
-      try #require(controller.isTracking)
-      sendResizeMouseEvent(.leftMouseDragged, atScreen: release, to: window, number: eventNumber)
-      eventNumber += 1
-      sendResizeMouseEvent(.leftMouseUp, atScreen: release, to: window, number: eventNumber)
-      eventNumber += 1
-
-      #expect(commits.count == 1)
-      let committed = try #require(commits.first)
-      let retainedFrame = window.frame
-      let retainedContentSize = window.contentRect(forFrameRect: retainedFrame).size
-      let rawTargetSize = CGSize(
-        width: startingFrame.width + (changesWidth ? widthDelta : 0),
-        height: startingFrame.height + (changesHeight ? heightDelta : 0)
-      )
-      let rawTargetFrame = CGRect(
-        x: fixedSide == .left
-          ? anchoredButtonFrame.minX
-          : anchoredButtonFrame.maxX - rawTargetSize.width,
-        y: startingFrame.maxY - rawTargetSize.height,
-        width: rawTargetSize.width,
-        height: rawTargetSize.height
-      )
-      let expectedFrame = screen.backingAlignedRect(
-        rawTargetFrame,
-        options: .alignAllEdgesOutward
-      )
-      let expectedContentSize = window.contentRect(forFrameRect: expectedFrame).size
-      #expect(retainedFrame == expectedFrame)
-      #expect(retainedContentSize == expectedContentSize)
-      #expect(committed.0 == expectedContentSize)
-      #expect(committed.1 == expectedFrame)
-      #expect(retainedFrame.maxY == startingFrame.maxY)
-      if fixedSide == .left {
-        #expect(retainedFrame.minX == anchoredButtonFrame.minX)
-      } else {
-        #expect(retainedFrame.maxX == anchoredButtonFrame.maxX)
-      }
-      if !changesWidth { #expect(retainedFrame.width == startingFrame.width) }
-      if !changesHeight { #expect(retainedFrame.height == startingFrame.height) }
-
-      await settleResizeHost(host)
-      #expect(commits.count == 1)
-      #expect(window.frame == retainedFrame)
-      #expect(window.contentRect(forFrameRect: window.frame).size == retainedContentSize)
-      completedCases += 1
     }
   }
 
-  #expect(completedCases == 6)
+  #expect(completedCases == 12)
+}
+
+@Test @MainActor func menuPanelNativeCanonicalizationRejectsCancelledRestartedAndReplacedInteractions() throws {
+  enum Mutation { case cancel, restart, replaceOwner }
+  let snapshot = try #require(resizeSnapshot(fixedSide: .right))
+  let pointer = CGPoint(x: snapshot.initialPointer.x - 20, y: snapshot.initialPointer.y)
+  let replacementSize = CGSize(width: 700, height: 500)
+
+  for finishes in [false, true] {
+    for mutation in [Mutation.cancel, .restart, .replaceOwner] {
+      let controller = MenuPanelResizeController()
+      let owner = UUID()
+      let replacement = UUID()
+      #expect(controller.claimPresentation(ownerID: owner))
+      try #require(controller.begin(snapshot: snapshot, handle: .farSide, ownerID: owner))
+      let canonicalize: (MenuPanelResizeProposal) -> MenuPanelResizeProposal? = { proposal in
+        switch mutation {
+        case .cancel:
+          #expect(controller.cancelSnapshot(ownerID: owner) != nil)
+        case .restart:
+          #expect(controller.cancelSnapshot(ownerID: owner) != nil)
+          #expect(controller.begin(snapshot: snapshot, handle: .farSide, ownerID: owner))
+        case .replaceOwner:
+          #expect(controller.claimPresentation(ownerID: replacement))
+          #expect(controller.setPresentationContentSize(replacementSize, ownerID: replacement))
+        }
+        return proposal
+      }
+      let result: MenuPanelResizeProposal?
+      if finishes {
+        let transient = try #require(controller.update(
+          pointer: pointer,
+          statusLabelFrame: snapshot.statusLabelFrame,
+          visibleFrame: snapshot.visibleFrame,
+          ownerID: owner
+        ))
+        result = controller.finish(
+          statusLabelFrame: snapshot.statusLabelFrame,
+          visibleFrame: snapshot.visibleFrame,
+          currentFrame: transient.frame,
+          ownerID: owner,
+          canonicalize: canonicalize
+        )
+      } else {
+        result = controller.update(
+          pointer: pointer,
+          statusLabelFrame: snapshot.statusLabelFrame,
+          visibleFrame: snapshot.visibleFrame,
+          ownerID: owner,
+          canonicalize: canonicalize
+        )
+      }
+      #expect(result == nil)
+      #expect(controller.currentProposal == nil)
+      #expect(controller.completedPreferenceSize == nil)
+      switch mutation {
+      case .cancel:
+        #expect(!controller.isTracking)
+        #expect(controller.effectiveContentSize == nil)
+      case .restart:
+        #expect(controller.isOwned(by: owner))
+        #expect(controller.effectiveContentSize == snapshot.initialContentSize)
+      case .replaceOwner:
+        #expect(!controller.isTracking)
+        #expect(controller.isPresentationOwner(replacement))
+        #expect(controller.presentationContentSize(ownerID: replacement) == replacementSize)
+      }
+    }
+  }
+}
+
+@Test @MainActor func menuPanelHostedNativeAdoptionPreservesReentrantLayoutAndRejectsUnexpectedWidth() async throws {
+  let screen = try #require(NSScreen.main)
+  let buttonFrame = CGRect(
+    x: screen.visibleFrame.maxX - 74,
+    y: screen.visibleFrame.maxY + 2,
+    width: 34,
+    height: 22
+  )
+  let initialFrame = CGRect(
+    x: buttonFrame.maxX - 540,
+    y: screen.visibleFrame.maxY - 470,
+    width: 540,
+    height: 430
+  )
+  let window = MenuPanelNativeRoundingWindow(
+    contentRect: initialFrame,
+    styleMask: .borderless,
+    backing: .buffered,
+    defer: false
+  )
+  let statusButton = PublicStatusButtonFixture(screenFrame: buttonFrame)
+  let geometryStore = MenuPanelGeometryStore(windows: { [statusButton.window] })
+  geometryStore.rememberCompletedSide(.right)
+  let controller = MenuPanelResizeController()
+  var commits: [CGSize] = []
+  let host = MenuPanelResizeHostView(controller: controller)
+  host.configure(
+    geometryStore: geometryStore,
+    preferredSize: initialFrame.size,
+    canResize: true,
+    onCommit: { commits.append($0) }
+  )
+  window.contentView = host
+  window.orderFront(nil)
+  defer {
+    window.onFrameChange = nil
+    window.unexpectedWidth = 0
+    host.uninstall()
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+  await settleResizeHost(host)
+  let start = CGPoint(x: 1, y: 200)
+  guard try await requireResizeBeginReadiness(host, at: start, in: window) else { return }
+  sendResizeMouseEvent(.leftMouseDown, at: start, to: window, number: 120)
+  try #require(controller.isTracking)
+  let startOnScreen = window.convertPoint(toScreen: start)
+  let firstDrag = CGPoint(x: startOnScreen.x - 20.375, y: startOnScreen.y)
+  window.roundsFramesOutward = true
+  window.onFrameChange = {
+    host.configure(
+      geometryStore: geometryStore,
+      preferredSize: initialFrame.size,
+      canResize: true,
+      onCommit: { commits.append($0) }
+    )
+  }
+  sendResizeMouseEvent(.leftMouseDragged, atScreen: firstDrag, to: window, number: 121)
+  try #require(controller.isTracking)
+  #expect(controller.currentProposal?.frame == window.frame)
+  let firstWidth = window.frame.width
+  let secondDrag = CGPoint(x: startOnScreen.x - 40.375, y: startOnScreen.y)
+  sendResizeMouseEvent(.leftMouseDragged, atScreen: secondDrag, to: window, number: 122)
+  try #require(controller.isTracking)
+  #expect(controller.currentProposal?.frame == window.frame)
+  #expect(window.frame.width > firstWidth)
+  let release = CGPoint(x: startOnScreen.x - 60.375, y: startOnScreen.y)
+  window.unexpectedWidth = 4
+  sendResizeMouseEvent(.leftMouseDragged, atScreen: release, to: window, number: 123)
+  #expect(!controller.isTracking)
+  #expect(controller.currentProposal == nil)
+  #expect(controller.completedPreferenceSize == nil)
+  #expect(commits.isEmpty)
+  sendResizeMouseEvent(.leftMouseUp, atScreen: release, to: window, number: 124)
+  #expect(commits.isEmpty)
+}
+
+@Test @MainActor func menuPanelHostedNativeAlignmentRejectsChangesToFractionalUntouchedAxes() async throws {
+  let screen = try #require(NSScreen.main)
+  let fraction = 0.5 / screen.backingScaleFactor
+  var eventNumber = 12_000
+  var completedCases = 0
+
+  for fixedSide in [MenuPanelFixedSide.left, .right] {
+    for handle in [MenuPanelResizeHandle.farSide, .nearBottomCorner] {
+      for finishes in [false, true] {
+        let buttonFrame = CGRect(
+          x: fixedSide == .left
+            ? screen.visibleFrame.minX + 40
+            : screen.visibleFrame.maxX - 74,
+          y: screen.visibleFrame.maxY + 2,
+          width: 34,
+          height: 22
+        )
+        let initialFrame = CGRect(
+          x: fixedSide == .left ? buttonFrame.minX : buttonFrame.maxX - 540,
+          y: screen.visibleFrame.maxY - 470,
+          width: 540,
+          height: 430
+        )
+        let window = MenuPanelNativeRoundingWindow(
+          contentRect: initialFrame,
+          styleMask: .borderless,
+          backing: .buffered,
+          defer: false
+        )
+        let statusButton = PublicStatusButtonFixture(screenFrame: buttonFrame)
+        let geometryStore = MenuPanelGeometryStore(windows: { [statusButton.window] })
+        geometryStore.rememberCompletedSide(fixedSide)
+        let controller = MenuPanelResizeController()
+        var commits: [CGSize] = []
+        let host = MenuPanelResizeHostView(controller: controller)
+        host.configure(
+          geometryStore: geometryStore,
+          preferredSize: initialFrame.size,
+          canResize: true,
+          onCommit: { commits.append($0) }
+        )
+        window.contentView = host
+        window.orderFront(nil)
+        defer {
+          window.onFrameChange = nil
+          host.uninstall()
+          window.contentView = nil
+          window.orderOut(nil)
+        }
+        await settleResizeHost(host)
+        let nearX: CGFloat = fixedSide == .left ? 1 : window.frame.width - 1
+        let farX: CGFloat = fixedSide == .left ? window.frame.width - 1 : 1
+        let start = CGPoint(
+          x: handle.changesWidth ? farX : nearX,
+          y: handle.changesHeight ? 1 : 200
+        )
+        guard try await requireResizeBeginReadiness(host, at: start, in: window) else { return }
+        guard case let .ready(initialSnapshot, admittedHandle, owner, _) = host.beginReadiness(
+          at: start,
+          in: window
+        ) else {
+          Issue.record("Expected resize readiness for fractional-axis fixture")
+          return
+        }
+        try #require(admittedHandle == handle)
+        sendResizeMouseEvent(.leftMouseDown, at: start, to: window, number: eventNumber)
+        eventNumber += 1
+        try #require(controller.isOwned(by: owner))
+        try #require(controller.cancelSnapshot(ownerID: owner) != nil)
+        var snapshot = initialSnapshot
+        if handle.changesWidth {
+          snapshot.initialFrame.size.height += fraction
+          snapshot.initialFrame.origin.y -= fraction
+        } else {
+          snapshot.initialFrame.size.width += fraction
+          if fixedSide == .right { snapshot.initialFrame.origin.x -= fraction }
+        }
+        snapshot.initialContentSize = window.contentRect(forFrameRect: snapshot.initialFrame).size
+        try #require(controller.begin(snapshot: snapshot, handle: handle, ownerID: owner))
+        var pointer = snapshot.initialPointer
+        if handle.changesWidth {
+          pointer.x += fixedSide == .left ? 20.375 : -20.375
+        } else {
+          pointer.y -= 20.375
+        }
+        let proposal = try #require(MenuPanelResizeGeometry.proposal(
+          snapshot: snapshot,
+          pointer: pointer,
+          handle: handle,
+          currentSide: fixedSide
+        ))
+        let alignedFrame = screen.backingAlignedRect(proposal.frame, options: .alignAllEdgesOutward)
+        try #require(alignedFrame.maxY == proposal.frame.maxY)
+        if handle.changesWidth {
+          try #require(proposal.frame.height == snapshot.initialFrame.height)
+          try #require(alignedFrame.height != proposal.frame.height)
+        } else {
+          try #require(proposal.frame.width == snapshot.initialFrame.width)
+          try #require(alignedFrame.width != proposal.frame.width)
+        }
+        var trackingFrames: [CGRect] = []
+        window.onFrameChange = {
+          if controller.isTracking { trackingFrames.append(window.frame) }
+        }
+        sendResizeMouseEvent(
+          finishes ? .leftMouseUp : .leftMouseDragged,
+          atScreen: pointer,
+          to: window,
+          number: eventNumber
+        )
+        eventNumber += 1
+        #expect(trackingFrames.isEmpty)
+        #expect(!controller.isTracking)
+        #expect(controller.currentProposal == nil)
+        #expect(controller.completedPreferenceSize == nil)
+        #expect(commits.isEmpty)
+        sendResizeMouseEvent(.leftMouseUp, atScreen: pointer, to: window, number: eventNumber)
+        eventNumber += 1
+        #expect(commits.isEmpty)
+        completedCases += 1
+      }
+    }
+  }
+
+  #expect(completedCases == 8)
+}
+
+@Test @MainActor func menuPanelHostedStaleNativeRollbackPreservesNewerInteractions() async throws {
+  enum Operation: Equatable { case drag, pointerUp, minimumRelease }
+  enum ReentryPoint: Equatable { case application, restore, publication }
+  let screen = try #require(NSScreen.main)
+
+  for operation in [Operation.drag, .pointerUp, .minimumRelease] {
+    for reentryPoint in [ReentryPoint.application, .restore, .publication] {
+      for restarts in (reentryPoint == .application ? [false, true] : [true]) {
+        let buttonFrame = CGRect(
+          x: screen.visibleFrame.maxX - 74,
+          y: screen.visibleFrame.maxY + 2,
+          width: 34,
+          height: 22
+        )
+        let initialFrame = CGRect(
+          x: buttonFrame.maxX - 540,
+          y: screen.visibleFrame.maxY - 470,
+          width: 540,
+          height: 430
+        )
+        let window = MenuPanelNativeRoundingWindow(
+          contentRect: initialFrame,
+          styleMask: .borderless,
+          backing: .buffered,
+          defer: false
+        )
+        window.roundsFramesOutward = true
+        let statusButton = PublicStatusButtonFixture(screenFrame: buttonFrame)
+        let geometryStore = MenuPanelGeometryStore(windows: { [statusButton.window] })
+        geometryStore.rememberCompletedSide(.right)
+        let controller = MenuPanelResizeController()
+        var commits: [CGSize] = []
+        let host = MenuPanelResizeHostView(controller: controller)
+        host.configure(
+          geometryStore: geometryStore,
+          preferredSize: initialFrame.size,
+          canResize: true,
+          onCommit: { commits.append($0) }
+        )
+        window.contentView = host
+        window.orderFront(nil)
+        defer {
+          window.onFrameChange = nil
+          window.unexpectedWidth = 0
+          host.uninstall()
+          window.contentView = nil
+          window.orderOut(nil)
+        }
+        await settleResizeHost(host)
+        let start = CGPoint(x: 1, y: 200)
+        guard try await requireResizeBeginReadiness(host, at: start, in: window) else { return }
+        var readyOwner: UUID?
+        if case let .ready(_, _, owner, _) = host.beginReadiness(at: start, in: window) {
+          readyOwner = owner
+        }
+        let owner = try #require(readyOwner)
+        var eventNumber = 10_000
+        func send(_ type: NSEvent.EventType, atScreen point: CGPoint) {
+          eventNumber += 1
+          sendResizeMouseEvent(type, atScreen: point, to: window, number: eventNumber)
+        }
+        let startOnScreen = window.convertPoint(toScreen: start)
+        send(.leftMouseDown, atScreen: startOnScreen)
+        try #require(controller.isTracking)
+        let minimumPointer = CGPoint(x: buttonFrame.minX - 6, y: startOnScreen.y)
+        if operation == .minimumRelease {
+          send(.leftMouseDragged, atScreen: minimumPointer)
+          try #require(controller.isTracking)
+          try #require(window.frame.width < MenuPanelResizeGeometry.minimumContentSize.width)
+        }
+        let originalInteraction = try #require(controller.interactionIdentity(ownerID: owner))
+        let newerPointer = CGPoint(x: startOnScreen.x - 80.375, y: startOnScreen.y)
+        var reentered = false
+        var expectedFrame: CGRect?
+        var expectedInteraction: MenuPanelResizeInteractionIdentity?
+        func installNewerInteraction() {
+          reentered = true
+          window.onFrameChange = nil
+          window.unexpectedWidth = 0
+          if restarts {
+            if controller.isTracking {
+              #expect(controller.cancelSnapshot(ownerID: owner) != nil)
+            }
+            window.setFrame(initialFrame, display: false, animate: false)
+            send(.leftMouseDown, atScreen: startOnScreen)
+          }
+          send(.leftMouseDragged, atScreen: newerPointer)
+          #expect(controller.isTracking)
+          expectedFrame = window.frame
+          expectedInteraction = controller.interactionIdentity(ownerID: owner)
+        }
+        let observation = controller.$effectiveContentSize.dropFirst().sink { value in
+          if reentryPoint == .publication, !reentered, value == nil, !controller.isTracking {
+            installNewerInteraction()
+          }
+        }
+        defer { observation.cancel() }
+        window.onFrameChange = {
+          guard !reentered else { return }
+          if reentryPoint == .application {
+            installNewerInteraction()
+          } else if controller.isTracking {
+            window.unexpectedWidth = 0
+          } else if reentryPoint == .restore {
+            installNewerInteraction()
+          }
+        }
+        if reentryPoint != .application { window.unexpectedWidth = 4 }
+        let pointer = operation == .minimumRelease
+          ? minimumPointer
+          : CGPoint(x: startOnScreen.x - 20.375, y: startOnScreen.y)
+        send(operation == .drag ? .leftMouseDragged : .leftMouseUp, atScreen: pointer)
+        try #require(reentered)
+        let retainedFrame = try #require(expectedFrame)
+        let retainedInteraction = try #require(expectedInteraction)
+        #expect(retainedInteraction != originalInteraction)
+        #expect(controller.interactionIdentity(ownerID: owner) == retainedInteraction)
+        #expect(controller.isOwned(by: owner))
+        #expect(window.frame == retainedFrame)
+        #expect(controller.currentProposal?.frame == retainedFrame)
+        #expect(controller.effectiveContentSize == window.contentRect(forFrameRect: retainedFrame).size)
+        #expect(controller.completedPreferenceSize == nil)
+        #expect(commits.isEmpty)
+        #expect(NSCursor.current == NSCursor.resizeLeftRight)
+      }
+    }
+  }
+}
+
+@Test @MainActor func menuPanelHostedCompletionRollbackPublicationPreservesRestart() async throws {
+  let screen = try #require(NSScreen.main)
+  let buttonFrame = CGRect(
+    x: screen.visibleFrame.maxX - 74,
+    y: screen.visibleFrame.maxY + 2,
+    width: 34,
+    height: 22
+  )
+  let initialFrame = CGRect(
+    x: buttonFrame.maxX - 540,
+    y: screen.visibleFrame.maxY - 470,
+    width: 540,
+    height: 430
+  )
+  let window = MenuPanelNativeRoundingWindow(
+    contentRect: initialFrame,
+    styleMask: .borderless,
+    backing: .buffered,
+    defer: false
+  )
+  window.roundsFramesOutward = true
+  let statusButton = PublicStatusButtonFixture(screenFrame: buttonFrame)
+  let geometryStore = MenuPanelGeometryStore(windows: { [statusButton.window] })
+  geometryStore.rememberCompletedSide(.right)
+  let controller = MenuPanelResizeController()
+  var commits: [CGSize] = []
+  let host = MenuPanelResizeHostView(controller: controller)
+  host.configure(
+    geometryStore: geometryStore,
+    preferredSize: initialFrame.size,
+    canResize: true,
+    onCommit: { commits.append($0) }
+  )
+  window.contentView = host
+  window.orderFront(nil)
+  defer {
+    host.uninstall()
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+  await settleResizeHost(host)
+  let start = CGPoint(x: 1, y: 200)
+  guard try await requireResizeBeginReadiness(host, at: start, in: window) else { return }
+  var readyOwner: UUID?
+  if case let .ready(_, _, owner, _) = host.beginReadiness(at: start, in: window) {
+    readyOwner = owner
+  }
+  let owner = try #require(readyOwner)
+  let startOnScreen = window.convertPoint(toScreen: start)
+  sendResizeMouseEvent(.leftMouseDown, atScreen: startOnScreen, to: window, number: 11_001)
+  try #require(controller.isTracking)
+  let minimumPointer = CGPoint(x: buttonFrame.minX - 6, y: startOnScreen.y)
+  sendResizeMouseEvent(.leftMouseDragged, atScreen: minimumPointer, to: window, number: 11_002)
+  try #require(controller.isTracking)
+  try #require(window.frame.width < MenuPanelResizeGeometry.minimumContentSize.width)
+  var hidCompletedWindow = false
+  var restarted = false
+  var expectedFrame: CGRect?
+  var expectedInteraction: MenuPanelResizeInteractionIdentity?
+  let observation = controller.$effectiveContentSize.dropFirst().sink { size in
+    if !hidCompletedWindow, !controller.isTracking,
+      size?.width == MenuPanelResizeGeometry.minimumContentSize.width
+    {
+      hidCompletedWindow = true
+      window.orderOut(nil)
+    } else if hidCompletedWindow, !restarted, size == nil, !controller.isTracking {
+      restarted = true
+      window.orderFront(nil)
+      sendResizeMouseEvent(.leftMouseDown, atScreen: startOnScreen, to: window, number: 11_003)
+      let newerPointer = CGPoint(x: startOnScreen.x - 80.375, y: startOnScreen.y)
+      sendResizeMouseEvent(.leftMouseDragged, atScreen: newerPointer, to: window, number: 11_004)
+      expectedFrame = window.frame
+      expectedInteraction = controller.interactionIdentity(ownerID: owner)
+    }
+  }
+  defer { observation.cancel() }
+  sendResizeMouseEvent(.leftMouseUp, atScreen: minimumPointer, to: window, number: 11_005)
+  try #require(hidCompletedWindow)
+  try #require(restarted)
+  let retainedFrame = try #require(expectedFrame)
+  let retainedInteraction = try #require(expectedInteraction)
+  #expect(window.isVisible)
+  #expect(window.frame == retainedFrame)
+  #expect(controller.isOwned(by: owner))
+  #expect(controller.interactionIdentity(ownerID: owner) == retainedInteraction)
+  #expect(controller.currentProposal?.frame == retainedFrame)
+  #expect(controller.effectiveContentSize == window.contentRect(forFrameRect: retainedFrame).size)
+  #expect(controller.completedPreferenceSize == nil)
+  #expect(commits.isEmpty)
+  #expect(NSCursor.current == NSCursor.resizeLeftRight)
+}
+
+@Test @MainActor func menuPanelReentrantImmediatePublicationPreservesDeferredLatestSize() {
+  let first = CGSize(width: 400, height: 430)
+  let immediate = CGSize(width: 500, height: 430)
+  let deferred = CGSize(width: 600, height: 430)
+  for deferredLast in [false, true] {
+    let controller = MenuPanelResizeController()
+    let owner = UUID()
+    #expect(controller.claimPresentation(ownerID: owner))
+    var reentered = false
+    var publications: [CGSize?] = []
+    let observation = controller.$effectiveContentSize.dropFirst().sink { size in
+      publications.append(size)
+      guard !reentered else { return }
+      reentered = true
+      if deferredLast {
+        #expect(controller.setPresentationContentSize(immediate, ownerID: owner))
+        #expect(controller.setPresentationContentSize(deferred, ownerID: owner, publication: .deferred))
+      } else {
+        #expect(controller.setPresentationContentSize(deferred, ownerID: owner, publication: .deferred))
+        #expect(controller.setPresentationContentSize(immediate, ownerID: owner))
+      }
+    }
+    defer { observation.cancel() }
+    #expect(controller.setPresentationContentSize(first, ownerID: owner))
+    #expect(publications == (deferredLast ? [first] : [first, immediate]))
+    #expect(controller.effectiveContentSize == (deferredLast ? first : immediate))
+    #expect(controller.presentationContentSize(ownerID: owner) == (deferredLast ? deferred : immediate))
+    #expect(controller.publishPresentationContentSize(ownerID: owner))
+    #expect(publications == (deferredLast ? [first, deferred] : [first, immediate]))
+    #expect(controller.effectiveContentSize == (deferredLast ? deferred : immediate))
+  }
+}
+
+@MainActor
+private final class MenuPanelNativeRoundingWindow: NSWindow {
+  var roundsFramesOutward = false
+  var unexpectedWidth: CGFloat = 0
+  var onFrameChange: (() -> Void)?
+
+  override func setFrame(_ frameRect: NSRect, display flag: Bool, animate animateFlag: Bool) {
+    var frame = roundsFramesOutward ? frameRect.integral : frameRect
+    frame.size.width += unexpectedWidth
+    super.setFrame(frame, display: flag, animate: animateFlag)
+    onFrameChange?()
+  }
 }
 
 @Test @MainActor func resizeMonitorConsumesHandledEventsAndForwardsOrdinaryClicks() async throws {
