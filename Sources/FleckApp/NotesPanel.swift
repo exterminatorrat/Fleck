@@ -5962,6 +5962,7 @@
       ReorderDragHost(content: content, begin: begin, began: began, moved: moved,
         activate: activate, noteID: noteID, displacement: displacement,
         animatesDisplacement: animatesDisplacement)
+        .accessibilityRepresentation { content }
     }
   }
 

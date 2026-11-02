@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.14-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve note-tab button accessibility semantics across the native drag host
+  without dropping its inherited appearance, typography, or layout environment.
+
 ## [1.7.13-beta.1] - 2026-11-02
 
 ### Fixed
