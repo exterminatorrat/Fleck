@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.5-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve newer validation errors across older save completion while retaining cumulative feature and test history.
+
 ## [1.7.4-beta.1] - 2026-11-02
 
 ### Fixed
@@ -15,6 +21,13 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Integrate the current native folder-navigation base while preserving deferred tab-width
   publication, overflow navigation, and the native fixture's accessibility-state restoration.
+
+## [1.7.4-beta.1] - 2026-11-02
+
+### Fixed
+
+- Keep newer folder-validation errors visible when an older unrelated save
+  completes, while still clearing an unchanged persistence error after retry.
 
 ## [1.7.3-beta.1] - 2026-11-02
 
