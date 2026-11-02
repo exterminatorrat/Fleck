@@ -86,6 +86,18 @@
     defer { nativeFrameControl.close() }
     nativeFrameControl.setFrame(expectedFrame, display: false)
     let nativeExpectedFrame = nativeFrameControl.frame
+    let frameClock = ContinuousClock()
+    let frameDeadline = frameClock.now.advanced(by: .seconds(2))
+    while frameClock.now < frameDeadline {
+      let frame = controller.panel.frame
+      if abs(frame.minX - nativeExpectedFrame.minX) <= 0.5,
+        abs(frame.minY - nativeExpectedFrame.minY) <= 0.5,
+        abs(frame.width - nativeExpectedFrame.width) <= 0.5,
+        abs(frame.height - nativeExpectedFrame.height) <= 0.5
+      { break }
+      host.layoutSubtreeIfNeeded()
+      try await Task.sleep(for: .milliseconds(16))
+    }
     let panelFrame = controller.panel.frame
     #expect(abs(panelFrame.minX - nativeExpectedFrame.minX) <= 0.5)
     #expect(abs(panelFrame.minY - nativeExpectedFrame.minY) <= 0.5)

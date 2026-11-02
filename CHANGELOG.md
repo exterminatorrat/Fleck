@@ -3,6 +3,49 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.15-beta.1] - 2026-11-02
+
+### Fixed
+
+- Resolve tab-title fading in an explicit physical gradient coordinate space
+  while preserving the surrounding semantic right-to-left layout.
+
+## [1.7.14-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve note-tab button accessibility semantics across the native drag host
+  without dropping its inherited appearance, typography, or layout environment,
+  while retaining the folder rows' separate accessible drag-source behavior.
+
+## [1.7.13-beta.1] - 2026-11-02
+
+### Fixed
+
+- Replace pending capsule shell animations when applying an immediate native frame
+  so an older transition cannot restore stale geometry.
+
+## [1.7.12-beta.1] - 2026-11-02
+
+### Fixed
+
+- Scope Settings section search semantics to the heading so the readiness button keeps
+  its own accessible name and identifier beside it.
+
+## [1.7.11-beta.1] - 2026-11-02
+
+### Fixed
+
+- Keep note-tab title fading at the semantic trailing edge in right-to-left layouts
+  without reversing the gradient a second time.
+
+## [1.7.10-beta.1] - 2026-11-02
+
+### Fixed
+
+- Return keyboard input to the expanded vocabulary search field after its sort popover
+  closes, provided that the vocabulary view still owns focus and no modal is presented.
+
 ## [1.7.9-beta.1] - 2026-11-02
 
 ### Fixed

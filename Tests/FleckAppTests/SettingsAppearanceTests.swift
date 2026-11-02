@@ -925,6 +925,8 @@ func settingsGlassOpacitySliderRendersNeutralTrackAcrossAppearancesAndContrast()
 func settingsGlassOpacitySliderRespondsToThumbDragAndTrackClickAtAnchoredSettingsRow()
   async throws
 {
+  let previousAccessibility = enableSettingsAppearanceAccessibility()
+  defer { restoreSettingsAppearanceAccessibility(previousAccessibility) }
   let application = NSApplication.shared
   let previousActivationPolicy = application.activationPolicy()
   if previousActivationPolicy != .regular {
@@ -971,25 +973,24 @@ func settingsGlassOpacitySliderRespondsToThumbDragAndTrackClickAtAnchoredSetting
         window.isKeyWindow,
         NSApp.keyWindow === window,
         window.isVisible,
-        let slider = settingsNativeSlider(in: host),
-        slider.window === window,
-        !slider.isHiddenOrHasHiddenAncestor
+        host.window === window,
+        let sliderFrame = settingsNativeSliderFrame(in: host)
       else { return false }
-      return slider.bounds.width > 0 && slider.bounds.height > 0
+      return sliderFrame.width > 0 && sliderFrame.height > 0
+        && host.visibleRect.intersects(sliderFrame)
     }
     if !windowReady {
-      let diagnosticSlider = settingsNativeSlider(in: host)
+      let diagnosticSliderFrame = settingsNativeSliderFrame(in: host)
       let diagnostic = "[F93-6178:slider-postwait] ready=\(windowReady) rtl=\(layoutDirection == .rightToLeft) active=\(NSApp.isActive)"
         + " key=\(window.isKeyWindow) keyOwned=\(NSApp.keyWindow === window) visible=\(window.isVisible)"
-        + " hostOwned=\(host.window === window) sliderPresent=\(diagnosticSlider != nil)"
-        + " sliderOwned=\(diagnosticSlider?.window === window) hidden=\(diagnosticSlider?.isHiddenOrHasHiddenAncestor ?? true)"
-        + " bounds=\(diagnosticSlider?.bounds ?? .zero)"
+        + " hostOwned=\(host.window === window) sliderPresent=\(diagnosticSliderFrame != nil)"
+        + " sliderOwned=\(diagnosticSliderFrame != nil && host.window === window) hidden=\(diagnosticSliderFrame == nil)"
+        + " frame=\(diagnosticSliderFrame ?? .zero)"
       print(String(decoding: diagnostic.utf8.prefix(1000), as: UTF8.self) + " truncated=\(diagnostic.utf8.count > 1000)")
     }
     try #require(windowReady)
 
-    let slider = try #require(settingsNativeSlider(in: host))
-    let sliderRect = slider.convert(slider.bounds, to: host)
+    let sliderRect = try #require(settingsNativeSliderFrame(in: host))
     func sliderPoint(for value: Double) -> NSPoint {
       let metrics = SettingsGlassOpacitySliderMetrics.resolve(
         value: value,
@@ -1032,6 +1033,8 @@ func settingsGlassOpacitySliderRespondsToThumbDragAndTrackClickAtAnchoredSetting
 
 @Test @MainActor
 func settingsGlassOpacitySliderRemainsDisabledForSolidAppearance() async throws {
+  let previousAccessibility = enableSettingsAppearanceAccessibility()
+  defer { restoreSettingsAppearanceAccessibility(previousAccessibility) }
   let application = NSApplication.shared
   let previousActivationPolicy = application.activationPolicy()
   if previousActivationPolicy != .regular {
@@ -1075,8 +1078,7 @@ func settingsGlassOpacitySliderRemainsDisabledForSolidAppearance() async throws 
     await Task.yield()
   }
 
-  let slider = try #require(settingsNativeSlider(in: host))
-  let sliderRect = slider.convert(slider.bounds, to: host)
+  let sliderRect = try #require(settingsNativeSliderFrame(in: host))
   func sliderPoint(for value: Double) -> NSPoint {
     let metrics = SettingsGlassOpacitySliderMetrics.resolve(
       value: value,
@@ -1776,14 +1778,51 @@ private struct SettingsGlassOpacityRowFixture: View {
 }
 
 @MainActor
-private func settingsNativeSlider(in view: NSView) -> NSSlider? {
-  if let slider = view as? NSSlider { return slider }
-  for subview in view.subviews {
-    if let slider = settingsNativeSlider(in: subview) {
-      return slider
+private func enableSettingsAppearanceAccessibility() -> Any? {
+  let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  let previous = NSApplication.shared.accessibilityAttributeValue(attribute)
+  NSApplication.shared.accessibilitySetValue(true, forAttribute: attribute)
+  return previous
+}
+
+@MainActor
+private func restoreSettingsAppearanceAccessibility(_ previous: Any?) {
+  NSApplication.shared.accessibilitySetValue(
+    previous, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+  )
+}
+
+@MainActor
+private func settingsNativeSliderFrame(in host: NSView) -> CGRect? {
+  guard let window = host.window else { return nil }
+  var frames: [CGRect] = []
+  var visited: Set<ObjectIdentifier> = []
+  func collect(_ value: Any) {
+    guard let object = value as? NSObject,
+      visited.insert(ObjectIdentifier(object)).inserted
+    else { return }
+    let roleSelector = NSSelectorFromString("accessibilityRole")
+    let ownerSelector = NSSelectorFromString("accessibilityWindow")
+    let frameSelector = NSSelectorFromString("accessibilityFrame")
+    if object.responds(to: roleSelector),
+      object.perform(roleSelector)?.takeUnretainedValue() as? String == "AXSlider",
+      object.responds(to: ownerSelector),
+      object.perform(ownerSelector)?.takeUnretainedValue() as? NSWindow === window,
+      object.responds(to: frameSelector),
+      let frame = (object.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue,
+      !frame.isEmpty
+    {
+      frames.append(host.convert(window.convertFromScreen(frame), from: nil))
+    }
+    let selector = NSSelectorFromString("accessibilityChildren")
+    if object.responds(to: selector),
+      let children = object.perform(selector)?.takeUnretainedValue() as? [Any]
+    {
+      for child in NSAccessibility.unignoredChildren(from: children) { collect(child) }
     }
   }
-  return nil
+  collect(host)
+  return frames.count == 1 ? frames.first : nil
 }
 
 @MainActor

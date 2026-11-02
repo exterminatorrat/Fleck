@@ -10,6 +10,24 @@ private final class RetryInteractionClock {
   var now = 0.0
 }
 
+private func quartzStableRetryTimestamp(for uptime: TimeInterval) -> TimeInterval {
+  let ticksPerSecond = 512.0
+  return (uptime * ticksPerSecond).rounded(.down) / ticksPerSecond
+}
+
+@Test(arguments: [537.798559333, 538.798559333]) @MainActor
+func retrySyntheticTimestampSurvivesQuartzRoundTrip(uptime: TimeInterval) throws {
+  let timestamp = quartzStableRetryTimestamp(for: uptime)
+  let event = try #require(NSEvent.mouseEvent(
+    with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: timestamp,
+    windowNumber: 0, context: nil, eventNumber: 1, clickCount: 1, pressure: 1
+  ))
+  let quartzEvent = try #require(event.cgEvent)
+  let roundTrip = try #require(NSEvent(cgEvent: quartzEvent))
+  #expect(event.timestamp == timestamp)
+  #expect(roundTrip.timestamp == event.timestamp)
+}
+
 @MainActor
 private func retryNativeEvents(_ controller: DictationCapsuleController, number: Int)
   throws -> (NSView, NSEvent, NSEvent)
@@ -28,8 +46,7 @@ private func retryNativeEvents(_ controller: DictationCapsuleController, number:
   let target = try #require(host.hitTest(host.convert(point, to: host.superview)))
   #expect(target === host.subviews.first)
   let location = host.convert(point, to: nil)
-  let timestamp = (ProcessInfo.processInfo.systemUptime * 1_000_000_000).rounded(.down)
-    / 1_000_000_000
+  let timestamp = quartzStableRetryTimestamp(for: ProcessInfo.processInfo.systemUptime)
   func event(_ type: NSEvent.EventType, _ offset: Int) throws -> NSEvent {
     try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
       timestamp: timestamp, windowNumber: panel.windowNumber,
@@ -158,12 +175,35 @@ private func retryWitnessCoordinate(_ value: Double?) -> String {
 
   var posted: [NSEvent] = []
   var delivered: [Int] = []
+  var prePostCoordinateSamples: [String] = []
+  var observedCoordinateSamples: [String] = []
+  var deliveredEventsForProbe: [Int: RetryPostedEvent] = [:]
+  defer {
+    let originalCGLocations = posted.map { event in
+      "n=\(event.eventNumber) cg=\(String(describing: event.cgEvent?.location))"
+    }
+    let deliveredCGLocations = deliveredEventsForProbe.keys.sorted().compactMap { number -> String? in
+      guard let event = deliveredEventsForProbe[number]?.event else { return nil }
+      return "n=\(number) cg=\(String(describing: event.cgEvent?.location))"
+    }
+    print("posted-coordinate-probe v=1 stage=post-sequence"
+      + " pre=\(prePostCoordinateSamples.joined(separator: ";"))"
+      + " monitor=\(observedCoordinateSamples.joined(separator: ";"))"
+      + " originalCG=\(originalCGLocations.joined(separator: ";"))"
+      + " deliveredCG=\(deliveredCGLocations.joined(separator: ";"))")
+  }
   let monitor = try #require(NSEvent.addLocalMonitorForEvents(
     matching: [.leftMouseDown, .leftMouseUp], handler: { event in
       let observed = RetryPostedEvent(event: event)
       MainActor.assumeIsolated {
         let event = observed.event
         guard let expected = posted.first(where: { $0.eventNumber == event.eventNumber }) else { return }
+        observedCoordinateSamples.append(
+          "n=\(event.eventNumber) wn=\(event.windowNumber)"
+            + " windowMatchesPanel=\(event.window === panel ? 1 : 0)"
+            + " point=\(event.locationInWindow)"
+        )
+        deliveredEventsForProbe[event.eventNumber] = observed
         #expect(event.eventNumber > 0)
         #expect(event.windowNumber == panel.windowNumber)
         #expect(event.windowNumber == expected.windowNumber)
@@ -193,6 +233,15 @@ private func retryWitnessCoordinate(_ value: Double?) -> String {
     try #require(event.windowNumber == panel.windowNumber && event.window === panel)
     try #require(event.eventNumber > 0)
     try #require(!posted.contains(where: { $0.eventNumber == event.eventNumber }))
+    let point = event.locationInWindow
+    let panelFrame = panel.frame
+    prePostCoordinateSamples.append(
+      "n=\(event.eventNumber) wn=\(event.windowNumber)"
+        + " windowMatchesPanel=\(event.window === panel ? 1 : 0) point=\(point)"
+        + " panelFrame=\(panelFrame) panelOrigin=\(panelFrame.origin)"
+        + " screenFrame=\(String(describing: panel.screen?.frame))"
+        + " pointOnScreen=\(panel.convertPoint(toScreen: point))"
+    )
     posted.append(event)
     application.postEvent(event, atStart: false)
     let clock = ContinuousClock()

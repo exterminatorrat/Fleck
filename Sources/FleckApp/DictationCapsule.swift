@@ -2829,8 +2829,7 @@
         )
       let reduceMotion = effectiveReduceMotion
       if reduceMotion {
-        panel.setFrame(finalFrame, display: true)
-        panel.alphaValue = 1
+        setImmediateFrame(finalFrame)
         guard animated else { return }
         let duration = DictationCapsuleMotion.shellDuration(
           from: previousStatus,
@@ -2851,8 +2850,7 @@
         return
       }
       guard animated, !fleckPillModel.isVisible, !usesErrorSurface else {
-        panel.setFrame(finalFrame, display: true)
-        panel.alphaValue = 1
+        setImmediateFrame(finalFrame)
         return
       }
       let duration = DictationCapsuleMotion.shellDuration(
@@ -2862,8 +2860,7 @@
         dockChange: dockChange
       )
       guard duration > 0 else {
-        panel.setFrame(finalFrame, display: true)
-        panel.alphaValue = 1
+        setImmediateFrame(finalFrame)
         return
       }
       NSAnimationContext.runAnimationGroup { context in
@@ -2880,6 +2877,15 @@
         panel.animator().alphaValue = 1
         panel.animator().setFrame(finalFrame, display: true)
       }
+    }
+
+    private func setImmediateFrame(_ frame: CGRect) {
+      NSAnimationContext.runAnimationGroup { context in
+        context.duration = 0
+        panel.animator().setFrame(frame, display: true)
+      }
+      panel.setFrame(frame, display: true)
+      panel.alphaValue = 1
     }
 
     private func selectDock(

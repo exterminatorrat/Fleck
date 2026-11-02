@@ -9,6 +9,7 @@ on:
         options:
           - readiness
           - models-click
+          - capsule-posted
 permissions:
   contents: read
 jobs:
@@ -43,12 +44,17 @@ jobs:
         run: |
           Scripts/run-nonempty-swift-tests.sh '^FleckAppTests\.modelSearchBlursWithoutSwallowingActionsAcrossThemesAndSizes\(\)$' > "$RUNNER_TEMP/models-click-route.log" 2>&1
           grep -F 'MODELS_CLICK_PROBE_INSTALL class=AppKitTestProbeApplication exactPrincipalClass=true beforeTestBundle=true' "$RUNNER_TEMP/models-click-route.log"
+      - name: Observe the exact posted capsule coordinate route
+        if: ${{ inputs.probe == 'capsule-posted' }}
+        run: |
+          Scripts/run-nonempty-swift-tests.sh '^FleckAppTests\.DictationCapsulePostedEventRetryQualification\(\)$' > "$RUNNER_TEMP/capsule-posted-route.log" 2>&1
+          grep -F 'posted-coordinate-probe v=1 stage=post-sequence' "$RUNNER_TEMP/capsule-posted-route.log"
       - name: Report diagnostic observations without final validation claim
         if: always()
         run: |
-          for trace in "$RUNNER_TEMP/readiness-seam.log" "$RUNNER_TEMP/models-click-route.log"; do
+          for trace in "$RUNNER_TEMP/readiness-seam.log" "$RUNNER_TEMP/models-click-route.log" "$RUNNER_TEMP/capsule-posted-route.log"; do
             if [[ -f "$trace" ]]; then
-              grep -E 'MODELS_CLICK_PROBE|SEAM|F93-readiness|Readiness full keyboard|matched test count|Test run with|^error:|✘|✔ Test' "$trace" || true
+              grep -E 'posted-coordinate-probe|posted-down-witness|MODELS_CLICK_PROBE|SEAM|F93-readiness|Readiness full keyboard|matched test count|Test run with|^error:|✘|✔ Test' "$trace" || true
             fi
           done
           printf '%s\n' 'Diagnostic only: no required full graph, package, or product validation verdict.' >> "$GITHUB_STEP_SUMMARY"
@@ -61,3 +67,4 @@ jobs:
             ${{ runner.temp }}/readiness-seam.log
             ${{ runner.temp }}/readiness-seam-captures
             ${{ runner.temp }}/models-click-route.log
+            ${{ runner.temp }}/capsule-posted-route.log
