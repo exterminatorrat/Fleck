@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.16-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve newer validation errors across older save completion while retaining cumulative feature and test history.
+
 ## [1.7.15-beta.1] - 2026-11-02
 
 ### Fixed
@@ -131,6 +137,19 @@ real-event, display and pixel behavior in this source context remain unverified.
 
 Source-only candidate. Compiler checks, tests, native tracking, real-event behavior and
 pixel behavior remain unverified.
+
+## [1.7.4-beta.1] - 2026-11-02
+
+### Fixed
+
+- Keep newer folder-validation errors visible when an older unrelated save
+  completes, while still clearing an unchanged persistence error after retry.
+
+## [1.7.3-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer while integrating verified parent title, accessibility, and native-fixture repairs.
 
 ## [1.7.2-beta.1] - 2026-10-29
 
@@ -274,6 +293,56 @@ pending. Existing 1.6.x candidates and all earlier development history remain pr
 Part of the approved substantial development cohort. Source-only correction; compilation,
 process tests and native behavior remain unverified locally.
 
+## [1.7.0-beta.1] - 2026-10-27
+
+### Fixed
+
+- Use the native inline folder-name field for renaming, with Return/Escape, validated
+  focus-loss commits and deletion-safe editor ownership. Preserve the existing icon-based
+  new-folder controls and compact Unfiled layout while keeping keyboard navigation in its
+  owning host.
+
+This focused change is part of the shared 1.7.0-beta.1 retained-feature release cohort,
+not a separate release. Source-only checkpoint: local compilation, tests and native
+keyboard, focus, IME, visual and accessibility behavior remain unverified.
+
+## [1.5.20-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve capsule standby placement and its explicit native fixture cleanup while
+  integrating reviewed note-tab accessibility, physical gradients and parent Settings work.
+
+## [1.5.16-beta.1] - 2026-11-02
+
+### Fixed
+
+- Carry verified readiness, Models input, native font and right-to-left title repairs
+  into the bottom-only pill source while preserving its standby and routing lifecycle.
+
+## [1.5.19-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve the theme, Settings and Models work while integrating reviewed native
+  note-tab accessibility, physical title gradients and interface-font corrections.
+
+## [1.5.15-beta.1] - 2026-11-02
+
+### Fixed
+
+- Integrate the verified font and right-to-left title parent while preserving the
+  readiness accessibility correction, Models input lifecycle and complete filing history.
+
+## [1.5.14-beta.1] - 2026-11-02
+
+### Fixed
+
+- Keep Settings section-heading accessibility semantics separate from the readiness
+  action, preserving its public identity and keyboard return behavior.
+- Give private Settings focus probes an independent identity and verify returned
+  window accessibility focus with mode-appropriate native keyboard coverage.
+
 ## [1.5.13-beta.1] - 2026-10-31
 
 ### Fixed
@@ -325,6 +394,20 @@ and native behavior remain unverified; hosted verification is pending.
 
 ## [1.5.9-beta.1] - 2026-10-27
 
+## [1.5.18-beta.1] - 2026-11-02
+
+### Fixed
+
+- Retain transactional multi-note filing while integrating reviewed native title
+  accessibility, physical gradient coordinates and interface-font picker corrections.
+
+## [1.5.9-beta.1] - 2026-11-02
+
+### Fixed
+
+- Inherit the verified tab-title fade and native font-picker Escape corrections while
+  preserving transactional filing, durable receipts and guarded undo.
+
 ## [1.5.9-beta.1] - 2026-10-29
 
 ### Fixed
@@ -348,6 +431,21 @@ ownership remains unresolved.
 Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
 and native behavior remain unverified; hosted verification is pending.
 
+## [1.5.17-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native note-tab accessibility activation and explicit physical title-gradient
+  coordinates when integrating the reviewed title parent, retaining optional interface
+  fonts and native font-picker Escape handling.
+
+## [1.5.8-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve the verified right-to-left tab-title fade correction alongside native
+  font-picker Escape handling when integrating the current parent source.
+
 ## [1.5.8-beta.1] - 2026-10-27
 
 ### Fixed
@@ -357,6 +455,26 @@ and native behavior remain unverified; hosted verification is pending.
 - Use AppKit's supported light/dark appearance assignment so system accessibility contrast
   remains authoritative, and preserve rectangular padded hit targets beneath rounded hover paint.
 - Match Models keyboard-focus regression coverage to its dynamically updated native key loop.
+
+Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
+and native behavior remain unverified; hosted verification is pending.
+
+## [1.5.7-beta.1] - 2026-11-02
+
+### Fixed
+
+- Route Escape from the native font-family table to its owning picker so cancelling
+  dismisses the picker without committing a font change.
+
+## [1.5.7-beta.1] - 2026-10-27
+
+### Fixed
+
+- Inherit the explicit interface-font correction while preserving transactional multi-note
+  and semantic-section filing, durable receipts, guarded undo and filing regression coverage.
+- Keep mixed-marker fence closers from exposing code-block headings as filing destinations.
+- Reject backtick fence openers whose info contains a backtick while preserving valid
+  backtick and tilde fences, including indented longer matching closers.
 
 Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
 and native behavior remain unverified; hosted verification is pending.
@@ -453,6 +571,22 @@ tests, visual/accessibility inspection and native behavior remain unverified.
 
 Source-only public review checkpoint, not accepted/development-source advancement. Compilation,
 tests and native behavior remain unverified.
+
+## [1.4.45-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve complete note-tab button accessibility through the native drag host,
+  including title labels and activation, without replacing folder drag semantics.
+- Resolve only the decorative fade gradient in physical coordinates so its semantic
+  trailing edge remains stable across native layout-direction handling.
+
+## [1.4.44-beta.1] - 2026-11-02
+
+### Fixed
+
+- Keep the tab-title fade at the semantic trailing edge in right-to-left layouts
+  without reversing the mirrored gradient twice.
 
 ## [1.4.43-beta.1] - 2026-11-01
 
