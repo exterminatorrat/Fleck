@@ -10,6 +10,24 @@ private final class RetryInteractionClock {
   var now = 0.0
 }
 
+private func quartzStableRetryTimestamp(for uptime: TimeInterval) -> TimeInterval {
+  let ticksPerSecond = 512.0
+  return (uptime * ticksPerSecond).rounded(.down) / ticksPerSecond
+}
+
+@Test(arguments: [537.798559333, 538.798559333]) @MainActor
+func retrySyntheticTimestampSurvivesQuartzRoundTrip(uptime: TimeInterval) throws {
+  let timestamp = quartzStableRetryTimestamp(for: uptime)
+  let event = try #require(NSEvent.mouseEvent(
+    with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: timestamp,
+    windowNumber: 0, context: nil, eventNumber: 1, clickCount: 1, pressure: 1
+  ))
+  let quartzEvent = try #require(event.cgEvent)
+  let roundTrip = try #require(NSEvent(cgEvent: quartzEvent))
+  #expect(event.timestamp == timestamp)
+  #expect(roundTrip.timestamp == event.timestamp)
+}
+
 @MainActor
 private func retryNativeEvents(_ controller: DictationCapsuleController, number: Int)
   throws -> (NSView, NSEvent, NSEvent)
@@ -28,8 +46,7 @@ private func retryNativeEvents(_ controller: DictationCapsuleController, number:
   let target = try #require(host.hitTest(host.convert(point, to: host.superview)))
   #expect(target === host.subviews.first)
   let location = host.convert(point, to: nil)
-  let timestamp = (ProcessInfo.processInfo.systemUptime * 1_000_000_000).rounded(.down)
-    / 1_000_000_000
+  let timestamp = quartzStableRetryTimestamp(for: ProcessInfo.processInfo.systemUptime)
   func event(_ type: NSEvent.EventType, _ offset: Int) throws -> NSEvent {
     try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
       timestamp: timestamp, windowNumber: panel.windowNumber,
