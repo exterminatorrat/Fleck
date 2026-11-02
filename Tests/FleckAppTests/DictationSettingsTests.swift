@@ -1394,13 +1394,11 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
     )
     try #require(!popoverWindow.isVisible)
     try #require(application.keyWindow === window)
-    if usesFullKeyboardAccess {
-      #expect(
-        settingsView(
-          withAccessibilityIdentifier: "settings-keyboard-focus-dictation-status", in: host
-        ) != nil
-      )
-    }
+    #expect(
+      settingsView(
+        withAccessibilityIdentifier: "settings-keyboard-focus-dictation-status", in: host
+      ) != nil
+    )
     let triggers = settingsAccessibilityElements(
       in: host, identifier: "settings-dictation-readiness-button"
     )
@@ -1429,15 +1427,12 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
     let focusCue = settingsView(
       withAccessibilityIdentifier: "settings-keyboard-focus-cue-dictation-status", in: host
     )
+    #expect(focusedAXTarget() == "readiness-trigger")
+    #expect(focusCue != nil)
     if usesFullKeyboardAccess {
-      #expect(focusedAXTarget() == "readiness-trigger")
-      #expect(focusCue != nil)
       try sendSettingsKey(49, characters: " ", ownedWindows: [window])
     } else {
-      #expect(focusCue == nil)
-      let selector = NSSelectorFromString("accessibilityPerformPress")
-      try #require(trigger.responds(to: selector))
-      _ = trigger.perform(selector)
+      try #require(performSettingsAccessibilityPress(trigger))
     }
     await settleSettingsHost(host)
     let reopenedWindow = try #require(
@@ -1462,12 +1457,8 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
     let returnedFocusCue = settingsView(
       withAccessibilityIdentifier: "settings-keyboard-focus-cue-dictation-status", in: host
     )
-    if usesFullKeyboardAccess {
-      #expect(focusedAXTarget() == "readiness-trigger")
-      #expect(returnedFocusCue != nil)
-    } else {
-      #expect(returnedFocusCue == nil)
-    }
+    #expect(focusedAXTarget() == "readiness-trigger")
+    #expect(returnedFocusCue != nil)
   }
 }
 
