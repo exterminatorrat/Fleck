@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.13-beta.1] - 2026-11-02
+
+### Fixed
+
+- Replace pending capsule shell animations when applying an immediate native frame
+  so an older transition cannot restore stale geometry.
+
 ## [1.7.12-beta.1] - 2026-11-02
 
 ### Fixed
