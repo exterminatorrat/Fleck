@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.7-beta.1] - 2026-11-02
+
+### Fixed
+
+- Route Escape from the native font-family table to its owning picker so cancelling
+  dismisses the picker without committing a font change.
+
 ## [1.5.6-beta.1] - 2026-10-27
 
 ### Fixed
