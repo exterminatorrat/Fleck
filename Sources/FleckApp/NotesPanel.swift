@@ -741,14 +741,17 @@
   }
 
   struct NoteTabTitleFadeMask: View {
+    @Environment(\.layoutDirection) private var layoutDirection
+
     var body: some View {
       HStack(spacing: 0) {
         Color.white
         LinearGradient(
           colors: [.white, .clear],
-          startPoint: UnitPoint(x: 0, y: 0.5),
-          endPoint: UnitPoint(x: 1, y: 0.5)
+          startPoint: UnitPoint(x: layoutDirection == .leftToRight ? 0 : 1, y: 0.5),
+          endPoint: UnitPoint(x: layoutDirection == .leftToRight ? 1 : 0, y: 0.5)
         )
+        .environment(\.layoutDirection, .leftToRight)
         .frame(width: TabTitlePresentation.fadeWidth)
       }
       .frame(width: TabTitlePresentation.maximumWidth, alignment: .leading)
@@ -5839,9 +5842,14 @@
     var animatesDisplacement = false
 
     func body(content: Content) -> some View {
-      ReorderDragHost(content: content, begin: begin, began: began, moved: moved,
+      let host = ReorderDragHost(content: content, begin: begin, began: began, moved: moved,
         activate: activate, noteID: noteID, displacement: displacement,
         animatesDisplacement: animatesDisplacement)
+      if noteID != nil {
+        host.accessibilityRepresentation { content }
+      } else {
+        host
+      }
     }
   }
 
