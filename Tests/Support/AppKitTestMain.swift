@@ -14,6 +14,33 @@ private enum ModelsClickProbeNotification {
   )
 }
 
+private enum CapsuleCoordinateReceiptNotification {
+  static let eventNumber = 20_900
+  static let arm = Notification.Name(
+    "org.fleck.appkit-test-host.capsule-coordinate-receipt.arm"
+  )
+  static let capture = Notification.Name(
+    "org.fleck.appkit-test-host.capsule-coordinate-receipt.capture"
+  )
+  static let finish = Notification.Name(
+    "org.fleck.appkit-test-host.capsule-coordinate-receipt.finish"
+  )
+}
+
+@MainActor
+private struct ArmedCapsuleCoordinateReceipt {
+  let window: NSWindow
+  let eventNumber: Int
+  var stages: [String] = []
+  var dequeueCaptured = false
+
+  func matches(_ event: NSEvent) -> Bool {
+    event.eventNumber == eventNumber
+      && event.windowNumber == window.windowNumber
+      && event.window === window
+  }
+}
+
 @MainActor
 private struct ModelsClickProbeEvent {
   let type: NSEvent.EventType
@@ -138,6 +165,7 @@ final class AppKitTestProbeApplication: NSApplication {
   private var hasInstalledModelsClickObservers = false
   private var armedModelsClick: ArmedModelsClick?
   private var modelsClickState = ModelsClickProbeState()
+  private var armedCapsuleCoordinateReceipt: ArmedCapsuleCoordinateReceipt?
 
   func installModelsClickObservers() {
     guard !hasInstalledModelsClickObservers else { return }
@@ -163,6 +191,28 @@ final class AppKitTestProbeApplication: NSApplication {
     )
   }
 
+  func installCapsuleCoordinateReceiptObservers() {
+    let center = NotificationCenter.default
+    center.addObserver(
+      self,
+      selector: #selector(armCapsuleCoordinateReceipt(_:)),
+      name: CapsuleCoordinateReceiptNotification.arm,
+      object: nil
+    )
+    center.addObserver(
+      self,
+      selector: #selector(captureCapsuleCoordinateReceipt(_:)),
+      name: CapsuleCoordinateReceiptNotification.capture,
+      object: nil
+    )
+    center.addObserver(
+      self,
+      selector: #selector(finishCapsuleCoordinateReceipt(_:)),
+      name: CapsuleCoordinateReceiptNotification.finish,
+      object: nil
+    )
+  }
+
   override func nextEvent(
     matching mask: NSEvent.EventTypeMask,
     until expiration: Date?,
@@ -175,6 +225,18 @@ final class AppKitTestProbeApplication: NSApplication {
       inMode: mode,
       dequeue: dequeue
     )
+    if dequeue,
+      var receipt = armedCapsuleCoordinateReceipt,
+      !receipt.dequeueCaptured,
+      let event,
+      receipt.matches(event)
+    {
+      receipt.stages.append(
+        capsuleCoordinateReceiptSample(stage: "dequeue", event: event, panel: receipt.window)
+      )
+      receipt.dequeueCaptured = true
+      armedCapsuleCoordinateReceipt = receipt
+    }
     if let event,
       let armedModelsClick,
       armedModelsClick.up.matches(event, in: armedModelsClick.window)
@@ -369,6 +431,119 @@ final class AppKitTestProbeApplication: NSApplication {
     modelsClickState = ModelsClickProbeState()
   }
 
+  @objc private func armCapsuleCoordinateReceipt(_ notification: Notification) {
+    guard armedCapsuleCoordinateReceipt == nil,
+      let window = notification.object as? NSWindow,
+      let event = notification.userInfo?["event"] as? NSEvent,
+      event.eventNumber == CapsuleCoordinateReceiptNotification.eventNumber,
+      event.windowNumber == window.windowNumber,
+      event.window === window
+    else {
+      return
+    }
+    var receipt = ArmedCapsuleCoordinateReceipt(
+      window: window,
+      eventNumber: event.eventNumber
+    )
+    receipt.stages.append(
+      capsuleCoordinateReceiptSample(stage: "construction", event: event, panel: window)
+    )
+    armedCapsuleCoordinateReceipt = receipt
+  }
+
+  @objc private func captureCapsuleCoordinateReceipt(_ notification: Notification) {
+    guard var receipt = armedCapsuleCoordinateReceipt,
+      let window = notification.object as? NSWindow,
+      window === receipt.window,
+      let event = notification.userInfo?["event"] as? NSEvent,
+      let stage = notification.userInfo?["stage"] as? String,
+      stage == "before-post" || stage == "postdispatch",
+      receipt.matches(event)
+    else {
+      return
+    }
+    receipt.stages.append(
+      capsuleCoordinateReceiptSample(stage: stage, event: event, panel: window)
+    )
+    armedCapsuleCoordinateReceipt = receipt
+  }
+
+  @objc private func finishCapsuleCoordinateReceipt(_ notification: Notification) {
+    guard let receipt = armedCapsuleCoordinateReceipt,
+      let window = notification.object as? NSWindow,
+      window === receipt.window,
+      let eventNumber = (notification.userInfo?["eventNumber"] as? NSNumber)?.intValue,
+      eventNumber == receipt.eventNumber
+    else {
+      return
+    }
+    let stages = receipt.stages.joined(separator: ";")
+    let record = "capsule-coordinate-receipt v=1 eventNumber=\(receipt.eventNumber) "
+      + "window=\(windowIdentity(receipt.window)) "
+      + "dequeueCaptured=\(receipt.dequeueCaptured ? 1 : 0) stages={\(stages)}\n"
+    FileHandle.standardError.write(Data(record.utf8))
+    armedCapsuleCoordinateReceipt = nil
+  }
+
+  private func capsuleCoordinateReceiptSample(
+    stage: String,
+    event: NSEvent,
+    panel: NSWindow
+  ) -> String {
+    let panelNumber = panel.windowNumber
+    let panelFrame = panel.frame
+    let panelIsKey = panel.isKeyWindow
+    let keyWindowDescription: String
+    if let keyWindow = self.keyWindow {
+      let frame = keyWindow.frame
+      keyWindowDescription =
+        "keyWindow={number=\(keyWindow.windowNumber),identity=\(windowIdentity(keyWindow)),"
+          + "frame=\(capsuleCoordinateFrame(frame)),isPanel=\(keyWindow is NSPanel ? 1 : 0)}"
+    } else {
+      keyWindowDescription = "keyWindow=nil"
+    }
+    let screenDescription: String
+    if let screen = panel.screen {
+      let frame = screen.frame
+      screenDescription =
+        "screenFrame=\(capsuleCoordinateFrame(frame)) screenHeight=\(frame.height)"
+    } else {
+      screenDescription = "screenFrame=nil screenHeight=nil"
+    }
+    let eventWindow = event.window
+    let eventWindowIdentity = eventWindow.map { windowIdentity($0) } ?? "nil"
+    let eventNumber = event.eventNumber
+    let eventWindowNumber = event.windowNumber
+    let eventType = event.type.rawValue
+    let eventTimestamp = event.timestamp
+    let locationBeforeCGGetter = event.locationInWindow
+    let cgEventLocation = event.cgEvent?.location
+    let locationAfterCGGetter = event.locationInWindow
+    let cgEventLocationDescription = cgEventLocation.map {
+      capsuleCoordinatePoint($0)
+    } ?? "nil"
+    return "stage=\(stage) panelWindow=\(windowIdentity(panel)) "
+      + "panelNumber=\(panelNumber) panelFrame=\(capsuleCoordinateFrame(panelFrame)) "
+      + "panelOrigin=\(capsuleCoordinatePoint(panelFrame.origin)) "
+      + "panelIsKey=\(panelIsKey ? 1 : 0) \(keyWindowDescription) \(screenDescription) "
+      + "eventNumber=\(eventNumber) eventType=\(eventType) "
+      + "eventWindowNumber=\(eventWindowNumber) eventWindowIdentity=\(eventWindowIdentity) "
+      + "eventWindowMatchesPanel=\(eventWindow === panel ? 1 : 0) "
+      + "timestamp=\(eventTimestamp) "
+      + "locationInWindowBeforeCGGetter=\(capsuleCoordinatePoint(locationBeforeCGGetter)) "
+      + "cgEventLocation=\(cgEventLocationDescription) "
+      + "locationInWindowAfterCGGetter=\(capsuleCoordinatePoint(locationAfterCGGetter)) "
+      + "locationChangedByCGGetter=\(locationBeforeCGGetter == locationAfterCGGetter ? 0 : 1)"
+  }
+
+  private func capsuleCoordinatePoint(_ point: CGPoint) -> String {
+    "\(point.x),\(point.y)"
+  }
+
+  private func capsuleCoordinateFrame(_ frame: CGRect) -> String {
+    "\(frame.origin.x),\(frame.origin.y),\(frame.size.width),\(frame.size.height)"
+  }
+
   private func writeModelsClickProbe(_ fields: String) {
     FileHandle.standardError.write(Data("MODELS_CLICK_PROBE \(fields)\n".utf8))
   }
@@ -410,6 +585,9 @@ struct AppKitTestMain {
       )
     }
     application.installModelsClickObservers()
+    if ProcessInfo.processInfo.environment["FLECK_CAPSULE_COORDINATE_RECEIPT"] == "1" {
+      application.installCapsuleCoordinateReceiptObservers()
+    }
     configuration.writeDiagnostic(
       "MODELS_CLICK_PROBE_INSTALL class=\(NSStringFromClass(type(of: application))) "
         + "exactPrincipalClass=true beforeTestBundle=true"

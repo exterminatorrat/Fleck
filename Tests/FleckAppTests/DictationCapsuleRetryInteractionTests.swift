@@ -52,7 +52,10 @@ private func retryNativeEvents(_ controller: DictationCapsuleController, number:
       timestamp: timestamp, windowNumber: panel.windowNumber,
       context: nil, eventNumber: number + offset, clickCount: 1, pressure: 0))
   }
-  return (target, try event(.leftMouseDown, 0), try event(.leftMouseUp, 1))
+  let down = try event(.leftMouseDown, 0)
+  let up = try event(.leftMouseUp, 1)
+  if number == 20_900 { RetryCapsuleCoordinateReceipt.arm(down, in: panel) }
+  return (target, down, up)
 }
 
 @MainActor
@@ -128,6 +131,56 @@ private func retryWitnessCoordinate(_ value: Double?) -> String {
   return text
 }
 
+@MainActor
+private enum RetryCapsuleCoordinateReceipt {
+  private static let eventNumber = 20_900
+  private static let enabled =
+    ProcessInfo.processInfo.environment["FLECK_CAPSULE_COORDINATE_RECEIPT"] == "1"
+  private static let armNotification = Notification.Name(
+    "org.fleck.appkit-test-host.capsule-coordinate-receipt.arm"
+  )
+  private static let captureNotification = Notification.Name(
+    "org.fleck.appkit-test-host.capsule-coordinate-receipt.capture"
+  )
+  private static let finishNotification = Notification.Name(
+    "org.fleck.appkit-test-host.capsule-coordinate-receipt.finish"
+  )
+
+  static func arm(_ event: NSEvent, in panel: NSWindow) {
+    guard matches(event, in: panel) else { return }
+    NotificationCenter.default.post(
+      name: armNotification,
+      object: panel,
+      userInfo: ["event": event]
+    )
+  }
+
+  static func capture(_ stage: String, event: NSEvent, in panel: NSWindow) {
+    guard matches(event, in: panel) else { return }
+    NotificationCenter.default.post(
+      name: captureNotification,
+      object: panel,
+      userInfo: ["event": event, "stage": stage]
+    )
+  }
+
+  static func finish(_ event: NSEvent, in panel: NSWindow) {
+    guard enabled, event.eventNumber == eventNumber else { return }
+    NotificationCenter.default.post(
+      name: finishNotification,
+      object: panel,
+      userInfo: ["eventNumber": event.eventNumber]
+    )
+  }
+
+  private static func matches(_ event: NSEvent, in panel: NSWindow) -> Bool {
+    enabled
+      && event.eventNumber == eventNumber
+      && event.windowNumber == panel.windowNumber
+      && event.window === panel
+  }
+}
+
 @Test @MainActor func DictationCapsulePostedEventRetryQualification() async throws {
   let application = try #require(NSApp)
   try #require(application.isRunning, "Requires the existing AppKit test host's live NSApplication.run loop")
@@ -170,6 +223,7 @@ private func retryWitnessCoordinate(_ value: Double?) -> String {
   try #require(panel.isVisible && !panel.ignoresMouseEvents)
   try #require(controller.errorPresentationModel.canBeginAction)
   let (_, down, up) = try retryNativeEvents(controller, number: 20_900)
+  defer { RetryCapsuleCoordinateReceipt.finish(down, in: panel) }
   try #require(down.window === panel && up.window === panel)
   try #require(down.locationInWindow == up.locationInWindow)
 
@@ -214,6 +268,7 @@ private func retryWitnessCoordinate(_ value: Double?) -> String {
       #expect(event.modifierFlags == expected.modifierFlags)
       #expect(event.clickCount == expected.clickCount)
       delivered.append(event.eventNumber)
+      RetryCapsuleCoordinateReceipt.capture("postdispatch", event: event, in: panel)
     }
   }
   defer { panel.eventDispatchObserverForTesting = nil }
@@ -242,6 +297,7 @@ private func retryWitnessCoordinate(_ value: Double?) -> String {
         + " pointOnScreen=\(panel.convertPoint(toScreen: point))"
     )
     posted.append(event)
+    RetryCapsuleCoordinateReceipt.capture("before-post", event: event, in: panel)
     application.postEvent(event, atStart: false)
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: .seconds(2))
