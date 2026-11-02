@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.9-beta.1] - 2026-11-02
+
+### Fixed
+
+- Send Escape from the font-family table directly to its owning picker's cancellation
+  callback, matching the existing explicit Return route instead of relying on table key handling.
+
 ## [1.7.8-beta.1] - 2026-11-02
 
 ### Fixed
