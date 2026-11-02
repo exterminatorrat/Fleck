@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.11-beta.1] - 2026-11-02
+
+### Fixed
+
+- Keep note-tab title fading at the semantic trailing edge in right-to-left layouts
+  without reversing the gradient a second time.
+
 ## [1.7.10-beta.1] - 2026-11-02
 
 ### Fixed
