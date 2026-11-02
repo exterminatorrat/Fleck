@@ -34,8 +34,10 @@ private struct ReadinessFocusSeamDiagnostic: View {
           to: $returnRequest
         )
       }
+      print("SEAM-EXIT variant=\(variant) pending=\(returnRequest != nil) keyMatches=\(returnRequest?.window != nil && NSApp.keyWindow === returnRequest?.window)")
       isPresented = false
     }
+    .onDisappear { print("SEAM-DISAPPEAR variant=\(variant)") }
   }
 
   private var anchoredTrigger: some View {
@@ -102,6 +104,9 @@ private struct ReadinessFocusSeamDiagnostic: View {
       }
     }
     .padding(40)
+    .onChange(of: nativeFocused) { oldValue, newValue in
+      print("SEAM-DIRECT-FOCUS variant=\(variant) old=\(oldValue) new=\(newValue)")
+    }
   }
 }
 
@@ -147,7 +152,15 @@ func readinessFocusSeamDiagnostic() async throws {
     window.sendEvent(event)
   }
 
+  var currentVariant = -1
+  let modality = SettingsSearchInputModality.shared
+  let previousObservation = modality.readinessReturnObservation
+  modality.readinessReturnObservation = { _, record in
+    print("SEAM-STATE variant=\(currentVariant) \(record)")
+  }
+  defer { modality.readinessReturnObservation = previousObservation }
   for variant in 0...5 {
+    currentVariant = variant
     let host = NSHostingView(rootView: ReadinessFocusSeamDiagnostic(variant: variant))
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 420, height: 250),

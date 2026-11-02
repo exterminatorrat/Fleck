@@ -1132,6 +1132,34 @@
           inputModality.record(isKeyboardInput: true, windowNumber: window.windowNumber)
           isKeyboardFocused = true
           isFocused = true
+          #if DEBUG
+          if target == .dictationStatus {
+            inputModality.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[SEAM-write] keyboard=\(isKeyboardFocused) accessibility=\(isFocused) native=\(nativeControlIdentifier != nil) keyMatches=\(NSApp.keyWindow === window)"
+            )
+          }
+          #endif
+        }
+        .onChange(of: isKeyboardFocused) { oldValue, newValue in
+          #if DEBUG
+          if target == .dictationStatus {
+            inputModality.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[SEAM-keyboard-state] old=\(oldValue) new=\(newValue) native=\(nativeControlIdentifier != nil) keyMatches=\(returnAttachment.view?.window != nil && NSApp.keyWindow === returnAttachment.view?.window)"
+            )
+          }
+          #endif
+        }
+        .onChange(of: isFocused) { oldValue, newValue in
+          #if DEBUG
+          if target == .dictationStatus {
+            inputModality.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[SEAM-ax-state] old=\(oldValue) new=\(newValue) native=\(nativeControlIdentifier != nil)"
+            )
+          }
+          #endif
         }
         .onDisappear {
           returnAttachment.invalidate()
