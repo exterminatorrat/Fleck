@@ -9,6 +9,9 @@ private enum ModelsClickProbeNotification {
     "org.fleck.appkit-test-host.models-click.window-event"
   )
   static let disarm = Notification.Name("org.fleck.appkit-test-host.models-click.disarm")
+  static let trackingMouseUpReceipt = Notification.Name(
+    "org.fleck.appkit-test-host.models-click.tracking-mouse-up-receipt"
+  )
 }
 
 @MainActor
@@ -103,6 +106,7 @@ private struct ModelsClickProbeEvent {
 
 @MainActor
 private struct ArmedModelsClick {
+  let generation: UUID
   let scenario: String
   let ordinal: Int
   let targetKind: String
@@ -112,6 +116,7 @@ private struct ArmedModelsClick {
   let up: ModelsClickProbeEvent
 }
 
+@MainActor
 private struct ModelsClickProbeState {
   var downDispatchActive = false
   var downSuperDispatchReturned = false
@@ -123,6 +128,8 @@ private struct ModelsClickProbeState {
   var nextEventUpDequeuedInTracking = false
   var nextEventUpDequeuedDuringDown = false
   var nextEventUpDequeuedInTrackingDuringDown = false
+  var trackingMouseUpEvent: NSEvent?
+  var qualifiedTrackingReceiptPosted = false
 }
 
 @MainActor
@@ -183,6 +190,9 @@ final class AppKitTestProbeApplication: NSApplication {
         }
         if mode == .eventTracking && modelsClickState.downDispatchActive {
           modelsClickState.nextEventUpDequeuedInTrackingDuringDown = true
+          if modelsClickState.trackingMouseUpEvent == nil {
+            modelsClickState.trackingMouseUpEvent = event
+          }
         }
       }
       if mode == .eventTracking {
@@ -208,6 +218,8 @@ final class AppKitTestProbeApplication: NSApplication {
   @objc private func armModelsClick(_ notification: Notification) {
     guard let window = notification.object as? NSWindow,
       let userInfo = notification.userInfo,
+      let generationValue = userInfo["generation"] as? String,
+      let generation = UUID(uuidString: generationValue),
       let scenario = userInfo["scenario"] as? String,
       let ordinal = (userInfo["ordinal"] as? NSNumber)?.intValue,
       let targetKind = userInfo["targetKind"] as? String,
@@ -234,6 +246,7 @@ final class AppKitTestProbeApplication: NSApplication {
       return
     }
     armedModelsClick = ArmedModelsClick(
+      generation: generation,
       scenario: scenario,
       ordinal: ordinal,
       targetKind: targetKind,
@@ -256,6 +269,8 @@ final class AppKitTestProbeApplication: NSApplication {
       window === armedModelsClick.window,
       let userInfo = notification.userInfo,
       let phase = userInfo["phase"] as? String,
+      let generation = userInfo["generation"] as? String,
+      generation == armedModelsClick.generation.uuidString,
       let windowNumber = (userInfo["windowNumber"] as? NSNumber)?.intValue,
       let event = ModelsClickProbeEvent(
         prefix: "event",
@@ -279,6 +294,36 @@ final class AppKitTestProbeApplication: NSApplication {
       if isDown {
         modelsClickState.downDispatchActive = false
         modelsClickState.downSuperDispatchReturned = true
+        if let event = modelsClickState.trackingMouseUpEvent,
+          modelsClickState.nextEventUpDequeuedInTrackingDuringDown,
+          modelsClickState.downSuperDispatchReturned,
+          !modelsClickState.qualifiedTrackingReceiptPosted
+        {
+          modelsClickState.qualifiedTrackingReceiptPosted = true
+          NotificationCenter.default.post(
+            name: ModelsClickProbeNotification.trackingMouseUpReceipt,
+            object: event,
+            userInfo: [
+              "generation": armedModelsClick.generation.uuidString,
+              "windowNumber": armedModelsClick.windowNumber,
+              "dequeue": true,
+              "mode": RunLoop.Mode.eventTracking.rawValue,
+              "dequeuedDuringOwnedWindowSynchronousDown": true,
+              "downSuperDispatchReturned": true,
+            ]
+          )
+          writeModelsClickProbe(
+            "scenario=\(armedModelsClick.scenario) ordinal=\(armedModelsClick.ordinal) "
+              + "target=\(armedModelsClick.targetKind) "
+              + "route=qualifiedTrackingReceipt "
+              + "generation=\(armedModelsClick.generation.uuidString) "
+              + "window=\(windowIdentity(armedModelsClick.window)) "
+              + "identity={\(armedModelsClick.up.diagnosticIdentity)} "
+              + "dequeue=true mode=\(RunLoop.Mode.eventTracking.rawValue) "
+              + "dequeuedDuringOwnedWindowSynchronousDown=true "
+              + "downSuperDispatchReturned=true"
+          )
+        }
       } else {
         modelsClickState.upSuperDispatchReturned = true
       }
@@ -293,13 +338,16 @@ final class AppKitTestProbeApplication: NSApplication {
         + "downDispatchActive=\(modelsClickState.downDispatchActive) "
         + "downSuperDispatchReturned=\(modelsClickState.downSuperDispatchReturned) "
         + "upSuperDispatchReturned=\(modelsClickState.upSuperDispatchReturned)"
+        + " qualifiedTrackingReceiptPosted=\(modelsClickState.qualifiedTrackingReceiptPosted)"
     )
   }
 
   @objc private func disarmModelsClick(_ notification: Notification) {
     guard let armedModelsClick,
       let window = notification.object as? NSWindow,
-      window === armedModelsClick.window
+      window === armedModelsClick.window,
+      let generation = notification.userInfo?["generation"] as? String,
+      generation == armedModelsClick.generation.uuidString
     else {
       return
     }
