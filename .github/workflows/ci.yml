@@ -80,6 +80,10 @@ jobs:
       FLECK_BUILD_IDENTITY_MODE: ci-unverified
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
+      - name: Keep the runner display awake for AppKit tests
+        run: |
+          sudo -n pmset -a displaysleep 0 sleep 0
+          pmset -g | grep -E '^ (displaysleep|sleep) '
       - name: Check out repository (actions/checkout v6.0.2)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -179,6 +183,10 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
       FLECK_NATIVE_CAPTURE_QA: "0"
     steps:
+      - name: Keep the runner display awake for AppKit tests
+        run: |
+          sudo -n pmset -a displaysleep 0 sleep 0
+          pmset -g | grep -E '^ (displaysleep|sleep) '
       - name: Check out repository (actions/checkout v6.0.2)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -359,6 +367,10 @@ jobs:
     runs-on: namespace-profile-fleck
     timeout-minutes: 60
     steps:
+      - name: Keep the runner display awake for AppKit tests
+        run: |
+          sudo -n pmset -a displaysleep 0 sleep 0
+          pmset -g | grep -E '^ (displaysleep|sleep) '
       - name: Check out repository (actions/checkout v6.0.2)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Toolchain
@@ -409,6 +421,10 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Keep the runner display awake for AppKit tests
+        run: |
+          sudo -n pmset -a displaysleep 0 sleep 0
+          pmset -g | grep -E '^ (displaysleep|sleep) '
       - name: Check out repository (actions/checkout v6.0.2, without credentials)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -464,6 +480,10 @@ jobs:
     env:
       FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC: ${{ inputs.folder_navigator_recording && '1' || '0' }}
     steps:
+      - name: Keep the runner display awake for AppKit tests
+        run: |
+          sudo -n pmset -a displaysleep 0 sleep 0
+          pmset -g | grep -E '^ (displaysleep|sleep) '
       - name: Check out repository (actions/checkout v6.0.2, without credentials)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -496,6 +516,10 @@ jobs:
     env:
       FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC: ${{ inputs.folder_navigator_recording && '1' || '0' }}
     steps:
+      - name: Keep the runner display awake for AppKit tests
+        run: |
+          sudo -n pmset -a displaysleep 0 sleep 0
+          pmset -g | grep -E '^ (displaysleep|sleep) '
       - name: Check out repository (actions/checkout v6.0.2, without credentials)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
