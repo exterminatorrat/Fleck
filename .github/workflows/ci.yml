@@ -25,7 +25,8 @@ jobs:
       - name: Compare actual focus and anchored cue state
         run: |
           export FLECK_SETTINGS_WINDOW_CAPTURE_DIR="$RUNNER_TEMP/readiness-seam-captures"
-          Scripts/run-nonempty-swift-tests.sh '^FleckAppTests\.(DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize\(\)|SettingsSearchProbeKeepsPrivateIdentityWhenAccessibilityIdentifierChanges\(\)|SettingsSearchConnectsGlobalResultsToExistingControlAnchors\(\)|DictationSettingsOpenModelsAndSearchNavigateIntoTheSamePane\(\)|SettingsSearchTests/.+)$' > "$RUNNER_TEMP/readiness-seam.log" 2>&1
+          Scripts/run-nonempty-swift-tests.sh '^FleckAppTests\.(DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize\(\)|SettingsSearchProbeKeepsPrivateIdentityWhenAccessibilityIdentifierChanges\(\)|SettingsSearchConnectsGlobalResultsToExistingControlAnchors\(\)|DictationSettingsOpenModelsAndSearchNavigateIntoTheSamePane\(\)|settingsSearchAnchorFocusCueDistinguishesTabFromPointer\(\)|SettingsSearchTests/.+)$' > "$RUNNER_TEMP/readiness-seam.log" 2>&1
+          grep -F 'Readiness full keyboard access: true' "$RUNNER_TEMP/readiness-seam.log"
       - name: Report diagnostic observations without final validation claim
         if: always()
         run: |
