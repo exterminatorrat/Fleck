@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.6-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
+
 ## [1.7.5-beta.1] - 2026-11-02
 
 ### Fixed
@@ -47,6 +53,12 @@ This focused change is part of the shared 1.7.0-beta.1 retained-feature release 
 not a separate release. Source-only checkpoint: local compilation, tests and native
 keyboard, focus, IME, visual and accessibility behavior remain unverified.
 
+## [1.5.22-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
+
 ## [1.5.21-beta.1] - 2026-11-02
 
 ### Fixed
@@ -66,6 +78,12 @@ keyboard, focus, IME, visual and accessibility behavior remain unverified.
 
 - Carry verified readiness, Models input, native font and right-to-left title repairs
   into the bottom-only pill source while preserving its standby and routing lifecycle.
+
+## [1.5.21-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
 
 ## [1.5.20-beta.1] - 2026-11-02
 
@@ -146,6 +164,12 @@ delivery is claimed.
 Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
 and native behavior remain unverified; hosted verification is pending.
 
+## [1.5.19-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
+
 ## [1.5.18-beta.1] - 2026-11-02
 
 ### Fixed
@@ -182,6 +206,13 @@ ownership remains unresolved.
 
 Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
 and native behavior remain unverified; hosted verification is pending.
+
+## [1.5.18-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native folder composer before exercising retained overflow actions,
+  preserving strict scroll-position and geometry assertions.
 
 ## [1.5.17-beta.1] - 2026-11-02
 
