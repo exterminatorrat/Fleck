@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.10-beta.1] - 2026-11-03
+
+### Fixed
+
+- Synchronize the critical-signal fixture on both preparation waiters registering
+  before opening the ASR load gate, instead of relying on scheduler yields.
+
 ## [1.7.9-beta.1] - 2026-11-02
 
 ### Fixed
