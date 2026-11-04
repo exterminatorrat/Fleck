@@ -517,8 +517,14 @@ final class AppKitTestProbeApplication: NSApplication {
     let eventType = event.type.rawValue
     let eventTimestamp = event.timestamp
     let locationBeforeCGGetter = event.locationInWindow
-    let cgEventLocation = event.cgEvent?.location
+    let coordinateCGEvent = event.cgEvent
+    let cgEventLocation = coordinateCGEvent?.location
     let locationAfterCGGetter = event.locationInWindow
+    let decodedEvent = coordinateCGEvent.flatMap { NSEvent(cgEvent: $0) }
+    let decodedDescription = decodedEvent.map {
+      "number=\($0.eventNumber),window=\($0.windowNumber),windowMatchesPanel=\($0.window === panel ? 1 : 0),local=\(capsuleCoordinatePoint($0.locationInWindow)),timestamp=\($0.timestamp)"
+    } ?? "nil"
+    let originalLocationAfterDecode = event.locationInWindow
     let cgEventLocationDescription = cgEventLocation.map {
       capsuleCoordinatePoint($0)
     } ?? "nil"
@@ -533,7 +539,9 @@ final class AppKitTestProbeApplication: NSApplication {
       + "locationInWindowBeforeCGGetter=\(capsuleCoordinatePoint(locationBeforeCGGetter)) "
       + "cgEventLocation=\(cgEventLocationDescription) "
       + "locationInWindowAfterCGGetter=\(capsuleCoordinatePoint(locationAfterCGGetter)) "
-      + "locationChangedByCGGetter=\(locationBeforeCGGetter == locationAfterCGGetter ? 0 : 1)"
+      + "locationChangedByCGGetter=\(locationBeforeCGGetter == locationAfterCGGetter ? 0 : 1) "
+      + "unpostedCGDecode={\(decodedDescription)} "
+      + "originalLocalAfterDecode=\(capsuleCoordinatePoint(originalLocationAfterDecode))"
   }
 
   private func capsuleCoordinatePoint(_ point: CGPoint) -> String {

@@ -3,6 +3,17 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.16-beta.1] - 2026-11-04
+
+### Diagnostic
+
+- Add an unused, unposted `NSEvent(cgEvent:)` decode comparison to the existing
+  capsule coordinate diagnostic; it records decoded identity and local point
+  beside the untouched original event. Diagnostic-only investigation; no
+  product acceptance claim.
+- Preserve running diagnostic work with the approved workflow-level concurrency
+  group and cancellation disabled for in-progress runs.
+
 ## [1.7.15-beta.1] - 2026-11-02
 
 ### Fixed
