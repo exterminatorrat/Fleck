@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.9-beta.1] - 2026-11-04
+
+### Fixed
+
+- Synchronize the Gemma termination fixture with helper event-stream attachment
+  before checking the synchronous force count.
+
 ## [1.7.8-beta.1] - 2026-11-04
 
 ### Fixed
