@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.5-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconcile PR84 with the current reviewed PR77 parent while preserving the restart-only model and cleanup features. This is source-only integration; current-head CI is pending.
+
 ## [1.7.4-beta.1] - 2026-11-02
 
 ### Fixed
@@ -42,6 +48,12 @@ This is one constituent of the shared 1.7.0-beta.1 development cohort, not a sep
 release or a qualified alternative model. No alternative availability or selection UI is
 added. Local compilation, tests and native/model behavior remain unverified.
 
+## [1.5.25-beta.1] - 2026-11-04
+
+### Fixed
+
+- Preserve the complete pill feature and parent histories while integrating the verified live dictionary-star fixture correction.
+
 ## [1.5.24-beta.1] - 2026-11-02
 
 ### Fixed
@@ -73,6 +85,12 @@ added. Local compilation, tests and native/model behavior remain unverified.
 
 - Carry verified readiness, Models input, native font and right-to-left title repairs
   into the bottom-only pill source while preserving its standby and routing lifecycle.
+
+## [1.5.24-beta.1] - 2026-11-04
+
+### Fixed
+
+- Use the live priority-button accessibility frame for the personal dictionary star-click fixture.
 
 ## [1.5.23-beta.1] - 2026-11-02
 
