@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.10-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconciled the retained capsule recovery feature branch with the current published PR83 parent.
+  This source-only refresh is pending current-head CI.
+
 ## [1.7.9-beta.1] - 2026-11-04
 
 ### Fixed
@@ -95,6 +102,13 @@ and packaging remain unverified; hosted verification is pending.
 Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
 and native behavior remain unverified; hosted verification is pending.
 
+## [1.7.5-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconciled retained R4B cleanup-failure provenance with the current reviewed PR77 parent.
+  This source-only refresh is pending current-head CI.
+
 ## [1.7.4-beta.1] - 2026-11-02
 
 ### Fixed
@@ -132,6 +146,12 @@ Part of the shared retained-feature 1.7.0 cohort, not a separate release.
 Source-only preparation. Local compilation, tests, native/visual/accessibility behavior
 and packaging remain unverified; hosted verification is pending.
 
+## [1.5.25-beta.1] - 2026-11-04
+
+### Fixed
+
+- Preserve the complete pill feature and parent histories while integrating the verified live dictionary-star fixture correction.
+
 ## [1.5.24-beta.1] - 2026-11-02
 
 ### Fixed
@@ -163,6 +183,12 @@ and packaging remain unverified; hosted verification is pending.
 
 - Carry verified readiness, Models input, native font and right-to-left title repairs
   into the bottom-only pill source while preserving its standby and routing lifecycle.
+
+## [1.5.24-beta.1] - 2026-11-04
+
+### Fixed
+
+- Use the live priority-button accessibility frame for the personal dictionary star-click fixture.
 
 ## [1.5.23-beta.1] - 2026-11-02
 
