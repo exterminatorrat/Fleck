@@ -8,6 +8,7 @@ readonly launch_adapter="$helper_root/AgentIPCClient.swift"
 readonly mcp_server="$helper_root/FleckMCPServer.swift"
 readonly tool_registry="$helper_root/FleckMCPToolRegistry.swift"
 readonly cli_entrypoint="$helper_root/FleckAgentBridge.swift"
+readonly mcp_transport="$helper_root/FleckMCPBoundedStdioTransport.swift"
 readonly client_setup="$repo_root/Sources/FleckApp/AgentClientSetup.swift"
 readonly installer="$repo_root/Sources/FleckApp/AgentBridgeInstaller.swift"
 readonly stdout_pattern='FileHandle\.standardOutput|\.standardOutput|\bSTDOUT_FILENO\b|\bstdout\b|(^|[^A-Za-z])print[[:space:]]*\(|(Darwin\.)?write[[:space:]]*\([[:space:]]*1[[:space:]]*,'
@@ -169,8 +170,9 @@ fail_matches \
   '\b(List|Get|Subscribe)(Resources|ResourceTemplates|Prompts|Roots|Completions)\b|\b(CreateMessage|Elicit)\b' \
   "$mcp_server"
 
-# stdout is the MCP protocol channel. Only the reviewed non-MCP CLI branches in
-# the entrypoint may write to it; every other helper Swift source is forbidden.
+# stdout is the MCP protocol channel. Only the bounded MCP transport's default
+# output descriptor and the reviewed non-MCP CLI branches in the entrypoint may
+# reference it; every other helper Swift source is forbidden.
 printf '%s\n' 'print("dangerous helper output")' >"$stdout_probe"
 if ! rg -n "$stdout_pattern" "$stdout_probe" >/dev/null; then
   printf 'error: helper stdout self-test did not detect a print call\n' >&2
@@ -178,7 +180,7 @@ if ! rg -n "$stdout_pattern" "$stdout_probe" >/dev/null; then
 fi
 helper_without_cli=()
 while IFS= read -r file; do
-  if [[ "$file" != "$cli_entrypoint" ]]; then
+  if [[ "$file" != "$cli_entrypoint" && "$file" != "$mcp_transport" ]]; then
     helper_without_cli+=("$file")
   fi
 done < <(find "$helper_root" -name '*.swift' -type f | sort)
@@ -186,6 +188,13 @@ fail_matches \
   'FleckAgentBridge Swift source outside the audited CLI entrypoint writes to stdout' \
   "$stdout_pattern" \
   "${helper_without_cli[@]}"
+transport_stdout="$(rg --no-line-number "$stdout_pattern" "$mcp_transport" | sed 's/^[[:space:]]*//' || true)"
+if [[ "$transport_stdout" != 'outputDescriptor: Int32 = STDOUT_FILENO' ]]; then
+  printf \
+    'error: MCP transport stdout references differ from its default output descriptor\n%s\n' \
+    "$transport_stdout" >&2
+  exit 1
+fi
 cli_stdout_branches="$(
   perl -ne '
     if (/case \.(help|configure|disconnect|mcp|workspace)(?:\(|:)/) {
