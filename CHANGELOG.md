@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.7-beta.1] - 2026-11-05
+
+### Fixed
+
+- Retain the exact protocol descriptor audit allowance and isolate each stdout regression control.
+
 ## [1.7.6-beta.1] - 2026-11-05
 
 ### Fixed

@@ -71,6 +71,7 @@ expect_rejection 'transport-stdout-log' 'FleckMCPBoundedStdioTransport.swift'
 /bin/cp -p "$test_root/transport-extra-stdout.swift" "$transport_source"
 expect_rejection 'transport-extra-stdout' 'FleckMCPBoundedStdioTransport.swift'
 
+/bin/cp -p "$repo_root/Sources/FleckAgentBridge/FleckMCPBoundedStdioTransport.swift" "$transport_source"
 /bin/cp -p "$repo_root/Sources/FleckAgentBridge/AgentIPCClient.swift" "$helper_source"
 printf '\nprivate func auditProbeOutput() { print("unexpected helper output") }\n' >> "$helper_source"
 expect_rejection 'ordinary-helper-stdout' 'AgentIPCClient.swift'
