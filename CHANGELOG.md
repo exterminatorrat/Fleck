@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.6-beta.1] - 2026-11-05
+
+### Fixed
+
+- Preserve the restart-only model binding feature while integrating the current PR77 parent and its complete ordered history.
+
 ## [1.7.5-beta.1] - 2026-11-05
 
 ### Changed
@@ -47,6 +53,19 @@ public release log. Packaging unchanged source does not add a changelog entry.
 This is one constituent of the shared 1.7.0-beta.1 development cohort, not a separate
 release or a qualified alternative model. No alternative availability or selection UI is
 added. Local compilation, tests and native/model behavior remain unverified.
+
+## [1.5.26-beta.1] - 2026-11-05
+
+### Fixed
+
+- Reconcile the bottom-only pill source with the current PR76 parent while preserving both complete ordered development histories.
+
+## [1.5.25-beta.1] - 2026-11-05
+
+### Fixed
+
+- Integrate PR75's global-hold terminal-observation fixture synchronization while preserving PR76's theme propagation and Settings/Models appearance.
+  This source-only refresh is pending current-head CI.
 
 ## [1.5.25-beta.1] - 2026-11-04
 
@@ -104,6 +123,13 @@ added. Local compilation, tests and native/model behavior remain unverified.
 
 - Qualify native Models mouse-up receipts by exact owned tracking consumption and
   completed synchronous dispatch, retaining keyboard scenarios and rejection controls.
+
+## [1.5.21-beta.1] - 2026-11-05
+
+### Fixed
+
+- Synchronize the monitor-loss shortcut test with terminal observation before
+  its follow-up press.
 
 ## [1.5.21-beta.1] - 2026-11-02
 
