@@ -3,6 +3,43 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.11-beta.1] - 2026-11-05
+
+### Fixed
+
+- Integrate PR91 with the current reviewed PR89 parent while preserving PR91's approved features and both complete changelog histories. This is source-only integration; no build or native checks were run.
+
+## [1.7.10-beta.1] - 2026-11-05
+
+### Fixed
+
+- Preserve the original PR79 and PR89 changelog entries as separate ordered records.
+
+## [1.7.9-beta.1] - 2026-11-05
+
+### Changed
+
+- Integrate PR79's reviewed retained-output audit fixes into PR89 while preserving the event-journal, authority, and subscription feature layer.
+
+## [1.7.8-beta.1] - 2026-11-05
+
+### Testing
+
+- Check both the retained audit's rejection boundary and each injected violation
+  in stdout regression controls, without changing the reviewed audit policy.
+
+## [1.7.7-beta.1] - 2026-11-05
+
+### Fixed
+
+- Retain the exact protocol descriptor audit allowance and isolate each stdout regression control.
+
+## [1.7.6-beta.1] - 2026-11-05
+
+### Fixed
+
+- Match the stdout audit to the bounded MCP protocol descriptor default while retaining rejection of other helper stdout writes.
+
 ## [1.7.7-beta.1] - 2026-11-05
 
 ### Changed
