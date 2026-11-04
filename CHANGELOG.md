@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.9-beta.1] - 2026-11-05
+
+### Fixed
+
+- Preserve the bounded MCP stdout-audit feature while integrating the current PR77 parent and its complete ordered history.
+
 ## [1.7.8-beta.1] - 2026-11-05
 
 ### Testing
@@ -80,6 +86,19 @@ pending. Existing 1.6.x candidates and all earlier development history remain pr
 Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
 and native behavior remain unverified; hosted verification is pending.
 
+## [1.5.26-beta.1] - 2026-11-05
+
+### Fixed
+
+- Reconcile the bottom-only pill source with the current PR76 parent while preserving both complete ordered development histories.
+
+## [1.5.25-beta.1] - 2026-11-05
+
+### Fixed
+
+- Integrate PR75's global-hold terminal-observation fixture synchronization while preserving PR76's theme propagation and Settings/Models appearance.
+  This source-only refresh is pending current-head CI.
+
 ## [1.5.25-beta.1] - 2026-11-04
 
 ### Fixed
@@ -136,6 +155,13 @@ and native behavior remain unverified; hosted verification is pending.
 
 - Qualify native Models mouse-up receipts by exact owned tracking consumption and
   completed synchronous dispatch, retaining keyboard scenarios and rejection controls.
+
+## [1.5.21-beta.1] - 2026-11-05
+
+### Fixed
+
+- Synchronize the monitor-loss shortcut test with terminal observation before
+  its follow-up press.
 
 ## [1.5.21-beta.1] - 2026-11-02
 
