@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.8-beta.1] - 2026-11-04
+
+### Fixed
+
+- Configure ambiguous routing explicitly in the terminal replay and saved-capture destination fixtures.
+
 ## [1.7.7-beta.1] - 2026-11-02
 
 ### Fixed
