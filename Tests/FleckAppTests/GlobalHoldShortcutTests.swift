@@ -221,6 +221,7 @@ func physicalGestureReceiptReachesHandlerBeforeQueuedEndDelivery() async throws 
   fixture.monitor.publish(.failed)
   await fixture.shortcut.drainEvents()
 
+  await fixture.shortcut.waitForTerminalObservation()
   fixture.clock.advance(by: .milliseconds(20))
   fixture.monitor.emit(.pressed(.rightOption))
   await fixture.shortcut.drainEvents()

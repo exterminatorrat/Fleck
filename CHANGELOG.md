@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.21-beta.1] - 2026-11-05
+
+### Fixed
+
+- Synchronize the monitor-loss shortcut test with terminal observation before
+  its follow-up press.
+
 ## [1.5.20-beta.1] - 2026-11-02
 
 ### Fixed
