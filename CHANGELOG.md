@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.8-beta.1] - 2026-11-05
+
+### Testing
+
+- Check both the retained audit's rejection boundary and each injected violation
+  in stdout regression controls, without changing the reviewed audit policy.
+
 ## [1.7.7-beta.1] - 2026-11-05
 
 ### Fixed

@@ -23,13 +23,15 @@ fail() {
 
 expect_rejection() {
   local label="$1"
-  local expected_source="$2"
+  local expected_boundary="$2"
+  local expected_violation="$3"
   local log="$test_root/$label.log"
 
   if bash "$fixture_audit" >"$log" 2>&1; then
     fail "audit accepted $label"
   fi
-  if ! /usr/bin/grep -Fq -- "$expected_source" "$log"; then
+  if ! /usr/bin/grep -Fq -- "$expected_boundary" "$log" ||
+    ! /usr/bin/grep -Fq -- "$expected_violation" "$log"; then
     /bin/cat "$log" >&2
     fail "audit rejected $label for an unrelated reason"
   fi
@@ -57,7 +59,10 @@ fi
   { print }
 ' "$transport_source" >"$test_root/transport-log.swift"
 /bin/cp -p "$test_root/transport-log.swift" "$transport_source"
-expect_rejection 'transport-stdout-log' 'FleckMCPBoundedStdioTransport.swift'
+expect_rejection \
+  'transport-stdout-log' \
+  'MCP transport stdout references differ from its default output descriptor' \
+  'private func stdoutLogProbe() { print("transport diagnostic") }'
 
 /bin/cp -p "$repo_root/Sources/FleckAgentBridge/FleckMCPBoundedStdioTransport.swift" "$transport_source"
 /usr/bin/awk '
@@ -69,10 +74,16 @@ expect_rejection 'transport-stdout-log' 'FleckMCPBoundedStdioTransport.swift'
   { print }
 ' "$transport_source" >"$test_root/transport-extra-stdout.swift"
 /bin/cp -p "$test_root/transport-extra-stdout.swift" "$transport_source"
-expect_rejection 'transport-extra-stdout' 'FleckMCPBoundedStdioTransport.swift'
+expect_rejection \
+  'transport-extra-stdout' \
+  'MCP transport stdout references differ from its default output descriptor' \
+  'private let extraOutputDescriptor = STDOUT_FILENO'
 
 /bin/cp -p "$repo_root/Sources/FleckAgentBridge/FleckMCPBoundedStdioTransport.swift" "$transport_source"
 /bin/cp -p "$repo_root/Sources/FleckAgentBridge/AgentIPCClient.swift" "$helper_source"
 printf '\nprivate func auditProbeOutput() { print("unexpected helper output") }\n' >> "$helper_source"
-expect_rejection 'ordinary-helper-stdout' 'AgentIPCClient.swift'
+expect_rejection \
+  'ordinary-helper-stdout' \
+  'FleckAgentBridge Swift source outside the audited CLI entrypoint writes to stdout' \
+  'private func auditProbeOutput() { print("unexpected helper output") }'
 printf '%s\n' 'Agent boundary audit regression tests passed.'
