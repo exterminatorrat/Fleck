@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.6-beta.1] - 2026-11-05
+
+### Fixed
+
+- Match the stdout audit to the bounded MCP protocol descriptor default while retaining rejection of other helper stdout writes.
+
 ## [1.7.5-beta.1] - 2026-11-05
 
 ### Changed

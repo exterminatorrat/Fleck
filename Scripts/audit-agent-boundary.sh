@@ -6,6 +6,7 @@ readonly repo_root="$(cd -- "$script_dir/.." && pwd -P)"
 readonly helper_root="$repo_root/Sources/FleckAgentBridge"
 readonly launch_adapter="$helper_root/AgentIPCClient.swift"
 readonly mcp_server="$helper_root/FleckMCPServer.swift"
+readonly mcp_transport="$helper_root/FleckMCPBoundedStdioTransport.swift"
 readonly tool_registry="$helper_root/FleckMCPToolRegistry.swift"
 readonly cli_entrypoint="$helper_root/FleckAgentBridge.swift"
 readonly client_setup="$repo_root/Sources/FleckApp/AgentClientSetup.swift"
@@ -169,12 +170,25 @@ fail_matches \
   '\b(List|Get|Subscribe)(Resources|ResourceTemplates|Prompts|Roots|Completions)\b|\b(CreateMessage|Elicit)\b' \
   "$mcp_server"
 
-# stdout is the MCP protocol channel. Only the reviewed non-MCP CLI branches in
-# the entrypoint may write to it; every other helper Swift source is forbidden.
+# stdout is the MCP protocol channel. Only the reviewed protocol descriptor
+# default is exempt; every other helper stdout access remains forbidden.
 printf '%s\n' 'print("dangerous helper output")' >"$stdout_probe"
 if ! rg -n "$stdout_pattern" "$stdout_probe" >/dev/null; then
   printf 'error: helper stdout self-test did not detect a print call\n' >&2
   exit 2
+fi
+protocol_output_default='      outputDescriptor: Int32 = STDOUT_FILENO'
+protocol_output_default_count="$(
+  perl -0777 -ne '
+    while (/    init\(\n      inputDescriptor: Int32 = STDIN_FILENO,\n      outputDescriptor: Int32 = STDOUT_FILENO\n    \) \{/g) {
+      $count++;
+    }
+    END { print($count || 0); }
+  ' "$mcp_transport"
+)"
+if [[ "$protocol_output_default_count" != "1" ]]; then
+  printf 'error: bounded MCP transport must retain one reviewed protocol output default\n' >&2
+  exit 1
 fi
 helper_without_cli=()
 while IFS= read -r file; do
@@ -182,10 +196,36 @@ while IFS= read -r file; do
     helper_without_cli+=("$file")
   fi
 done < <(find "$helper_root" -name '*.swift' -type f | sort)
-fail_matches \
-  'FleckAgentBridge Swift source outside the audited CLI entrypoint writes to stdout' \
-  "$stdout_pattern" \
-  "${helper_without_cli[@]}"
+stdout_matches=''
+if stdout_matches="$(rg -n --with-filename "$stdout_pattern" "${helper_without_cli[@]}")"; then
+  :
+else
+  stdout_status=$?
+  if [[ "$stdout_status" != "1" ]]; then
+    printf 'error: stdout audit could not scan helper Swift source\n' >&2
+    exit "$stdout_status"
+  fi
+fi
+unexpected_stdout_matches="$(
+  printf '%s\n' "$stdout_matches" |
+    awk -F: \
+      -v reviewed_file="$mcp_transport" \
+      -v reviewed_line="$protocol_output_default" '
+        {
+          source_line = substr($0, length($1) + length($2) + 3)
+          if ($1 == reviewed_file && source_line == reviewed_line) {
+            next
+          }
+          print
+        }
+      '
+)"
+if [[ -n "$unexpected_stdout_matches" ]]; then
+  printf \
+    'error: FleckAgentBridge Swift source outside the audited CLI entrypoint writes to stdout\n%s\n' \
+    "$unexpected_stdout_matches" >&2
+  exit 1
+fi
 cli_stdout_branches="$(
   perl -ne '
     if (/case \.(help|configure|disconnect|mcp|workspace)(?:\(|:)/) {
