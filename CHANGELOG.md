@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.8-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconciled the retained native folder-renaming feature with the current reviewed PR77 parent.
+  This source-only refresh is pending current-head CI.
+
 ## [1.7.7-beta.1] - 2026-11-02
 
 ### Fixed
@@ -59,6 +66,12 @@ This focused change is part of the shared 1.7.0-beta.1 retained-feature release 
 not a separate release. Source-only checkpoint: local compilation, tests and native
 keyboard, focus, IME, visual and accessibility behavior remain unverified.
 
+## [1.5.25-beta.1] - 2026-11-04
+
+### Fixed
+
+- Preserve the complete pill feature and parent histories while integrating the verified live dictionary-star fixture correction.
+
 ## [1.5.24-beta.1] - 2026-11-02
 
 ### Fixed
@@ -90,6 +103,12 @@ keyboard, focus, IME, visual and accessibility behavior remain unverified.
 
 - Carry verified readiness, Models input, native font and right-to-left title repairs
   into the bottom-only pill source while preserving its standby and routing lifecycle.
+
+## [1.5.24-beta.1] - 2026-11-04
+
+### Fixed
+
+- Use the live priority-button accessibility frame for the personal dictionary star-click fixture.
 
 ## [1.5.23-beta.1] - 2026-11-02
 
