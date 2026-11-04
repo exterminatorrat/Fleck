@@ -1880,7 +1880,7 @@ func personalDictionaryPriorityStarStaysVisibleWithoutHoverAndDeleteRemainsHidde
       height: host.bounds.height
     )
     let diagnosticPriorityFrame = personalDictionaryHostFrame(fromScreenFrame: priorityFrame, in: host)
-    let diagnosticClickPoint = NSPoint(x: starredRowFrame.maxX - 13, y: starredRowFrame.midY)
+    let diagnosticRowClickPoint = NSPoint(x: starredRowFrame.maxX - 13, y: starredRowFrame.midY)
     let diagnosticPriorityBeforeClick = viewModel.entries.first(where: { $0.id == starredEntry.id })?.isPriority
     let diagnosticRevisionBeforeClick = viewModel.revision
     let diagnosticTarget = personalDictionaryPriorityStarColor(
@@ -1914,8 +1914,10 @@ func personalDictionaryPriorityStarStaysVisibleWithoutHoverAndDeleteRemainsHidde
     let diagnosticPaint = "[F93-6178:star-paint] dark=\(appearance == .dark) active=\(NSApp.isActive)"
       + " key=\(window.isKeyWindow) keyOwned=\(NSApp.keyWindow === window) visible=\(window.isVisible)"
       + " bounds=\(host.bounds) bitmap=\(screenshot.pixelsWide)x\(screenshot.pixelsHigh) flipped=\(host.isFlipped)"
-      + " gold=\(goldFrame) roi=\(diagnosticROI) ax=\(diagnosticPriorityFrame) click=\(diagnosticClickPoint)"
-      + " inAX=\(diagnosticPriorityFrame.contains(diagnosticClickPoint)) inVisible=\(host.visibleRect.contains(diagnosticClickPoint))"
+      + " gold=\(goldFrame) roi=\(diagnosticROI) paintAX=\(diagnosticPriorityFrame)"
+      + " row=\(starredRowFrame) rowPoint=\(diagnosticRowClickPoint)"
+      + " rowPointInAX=\(diagnosticPriorityFrame.contains(diagnosticRowClickPoint))"
+      + " rowPointInVisible=\(host.visibleRect.contains(diagnosticRowClickPoint))"
       + " targetRGBA=\(diagnosticTargetRGBA) sampleRGBA=\(diagnosticSampleRGBA) pixel=\(diagnosticPixelX),\(diagnosticPixelY)"
       + " explicitAppearance=\(window.appearance != nil) effectiveDark=\(host.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)"
     print(String(decoding: diagnosticPaint.utf8.prefix(1000), as: UTF8.self) + " truncated=\(diagnosticPaint.utf8.count > 1000)")
@@ -1941,11 +1943,28 @@ func personalDictionaryPriorityStarStaysVisibleWithoutHoverAndDeleteRemainsHidde
       ) > 3
     )
 
-    try clickPersonalDictionaryTrailingStarAtPaddedEdge(
-      in: host,
-      rowFrame: starredRowFrame,
-      window: window
+    let dispatchPriorityAXFrame = try personalDictionarySettingsAccessibilityFrame(
+      starredPriorityID,
+      in: host
     )
+    try #require(abs(dispatchPriorityAXFrame.width - 32) < 1)
+    try #require(abs(dispatchPriorityAXFrame.height - 32) < 1)
+    let dispatchPriorityFrame = personalDictionaryHostFrame(
+      fromScreenFrame: dispatchPriorityAXFrame,
+      in: host
+    )
+    let diagnosticClickPoint = NSPoint(
+      x: dispatchPriorityFrame.maxX - 1,
+      y: dispatchPriorityFrame.midY
+    )
+    try #require(dispatchPriorityFrame.contains(diagnosticClickPoint))
+    let diagnosticDispatch = "[F93-6178:star-dispatch] dark=\(appearance == .dark)"
+      + " ax=\(dispatchPriorityFrame) click=\(diagnosticClickPoint)"
+      + " inAX=\(dispatchPriorityFrame.contains(diagnosticClickPoint))"
+      + " active=\(NSApp.isActive) key=\(window.isKeyWindow) keyOwned=\(NSApp.keyWindow === window)"
+      + " visible=\(window.isVisible)"
+    print(String(decoding: diagnosticDispatch.utf8.prefix(1000), as: UTF8.self) + " truncated=\(diagnosticDispatch.utf8.count > 1000)")
+    try sendPersonalDictionaryMouseClick(at: diagnosticClickPoint, in: host, window: window)
     await settlePersonalDictionarySettingsHost(host)
     try await Task.sleep(for: .milliseconds(120))
     await settlePersonalDictionarySettingsHost(host)
@@ -2949,19 +2968,6 @@ private func personalDictionaryHostFrame(
 ) -> CGRect {
   guard let window = host.window else { return .zero }
   return host.convert(window.convertFromScreen(frame), from: nil)
-}
-
-@MainActor
-private func clickPersonalDictionaryTrailingStarAtPaddedEdge(
-  in host: NSView,
-  rowFrame: CGRect,
-  window: NSWindow
-) throws {
-  try sendPersonalDictionaryMouseClick(
-    at: NSPoint(x: rowFrame.maxX - 13, y: rowFrame.midY),
-    in: host,
-    window: window
-  )
 }
 
 @MainActor

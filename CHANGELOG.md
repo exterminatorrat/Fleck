@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.5.24-beta.1] - 2026-11-04
+
+### Fixed
+
+- Use the live priority-button accessibility frame for the personal dictionary star-click fixture.
+
 ## [1.5.23-beta.1] - 2026-11-02
 
 ### Fixed
