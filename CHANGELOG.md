@@ -3,6 +3,14 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.19-beta.1] - 2026-11-04
+
+### Diagnostic
+
+- Report each reconstructed Quartz retry-event signature invariant as an ordered strict
+  requirement so the first failure identifies its field without changing the event route or
+  inputs. Diagnostic-only; no product behavior or acceptance claim.
+
 ## [1.7.18-beta.1] - 2026-11-04
 
 ### Diagnostic

@@ -83,18 +83,17 @@ private func retryNativeEvents(_ controller: DictationCapsuleController, number:
     quartzEvent.setIntegerValueField(.mouseEventClickState, value: Int64(original.clickCount))
     quartzEvent.setDoubleValueField(.mouseEventPressure, value: Double(original.pressure))
     let reconstructed = try #require(NSEvent(cgEvent: quartzEvent))
-    try #require(reconstructed.windowNumber > 0
-      && reconstructed.windowNumber == original.windowNumber
-      && reconstructed.window === panel
-      && reconstructed.type == original.type
-      && reconstructed.locationInWindow == original.locationInWindow
-      && reconstructed.eventNumber == original.eventNumber
-      && reconstructed.timestamp == original.timestamp
-      && reconstructed.modifierFlags == original.modifierFlags
-      && reconstructed.buttonNumber == original.buttonNumber
-      && reconstructed.clickCount == original.clickCount
-      && reconstructed.pressure == original.pressure,
-      "Quartz retry event must preserve the original AppKit signature before posting")
+    try #require(reconstructed.windowNumber > 0)
+    try #require(reconstructed.windowNumber == original.windowNumber)
+    try #require(reconstructed.window === panel)
+    try #require(reconstructed.type == original.type)
+    try #require(reconstructed.locationInWindow == original.locationInWindow)
+    try #require(reconstructed.eventNumber == original.eventNumber)
+    try #require(reconstructed.timestamp == original.timestamp)
+    try #require(reconstructed.modifierFlags == original.modifierFlags)
+    try #require(reconstructed.buttonNumber == original.buttonNumber)
+    try #require(reconstructed.clickCount == original.clickCount)
+    try #require(reconstructed.pressure == original.pressure)
     return reconstructed
   }
   let down = try event(.leftMouseDown, 0)
