@@ -525,6 +525,10 @@ final class AppKitTestProbeApplication: NSApplication {
       "number=\($0.eventNumber),window=\($0.windowNumber),windowMatchesPanel=\($0.window === panel ? 1 : 0),local=\(capsuleCoordinatePoint($0.locationInWindow)),timestamp=\($0.timestamp)"
     } ?? "nil"
     let originalLocationAfterDecode = event.locationInWindow
+    let cgEventUnflippedLocation = coordinateCGEvent?.unflippedLocation
+    let cgEventUnflippedLocationInPanel = cgEventUnflippedLocation.map {
+      panel.convertPoint(fromScreen: $0)
+    }
     let cgEventLocationDescription = cgEventLocation.map {
       capsuleCoordinatePoint($0)
     } ?? "nil"
@@ -541,7 +545,9 @@ final class AppKitTestProbeApplication: NSApplication {
       + "locationInWindowAfterCGGetter=\(capsuleCoordinatePoint(locationAfterCGGetter)) "
       + "locationChangedByCGGetter=\(locationBeforeCGGetter == locationAfterCGGetter ? 0 : 1) "
       + "unpostedCGDecode={\(decodedDescription)} "
-      + "originalLocalAfterDecode=\(capsuleCoordinatePoint(originalLocationAfterDecode))"
+      + "originalLocalAfterDecode=\(capsuleCoordinatePoint(originalLocationAfterDecode)) "
+      + "cgEventUnflippedLocation=\(cgEventUnflippedLocation.map { capsuleCoordinatePoint($0) } ?? "nil") "
+      + "cgEventUnflippedLocationInPanel=\(cgEventUnflippedLocationInPanel.map { capsuleCoordinatePoint($0) } ?? "nil")"
   }
 
   private func capsuleCoordinatePoint(_ point: CGPoint) -> String {

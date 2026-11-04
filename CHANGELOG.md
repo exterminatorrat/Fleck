@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.17-beta.1] - 2026-11-04
+
+### Diagnostic
+
+- Record the existing capsule CG event's unflipped location and its public
+  screen-to-panel conversion beside the unused decode comparison. Original
+  event inputs, routing and strict assertions remain unchanged; no coordinate
+  compensation or product acceptance claim.
+
 ## [1.7.16-beta.1] - 2026-11-04
 
 ### Diagnostic
