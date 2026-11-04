@@ -48,23 +48,25 @@ jobs:
         run: |
           Scripts/run-nonempty-swift-tests.sh '^FleckAppTests\.modelSearchBlursWithoutSwallowingActionsAcrossThemesAndSizes\(\)$' > "$RUNNER_TEMP/models-click-route.log" 2>&1
           grep -F 'MODELS_CLICK_PROBE_INSTALL class=AppKitTestProbeApplication exactPrincipalClass=true beforeTestBundle=true' "$RUNNER_TEMP/models-click-route.log"
-      - name: Observe the exact posted capsule coordinate route
+      - name: Compare original and Quartz capsule retry event factories
         if: ${{ inputs.probe == 'capsule-posted' }}
         run: |
           set +e
-          FLECK_CAPSULE_COORDINATE_RECEIPT=0 Scripts/run-nonempty-swift-tests.sh '^FleckAppTests\.DictationCapsulePostedEventRetryQualification\(\)$' > "$RUNNER_TEMP/capsule-posted-control.log" 2>&1
-          control_status=$?
-          FLECK_CAPSULE_COORDINATE_RECEIPT=1 Scripts/run-nonempty-swift-tests.sh '^FleckAppTests\.DictationCapsulePostedEventRetryQualification\(\)$' > "$RUNNER_TEMP/capsule-posted-route.log" 2>&1
-          receipt_status=$?
+          FLECK_CAPSULE_RETRY_EVENT_FACTORY=original FLECK_CAPSULE_COORDINATE_RECEIPT=1 Scripts/run-nonempty-swift-tests.sh '^FleckAppTests\.DictationCapsulePostedEventRetryQualification\(\)$' > "$RUNNER_TEMP/capsule-posted-original.log" 2>&1
+          original_status=$?
+          FLECK_CAPSULE_RETRY_EVENT_FACTORY=quartz FLECK_CAPSULE_COORDINATE_RECEIPT=1 Scripts/run-nonempty-swift-tests.sh '^FleckAppTests\.DictationCapsulePostedEventRetryQualification\(\)$' > "$RUNNER_TEMP/capsule-posted-quartz.log" 2>&1
+          quartz_status=$?
           set -e
-          printf 'capsule-coordinate-pair control_exit=%s receipt_exit=%s\n' "$control_status" "$receipt_status"
-          if (( control_status != 0 || receipt_status != 0 )); then exit 1; fi
-          grep -F 'posted-coordinate-probe v=1 stage=post-sequence' "$RUNNER_TEMP/capsule-posted-route.log"
-          grep -F 'capsule-coordinate-receipt v=1' "$RUNNER_TEMP/capsule-posted-route.log"
+          printf 'capsule-retry-factory-pair original_exit=%s quartz_exit=%s\n' "$original_status" "$quartz_status"
+          if (( original_status != 0 || quartz_status != 0 )); then exit 1; fi
+          grep -F 'posted-coordinate-probe v=1 stage=post-sequence factory=original' "$RUNNER_TEMP/capsule-posted-original.log"
+          grep -F 'capsule-coordinate-receipt v=1' "$RUNNER_TEMP/capsule-posted-original.log"
+          grep -F 'posted-coordinate-probe v=1 stage=post-sequence factory=quartz' "$RUNNER_TEMP/capsule-posted-quartz.log"
+          grep -F 'capsule-coordinate-receipt v=1' "$RUNNER_TEMP/capsule-posted-quartz.log"
       - name: Report diagnostic observations without final validation claim
         if: always()
         run: |
-          for trace in "$RUNNER_TEMP/readiness-seam.log" "$RUNNER_TEMP/models-click-route.log" "$RUNNER_TEMP/capsule-posted-control.log" "$RUNNER_TEMP/capsule-posted-route.log"; do
+          for trace in "$RUNNER_TEMP/readiness-seam.log" "$RUNNER_TEMP/models-click-route.log" "$RUNNER_TEMP/capsule-posted-original.log" "$RUNNER_TEMP/capsule-posted-quartz.log"; do
             if [[ -f "$trace" ]]; then
               grep -E 'capsule-coordinate-receipt|posted-coordinate-probe|posted-down-witness|MODELS_CLICK_PROBE|SEAM|F93-readiness|Readiness full keyboard|matched test count|Test run with|^error:|✘|✔ Test' "$trace" || true
             fi
@@ -79,5 +81,5 @@ jobs:
             ${{ runner.temp }}/readiness-seam.log
             ${{ runner.temp }}/readiness-seam-captures
             ${{ runner.temp }}/models-click-route.log
-            ${{ runner.temp }}/capsule-posted-control.log
-            ${{ runner.temp }}/capsule-posted-route.log
+            ${{ runner.temp }}/capsule-posted-original.log
+            ${{ runner.temp }}/capsule-posted-quartz.log

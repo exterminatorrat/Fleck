@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.18-beta.1] - 2026-11-04
+
+### Diagnostic
+
+- Compare the original capsule retry event factory with a fresh Quartz event decoded through
+  `NSEvent(cgEvent:)`, retaining strict pre-post and normal-dispatch signature checks across
+  the existing eight-event recovery sequence. Diagnostic-only; no product behavior or
+  acceptance claim.
+
 ## [1.7.17-beta.1] - 2026-11-04
 
 ### Diagnostic

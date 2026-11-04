@@ -29,6 +29,11 @@ func retrySyntheticTimestampSurvivesQuartzRoundTrip(uptime: TimeInterval) throws
 }
 
 @MainActor
+private func retryEventFactory() -> String {
+  ProcessInfo.processInfo.environment["FLECK_CAPSULE_RETRY_EVENT_FACTORY"] ?? "original"
+}
+
+@MainActor
 private func retryNativeEvents(_ controller: DictationCapsuleController, number: Int)
   throws -> (NSView, NSEvent, NSEvent)
 {
@@ -47,10 +52,50 @@ private func retryNativeEvents(_ controller: DictationCapsuleController, number:
   #expect(target === host.subviews.first)
   let location = host.convert(point, to: nil)
   let timestamp = quartzStableRetryTimestamp(for: ProcessInfo.processInfo.systemUptime)
+  let factory = retryEventFactory()
+  try #require(factory == "original" || factory == "quartz")
+  try #require(panel.windowNumber > 0)
   func event(_ type: NSEvent.EventType, _ offset: Int) throws -> NSEvent {
-    try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
+    let original = try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
       timestamp: timestamp, windowNumber: panel.windowNumber,
       context: nil, eventNumber: number + offset, clickCount: 1, pressure: 0))
+    try #require(original.windowNumber > 0
+      && original.windowNumber == panel.windowNumber
+      && original.window === panel
+      && original.locationInWindow == location)
+    guard factory == "quartz" else { return original }
+
+    try #require(type == .leftMouseDown || type == .leftMouseUp)
+    let mouseType: CGEventType = type == .leftMouseDown ? .leftMouseDown : .leftMouseUp
+    let screenLocation = panel.convertPoint(toScreen: location)
+    let quartzLocation = CGPoint(x: screenLocation.x,
+      y: CGDisplayBounds(CGMainDisplayID()).height - screenLocation.y)
+    let quartzEvent = try #require(CGEvent(mouseEventSource: nil, mouseType: mouseType,
+      mouseCursorPosition: quartzLocation, mouseButton: .left))
+    quartzEvent.timestamp = CGEventTimestamp((original.timestamp * 1_000_000_000).rounded())
+    quartzEvent.flags = []
+    quartzEvent.setIntegerValueField(.mouseEventWindowUnderMousePointer,
+      value: Int64(original.windowNumber))
+    quartzEvent.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent,
+      value: Int64(original.windowNumber))
+    quartzEvent.setIntegerValueField(.mouseEventNumber, value: Int64(original.eventNumber))
+    quartzEvent.setIntegerValueField(.mouseEventButtonNumber, value: Int64(original.buttonNumber))
+    quartzEvent.setIntegerValueField(.mouseEventClickState, value: Int64(original.clickCount))
+    quartzEvent.setDoubleValueField(.mouseEventPressure, value: Double(original.pressure))
+    let reconstructed = try #require(NSEvent(cgEvent: quartzEvent))
+    try #require(reconstructed.windowNumber > 0
+      && reconstructed.windowNumber == original.windowNumber
+      && reconstructed.window === panel
+      && reconstructed.type == original.type
+      && reconstructed.locationInWindow == original.locationInWindow
+      && reconstructed.eventNumber == original.eventNumber
+      && reconstructed.timestamp == original.timestamp
+      && reconstructed.modifierFlags == original.modifierFlags
+      && reconstructed.buttonNumber == original.buttonNumber
+      && reconstructed.clickCount == original.clickCount
+      && reconstructed.pressure == original.pressure,
+      "Quartz retry event must preserve the original AppKit signature before posting")
+    return reconstructed
   }
   let down = try event(.leftMouseDown, 0)
   let up = try event(.leftMouseUp, 1)
@@ -188,6 +233,8 @@ private enum RetryCapsuleCoordinateReceipt {
   try #require(application.activationPolicy() == .regular)
   let controller = DictationCapsuleController(automaticallyAdvancesLivePill: false,
     reduceMotionProvider: { true })
+  let factory = retryEventFactory()
+  try #require(factory == "original" || factory == "quartz")
   controller.setReduceMotionOverrideForTesting(true)
   var witnessArmed = false
   var witnessPostReturned = false
@@ -241,7 +288,7 @@ private enum RetryCapsuleCoordinateReceipt {
       return "n=\(number) cg=\(String(describing: event.cgEvent?.location))"
     }
     print("posted-coordinate-probe v=1 stage=post-sequence"
-      + " pre=\(prePostCoordinateSamples.joined(separator: ";"))"
+      + " factory=\(factory) pre=\(prePostCoordinateSamples.joined(separator: ";"))"
       + " owned-window-post-dispatch=\(postDispatchCoordinateSamples.joined(separator: ";"))"
       + " originalCG=\(originalCGLocations.joined(separator: ";"))"
       + " deliveredCG=\(deliveredCGLocations.joined(separator: ";"))")
@@ -265,8 +312,10 @@ private enum RetryCapsuleCoordinateReceipt {
       #expect(event.type == expected.type)
       #expect(event.locationInWindow == expected.locationInWindow)
       #expect(event.timestamp == expected.timestamp)
+      #expect(event.buttonNumber == expected.buttonNumber)
       #expect(event.modifierFlags == expected.modifierFlags)
       #expect(event.clickCount == expected.clickCount)
+      #expect(event.pressure == expected.pressure)
       delivered.append(event.eventNumber)
       RetryCapsuleCoordinateReceipt.capture("postdispatch", event: event, in: panel)
     }
