@@ -32,8 +32,11 @@ they are not MPL-covered. Each vendored tree keeps its upstream license file.
 The pstack tree is copied from the `pstack/` plugin directory of
 `cursor/plugins`; the unslop tree is copied from `skills/unslop` of
 `heydamir/unslop`. Both copies are unmodified apart from dropping pstack's
-nested `.gitignore` and renaming unslop's upstream README to
-`UPSTREAM_README.md`. Re-vendoring must update the pins above.
+nested `.gitignore`, renaming unslop's upstream README to `UPSTREAM_README.md`,
+and renaming unslop's skill to `unslop-ui` in `SKILL.md` and
+`agents/openai.yaml` so it does not collide with pstack's own `unslop` skill.
+The CC BY credit inside `SKILL.md` is unchanged. Re-vendoring must update the
+pins above and reapply the rename.
 
 ## Ordinary application and agent link graph
 

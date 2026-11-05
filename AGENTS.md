@@ -28,7 +28,9 @@ from `.agents/skills/pstack/skills/` rather than restating them. pstack is
 written for Cursor; steps that need Cursor-only features such as Bugbot or
 Automations are skipped with a note.
 
-UI work that needs a design pass uses `.agents/skills/unslop/SKILL.md`.
+UI work that needs a design pass uses the `unslop-ui` skill at
+`.agents/skills/unslop/SKILL.md`. It is named `unslop-ui` because pstack ships
+its own `unslop` skill for prose, and two skills cannot share a name.
 
 ## Keep changes bounded
 
