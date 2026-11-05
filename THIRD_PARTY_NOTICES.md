@@ -18,6 +18,23 @@ Organization for Ethical Source, and licensed under
 The file preserves the source link, adaptation statement, attribution, and
 license link. It is not MPL-covered.
 
+## Agent skills
+
+`.agents/skills/` vendors two third-party agent skill packs. They are
+instructional material for agents, not compiled into any Fleck product, and
+they are not MPL-covered. Each vendored tree keeps its upstream license file.
+
+| Component | Pin | Terms and exact evidence |
+| --- | --- | --- |
+| [pstack](https://github.com/cursor/plugins/tree/main/pstack) | `2776ddd2355d6d6c8747d3964600f28daf62f049` | MIT. Copyright 2026 Lauren Tan. Vendored `LICENSE` SHA-256 `bc957ca6bee02792566a1a028d105e02e247c6e77cf057061674273da77b200e`. |
+| [unslop](https://github.com/heydamir/unslop) | `a6f121eee5f29c2f74976b75456feae8b66afb3a` | CC BY 4.0. Created by Damir Sokolovsky ([@heydamir](https://x.com/heydamir)). Vendored `LICENSE` SHA-256 `9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411`. The skill's `SKILL.md` retains the required credit and license statement. |
+
+The pstack tree is copied from the `pstack/` plugin directory of
+`cursor/plugins`; the unslop tree is copied from `skills/unslop` of
+`heydamir/unslop`. Both copies are unmodified apart from dropping pstack's
+nested `.gitignore` and renaming unslop's upstream README to
+`UPSTREAM_README.md`. Re-vendoring must update the pins above.
+
 ## Ordinary application and agent link graph
 
 The ordinary `Fleck` application is first-party Swift/AppKit code. The bundled
