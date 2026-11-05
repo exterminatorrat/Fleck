@@ -38,7 +38,7 @@ permissions:
 jobs:
   detect-changes:
     name: Detect documentation-only changes
-    runs-on: namespace-profile-fleck
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
@@ -74,7 +74,7 @@ jobs:
     name: macOS ordinary graph and package
     needs: detect-changes
     if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
-    runs-on: namespace-profile-fleck
+    runs-on: macos-26
     timeout-minutes: 90
     outputs:
       source_commit: ${{ steps.source.outputs.commit }}
@@ -106,6 +106,9 @@ jobs:
           } | tee -a "$GITHUB_OUTPUT"
       - name: Toolchain
         run: |
+          sw_vers
+          uname -m
+          printf 'Runner OS: %s; architecture: %s\n' "$RUNNER_OS" "$RUNNER_ARCH"
           xcodebuild -version
           swift --version
       - name: Install and verify ripgrep
@@ -257,7 +260,7 @@ jobs:
     name: Validate README-only change
     needs: detect-changes
     if: ${{ needs.detect-changes.outputs.route == 'docs' }}
-    runs-on: namespace-profile-fleck
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
@@ -297,7 +300,7 @@ jobs:
     name: macOS build and tests
     if: ${{ always() }}
     needs: [detect-changes, docs-validation, macos-build, macos-validation, macos-enhanced]
-    runs-on: namespace-profile-fleck
+    runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
       DETECTOR_RESULT: ${{ needs.detect-changes.result }}
