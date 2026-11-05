@@ -3,12 +3,24 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.8-beta.1] - 2026-11-05
+
+### Changed
+
+- Preserve this feature layer and both complete parent histories while integrating the current PR88 ancestry; production and fixture bytes are unchanged.
+
 ## [1.7.7-beta.1] - 2026-11-05
 
 ### Changed
 
 - Reconciled the retained relative-paragraph codec feature with the current published PR88 parent.
   This source-only refresh is pending current-head CI.
+
+## [1.7.7-beta.1] - 2026-11-05
+
+### Changed
+
+- Preserve this feature layer and both complete parent histories while integrating the current PR81 ancestry; production and fixture bytes are unchanged.
 
 ## [1.7.6-beta.1] - 2026-11-05
 
@@ -93,6 +105,12 @@ This checkpoint is part of the retained-feature 1.7.0-beta.1 development cohort,
 separate release. Local compilation, tests and native visual/accessibility behavior remain
 unrun; hosted verification is pending.
 
+## [1.7.6-beta.1] - 2026-11-05
+
+### Fixed
+
+- Preserve the retained checklist correctness feature while integrating the current PR77 parent and its complete ordered history.
+
 ## [1.7.5-beta.1] - 2026-11-05
 
 ### Changed
@@ -133,6 +151,19 @@ unrun; hosted verification is pending.
 This checkpoint is part of the retained-feature 1.7.0-beta.1 development cohort, not a
 separate release. Local compilation, tests and native visual/accessibility behavior remain
 unrun; hosted verification is pending.
+
+## [1.5.26-beta.1] - 2026-11-05
+
+### Fixed
+
+- Reconcile the bottom-only pill source with the current PR76 parent while preserving both complete ordered development histories.
+
+## [1.5.25-beta.1] - 2026-11-05
+
+### Fixed
+
+- Integrate PR75's global-hold terminal-observation fixture synchronization while preserving PR76's theme propagation and Settings/Models appearance.
+  This source-only refresh is pending current-head CI.
 
 ## [1.5.25-beta.1] - 2026-11-04
 
@@ -190,6 +221,13 @@ unrun; hosted verification is pending.
 
 - Qualify native Models mouse-up receipts by exact owned tracking consumption and
   completed synchronous dispatch, retaining keyboard scenarios and rejection controls.
+
+## [1.5.21-beta.1] - 2026-11-05
+
+### Fixed
+
+- Synchronize the monitor-loss shortcut test with terminal observation before
+  its follow-up press.
 
 ## [1.5.21-beta.1] - 2026-11-02
 
