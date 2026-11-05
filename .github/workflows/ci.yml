@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       own_window_capture_probe:
@@ -30,6 +31,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   detect-changes:
@@ -166,7 +171,7 @@ jobs:
 
   macos-validation:
     name: macOS ordinary repeat and bundle validation
-    needs: [detect-changes, macos-build]
+    needs: detect-changes
     if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
     runs-on: macos-26
     timeout-minutes: 90
@@ -187,16 +192,16 @@ jobs:
       - name: Verify exact workflow source
         id: source
         env:
-          INITIAL_COMMIT: ${{ needs.macos-build.outputs.source_commit }}
-          INITIAL_TREE: ${{ needs.macos-build.outputs.source_tree }}
-          INITIAL_VERSION: ${{ needs.macos-build.outputs.product_version }}
+          DETECTED_COMMIT: ${{ needs.detect-changes.outputs.source_commit }}
+          DETECTED_TREE: ${{ needs.detect-changes.outputs.source_tree }}
+          DETECTED_VERSION: ${{ needs.detect-changes.outputs.product_version }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain)"
-          test "$(git rev-parse HEAD)" = "$INITIAL_COMMIT"
-          test "$(git rev-parse HEAD^{tree})" = "$INITIAL_TREE"
-          test "$(cat VERSION)" = "$INITIAL_VERSION"
+          test "$(git rev-parse HEAD)" = "$DETECTED_COMMIT"
+          test "$(git rev-parse HEAD^{tree})" = "$DETECTED_TREE"
+          test "$(cat VERSION)" = "$DETECTED_VERSION"
           {
             printf 'commit=%s\n' "$(git rev-parse HEAD)"
             printf 'tree=%s\n' "$(git rev-parse HEAD^{tree})"
