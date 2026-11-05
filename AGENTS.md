@@ -18,6 +18,18 @@ registry should use the base named in the issue or pull request. Never infer
 “accepted” or “newest” from a filename, modification time, running process, or
 branch name.
 
+## Architecture work
+
+Non-trivial design work starts from the vendored pstack `architect` skill at
+`.agents/skills/pstack/skills/architect/SKILL.md`: ground the subsystems, sketch
+types and module boundaries, then implement against the sketch. It calls the
+`how`, `why`, `arena`, and `principle-*` skills in the same tree, so read those
+from `.agents/skills/pstack/skills/` rather than restating them. pstack is
+written for Cursor; steps that need Cursor-only features such as Bugbot or
+Automations are skipped with a note.
+
+UI work that needs a design pass uses `.agents/skills/unslop/SKILL.md`.
+
 ## Keep changes bounded
 
 - Edit only the files needed for the requested outcome.
