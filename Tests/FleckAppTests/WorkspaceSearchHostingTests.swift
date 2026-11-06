@@ -305,6 +305,14 @@ func WorkspaceSearchHostingKeepsCompactSurfaceInsideMinimumWidth() async throws 
   let dismissed = try await waitForWorkspaceSearchHostState(host) {
     !searchController.isPresented
   }
+  if !dismissed {
+    printCompactSearchDismissDiagnostic(
+      host: host,
+      window: window,
+      queryFrame: queryFrame,
+      dismissPoint: dismissPoint
+    )
+  }
   #expect(dismissed, "Timed out waiting for the compact search close control to dismiss search")
 
   window.contentView = nil
@@ -1612,6 +1620,38 @@ private func workspaceSearchTrigger(in view: NSView) -> NSView? {
       $0.convert($0.bounds, to: view).minX < $1.convert($1.bounds, to: view).minX
     }
   return headerControls.dropFirst().first
+}
+
+@MainActor
+private func printCompactSearchDismissDiagnostic(
+  host: NSView,
+  window: NSWindow,
+  queryFrame: NSRect,
+  dismissPoint: NSPoint
+) {
+  let windowPoint = host.convert(dismissPoint, to: nil)
+  var hitChain: [String] = []
+  var hit = window.contentView?.hitTest(
+    window.contentView?.superview?.convert(windowPoint, from: nil) ?? windowPoint
+  )
+  while let view = hit, hitChain.count < 12 {
+    hitChain.append(
+      "\(type(of: view))@\(NSStringFromRect(view.convert(view.bounds, to: host)))"
+    )
+    hit = view.superview
+  }
+  let containing = hostedWorkspaceSearchDescendants(in: host, as: NSView.self)
+    .filter { $0 !== host && $0.convert($0.bounds, to: host).contains(dismissPoint) }
+    .map { "\(type(of: $0))@\(NSStringFromRect($0.convert($0.bounds, to: host)))" }
+  print(
+    "FLECK_COMPACT_SEARCH_DISMISS_DIAGNOSTIC"
+      + " host=\(NSStringFromRect(host.bounds))"
+      + " fitting=\(NSStringFromSize(host.fittingSize))"
+      + " query=\(NSStringFromRect(queryFrame))"
+      + " point=\(NSStringFromPoint(dismissPoint))"
+      + " hit=[\(hitChain.joined(separator: " < "))]"
+      + " containing=[\(containing.joined(separator: ", "))]"
+  )
 }
 
 @MainActor
