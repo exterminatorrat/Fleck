@@ -726,9 +726,14 @@ func deadlineAfterAdmittedResultRequestReturnsServiceFallbackAfterBoundedDrain()
   )
   let generator = CleanupGeneratorProbe(session: session)
   let recorder = DurationRecorder()
+  let clock = CleanupClock(
+    now: { now },
+    sleepUntil: { _ in await session.waitUntilStarted() },
+    sleepFor: { recorder.append($0) }
+  )
   let cleaner = IncrementalTranscriptCleaner(
     generator: generator,
-    clock: TestCleanupClock.fixed(now: now, onSleep: recorder.append),
+    clock: clock,
     cancellationBudget: .milliseconds(25)
   )
 
