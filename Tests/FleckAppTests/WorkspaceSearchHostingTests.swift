@@ -1311,20 +1311,36 @@ func WorkspaceSearchHostingActivatesNamedFolderResultThroughProductionScope()
     )
   )
   window.sendEvent(returnEvent)
+  let activated = try await waitForWorkspaceSearchHostState(host) {
+    guard state.workspace.selectedNoteID == target.id,
+      !searchController.isPresented,
+      let targetEditor = hostedWorkspaceSearchDescendants(
+        in: host,
+        as: ListAwareTextView.self
+      ).first(where: { $0.string == target.body })
+    else {
+      return false
+    }
+    return commands.textView === targetEditor
+      && window.firstResponder === targetEditor
+  }
+  if !activated {
+    let targetEditor = hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+      .first { $0.string == target.body }
+    print(
+      "FLECK_SEARCH_RETURN_DIAGNOSTIC"
+        + " selected=\(state.workspace.selectedNoteID == target.id)"
+        + " presented=\(searchController.isPresented)"
+        + " targetEditor=\(targetEditor != nil)"
+        + " commandsTarget=\(targetEditor != nil && commands.textView === targetEditor)"
+        + " responderTarget=\(targetEditor != nil && window.firstResponder === targetEditor)"
+        + " queryOwnsEditor=\(queryField.currentEditor() === window.firstResponder)"
+        + " active=\(NSApp.isActive) key=\(window.isKeyWindow)"
+        + " responder=\(String(describing: window.firstResponder.map { type(of: $0) }))"
+    )
+  }
   try #require(
-    await waitForWorkspaceSearchHostState(host) {
-      guard state.workspace.selectedNoteID == target.id,
-        !searchController.isPresented,
-        let targetEditor = hostedWorkspaceSearchDescendants(
-          in: host,
-          as: ListAwareTextView.self
-        ).first(where: { $0.string == target.body })
-      else {
-        return false
-      }
-      return commands.textView === targetEditor
-        && window.firstResponder === targetEditor
-    },
+    activated,
     "Timed out waiting for Return activation to restore the target editor"
   )
 
@@ -1645,6 +1661,8 @@ private func printCompactSearchDismissDiagnostic(
     .map { "\(type(of: $0))@\(NSStringFromRect($0.convert($0.bounds, to: host)))" }
   print(
     "FLECK_COMPACT_SEARCH_DISMISS_DIAGNOSTIC"
+      + " active=\(NSApp.isActive) key=\(window.isKeyWindow)"
+      + " responder=\(String(describing: window.firstResponder.map { type(of: $0) }))"
       + " host=\(NSStringFromRect(host.bounds))"
       + " fitting=\(NSStringFromSize(host.fittingSize))"
       + " query=\(NSStringFromRect(queryFrame))"
