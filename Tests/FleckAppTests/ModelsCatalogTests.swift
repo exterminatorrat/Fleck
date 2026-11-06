@@ -1149,6 +1149,88 @@ private func modelLibraryDescriptor(
     #expect(ModelLibraryLayout.stacksDetails(width: 1_100, dynamicTypeSize: .accessibility1))
   }
 
+  @Test
+  func modelsPageAndDetailReuseDefaultCompatibleSettingsHeaders() throws {
+    let repositoryRoot = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let settingsSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("Sources/FleckApp/SettingsView.swift"),
+      encoding: .utf8
+    )
+    let modelsSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("Sources/FleckApp/ModelsView.swift"),
+      encoding: .utf8
+    )
+    let settingsHeader = try #require(
+      settingsSource.components(separatedBy: "struct SettingsPageHeader: View {").last?
+        .components(separatedBy: "struct SettingsSectionCard").first
+    )
+    let modelPageHeader = try #require(
+      modelsSource.components(separatedBy: "private var header: some View").last?
+        .components(separatedBy: "private var searchField").first
+    )
+    let modelDetail = try #require(
+      modelsSource.components(separatedBy: "private func detailView(").last?
+        .components(separatedBy: "private func detailSpecifications(").first
+    )
+
+    #expect(settingsHeader.contains("description: String? = nil"))
+    #expect(settingsHeader.contains("titleAccessibilityIdentifier: String? = nil"))
+    #expect(settingsHeader.contains("Text(title ?? section.title)"))
+    #expect(settingsHeader.contains("Text(description ?? section.description)"))
+    #expect(modelPageHeader.contains("SettingsPageHeader("))
+    #expect(modelPageHeader.contains("section: .models"))
+    #expect(modelPageHeader.contains("title: \"Models\""))
+    #expect(modelDetail.contains("SettingsPageHeader("))
+    #expect(modelDetail.contains("entry.provider.rawValue"))
+    #expect(modelDetail.contains("entry.typeTitle"))
+    #expect(modelDetail.contains("Text(entry.purpose)"))
+    #expect(modelDetail.contains("titleAccessibilityIdentifier: \"models-detail-title\""))
+    #expect(modelDetail.contains("Label(\"Back to Models\", systemImage: \"chevron.left\")"))
+    #expect(modelDetail.contains(".accessibilityLabel(\"Back to Models\")"))
+    #expect(modelDetail.components(separatedBy: "Button(action: closeDetails)").count - 1 == 1)
+  }
+
+  @Test @MainActor
+  func defaultSharedSettingsHeaderRendersSectionTitleAndDescription() async throws {
+    let previousAccessibility = enableModelBrowserAccessibility()
+    defer { restoreModelBrowserAccessibility(previousAccessibility) }
+    let section = SettingsSection.models
+    let theme = FleckThemeSnapshot.resolve(
+      colorTheme: .monochrome,
+      mode: .light,
+      systemAppearance: .light,
+      reduceTransparency: true,
+      increasedContrast: false
+    )
+    let header = SettingsPageHeader(section: section, searchRequest: nil)
+      .environment(\.fleckThemeSnapshot, theme)
+      .accessibilityElement(children: .combine)
+      .accessibilityIdentifier("models-default-header")
+    let host = NSHostingView(rootView: header)
+    host.frame = CGRect(origin: .zero, size: CGSize(width: 620, height: 180))
+    host.layoutSubtreeIfNeeded()
+    let window = makeModelFixtureWindow(contentView: host)
+    defer {
+      window.orderOut(nil)
+      window.contentView = nil
+    }
+    for _ in 0..<5 { await Task.yield() }
+    host.layoutSubtreeIfNeeded()
+
+    let headerElement = try #require(
+      modelAccessibilityElements(in: host, identifier: "models-default-header").first
+    )
+    let renderedCopy = try #require(modelAccessibilityLabel(headerElement))
+    #expect(renderedCopy.contains(section.title))
+    #expect(renderedCopy.contains(section.description))
+    if ProcessInfo.processInfo.environment["FLECK_EDITOR_EVIDENCE_DIR"] != nil {
+      try writeModelFixture("models-default-header", in: host)
+    }
+  }
+
   @Test @MainActor
   func externalBenchmarkEvidenceRequiresExactRoleModelAndRevision() throws {
     let parakeet = try modelLibraryDescriptor(
@@ -1269,6 +1351,11 @@ private func modelLibraryDescriptor(
       await Task.yield()
     }
     #expect(modelAccessibilityElements(in: tableHost, identifier: "models-detail-title").count == 1)
+    #expect(modelAccessibilityElements(in: tableHost, identifier: "models-detail-header").count == 1)
+    let backToModels = try #require(
+      modelAccessibilityElements(in: tableHost, identifier: "models-back").first
+    )
+    #expect(modelAccessibilityLabel(backToModels) == "Back to Models")
     #expect(modelAccessibilityElements(in: tableHost, identifier: "models-verified-specifications").count == 1)
     #expect(modelAccessibilityElements(in: tableHost, identifier: "models-external-results").count == 1)
     #expect(
@@ -1289,6 +1376,22 @@ private func modelLibraryDescriptor(
     let installAction = try #require(installActions.first)
     #expect(modelAccessibilityLabel(installAction) == "Install")
     try writeModelFixture("models-detail-fixture", in: tableHost)
+
+    let backFrame = try #require(modelAccessibilityFrame(backToModels))
+    #expect(backFrame.width > 0)
+    #expect(backFrame.height > 0)
+    try sendModelMouseClick(
+      at: NSPoint(x: backFrame.midX, y: backFrame.midY),
+      to: tableWindow
+    )
+    try await Task.sleep(for: .milliseconds(150))
+    for _ in 0..<5 {
+      tableHost.layoutSubtreeIfNeeded()
+      await Task.yield()
+    }
+    #expect(modelAccessibilityElements(in: tableHost, identifier: "models-back").isEmpty)
+    #expect(modelAccessibilityElements(in: tableHost, identifier: "models-detail-title").isEmpty)
+    #expect(modelAccessibilityElements(in: tableHost, identifier: "models-row-\(speechID)").count == 1)
 
     let compactPaneHost = try captureModelFixture(
       browser(width: 900, height: 620),

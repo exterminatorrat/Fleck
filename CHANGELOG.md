@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.24-beta.1] - 2026-11-06
+
+### Changed
+
+- Port retained-only regression coverage (bullet editing, editor input, dictation error and terminal presentation, relative RTF tails) and the Models back-button accessibility label from the retained source snapshot.
+
 ## [1.7.23-beta.1] - 2026-11-06
 
 ### Changed
