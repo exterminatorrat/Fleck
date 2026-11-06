@@ -466,7 +466,8 @@ struct FolderNavigatorPresentationTests {
           + " editorPresent=\(currentEditor != nil)"
           + " editorOwnsFocus=\(currentEditor != nil && currentEditor === fixture.window.firstResponder)"
           + " originalEditorOwnsFocus=\(duplicateEditor === fixture.window.firstResponder)"
-          + " active=\(NSApp.isActive) key=\(fixture.window.isKeyWindow)"
+          + " active=\(NSApp.isActive) appKeyWindowMatches=\(NSApp.keyWindow === fixture.window)"
+          + " key=\(fixture.window.isKeyWindow)"
           + " saving=\(fixture.state.saveStatus == .saving)"
           + " responder=\(fixture.window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil")"
       )
@@ -2105,7 +2106,7 @@ private final class FolderNavigatorFixture {
     let identifier = "folder-rename-\(folderID.uuidString)"
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: .seconds(2))
-    while clock.now < deadline {
+    while true {
       try Task.checkCancellation()
       host.layoutSubtreeIfNeeded()
       let fields = textFields.filter { $0.accessibilityIdentifier() == identifier }
