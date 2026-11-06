@@ -453,7 +453,7 @@ jobs:
           {
             printf 'Git commit SHA: '
             git rev-parse --verify HEAD
-            printf 'Runner profile: namespace-profile-fleck\n'
+            printf 'Runner profile: macos-26\n'
             sw_vers
             xcodebuild -version
             swift --version
