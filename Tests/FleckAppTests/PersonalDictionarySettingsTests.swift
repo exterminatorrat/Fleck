@@ -230,6 +230,7 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
     viewModel: viewModel,
     size: NSSize(width: 540, height: 500)
   )
+  window.acceptsMouseMovedEvents = true
   defer {
     window.contentView = nil
     window.orderOut(nil)
@@ -323,7 +324,7 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
   try #require(
     offRowPointIsVisible && !geometryBeforePointer.rowFrame.contains(pointerOutsideRows)
   )
-  try movePersonalDictionaryDeleteAdmissionPointer(
+  try await movePersonalDictionaryDeleteAdmissionPointer(
     to: pointerOutsideRows,
     in: host,
     window: window,
@@ -385,7 +386,7 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
   try #require(
     geometryAfterExit.rowFullyVisible && screen.visibleFrame.contains(rowCenterScreenPoint)
   )
-  try movePersonalDictionaryDeleteAdmissionPointer(
+  try await movePersonalDictionaryDeleteAdmissionPointer(
     to: rowCenter,
     in: host,
     window: window,
@@ -2693,6 +2694,11 @@ private func personalDictionaryDeletePointerState(
 }
 
 @MainActor
+private enum PersonalDictionaryDeleteAdmissionEventSequence {
+  static var nextEventNumber = 30_000
+}
+
+@MainActor
 private func movePersonalDictionaryDeleteAdmissionPointer(
   to point: NSPoint,
   in host: NSView,
@@ -2702,7 +2708,7 @@ private func movePersonalDictionaryDeleteAdmissionPointer(
   entryID: UUID,
   deleteIdentifier: String,
   viewModel: PersonalDictionarySettingsViewModel
-) throws {
+) async throws {
   do {
     let pointOnScreen = personalDictionaryScreenPoint(
       fromHostPoint: point,
@@ -2729,6 +2735,8 @@ private func movePersonalDictionaryDeleteAdmissionPointer(
     let pointerInWindow = window.convertFromScreen(
       NSRect(origin: pointerOnScreen, size: .zero)
     ).origin
+    let eventNumber = PersonalDictionaryDeleteAdmissionEventSequence.nextEventNumber
+    PersonalDictionaryDeleteAdmissionEventSequence.nextEventNumber += 1
     let event = try #require(
       NSEvent.mouseEvent(
         with: .mouseMoved,
@@ -2737,12 +2745,38 @@ private func movePersonalDictionaryDeleteAdmissionPointer(
         timestamp: ProcessInfo.processInfo.systemUptime,
         windowNumber: window.windowNumber,
         context: nil,
-        eventNumber: 1,
+        eventNumber: eventNumber,
         clickCount: 0,
         pressure: 0
       )
     )
-    window.sendEvent(event)
+    var wasDeliveredToOwnedWindow = false
+    let monitor = try #require(
+      NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { observedEvent in
+        let observedEventNumber = observedEvent.eventNumber
+        let observedWindowNumber = observedEvent.windowNumber
+        MainActor.assumeIsolated {
+          if observedEventNumber == eventNumber
+            && observedWindowNumber == window.windowNumber
+          {
+            wasDeliveredToOwnedWindow = true
+          }
+        }
+        return observedEvent
+      }
+    )
+    defer { NSEvent.removeMonitor(monitor) }
+    NSApplication.shared.postEvent(event, atStart: false)
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(2))
+    while !wasDeliveredToOwnedWindow && clock.now < deadline {
+      try Task.checkCancellation()
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    try #require(
+      wasDeliveredToOwnedWindow,
+      "Owned mouse-moved event must reach AppKit dispatch"
+    )
   } catch {
     print(
       personalDictionaryDeleteAdmissionDiagnostic(
