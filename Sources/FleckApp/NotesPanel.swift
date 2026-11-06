@@ -1208,13 +1208,15 @@
           editorCommands.invalidateEditorSession()
         }
         appState.refreshSelectedNoteFileReferences()
+        searchController.recordSearchCausalDiagnostic("selection-focus-reset presented=\(searchController.isPresented) previous=\(String(describing: editorFocus))")
         editorFocus = nil
         synchronizeBodyCommandGuard()
       }
       .onChange(of: isBlockingOverlayPresented, initial: true) { _, _ in
         synchronizeBodyCommandGuard()
       }
-      .onChange(of: editorFocus, initial: true) { _, _ in
+      .onChange(of: editorFocus, initial: true) { oldValue, newValue in
+        searchController.recordSearchCausalDiagnostic("focus-state old=\(String(describing: oldValue)) new=\(String(describing: newValue))")
         synchronizeBodyCommandGuard()
       }
       .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in

@@ -271,12 +271,13 @@ func WorkspaceSearchHostingKeepsCompactSurfaceInsideMinimumWidth() async throws 
     )
     .environmentObject(state)
   )
-  let window = NSWindow(
+  let window = WorkspaceSearchCausalDiagnosticWindow(
     contentRect: NSRect(x: 137, y: 211, width: 380, height: 430),
     styleMask: [.titled],
     backing: .buffered,
     defer: false
   )
+  searchController.searchCausalDiagnostic = { [weak window] in window?.recordSearchTrace($0) }
   window.contentView = host
   window.makeKeyAndOrderFront(nil)
   await settleWorkspaceSearchHost(host)
@@ -301,6 +302,7 @@ func WorkspaceSearchHostingKeepsCompactSurfaceInsideMinimumWidth() async throws 
   )
   #expect(dismissPoint.x >= host.bounds.maxX - 40)
   #expect(dismissPoint.x <= host.bounds.maxX - 10)
+  window.recordSearchTrace("before-close queryOwnsResponder=\(queryField.currentEditor() === window.firstResponder)")
   clickWorkspaceSearchControl(host.convert(dismissPoint, to: nil), in: window)
   let dismissed = try await waitForWorkspaceSearchHostState(host) {
     !searchController.isPresented
@@ -313,6 +315,8 @@ func WorkspaceSearchHostingKeepsCompactSurfaceInsideMinimumWidth() async throws 
       dismissPoint: dismissPoint
     )
   }
+  window.recordSearchTrace("after-close dismissed=\(dismissed)")
+  window.printSearchTrace()
   #expect(dismissed, "Timed out waiting for the compact search close control to dismiss search")
 
   window.contentView = nil
@@ -1262,12 +1266,13 @@ func WorkspaceSearchHostingActivatesNamedFolderResultThroughProductionScope()
     )
     .environmentObject(state)
   )
-  let window = NSWindow(
+  let window = WorkspaceSearchCausalDiagnosticWindow(
     contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
     styleMask: [.titled],
     backing: .buffered,
     defer: false
   )
+  searchController.searchCausalDiagnostic = { [weak window] in window?.recordSearchTrace($0) }
   window.contentView = host
   window.makeKeyAndOrderFront(nil)
   await settleWorkspaceSearchHost(host)
@@ -1310,6 +1315,7 @@ func WorkspaceSearchHostingActivatesNamedFolderResultThroughProductionScope()
       keyCode: 36
     )
   )
+  window.recordSearchTrace("before-return queryOwnsResponder=\(queryField.currentEditor() === window.firstResponder)")
   window.sendEvent(returnEvent)
   let activated = try await waitForWorkspaceSearchHostState(host) {
     guard state.workspace.selectedNoteID == target.id,
@@ -1339,6 +1345,8 @@ func WorkspaceSearchHostingActivatesNamedFolderResultThroughProductionScope()
         + " responder=\(String(describing: window.firstResponder.map { type(of: $0) }))"
     )
   }
+  window.recordSearchTrace("after-return activated=\(activated) commandEditor=\(commands.textView.map { String(describing: ObjectIdentifier($0)) } ?? "nil")")
+  window.printSearchTrace()
   try #require(
     activated,
     "Timed out waiting for Return activation to restore the target editor"
@@ -1700,6 +1708,45 @@ private func printCompactSearchDismissDiagnostic(
       + " containing=[\(containing.joined(separator: ", "))]"
       + " dismissAX=[\(dismissAccessibilityFrames.joined(separator: ", "))]"
   )
+}
+
+@MainActor
+private final class WorkspaceSearchCausalDiagnosticWindow: NSWindow {
+  private var trace: [String] = []
+  private var sequence = 0
+
+  func recordSearchTrace(_ message: String) {
+    sequence += 1
+    let editors = contentView.map {
+      hostedWorkspaceSearchDescendants(in: $0, as: ListAwareTextView.self).map {
+        "\(ObjectIdentifier($0)):attached=\($0.window === self),editable=\($0.isEditable),selectable=\($0.isSelectable),hidden=\($0.isHiddenOrHasHiddenAncestor)"
+      }.joined(separator: ";")
+    } ?? ""
+    trace.append("\(sequence) \(message) responder=\(firstResponder.map { "\(type(of: $0)):\(ObjectIdentifier($0))" } ?? "nil") editors=[\(editors)]")
+    if trace.count > 200 { trace.removeFirst() }
+  }
+
+  override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+    let requested = responder.map { "\(type(of: $0)):\(ObjectIdentifier($0))" } ?? "nil"
+    let previous = firstResponder
+    recordSearchTrace("focus-request=\(requested) previous=\(previous.map { "\(type(of: $0)):\(ObjectIdentifier($0))" } ?? "nil")")
+    let result = super.makeFirstResponder(responder)
+    recordSearchTrace("focus-result=\(result) requested=\(requested)")
+    if previous is ListAwareTextView, firstResponder == nil || firstResponder === self {
+      recordSearchTrace("focus-cleared-stack=" + Thread.callStackSymbols.prefix(16).joined(separator: " | "))
+    }
+    return result
+  }
+
+  override func sendEvent(_ event: NSEvent) {
+    recordSearchTrace("event-before=\(event.type.rawValue) applicationEvent=\(NSApp.currentEvent?.type.rawValue.description ?? "nil") pressedButtons=\(NSEvent.pressedMouseButtons)")
+    super.sendEvent(event)
+    recordSearchTrace("event-after=\(event.type.rawValue)")
+  }
+
+  func printSearchTrace() {
+    for entry in trace { print("FLECK_SEARCH_CAUSAL_TRACE \(entry)") }
+  }
 }
 
 @MainActor
