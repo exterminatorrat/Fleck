@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.20-beta.1] - 2026-11-06
+
+### Changed
+
+- Consolidate the dictation diagnostics, cleanup provenance, capsule recovery and restart-only model pull requests (#82, #83, #84, #87) onto the foundation branch.
+
 ## [1.7.18-beta.1] - 2026-11-06
 
 ### Changed
