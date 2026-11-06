@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.19-beta.1] - 2026-11-06
+
+### Changed
+
+- Consolidate the editor, list, clipboard, folder and tab-navigation pull requests (#80, #81, #86, #88, #90, #92) onto the foundation branch.
+
 ## [1.7.18-beta.1] - 2026-11-06
 
 ### Changed
