@@ -381,7 +381,7 @@ import Testing
   await sleeper.resumeAll()
 }
 
-@Test func criticalSignalWaitsForPreparationUpgradeAndLeavesRuntimeCold() async {
+@Test func criticalSignalWaitsForPreparationUpgradeAndLeavesRuntimeCold() async throws {
   let asrLoadGate = AsyncRuntimeGate()
   let cleanupLoadGate = AsyncRuntimeGate()
   let asr = FakeRuntimeAdapter(role: .asr, loadGate: asrLoadGate)
@@ -400,12 +400,15 @@ import Testing
   let immediatePreparation = Task {
     await runtime.prepare(for: .immediateCapture)
   }
-  await Task.yield()
   let criticalSignal = Task {
     await runtime.handle(.memoryCritical)
     await completions.mark()
   }
-  await Task.yield()
+  try await waitForRuntimeCondition(
+    "preparation upgrade and critical lifecycle waiters to register before opening the load gate"
+  ) {
+    await runtime.preparationWaiterCountForTesting == 2
+  }
 
   await asrLoadGate.openGate()
   await cleanupLoadGate.waitUntilWaiting()

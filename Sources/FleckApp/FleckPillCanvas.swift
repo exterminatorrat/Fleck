@@ -8,6 +8,25 @@ struct FleckPillCanvasLayers: Equatable {
   var halo = true
 }
 
+#if DEBUG
+enum FleckPillCanvasBackdrop: CaseIterable, Hashable {
+  case clear
+  case dark
+  case bright
+
+  var color: Color? {
+    switch self {
+    case .clear:
+      nil
+    case .dark:
+      FleckPillPainter.color(0x07080B)
+    case .bright:
+      FleckPillPainter.color(0xF6F6F6)
+    }
+  }
+}
+#endif
+
 struct FleckPillCanvas: View {
   var frame: FleckPillArtworkFrame
   var layers = FleckPillCanvasLayers()
@@ -16,6 +35,9 @@ struct FleckPillCanvas: View {
   var renderSessionID: UUID?
   var receipt: FleckPillRenderReceipt?
 
+  #if DEBUG
+  var backdrop: FleckPillCanvasBackdrop = .clear
+  #endif
 
   init(
     frame: FleckPillArtworkFrame,
@@ -33,12 +55,204 @@ struct FleckPillCanvas: View {
     self.colors = colors
   }
 
+  #if DEBUG
+  init(
+    frame: FleckPillMotionFrame,
+    layers: FleckPillCanvasLayers = FleckPillCanvasLayers(),
+    backdrop: FleckPillCanvasBackdrop = .clear
+  ) {
+    self.frame = frame.artworkFrame
+    self.layers = layers
+    self.renderGeneration = 0
+    self.renderSessionID = nil
+    self.receipt = nil
+    self.backdrop = backdrop
+  }
+
+  init(
+    frame: FleckPillArtworkFrame,
+    layers: FleckPillCanvasLayers = FleckPillCanvasLayers(),
+    backdrop: FleckPillCanvasBackdrop
+  ) {
+    self.frame = frame
+    self.layers = layers
+    self.renderGeneration = 0
+    self.renderSessionID = nil
+    self.receipt = nil
+    self.backdrop = backdrop
+  }
+
+  private var backdropColor: Color? { backdrop.color }
+  #else
+  private var backdropColor: Color? { nil }
+  #endif
+
   var body: some View {
     Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: false) { context, size in
+      if let color = backdropColor {
+        context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(color))
+      }
       FleckPillPainter.draw(frame, layers: layers, colors: colors, in: context)
       receipt?.record(frame, generation: renderGeneration, sessionID: renderSessionID)
     }
     .frame(width: FleckPillGeometry.canvasSize.width, height: FleckPillGeometry.canvasSize.height)
+    .accessibilityHidden(true)
+  }
+}
+
+struct FleckErrorCanvas: View {
+  let presentation: FleckErrorPresentation
+  let frame: FleckPillArtworkFrame
+  let sourceFrame: FleckPillArtworkFrame?
+  let increaseContrast: Bool
+  let reduceTransparency: Bool
+  let colors: FleckRailColors
+
+  private var statusColor: Color {
+    switch presentation.kind {
+    case .noSpeech, .usedOriginal:
+      colors.warningColor
+    case .repairing:
+      colors.liveColor
+    default:
+      colors.failureColor
+    }
+  }
+
+  private var layout: FleckErrorLayout { .approved }
+
+  var body: some View {
+    Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: false) { context, _ in
+      let geometry = FleckErrorGeometry.shell(
+        dismissal: presentation.dismissal,
+        target: presentation.target,
+        layout: layout
+      )
+      let errorOpacity = 1 - presentation.dismissal * presentation.dismissal
+      if errorOpacity != 0 {
+        context.drawLayer { error in
+          error.opacity = errorOpacity
+          FleckPillPainter.drawError(
+            geometry,
+            layout: layout,
+            shoulders: !reduceTransparency,
+            increaseContrast: increaseContrast,
+            colors: colors,
+            signalColor: statusColor,
+            in: error
+          )
+        }
+      }
+      let normalFrame = sourceFrame ?? frame
+      let normalEndpointOpacity = presentation.dismissal * presentation.dismissal
+      if normalEndpointOpacity != 0 {
+        var endpoint = context
+        endpoint.opacity = normalEndpointOpacity
+        endpoint.concatenate(CGAffineTransform(
+          translationX: (layout.canvasWidth - DictationCapsuleController.livePillHostSize.width) / 2,
+          y: layout.canvasHeight - DictationCapsuleController.livePillHostSize.height
+        ))
+        FleckPillPainter.draw(
+          normalFrame,
+          layers: FleckPillCanvasLayers(
+            rim: true,
+            shoulders: !reduceTransparency,
+            signal: true,
+            halo: !reduceTransparency && !increaseContrast
+          ),
+          colors: colors,
+          in: endpoint
+        )
+      }
+    }
+    .frame(width: layout.canvasWidth, height: layout.canvasHeight)
+    .accessibilityHidden(true)
+  }
+}
+
+struct FleckErrorButtonCanvas: View {
+  let feedback: FleckErrorButtonFeedback
+  let increaseContrast: Bool
+  let reduceMotion: Bool
+
+  var body: some View {
+    ZStack {
+      FleckErrorButtonStopsCanvas(stops: feedback.stops, increaseContrast: increaseContrast)
+        .animation(animation(duration: FleckErrorGeometry.buttonFillRimDuration), value: feedback.stops)
+      if !increaseContrast {
+        FleckErrorButtonReflectionCanvas(opacity: feedback.reflection)
+          .animation(
+            animation(duration: FleckErrorGeometry.buttonColorReflectionDuration),
+            value: feedback.reflection
+          )
+      }
+    }
+    .frame(
+      width: FleckErrorLayout.approved.buttonFaceWidth,
+      height: FleckErrorLayout.approved.buttonFaceHeight
+    )
+    .accessibilityHidden(true)
+  }
+
+  private func animation(duration: Double) -> Animation? {
+    reduceMotion ? nil : .easeOut(duration: duration)
+  }
+}
+
+private typealias FleckErrorButtonStopPair = AnimatablePair<Double, Double>
+private typealias FleckErrorButtonStopQuad = AnimatablePair<FleckErrorButtonStopPair, FleckErrorButtonStopPair>
+private typealias FleckErrorButtonStopVector = AnimatablePair<FleckErrorButtonStopQuad, FleckErrorButtonStopPair>
+
+private struct FleckErrorButtonStopsCanvas: View, Animatable {
+  var stops: FleckErrorButtonStops
+  let increaseContrast: Bool
+
+  nonisolated var animatableData: FleckErrorButtonStopVector {
+    get {
+      AnimatablePair(
+        AnimatablePair(
+          AnimatablePair(stops.fill[0], stops.fill[1]),
+          AnimatablePair(stops.fill[2], stops.rim[0])
+        ),
+        AnimatablePair(stops.rim[1], stops.rim[2])
+      )
+    }
+    set {
+      stops = FleckErrorButtonStops(
+        fill: [newValue.first.first.first, newValue.first.first.second, newValue.first.second.first],
+        rim: [newValue.first.second.second, newValue.second.first, newValue.second.second]
+      )
+    }
+  }
+
+  var body: some View {
+    Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: false) { context, _ in
+      FleckPillPainter.drawErrorButtonStops(stops, increaseContrast: increaseContrast, in: context)
+    }
+    .frame(
+      width: FleckErrorLayout.approved.buttonFaceWidth,
+      height: FleckErrorLayout.approved.buttonFaceHeight
+    )
+    .accessibilityHidden(true)
+  }
+}
+
+private struct FleckErrorButtonReflectionCanvas: View, Animatable {
+  var opacity: Double
+
+  nonisolated var animatableData: Double {
+    get { opacity }
+    set { opacity = newValue }
+  }
+
+  var body: some View {
+    Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: false) { context, _ in
+      FleckPillPainter.drawErrorButtonReflection(opacity, in: context)
+    }
+    .frame(
+      width: FleckErrorLayout.approved.buttonFaceWidth,
+      height: FleckErrorLayout.approved.buttonFaceHeight
+    )
     .accessibilityHidden(true)
   }
 }
@@ -161,6 +375,388 @@ private enum FleckPillPainter {
         colors: colors
       )
     }
+  }
+
+  static func drawError(
+    _ geometry: FleckErrorShellGeometry,
+    layout: FleckErrorLayout,
+    shoulders: Bool,
+    increaseContrast: Bool,
+    colors: FleckRailColors,
+    signalColor: Color,
+    in context: GraphicsContext
+  ) {
+    let extra = layout.centerExtension
+    let transform = CGAffineTransform(
+      a: layout.scale,
+      b: 0,
+      c: 0,
+      d: layout.scale * 0.925,
+      tx: layout.artworkPadding,
+      ty: layout.scale * 15
+    )
+    let fill = path(geometry.artworkFill)
+    let contour = path(geometry.artworkContour)
+    context.drawLayer { body in
+      body.opacity = colors.effectiveShellOpacity
+      body.fill(
+        fill.applying(transform),
+        with: linear(
+          [
+            (0.0, color(0x131519)),
+            (0.32, color(0x090A0D)),
+            (0.75, color(0x090A0D)),
+            (1.0, color(0x000000)),
+          ],
+          start: point(0, 0, transform: transform),
+          end: point(0, 40, transform: transform)
+        )
+      )
+      body.clip(to: fill.applying(transform))
+      body.drawLayer { reflection in
+        reflection.opacity = FleckErrorGeometry.reflectionOpacity(
+          dismissal: geometry.dismissal
+        )
+        drawErrorActiveLight(
+          in: reflection,
+          transform: FleckErrorGeometry.reflectionTransform(for: geometry, layout: layout),
+          extra: extra,
+          visible: shoulders
+        )
+      }
+      body.fill(
+        fill.applying(transform),
+        with: linear(
+          [(0.0, color(0x000000, alpha: 0)), (1.0, color(0x000000))],
+          start: point(0, 36, transform: transform),
+          end: point(0, 40, transform: transform)
+        )
+      )
+    }
+    let rimStops = widenedRimStops(extra: extra, artworkWidth: layout.artworkWidth)
+    drawBlurred(in: context, transform: transform, radius: 0.7, opacity: 0.24) { glow in
+      fillLinearStroke(
+        glow,
+        path: contour,
+        width: 1.25,
+        transform: .identity,
+        stops: rimStops,
+        start: point(0, 0),
+        end: point(layout.artworkWidth, 0)
+      )
+    }
+    fillLinearStroke(
+      context,
+      path: contour,
+      width: 0.48,
+      transform: transform,
+      stops: rimStops,
+      start: point(0, 0, transform: transform),
+      end: point(layout.artworkWidth, 0, transform: transform)
+    )
+    context.stroke(
+      contour.applying(transform),
+      with: .color(colors.borderColor),
+      lineWidth: 0.48
+    )
+    context.stroke(
+      contour.applying(transform),
+      with: .color(signalColor.opacity(increaseContrast ? 0.65 : 0.35)),
+      lineWidth: increaseContrast ? 0.75 : 0.45
+    )
+    if increaseContrast {
+      context.stroke(
+        contour.applying(transform),
+        with: .color(colors.primaryTextColor),
+        lineWidth: 1
+      )
+    }
+  }
+
+  static func drawErrorRepairProgress(
+    _ sample: FleckErrorRepairSample,
+    increaseContrast: Bool,
+    reduceTransparency: Bool,
+    colors: FleckRailColors,
+    layout: FleckErrorLayout,
+    in context: GraphicsContext
+  ) {
+    let frame = FleckPillArtworkFrame(
+      expansion: 1,
+      energy: 0,
+      phase: 0,
+      activationMix: 0,
+      processingMix: 1,
+      signalOpacity: 1,
+      glint: sample.glint,
+      glintOpacity: sample.opacity
+    )
+    let shell = FleckErrorGeometry.shell(layout: layout)
+    let shellTransform = CGAffineTransform(
+      a: layout.scale,
+      b: 0,
+      c: 0,
+      d: layout.scale * 0.925,
+      tx: layout.artworkPadding,
+      ty: layout.scale * 15
+    )
+    drawSignal(
+      frame,
+      geometry: FleckPillMotion.signalGeometry(frame),
+      in: context,
+      clip: path(shell.artworkFill).applying(shellTransform),
+      matrix: FleckErrorGeometry.repairProgressTransform(layout: layout),
+      haloVisible: !reduceTransparency && !increaseContrast,
+      colors: colors
+    )
+  }
+
+  static func drawErrorButtonStops(
+    _ stops: FleckErrorButtonStops,
+    increaseContrast: Bool,
+    in context: GraphicsContext
+  ) {
+    let width = FleckErrorLayout.approved.buttonFaceWidth
+    let height = FleckErrorLayout.approved.buttonFaceHeight
+    let rect = CGRect(x: 0.3, y: 0.3, width: width - 0.6, height: height - 0.6)
+    let face = Path(roundedRect: rect, cornerSize: CGSize(width: 10.7, height: 10.7))
+    if increaseContrast {
+      context.fill(face, with: .color(Color(nsColor: .controlBackgroundColor)))
+      context.stroke(face, with: .color(Color(nsColor: .controlTextColor)), lineWidth: 1)
+      return
+    }
+    let fillColors = stops.fill
+    context.fill(
+      face,
+      with: linear(
+        [
+          (0.0, color(0xFFFFFF, alpha: fillColors[0])),
+          (0.48, color(0xFFFFFF, alpha: fillColors[1])),
+          (1.0, color(0xD0D0D1, alpha: fillColors[2])),
+        ],
+        start: point(0, 0),
+        end: point(0, height)
+      )
+    )
+    let rimColors = stops.rim
+    context.stroke(
+      face,
+      with: linear(
+        [
+          (0.0, color(0xE3E3E4, alpha: rimColors[0])),
+          (0.48, color(0x8E8E90, alpha: rimColors[1])),
+          (1.0, color(0xD1D1D3, alpha: rimColors[2])),
+        ],
+        start: point(width * 0.15, 0),
+        end: point(width * 0.72, height)
+      ),
+      lineWidth: 0.5
+    )
+  }
+
+  static func drawErrorButtonReflection(_ opacity: Double, in context: GraphicsContext) {
+    let width = FleckErrorLayout.approved.buttonFaceWidth
+    let height = FleckErrorLayout.approved.buttonFaceHeight
+    let rect = CGRect(x: 0.8, y: 0.8, width: width - 1.6, height: height - 1.6)
+    let reflection = Path(roundedRect: rect, cornerSize: CGSize(width: 10.2, height: 10.2))
+    context.drawLayer { glass in
+      glass.opacity = opacity
+      fillRadial(
+        in: glass,
+        shape: reflection,
+        transform: radialMatrix(
+          center: point(20, 0.7),
+          radiusX: 38,
+          radiusY: 14,
+          angle: 0,
+          outer: .identity
+        ),
+        stops: [
+          (0.0, color(0xFFFFFF)),
+          (0.5, color(0xFFFFFF, alpha: 0.38)),
+          (1.0, color(0xFFFFFF, alpha: 0)),
+        ]
+      )
+    }
+  }
+
+  private static func drawErrorActiveLight(
+    in context: GraphicsContext,
+    transform: CGAffineTransform,
+    extra: Double,
+    visible: Bool
+  ) {
+    let poolCenter = 112 + extra / 2
+    let poolRadius = 73 + extra / 2
+    let pool = ellipse(poolCenter, 24, poolRadius, 20).applying(transform)
+    fillRadial(
+      in: context,
+      shape: pool,
+      transform: radialMatrix(
+        center: point(poolCenter, 20),
+        radiusX: poolRadius,
+        radiusY: 20,
+        angle: 0,
+        outer: transform
+      ),
+      stops: [
+        (0.0, color(0xAAAEBA, alpha: 0.06)),
+        (1.0, color(0xAAAEBA, alpha: 0)),
+      ]
+    )
+    guard visible else { return }
+    let shoulderLeft = path("M 29 39 C 41 36 43.3 24 51 14 C 57.8 5.2 65 4.4 82 3.8")
+    let shoulderRight = widenedPath(
+      path("M 195 39 C 183 36 180.7 24 173 14 C 166.2 5.2 159 4.4 142 3.8"),
+      extra: extra
+    )
+    var shouldersPath = shoulderLeft
+    shouldersPath.addPath(shoulderRight)
+    drawBlurred(in: context, transform: transform, radius: 3.2, opacity: 1) { glow in
+      fillLinearStroke(
+        glow,
+        path: shouldersPath,
+        width: 4.6,
+        transform: .identity,
+        stops: insideRim,
+        start: point(0, 0),
+        end: point(0, 40)
+      )
+    }
+    drawBlurred(in: context, transform: transform, radius: 0.7, opacity: 1) { glow in
+      fillLinearStroke(
+        glow,
+        path: shouldersPath,
+        width: 1.5,
+        transform: .identity,
+        stops: insideRim,
+        start: point(0, 0),
+        end: point(0, 40)
+      )
+    }
+    let blackEdge = widenedPath(
+      path("M 45 23 C 52 9 63 3.2 79 3.4 L 145 3.4 C 161 3.2 172 9 179 23"),
+      extra: extra
+    )
+    drawBlurred(in: context, transform: transform, radius: 0.7, opacity: 0.7) { edge in
+      edge.fill(stroked(blackEdge, width: 1.4), with: .color(color(0x050506)))
+    }
+    for (line, stops, centerX, angle) in [
+      (shoulderLeft, shoulderLeftStops, 53.0, -41.0),
+      (shoulderRight, shoulderRightStops, 171.0 + extra, 41.0),
+    ] {
+      let centerY = 12.0
+      let ellipseShape = ellipse(
+        centerX + (centerX < 100 ? 2 : -2), 13, 27, 26
+      ).applying(transform)
+      context.drawLayer { glow in
+        glow.opacity = 0.26
+        fillRadial(
+          in: glow,
+          shape: ellipseShape,
+          transform: radialMatrix(
+            center: point(centerX, centerY),
+            radiusX: 20,
+            radiusY: 10,
+            angle: angle,
+            outer: transform
+          ),
+          stops: stops
+        )
+      }
+      drawBlurred(in: context, transform: transform, radius: 1.6, opacity: 1) { soft in
+        fillRadial(
+          in: soft,
+          shape: stroked(line, width: 8),
+          transform: radialMatrix(
+            center: point(centerX, centerY), radiusX: 20, radiusY: 10,
+            angle: angle, outer: .identity
+          ),
+          stops: stops
+        )
+      }
+      drawBlurred(in: context, transform: transform, radius: 0.7, opacity: 1) { near in
+        fillRadial(
+          in: near,
+          shape: stroked(line, width: 3.6),
+          transform: radialMatrix(
+            center: point(centerX, centerY), radiusX: 20, radiusY: 10,
+            angle: angle, outer: .identity
+          ),
+          stops: stops
+        )
+      }
+      let fine = centerX < 100
+        ? path("M 46 22 C 51 13 55.5 8.6 63.5 5.9")
+        : widenedPath(path("M 178 22 C 173 13 168.5 8.6 160.5 5.9"), extra: extra)
+      drawBlurred(in: context, transform: transform, radius: 0.7, opacity: 1) { highlight in
+        fillRadial(
+          in: highlight,
+          shape: stroked(fine, width: centerX < 100 ? 1.2 : 1.15),
+          transform: radialMatrix(
+            center: point(centerX, centerY), radiusX: 20, radiusY: 10,
+            angle: angle, outer: .identity
+          ),
+          stops: stops
+        )
+      }
+    }
+  }
+
+  private static let shoulderLeftStops = [
+    (0.0, color(0xFFFFFF, alpha: 0.82)),
+    (0.23, color(0xE0E2E9, alpha: 0.47)),
+    (0.6, color(0x9B9FA9, alpha: 0.19)),
+    (1.0, color(0x797D87, alpha: 0)),
+  ]
+  private static let shoulderRightStops = [
+    (0.0, color(0xFFFFFF, alpha: 0.66)),
+    (0.24, color(0xE0E2E9, alpha: 0.39)),
+    (0.65, color(0x9B9FA9, alpha: 0.15)),
+    (1.0, color(0x797D87, alpha: 0)),
+  ]
+
+  private static func widenedRimStops(
+    extra: Double,
+    artworkWidth: Double
+  ) -> [(Double, Color)] {
+    activeRim.map { location, color in
+      let x = location * 224
+      let widened = x > 112 ? x + extra : x
+      return (widened / artworkWidth, color)
+    }
+  }
+
+  private static func widenedPath(_ path: Path, extra: Double) -> Path {
+    func adjust(_ point: CGPoint) -> CGPoint {
+      CGPoint(x: point.x > 112 ? point.x + extra : point.x, y: point.y)
+    }
+    let result = CGMutablePath()
+    path.cgPath.applyWithBlock { pointer in
+      let element = pointer.pointee
+      switch element.type {
+      case .moveToPoint:
+        result.move(to: adjust(element.points[0]))
+      case .addLineToPoint:
+        result.addLine(to: adjust(element.points[0]))
+      case .addQuadCurveToPoint:
+        result.addQuadCurve(
+          to: adjust(element.points[1]),
+          control: adjust(element.points[0])
+        )
+      case .addCurveToPoint:
+        result.addCurve(
+          to: adjust(element.points[2]),
+          control1: adjust(element.points[0]),
+          control2: adjust(element.points[1])
+        )
+      case .closeSubpath:
+        result.closeSubpath()
+      @unknown default:
+        break
+      }
+    }
+    return Path(result)
   }
 
   private static func drawActiveLight(
@@ -630,4 +1226,21 @@ private enum FleckPillPainter {
   }
 }
 
+func drawFleckErrorRepairProgress(
+  _ sample: FleckErrorRepairSample,
+  increaseContrast: Bool,
+  reduceTransparency: Bool,
+  colors: FleckRailColors,
+  layout: FleckErrorLayout,
+  in context: GraphicsContext
+) {
+  FleckPillPainter.drawErrorRepairProgress(
+    sample,
+    increaseContrast: increaseContrast,
+    reduceTransparency: reduceTransparency,
+    colors: colors,
+    layout: layout,
+    in: context
+  )
+}
 #endif

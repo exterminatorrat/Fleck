@@ -2,21 +2,33 @@ import Foundation
 
 struct FoundationModelCleanupGenerator: BoundedCleanupGenerating {
   private let generate:
-    @Sendable (IncrementalCleanupRequest, Int) async throws -> String
+    @Sendable (IncrementalCleanupRequest, Int) async throws -> GeneratedCleanupCandidate
 
   init(dictation: FoundationModelDictation) {
     generate = { request, maximumOutputTokens in
-      await dictation.cleanupResult(
+      let result = await dictation.cleanupResult(
         request.baseline,
         maximumOutputTokens: maximumOutputTokens
-      ).text
+      )
+      if result.outcome == .usedRaw,
+         result.cleanupFallbackProvenance == nil,
+         result.cleanupServiceUnavailableReason == nil {
+        throw CancellationError()
+      }
+      return .init(
+        cleaned: result.text,
+        cleanupFallbackProvenance: result.cleanupFallbackProvenance,
+        cleanupServiceUnavailableReason: result.cleanupServiceUnavailableReason
+      )
     }
   }
 
   init(
     generate: @escaping @Sendable (IncrementalCleanupRequest, Int) async throws -> String
   ) {
-    self.generate = generate
+    self.generate = { request, maximumOutputTokens in
+      .init(cleaned: try await generate(request, maximumOutputTokens))
+    }
   }
 
   func start(
@@ -35,7 +47,7 @@ private final class FoundationModelCleanupSession: CleanupGenerationSession, @un
   private let request: IncrementalCleanupRequest
   private let maximumOutputTokens: Int
   private let responder:
-    @Sendable (IncrementalCleanupRequest, Int) async throws -> String
+    @Sendable (IncrementalCleanupRequest, Int) async throws -> GeneratedCleanupCandidate
   private let gate: FoundationModelPublicationGate
   private let lock = NSLock()
   private var generationTask: Task<Void, Never>?
@@ -44,7 +56,8 @@ private final class FoundationModelCleanupSession: CleanupGenerationSession, @un
   init(
     request: IncrementalCleanupRequest,
     maximumOutputTokens: Int,
-    responder: @escaping @Sendable (IncrementalCleanupRequest, Int) async throws -> String
+    responder: @escaping @Sendable (IncrementalCleanupRequest, Int) async throws
+      -> GeneratedCleanupCandidate
   ) {
     self.request = request
     self.maximumOutputTokens = maximumOutputTokens
@@ -93,8 +106,8 @@ private final class FoundationModelCleanupSession: CleanupGenerationSession, @un
     let gate = self.gate
     generationTask = Task {
       do {
-        let text = try await responder(request, maximumOutputTokens)
-        _ = gate.publish(.init(cleaned: text))
+        let candidate = try await responder(request, maximumOutputTokens)
+        _ = gate.publish(candidate)
       } catch is CancellationError {
         gate.close(.requestCancelled)
       } catch {

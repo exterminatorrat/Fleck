@@ -9,11 +9,56 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Consolidate the stacked foundation pull requests (#68–#73, #75–#77, #93, and the #95 tab-overflow test fix) into one branch on current `main` with its CI scheduling, and record the held Sparkle release work in `docs/held-features.md`.
 
+## [1.7.11-beta.1] - 2026-11-05
+
+### Changed
+
+- Preserve this feature layer and both complete parent histories while integrating the current PR83 ancestry; production and fixture bytes are unchanged.
+
+## [1.7.10-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconciled the retained capsule recovery feature branch with the current published PR83 parent.
+  This source-only refresh is pending current-head CI.
+
+## [1.7.9-beta.1] - 2026-11-04
+
+### Fixed
+
+- Synchronize the Gemma termination fixture with helper event-stream attachment
+  before checking the synchronous force count.
+
+## [1.7.8-beta.1] - 2026-11-04
+
+### Fixed
+
+- Configure ambiguous routing explicitly in the terminal replay and saved-capture destination fixtures.
+
+## [1.7.7-beta.1] - 2026-11-02
+
+### Fixed
+
+- Advance the injected terminal-animation clock and await its real callback before
+  checking sampler quiescence, retaining native terminal and no-speech assertions.
+
 ## [1.7.6-beta.1] - 2026-11-05
 
 ### Fixed
 
 - Preserve the retained Apple speech diagnostics feature while integrating the current PR77 parent and its complete ordered history.
+
+## [1.7.6-beta.1] - 2026-11-05
+
+### Fixed
+
+- Preserve the R4B cleanup failure provenance feature while integrating the current PR77 parent and its complete ordered history.
+
+## [1.7.6-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
 
 ## [1.7.5-beta.1] - 2026-11-05
 
@@ -22,11 +67,30 @@ public release log. Packaging unchanged source does not add a changelog entry.
 - Reconciled the retained Apple Speech diagnostics feature with the current reviewed PR77 parent.
   This source-only refresh is pending current-head CI.
 
+## [1.7.5-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconciled retained R4B cleanup-failure provenance with the current reviewed PR77 parent.
+  This source-only refresh is pending current-head CI.
+
+## [1.7.5-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
+
 ## [1.7.4-beta.1] - 2026-11-02
 
 ### Fixed
 
 - Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
+## [1.7.4-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native slider input coverage and current parent repairs without dropping this feature layer.
 
 ## [1.7.3-beta.1] - 2026-11-02
 
@@ -39,6 +103,12 @@ public release log. Packaging unchanged source does not add a changelog entry.
 ### Fixed
 
 - Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
+
+## [1.7.3-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this descendant feature layer while integrating the verified current parent repairs.
 
 ## [1.7.2-beta.1] - 2026-11-02
 
@@ -52,6 +122,13 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Preserve native slider input coverage and current parent repairs without dropping this feature layer.
 
+## [1.7.2-beta.1] - 2026-11-02
+
+### Fixed
+
+- Keep capsule recovery mouse releases bound to the pressed recovery generation,
+  rejecting replacement actions instead of activating them after a state change.
+
 ## [1.7.1-beta.1] - 2026-11-02
 
 ### Fixed
@@ -64,6 +141,20 @@ public release log. Packaging unchanged source does not add a changelog entry.
 ### Fixed
 
 - Preserve this feature layer while integrating verified parent title, accessibility, and native-fixture repairs.
+
+## [1.7.1-beta.1] - 2026-10-29
+
+### Fixed
+
+- Add native destination chooser actions to the dictation capsule menu, rejecting
+  stale items after a newer presentation, capture replacement, or choice change.
+- Align capsule accessibility fixtures with recovery routing, wait for matching live-pill
+  render receipts, and register runtime waiters before opening load gates.
+- Retain the controller's routing chooser only when its capture and context are
+  still displayable.
+
+Source-only validation. Tests, compilation, native/visual/accessibility validation,
+hosted CI, and packaging were not run.
 
 ## [1.7.0-beta.1] - 2026-10-28
 
@@ -86,6 +177,36 @@ process tests and native behavior remain unverified locally.
 
 Source-only capture/diagnostics constituent of the retained-feature 1.7 release cohort.
 Local compilation, tests and native capture behavior remain unrun; hosted verification is pending.
+
+## [1.7.0-beta.1] - 2026-10-27
+
+### Fixed
+
+- Keep raw fallback outcomes honest across cleanup service failure, OS/backend
+  unavailability, deadlines and cancellation while preserving dictionary-protected forms.
+- Carry insertion-versus-persistence failure provenance through dictation contexts
+  without changing receipt-backed recovery or successful-save standby.
+- Present session-bound dictation error recovery with guarded retry, copy and Settings
+  actions, and actual model-repair activity that does not interrupt an active capture.
+- Preserve bottom-only live-pill placement, direct saved-result standby, accessibility,
+  reduced motion and monotonic waveform behavior with retained synthetic regressions.
+
+Part of the shared retained-feature 1.7.0 cohort, not a separate release.
+Source-only preparation. Local compilation, tests, native/visual/accessibility behavior
+and packaging remain unverified; hosted verification is pending.
+
+## [1.7.0-beta.1] - 2026-10-27
+
+### Fixed
+
+- Keep raw fallback outcomes honest across cleanup service failure, OS/backend
+  unavailability, deadlines and cancellation while preserving dictionary-protected forms.
+- Carry insertion-versus-persistence failure provenance through dictation contexts
+  without changing receipt-backed recovery or successful-save standby.
+
+Part of the shared retained-feature 1.7.0 cohort, not a separate release.
+Source-only preparation. Local compilation, tests, native/visual/accessibility behavior
+and packaging remain unverified; hosted verification is pending.
 
 ## [1.5.26-beta.1] - 2026-11-05
 
@@ -314,6 +435,16 @@ and native behavior remain unverified; hosted verification is pending.
 Source-only repair checkpoint. Compilation, tests and native/visual/accessibility validation
 remain unrun for this change; hosted CI has not run for this checkpoint. Readiness focus
 ownership remains unresolved.
+
+## [1.5.9-beta.1] - 2026-10-27
+
+### Fixed
+
+- Inherit the explicit interface-font correction while preserving theme/hover surfaces,
+  bottom-only live-pill standby and the reviewed dictation regression guards.
+
+Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
+and native behavior remain unverified; hosted verification is pending.
 
 ## [1.5.8-beta.1] - 2026-11-02
 

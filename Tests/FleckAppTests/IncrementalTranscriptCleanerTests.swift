@@ -18,7 +18,7 @@ import Testing
 
   let decision = try await cleaner.clean(request)
 
-  #expect(decision == .baseline(reason: .validationRejected))
+  #expect(decision == .serviceFallback)
   #expect(generator.startCount == 1)
   #expect(generator.resultCount == 1)
 }
@@ -204,6 +204,61 @@ import Testing
   )
 }
 
+@Test func cleanerCarriesOnlyExplicitFallbackMetadataForTheExactValidatedBaseline() async throws {
+  let raw = "Send the report."
+  let session = CleanupGenerationSessionProbe(
+    result: .success(.init(
+      cleaned: raw,
+      cleanupFallbackProvenance: .serviceFallback
+    ))
+  )
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: CleanupGeneratorProbe(session: session),
+    clock: TestCleanupClock.immediate
+  )
+
+  let decision = try await cleaner.clean(request(raw))
+
+  #expect(decision == .serviceFallback)
+}
+
+@Test func cleanerDropsFallbackMetadataWhenValidationSelectsFormattedText() async throws {
+  let baseline = "send the report"
+  let session = CleanupGenerationSessionProbe(
+    result: .success(.init(
+      cleaned: "send the report.",
+      cleanupFallbackProvenance: .serviceFallback
+    ))
+  )
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: CleanupGeneratorProbe(session: session),
+    clock: TestCleanupClock.immediate
+  )
+
+  let decision = try await cleaner.clean(request(baseline))
+
+  #expect(decision == .accepted("send the report."))
+}
+
+@Test(arguments: [CleanupServiceUnavailableReason.operatingSystem, .backend])
+func cleanerKeepsValidatedUnchangedUnavailableFallbackRaw(
+  reason: CleanupServiceUnavailableReason
+) async throws {
+  let raw = "Send the report."
+  let session = CleanupGenerationSessionProbe(
+    result: .success(.init(cleaned: raw, cleanupServiceUnavailableReason: reason))
+  )
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: CleanupGeneratorProbe(session: session),
+    clock: TestCleanupClock.immediate
+  )
+
+  let decision = try await cleaner.clean(request(raw))
+
+  #expect(decision == .baseline(reason: .backendUnavailable))
+  #expect(session.resultCount == 1)
+}
+
 @Test func cleanerReturnsBaselineForAnInputOverTheTargetBound() async throws {
   let generator = CleanupGeneratorProbe(result: "unused")
   let cleaner = IncrementalTranscriptCleaner(
@@ -313,7 +368,7 @@ import Testing
 
   let decision = try await cleaner.clean(request("send the report"))
 
-  #expect(decision == .baseline(reason: .generationFailed))
+  #expect(decision == .serviceFallback)
   #expect(generator.startCount == 1)
   #expect(session.resultCount == 1)
 }
@@ -327,7 +382,7 @@ import Testing
 
   let decision = try await cleaner.clean(request("send the report"))
 
-  #expect(decision == .baseline(reason: .malformedOutput))
+  #expect(decision == .serviceFallback)
 }
 
 @Test func generatedOutputOverTheBoundReturnsTheExactBaseline() async throws {
@@ -341,7 +396,7 @@ import Testing
 
   let decision = try await cleaner.clean(request("send the report"))
 
-  #expect(decision == .baseline(reason: .outputTooLarge))
+  #expect(decision == .serviceFallback)
 }
 
 @Test func generatorStartIsSynchronousAndOnlyCapturesRequestMetadata() throws {
@@ -365,7 +420,7 @@ import Testing
   let generator = CleanupGeneratorProbe(result: "Send the report.")
   let cleaner = IncrementalTranscriptCleaner(
     generator: generator,
-    clock: TestCleanupClock.sequence([now, now, deadline])
+    clock: TestCleanupClock.sequence([now, now, now, deadline])
   )
 
   let decision = try await cleaner.clean(.init(
@@ -405,6 +460,148 @@ import Testing
   #expect(session.acknowledgementCallCount == 1)
   #expect(session.acknowledgementFinished)
   #expect(session.forceTerminateCount == 0)
+}
+
+@Test func generationFailureAfterDeadlinePreservesDeadlineFallback() async throws {
+  let now = TestCleanupClock.fixedInstant
+  let deadline = now.advanced(by: .seconds(1))
+  let sequence = InstantSequence([now, now, now, deadline])
+  let session = CleanupGenerationSessionProbe(result: .failure(.generationFailed))
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: CleanupGeneratorProbe(session: session),
+    clock: CleanupClock(
+      now: { sequence.next() },
+      sleepUntil: { _ in
+        while true {
+          try Task.checkCancellation()
+          await Task.yield()
+        }
+      },
+      sleepFor: { _ in }
+    )
+  )
+
+  let decision = try await cleaner.clean(.init(
+    baseline: "Send the report.",
+    protectedForms: [],
+    replacements: 0,
+    deadline: deadline
+  ))
+
+  #expect(decision == .baseline(reason: .deadlineExpired))
+  #expect(session.resultCount == 1)
+}
+
+@Test("Deadline after an admitted result request remains a deadline fallback after bounded drain")
+func deadlineAfterAdmittedResultRequestReturnsServiceFallbackAfterBoundedDrain() async throws {
+  let now = TestCleanupClock.fixedInstant
+  let deadline = now.advanced(by: .seconds(1))
+  let deadlineGate = CleanupDeadlineGate()
+  let session = CleanupGenerationSessionProbe(
+    result: .failure(.generationFailed),
+    waitsForCancellation: true
+  )
+  let generator = CleanupGeneratorProbe(session: session)
+  let clock = CleanupClock(
+    now: { now },
+    sleepUntil: { _ in await deadlineGate.wait() },
+    sleepFor: { _ in
+      while true {
+        try Task.checkCancellation()
+        await Task.yield()
+      }
+    }
+  )
+  let cleaner = IncrementalTranscriptCleaner(generator: generator, clock: clock)
+  let cleaning = Task {
+    try await cleaner.clean(.init(
+      baseline: "Send the report.",
+      protectedForms: [],
+      replacements: 0,
+      deadline: deadline
+    ))
+  }
+
+  let resultRequestStarted = await session.waitUntilStarted(timeout: .seconds(1))
+  await deadlineGate.open()
+  let decision = try await cleaning.value
+
+  #expect(resultRequestStarted)
+  #expect(decision == .baseline(reason: .deadlineExpired))
+  #expect(session.resultCount == 1)
+  #expect(session.requestCancellationCount == 1)
+  #expect(session.acknowledgementFinished)
+  #expect(session.forceTerminateCount == 0)
+}
+
+@Test func deadlineDrainPreservesKnownUnavailableCandidateEvidence() async throws {
+  let now = TestCleanupClock.fixedInstant
+  let deadline = now.advanced(by: .seconds(1))
+  let deadlineGate = CleanupDeadlineGate()
+  let session = CleanupGenerationSessionProbe(
+    result: .success(.init(
+      cleaned: "send 1/0",
+      cleanupServiceUnavailableReason: .backend
+    )),
+    waitsForCancellation: true,
+    lateCandidateOnCancellation: true,
+    acknowledgesLateCandidate: true
+  )
+  let generator = CleanupGeneratorProbe(session: session)
+  let clock = CleanupClock(
+    now: { now },
+    sleepUntil: { _ in await deadlineGate.wait() },
+    sleepFor: { _ in
+      while true {
+        try Task.checkCancellation()
+        await Task.yield()
+      }
+    }
+  )
+  let cleaner = IncrementalTranscriptCleaner(generator: generator, clock: clock)
+  let cleaning = Task {
+    try await cleaner.clean(.init(
+      baseline: "send 1/0",
+      protectedForms: [],
+      replacements: 0,
+      deadline: deadline
+    ))
+  }
+
+  let resultRequestStarted = await session.waitUntilStarted(timeout: .seconds(1))
+  await deadlineGate.open()
+  let decision = try await cleaning.value
+
+  #expect(resultRequestStarted)
+  #expect(decision == .baseline(reason: .deadlineExpired))
+  #expect(session.requestCancellationCount == 1)
+  #expect(session.lateCandidateWasIgnored)
+  #expect(session.resultFinished)
+  #expect(session.acknowledgementFinished)
+  #expect(session.forceTerminateCount == 0)
+}
+
+@Test func callerCancellationBeforeCleanupAdmissionNeverStartsGenerator() async {
+  let startGate = CleanupDeadlineGate()
+  let session = CleanupGenerationSessionProbe(
+    result: .success(.init(cleaned: "Send the report."))
+  )
+  let generator = CleanupGeneratorProbe(session: session)
+  let cleaner = IncrementalTranscriptCleaner(
+    generator: generator,
+    clock: TestCleanupClock.immediate
+  )
+  let cleaning = Task {
+    await startGate.wait()
+    return try await cleaner.clean(request("Send the report."))
+  }
+
+  cleaning.cancel()
+  await startGate.open()
+  await #expect(throws: CancellationError.self) { try await cleaning.value }
+
+  #expect(generator.startCount == 0)
+  #expect(session.resultCount == 0)
 }
 
 @Test func deadlineExpiryUsesTheValidatedDeterministicFillerFallback() async throws {
@@ -566,7 +763,7 @@ import Testing
       replacements: 0,
       deadline: ContinuousClock().now.advanced(by: .seconds(1))
     ))
-    #expect(decision == .baseline(reason: .validationRejected))
+    #expect(decision == .serviceFallback)
     #expect(generator.startCount == 1)
     #expect(generator.resultCount == 1)
   }
@@ -590,7 +787,7 @@ import Testing
     clock: TestCleanupClock.immediate
   )
   let decision = try await cleaner.clean(request(baseline))
-  #expect(decision == .baseline(reason: .validationRejected))
+  #expect(decision == .serviceFallback)
   #expect(generator.startCount == 1)
   #expect(generator.resultCount == 1)
 }
@@ -674,6 +871,28 @@ private enum TestCleanupClock {
   }
 }
 
+private actor CleanupDeadlineGate {
+  private var isOpen = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  func wait() async {
+    await withCheckedContinuation { continuation in
+      guard !isOpen else {
+        continuation.resume()
+        return
+      }
+      waiters.append(continuation)
+    }
+  }
+
+  func open() {
+    isOpen = true
+    let waiters = self.waiters
+    self.waiters = []
+    waiters.forEach { $0.resume() }
+  }
+}
+
 private final class CleanupGeneratorProbe: BoundedCleanupGenerating, @unchecked Sendable {
   private let lock = NSLock()
   private let session: CleanupGenerationSessionProbe
@@ -739,6 +958,10 @@ private final class CleanupGeneratorProbe: BoundedCleanupGenerating, @unchecked 
   func waitUntilStarted() async {
     await session.waitUntilStarted()
   }
+
+  func waitUntilStarted(timeout: Duration) async -> Bool {
+    await session.waitUntilStarted(timeout: timeout)
+  }
 }
 
 private final class CleanupGenerationSessionProbe: CleanupGenerationSession, @unchecked Sendable {
@@ -752,6 +975,7 @@ private final class CleanupGenerationSessionProbe: CleanupGenerationSession, @un
   private let waitsForCancellation: Bool
   private let ignoresCancellation: Bool
   private let lateCandidateOnCancellation: Bool
+  private let acknowledgesLateCandidate: Bool
   private let acknowledgementGate: (@Sendable () async -> Void)?
   private var resultCountStorage = 0
   private var resultOutcomeStorage: Outcome?
@@ -771,6 +995,7 @@ private final class CleanupGenerationSessionProbe: CleanupGenerationSession, @un
     waitsForCancellation: Bool = false,
     ignoresCancellation: Bool = false,
     lateCandidateOnCancellation: Bool = false,
+    acknowledgesLateCandidate: Bool = false,
     acknowledgementGate: (@Sendable () async -> Void)? = nil
   ) {
     switch result {
@@ -782,6 +1007,7 @@ private final class CleanupGenerationSessionProbe: CleanupGenerationSession, @un
     self.waitsForCancellation = waitsForCancellation
     self.ignoresCancellation = ignoresCancellation
     self.lateCandidateOnCancellation = lateCandidateOnCancellation
+    self.acknowledgesLateCandidate = acknowledgesLateCandidate
     self.acknowledgementGate = acknowledgementGate
     self.resultOutcomeStorage = waitsForCancellation || ignoresCancellation ? nil : initialOutcome
   }
@@ -824,6 +1050,9 @@ private final class CleanupGenerationSessionProbe: CleanupGenerationSession, @un
           if case .success(let candidate) = initialOutcome {
             resultOutcomeStorage = .success(candidate)
           }
+          if acknowledgesLateCandidate {
+            acknowledgementSignaledStorage = true
+          }
         } else {
           resultOutcomeStorage = .failure(.requestCancelled)
           acknowledgementSignaledStorage = true
@@ -850,6 +1079,15 @@ private final class CleanupGenerationSessionProbe: CleanupGenerationSession, @un
     while !lock.testWithLock({ startedStorage }) {
       await Task.yield()
     }
+  }
+
+  func waitUntilStarted(timeout: Duration) async -> Bool {
+    let deadline = ContinuousClock().now.advanced(by: timeout)
+    while ContinuousClock().now < deadline {
+      if lock.testWithLock({ startedStorage }) { return true }
+      try? await Task.sleep(for: .milliseconds(5))
+    }
+    return lock.testWithLock { startedStorage }
   }
 
   var resultCount: Int {

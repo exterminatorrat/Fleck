@@ -618,12 +618,17 @@ struct DictationRuntimeMeasurements: Equatable, Sendable {
   }
 }
 
+enum DictationCleanupFallbackProvenance: Equatable, Sendable {
+  case serviceFallback
+}
+
 struct DictationProcessingResult: Equatable, Sendable {
   let rawTranscript: String
   let dictionaryBaseline: String?
   let cleanedTranscript: String?
   let insertedText: String
   let cleanupOutcome: DictationCleanupOutcome
+  let cleanupFallbackProvenance: DictationCleanupFallbackProvenance?
   let measurements: DictationRuntimeMeasurements
   let captureContext: LocalWritingCaptureContext?
   let recognitionContextAcknowledgement: DictationRecognitionContextAcknowledgement?
@@ -639,6 +644,7 @@ struct DictationProcessingResult: Equatable, Sendable {
     cleanedTranscript: String?,
     insertedText: String,
     cleanupOutcome: DictationCleanupOutcome,
+    cleanupFallbackProvenance: DictationCleanupFallbackProvenance? = nil,
     measurements: DictationRuntimeMeasurements,
     captureContext: LocalWritingCaptureContext? = nil,
     recognitionContextAcknowledgement: DictationRecognitionContextAcknowledgement? = nil,
@@ -650,6 +656,7 @@ struct DictationProcessingResult: Equatable, Sendable {
     self.cleanedTranscript = cleanedTranscript
     self.insertedText = insertedText
     self.cleanupOutcome = cleanupOutcome
+    self.cleanupFallbackProvenance = cleanupFallbackProvenance
     self.measurements = measurements
     self.captureContext = captureContext
     self.recognitionContextAcknowledgement = recognitionContextAcknowledgement
