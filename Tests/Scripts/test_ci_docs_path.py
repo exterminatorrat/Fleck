@@ -509,6 +509,21 @@ class CIDocsPathTests(unittest.TestCase):
         self.assertIn("test \"$DETECTED_COMMIT\" = \"$GITHUB_SHA\"", aggregate)
         self.assertIn("python3 -B -m unittest discover -s Tests/Scripts -p test_ci_docs_path.py", build)
 
+    def test_workflow_schedules_full_ci_once_per_main_bound_head(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("  pull_request:\n    branches: [main]\n", workflow)
+        self.assertIn(
+            "concurrency:\n"
+            "  group: ci-${{ github.event.pull_request.number || github.ref }}\n"
+            "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n",
+            workflow,
+        )
+        validation = job_block(workflow, "macos-validation")
+        self.assertIn("    needs: detect-changes\n", validation)
+        self.assertNotIn("needs.macos-build", validation)
+        for key in ("source_commit", "source_tree", "product_version"):
+            self.assertIn(f"needs.detect-changes.outputs.{key}", validation)
+
 
 if __name__ == "__main__":
     unittest.main()
