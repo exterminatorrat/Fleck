@@ -302,8 +302,10 @@ func WorkspaceSearchHostingKeepsCompactSurfaceInsideMinimumWidth() async throws 
   #expect(dismissPoint.x >= host.bounds.maxX - 40)
   #expect(dismissPoint.x <= host.bounds.maxX - 10)
   clickWorkspaceSearchControl(host.convert(dismissPoint, to: nil), in: window)
-  await settleWorkspaceSearchHost(host)
-  #expect(!searchController.isPresented)
+  let dismissed = try await waitForWorkspaceSearchHostState(host) {
+    !searchController.isPresented
+  }
+  #expect(dismissed, "Timed out waiting for the compact search close control to dismiss search")
 
   window.contentView = nil
   window.orderOut(nil)

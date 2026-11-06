@@ -15,6 +15,10 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Integration build of the consolidated foundation, editor, dictation, MCP and status/update branches for full CI.
 
+### Fixed
+
+- Wait for the compact workspace search close control to finish dismissing search before asserting it, instead of a fixed number of run-loop yields.
+
 ## [1.7.22-beta.1] - 2026-11-06
 
 ### Changed
