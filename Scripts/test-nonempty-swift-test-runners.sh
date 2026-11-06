@@ -2379,7 +2379,8 @@ for job_id, block, required_values in (
     (
         "macos", aggregate,
         (
-            "name: macOS build and tests", "if: ${{ always() }}",
+            "name: macOS build and tests",
+            "if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.ordinary_test_diagnostic_selector == '') }}",
             "needs: [detect-changes, docs-validation, macos-build, macos-validation, macos-enhanced]",
             "runs-on: ubuntu-latest",
         ),
@@ -2477,7 +2478,7 @@ for name in (ordinary_name, candidate_name):
         + normalized_workflow[end:]
     )
 if hashlib.sha256(normalized_workflow.encode()).hexdigest() != (
-    "3c9ab8a257bf068d2b7dfc454c47784e3013423bb3325d1beeba6f61bd428a02"
+    "5bf74720b849c538571fd574d000942207567526bc02c3922496334aafb7fa1c"
 ):
     raise SystemExit("CI changed outside the declared split and native-capture boundary fixture")
 
