@@ -145,6 +145,14 @@
     private var focusRestoreTask: Task<Void, Never>?
     private var hasActivatedCurrentPresentation = false
 
+#if DEBUG
+    var searchDeliveryExperimentObserver: ((String) -> Void)?
+
+    func recordSearchDeliveryExperimentEvent(_ event: String) {
+      searchDeliveryExperimentObserver?(event)
+    }
+#endif
+
     init(
       searchOperation: @escaping SearchOperation = { query, notes, limit in
         await WorkspaceSearchEngine().search(query: query, in: notes, limit: limit)
@@ -704,6 +712,9 @@
               }
 
             Button {
+#if DEBUG
+              controller.recordSearchDeliveryExperimentEvent("close-button-action")
+#endif
               onDismiss()
             } label: {
               Image(systemName: "xmark")

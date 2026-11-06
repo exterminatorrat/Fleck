@@ -1505,12 +1505,29 @@
           .fleckPopoverTheme(theme)
         }
         Button {
+#if DEBUG
+          searchController.recordSearchDeliveryExperimentEvent("button-action")
+#endif
           let pointerActivation = searchPointerActivationPending
           searchPointerActivationPending = false
           guard !pointerActivation else { return }
+#if DEBUG
+          searchController.recordSearchDeliveryExperimentEvent("keyboard-fallback-scheduled")
+#endif
           Task { @MainActor in
+#if DEBUG
+            searchController.recordSearchDeliveryExperimentEvent("keyboard-fallback-entry")
+#endif
             await Task.yield()
-            guard !searchController.isPresented else { return }
+            guard !searchController.isPresented else {
+#if DEBUG
+              searchController.recordSearchDeliveryExperimentEvent("keyboard-fallback-skipped")
+#endif
+              return
+            }
+#if DEBUG
+            searchController.recordSearchDeliveryExperimentEvent("keyboard-fallback-execution")
+#endif
             presentWorkspaceSearch(activation: .keyboard)
           }
         } label: {
@@ -1524,6 +1541,9 @@
         .help("Search notes (⌘F)")
         .simultaneousGesture(
           TapGesture().onEnded {
+#if DEBUG
+            searchController.recordSearchDeliveryExperimentEvent("pointer-tap-ended")
+#endif
             guard !noteLinkPickerController.isPresented else { return }
             searchPointerActivationPending = true
             presentWorkspaceSearch(activation: .pointer)

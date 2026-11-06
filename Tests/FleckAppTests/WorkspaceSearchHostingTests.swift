@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 import FleckCore
 import SwiftUI
@@ -255,69 +256,7 @@ func WorkspaceSearchHostingUsesACompactTrailingSurfaceAt640Points() async throws
 
 @Test @MainActor
 func WorkspaceSearchHostingKeepsCompactSurfaceInsideMinimumWidth() async throws {
-  let root = FileManager.default.temporaryDirectory
-    .appendingPathComponent("workspace-search-compact-380-" + UUID().uuidString, isDirectory: true)
-  defer { try? FileManager.default.removeItem(at: root) }
-
-  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _ in })
-  await state.waitUntilInitialLoad()
-  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
-  let searchController = WorkspaceSearchController()
-  let host = NSHostingView(
-    rootView: NotesPanel(
-      dictationRuntime: runtime,
-      sizing: .container,
-      searchController: searchController
-    )
-    .environmentObject(state)
-  )
-  let window = NSWindow(
-    contentRect: NSRect(x: 137, y: 211, width: 380, height: 430),
-    styleMask: [.titled],
-    backing: .buffered,
-    defer: false
-  )
-  window.contentView = host
-  window.makeKeyAndOrderFront(nil)
-  await settleWorkspaceSearchHost(host)
-
-  searchController.present(presentation: .inline)
-  await settleWorkspaceSearchHost(host)
-  let queryField = try #require(
-    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
-      .first { $0.placeholderString == "Search notes" }
-  )
-  let queryFrame = queryField.convert(queryField.bounds, to: host)
-
-  #expect(queryFrame.width <= 320)
-  #expect(queryFrame.minX >= 10)
-  #expect(queryFrame.maxX <= host.bounds.maxX - 10)
-
-  let hStackSpacing: CGFloat = 8
-  let closeGlyphWidth: CGFloat = 15
-  let dismissPoint = NSPoint(
-    x: queryFrame.maxX + hStackSpacing + closeGlyphWidth / 2,
-    y: queryFrame.midY
-  )
-  #expect(dismissPoint.x >= host.bounds.maxX - 40)
-  #expect(dismissPoint.x <= host.bounds.maxX - 10)
-  try clickWorkspaceSearchControl(host.convert(dismissPoint, to: nil), in: window)
-  let dismissed = try await waitForWorkspaceSearchHostState(host) {
-    !searchController.isPresented
-  }
-  if !dismissed {
-    printCompactSearchDismissDiagnostic(
-      host: host,
-      window: window,
-      queryFrame: queryFrame,
-      dismissPoint: dismissPoint
-    )
-  }
-  #expect(dismissed, "Timed out waiting for the compact search close control to dismiss search")
-
-  window.contentView = nil
-  window.orderOut(nil)
-  await runtime.shutdown()
+  _ = try await runWorkspaceSearchCompactCloseFixture()
 }
 
 @Test
@@ -346,72 +285,96 @@ func WorkspaceSearchDismissalsUseNotesPanelAnimationContract() throws {
 
 @Test @MainActor
 func WorkspaceSearchHostingPointerDismissRestoresEditorFocus() async throws {
-  let root = FileManager.default.temporaryDirectory
-    .appendingPathComponent("workspace-search-pointer-focus-" + UUID().uuidString, isDirectory: true)
-  defer { try? FileManager.default.removeItem(at: root) }
+  _ = try await runWorkspaceSearchPointerOpenFixture(includeDismissalChecks: true)
+}
 
-  let note = Note(title: "Focus title", body: "Keep this body")
-  let state = AppState(
-    store: LocalStore(rootURL: root),
-    saveOperation: { _, _, _, _ in .committed }
-  )
-  await state.waitUntilInitialLoad()
-  state.workspace = Workspace(notes: [note], selectedNoteID: note.id)
-
-  let commands = EditorCommands()
-  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
-  let searchController = WorkspaceSearchController()
-  let host = NSHostingView(
-    rootView: NotesPanel(
-      dictationRuntime: runtime,
-      sizing: .container,
-      editorCommands: commands,
-      searchController: searchController
-    )
-    .environmentObject(state)
-    .environment(\._accessibilityReduceMotion, false)
-  )
-  let window = NSWindow(
-    contentRect: NSRect(x: 137, y: 211, width: 640, height: 430),
-    styleMask: [.titled],
-    backing: .buffered,
-    defer: false
-  )
-  window.contentView = host
-  window.makeKeyAndOrderFront(nil)
-  await settleWorkspaceSearchHost(host)
-
-  let editor = try #require(
-    hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
-      .first { $0.string == note.body }
-  )
-  #expect(window.makeFirstResponder(editor))
-  let bodySelection = NSRange(location: 2, length: 4)
-  editor.setSelectedRange(bodySelection)
-
-  let searchButton = try #require(workspaceSearchTrigger(in: host))
-  try clickWorkspaceSearchControl(searchButton, in: window)
-  await settleWorkspaceSearchHost(host)
-
-  #expect(searchController.isPresented)
-  #expect(searchController.presentationKind == .inline)
-  guard searchController.isPresented, searchController.presentationKind == .inline else {
-    window.contentView = nil
-    window.orderOut(nil)
-    await runtime.shutdown()
-    return
+@Test("Workspace search paired input delivery experiment [anchor: paired-search-delivery]")
+@MainActor
+func WorkspaceSearchHostingPairedInputDeliveryExperimentAnchor() async throws {
+  let originalPointer = CGEvent(source: nil)?.location
+  defer {
+    if let originalPointer {
+      _ = CGWarpMouseCursorPosition(originalPointer)
+    }
   }
-  sendWorkspaceSearchEscape(to: window)
-  await settleWorkspaceSearchHost(host)
 
-  #expect(!searchController.isPresented)
-  #expect(commands.textView === editor)
-  #expect(editor.selectedRange() == bodySelection)
-  #expect(window.firstResponder === editor)
+  let cgEventControl = CGPreflightPostEventAccess()
+    ? "available-not-used"
+    : "unavailable-access"
+  print("WORKSPACE_SEARCH_DELIVERY_EXPERIMENT cgEventControl=\(cgEventControl)")
 
-  window.contentView = nil
-  window.orderOut(nil)
-  await runtime.shutdown()
+  var ordinal = 0
+  for round in 0..<4 {
+    for scenario in WorkspaceSearchDeliveryScenario.allCases {
+      for pointer in WorkspaceSearchDeliveryPointerCondition.allCases {
+        let paths = round.isMultiple(of: 2)
+          ? WorkspaceSearchDeliveryPath.allCases
+          : Array(WorkspaceSearchDeliveryPath.allCases.reversed())
+        for path in paths {
+          ordinal += 1
+          let trial = WorkspaceSearchDeliveryTrial(
+            scenario: scenario,
+            path: path,
+            pointer: pointer,
+            round: round + 1,
+            ordinal: ordinal
+          )
+          WorkspaceSearchDeliveryExperiment.current = trial
+          var result: WorkspaceSearchFixtureResult?
+          do {
+            switch scenario {
+            case .compactClose:
+              result = try await runWorkspaceSearchCompactCloseFixture()
+            case .pointerOpen:
+              result = try await runWorkspaceSearchPointerOpenFixture(
+                includeDismissalChecks: false
+              )
+            }
+          } catch {
+            trial.setOutcome("fixture-error")
+          }
+          trial.finish()
+          WorkspaceSearchDeliveryExperiment.current = nil
+
+          let presentation = result?.presentationKind.experimentLabel ?? "none"
+          let behavior: String
+          switch scenario {
+          case .compactClose:
+            behavior = "dismissed=\(result?.dismissed ?? false)"
+          case .pointerOpen:
+            behavior = "presented=\(result?.isPresented ?? false) presentation=\(presentation)"
+          }
+          let witness = trial.pointerWitness?.summary ?? "unavailable"
+          let events = trial.eventPairSummary ?? "unavailable"
+          let routes = trial.routes.isEmpty ? "none" : trial.routes.joined(separator: ",")
+          let callbacks = trial.callbacks.isEmpty ? "none" : trial.callbacks.joined(separator: ",")
+          let outcome = trial.outcome ?? behavior
+          print(
+            "WORKSPACE_SEARCH_DELIVERY_EXPERIMENT round=\(trial.round) "
+              + "scenario=\(scenario.rawValue) path=\(path.rawValue) "
+              + "pointer=\(pointer.rawValue) witness={\(witness)} "
+              + "events={\(events)} routes={\(routes)} "
+              + "callbacks={\(callbacks)} completionWait=\(trial.completionWaitCompleted) "
+              + "\(behavior) outcome=\(outcome)"
+          )
+
+          #expect(result != nil, "Search delivery fixture did not complete")
+          #expect(trial.pointerWitness?.matches == true, "Global pointer witness did not match the requested condition")
+          #expect(trial.completionWaitCompleted, "Timed out waiting for the fixture's required delivery and behavior")
+          #expect(trial.receivedOwnedMouseUp, "Timed out waiting for the owned mouse-up delivery witness")
+          switch scenario {
+          case .compactClose:
+            #expect(result?.dismissed == true, "Compact search close did not dismiss search")
+          case .pointerOpen:
+            #expect(
+              result?.isPresented == true && result?.presentationKind == .inline,
+              "Pointer-open fixture did not present inline"
+            )
+          }
+        }
+      }
+    }
+  }
 }
 
 @Test @MainActor
@@ -1594,6 +1557,752 @@ func WorkspaceSearchHostingDismissPreservesFocusScopeWorkspaceAndSaveGeneration(
 }
 
 @MainActor
+private func runWorkspaceSearchCompactCloseFixture() async throws
+  -> WorkspaceSearchFixtureResult
+{
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-compact-380-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _ in })
+  await state.waitUntilInitialLoad()
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let trial = WorkspaceSearchDeliveryExperiment.current
+#if DEBUG
+  if let trial {
+    searchController.searchDeliveryExperimentObserver = {
+      trial.recordCallback($0)
+    }
+  }
+#endif
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = workspaceSearchFixtureWindow(
+    contentRect: NSRect(x: 137, y: 211, width: 380, height: 430)
+  )
+
+  do {
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+    await settleWorkspaceSearchHost(host)
+
+    searchController.present(presentation: .inline)
+    await settleWorkspaceSearchHost(host)
+    let queryField = try #require(
+      hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+        .first { $0.placeholderString == "Search notes" }
+    )
+    let queryFrame = queryField.convert(queryField.bounds, to: host)
+
+    #expect(queryFrame.width <= 320)
+    #expect(queryFrame.minX >= 10)
+    #expect(queryFrame.maxX <= host.bounds.maxX - 10)
+
+    let hStackSpacing: CGFloat = 8
+    let closeGlyphWidth: CGFloat = 15
+    let dismissPoint = NSPoint(
+      x: queryFrame.maxX + hStackSpacing + closeGlyphWidth / 2,
+      y: queryFrame.midY
+    )
+    #expect(dismissPoint.x >= host.bounds.maxX - 40)
+    #expect(dismissPoint.x <= host.bounds.maxX - 10)
+    try clickWorkspaceSearchControl(host.convert(dismissPoint, to: nil), in: window)
+    let dismissed: Bool
+    if let trial {
+      let completionWait = try await waitForWorkspaceSearchHostState(host) {
+        trial.inputDeliveryComplete && !searchController.isPresented
+      }
+      trial.recordCompletionWait(completionWait)
+      dismissed = !searchController.isPresented
+    } else {
+      dismissed = try await waitForWorkspaceSearchHostState(host) {
+        !searchController.isPresented
+      }
+    }
+    if !dismissed {
+      printCompactSearchDismissDiagnostic(
+        host: host,
+        window: window,
+        queryFrame: queryFrame,
+        dismissPoint: dismissPoint
+      )
+    }
+    #expect(dismissed, "Timed out waiting for the compact search close control to dismiss search")
+
+    let result = WorkspaceSearchFixtureResult(
+      isPresented: searchController.isPresented,
+      presentationKind: searchController.presentationKind,
+      dismissed: dismissed
+    )
+    trial?.finish()
+    searchController.dismiss()
+    window.contentView = nil
+    window.orderOut(nil)
+    await runtime.shutdown()
+    return result
+  } catch {
+    trial?.finish()
+    searchController.dismiss()
+    window.contentView = nil
+    window.orderOut(nil)
+    await runtime.shutdown()
+    throw error
+  }
+}
+
+@MainActor
+private func runWorkspaceSearchPointerOpenFixture(
+  includeDismissalChecks: Bool
+) async throws -> WorkspaceSearchFixtureResult {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-pointer-focus-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let note = Note(title: "Focus title", body: "Keep this body")
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in .committed }
+  )
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(notes: [note], selectedNoteID: note.id)
+
+  let commands = EditorCommands()
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let trial = WorkspaceSearchDeliveryExperiment.current
+#if DEBUG
+  if let trial {
+    searchController.searchDeliveryExperimentObserver = {
+      trial.recordCallback($0)
+    }
+  }
+#endif
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      editorCommands: commands,
+      searchController: searchController
+    )
+    .environmentObject(state)
+    .environment(\._accessibilityReduceMotion, false)
+  )
+  let window = workspaceSearchFixtureWindow(
+    contentRect: NSRect(x: 137, y: 211, width: 640, height: 430)
+  )
+
+  do {
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+    await settleWorkspaceSearchHost(host)
+
+    let editor = try #require(
+      hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+        .first { $0.string == note.body }
+    )
+    #expect(window.makeFirstResponder(editor))
+    let bodySelection = NSRange(location: 2, length: 4)
+    editor.setSelectedRange(bodySelection)
+
+    let searchButton = try #require(workspaceSearchTrigger(in: host))
+    try clickWorkspaceSearchControl(searchButton, in: window)
+    if let trial {
+      let completionWait = try await waitForWorkspaceSearchHostState(host) {
+        trial.inputDeliveryComplete && searchController.isPresented
+      }
+      trial.recordCompletionWait(completionWait)
+    } else {
+      await settleWorkspaceSearchHost(host)
+    }
+
+    let isPresented = searchController.isPresented
+    let presentationKind = searchController.presentationKind
+    #expect(searchController.isPresented)
+    #expect(searchController.presentationKind == .inline)
+    if includeDismissalChecks && searchController.isPresented
+      && searchController.presentationKind == .inline
+    {
+      sendWorkspaceSearchEscape(to: window)
+      await settleWorkspaceSearchHost(host)
+
+      #expect(!searchController.isPresented)
+      #expect(commands.textView === editor)
+      #expect(editor.selectedRange() == bodySelection)
+      #expect(window.firstResponder === editor)
+    }
+
+    let result = WorkspaceSearchFixtureResult(
+      isPresented: isPresented,
+      presentationKind: presentationKind,
+      dismissed: includeDismissalChecks ? !searchController.isPresented : nil
+    )
+    trial?.finish()
+    searchController.dismiss()
+    window.contentView = nil
+    window.orderOut(nil)
+    await runtime.shutdown()
+    return result
+  } catch {
+    trial?.finish()
+    searchController.dismiss()
+    window.contentView = nil
+    window.orderOut(nil)
+    await runtime.shutdown()
+    throw error
+  }
+}
+
+@MainActor
+private func workspaceSearchFixtureWindow(contentRect: NSRect) -> NSWindow {
+  if WorkspaceSearchDeliveryExperiment.current != nil {
+    return WorkspaceSearchDeliveryProbeWindow(
+      contentRect: contentRect,
+      styleMask: [.titled],
+      backing: .buffered,
+      defer: false
+    )
+  }
+  return NSWindow(
+    contentRect: contentRect,
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+}
+
+private struct WorkspaceSearchFixtureResult {
+  let isPresented: Bool
+  let presentationKind: WorkspaceSearchPresentationKind
+  let dismissed: Bool?
+}
+
+private enum WorkspaceSearchDeliveryScenario: String, CaseIterable {
+  case compactClose = "compact-close"
+  case pointerOpen = "pointer-open"
+}
+
+private enum WorkspaceSearchDeliveryPath: String, CaseIterable {
+  case splitWindowDown = "A-split-up-window-down"
+  case queuedPair = "B-queued-down-up"
+}
+
+private enum WorkspaceSearchDeliveryPointerCondition: String, CaseIterable {
+  case atTarget = "pointer-at-target"
+  case outsideWindow = "pointer-outside-window"
+}
+
+private extension WorkspaceSearchPresentationKind {
+  var experimentLabel: String {
+    switch self {
+    case .inline: "inline"
+    case .crossfade: "crossfade"
+    case .instant: "instant"
+    }
+  }
+}
+
+@MainActor
+private enum WorkspaceSearchDeliveryExperiment {
+  static var current: WorkspaceSearchDeliveryTrial?
+}
+
+@MainActor
+private final class WorkspaceSearchDeliveryTrial {
+  let scenario: WorkspaceSearchDeliveryScenario
+  let path: WorkspaceSearchDeliveryPath
+  let pointer: WorkspaceSearchDeliveryPointerCondition
+  let round: Int
+  let ordinal: Int
+  private(set) var callbacks: [String] = []
+  private(set) var routes: [String] = []
+  private(set) var pointerWitness: WorkspaceSearchPointerWitness?
+  private(set) var eventPairSummary: String?
+  private(set) var outcome: String?
+  private(set) var completionWaitCompleted = false
+  private(set) var receivedOwnedMouseUp = false
+  private var keyboardFallbackPending = false
+  private var receiptObserver: WorkspaceSearchDeliveryReceiptObserver?
+  private var localMonitor: Any?
+  private weak var probeWindow: WorkspaceSearchDeliveryProbeWindow?
+  private var isFinished = false
+
+  init(
+    scenario: WorkspaceSearchDeliveryScenario,
+    path: WorkspaceSearchDeliveryPath,
+    pointer: WorkspaceSearchDeliveryPointerCondition,
+    round: Int,
+    ordinal: Int
+  ) {
+    self.scenario = scenario
+    self.path = path
+    self.pointer = pointer
+    self.round = round
+    self.ordinal = ordinal
+  }
+
+  var inputDeliveryComplete: Bool {
+    receivedOwnedMouseUp && !keyboardFallbackPending
+  }
+
+  func recordCallback(_ event: String) {
+    callbacks.append(event)
+    switch event {
+    case "keyboard-fallback-scheduled":
+      keyboardFallbackPending = true
+    case "keyboard-fallback-execution", "keyboard-fallback-skipped":
+      keyboardFallbackPending = false
+    default:
+      break
+    }
+  }
+
+  func recordRoute(_ route: String) {
+    routes.append(route)
+  }
+
+  func recordPointerWitness(_ witness: WorkspaceSearchPointerWitness) {
+    pointerWitness = witness
+  }
+
+  func recordEventPair(_ summary: String) {
+    eventPairSummary = summary
+  }
+
+  func recordMouseUpReceipt(_ route: String) {
+    routes.append("mouse-up-receipt:\(route)")
+    if route == "qualifiedTrackingReceipt" {
+      receivedOwnedMouseUp = true
+    }
+  }
+
+  func recordMouseUpWindowReturn() {
+    receivedOwnedMouseUp = true
+    routes.append("window-super-return:leftMouseUp")
+  }
+
+  func recordCompletionWait(_ completed: Bool) {
+    completionWaitCompleted = completed
+  }
+
+  func setOutcome(_ outcome: String) {
+    self.outcome = outcome
+  }
+
+  func arm(
+    _ click: WorkspaceSearchDeliveryClick,
+    in window: WorkspaceSearchDeliveryProbeWindow
+  ) throws {
+    probeWindow = window
+    let receiptObserver = WorkspaceSearchDeliveryReceiptObserver(
+      window: window,
+      generation: click.generation,
+      mouseUp: click.up
+    ) { [weak self] route in
+      self?.recordMouseUpReceipt(route)
+    }
+    self.receiptObserver = receiptObserver
+
+    guard let monitor = NSEvent.addLocalMonitorForEvents(
+      matching: [.leftMouseDown, .leftMouseUp],
+      handler: { [self, window] event in
+        MainActor.assumeIsolated {
+          if let identity = click.identity(for: event, in: window) {
+            recordRoute(
+              "app-monitor:\(identity.label):pointer=\(WorkspaceSearchDeliveryPointerCondition.label(NSEvent.mouseLocation))"
+            )
+            if identity.type == .leftMouseUp {
+              NotificationCenter.default.post(
+                name: WorkspaceSearchDeliveryProbeNotification.localMouseUpReceipt,
+                object: event,
+                userInfo: ["generation": click.generation.uuidString]
+              )
+            }
+          }
+        }
+        return event
+      }
+    ) else {
+      receiptObserver.removeObserver()
+      self.receiptObserver = nil
+      throw WorkspaceSearchDeliveryError.localMonitorUnavailable
+    }
+    localMonitor = monitor
+    window.arm(click, trial: self)
+  }
+
+  func finish() {
+    guard !isFinished else { return }
+    isFinished = true
+    if let localMonitor {
+      NSEvent.removeMonitor(localMonitor)
+      self.localMonitor = nil
+    }
+    receiptObserver?.removeObserver()
+    receiptObserver = nil
+    probeWindow?.disarm()
+    probeWindow = nil
+  }
+}
+
+private enum WorkspaceSearchDeliveryError: Error {
+  case localMonitorUnavailable
+  case probeWindowUnavailable
+}
+
+private enum WorkspaceSearchDeliveryProbeNotification {
+  static let arm = Notification.Name("org.fleck.appkit-test-host.models-click.arm")
+  static let windowEvent = Notification.Name(
+    "org.fleck.appkit-test-host.models-click.window-event"
+  )
+  static let disarm = Notification.Name("org.fleck.appkit-test-host.models-click.disarm")
+  static let localMouseUpReceipt = Notification.Name(
+    "org.fleck.appkit-test-host.models-click.local-mouse-up-receipt"
+  )
+  static let trackingMouseUpReceipt = Notification.Name(
+    "org.fleck.appkit-test-host.models-click.tracking-mouse-up-receipt"
+  )
+}
+
+@MainActor
+private struct WorkspaceSearchDeliveryEventIdentity {
+  let type: NSEvent.EventType
+  let windowNumber: Int
+  let eventNumber: Int
+  let timestamp: TimeInterval
+  let x: Double
+  let y: Double
+  let modifierFlags: NSEvent.ModifierFlags.RawValue
+  let clickCount: Int
+
+  init?(event: NSEvent, window: NSWindow) {
+    guard (event.type == .leftMouseDown || event.type == .leftMouseUp),
+      event.window === window,
+      event.windowNumber == window.windowNumber
+    else {
+      return nil
+    }
+    type = event.type
+    windowNumber = event.windowNumber
+    eventNumber = event.eventNumber
+    timestamp = event.timestamp
+    x = Double(event.locationInWindow.x)
+    y = Double(event.locationInWindow.y)
+    modifierFlags = event.modifierFlags.rawValue
+    clickCount = event.clickCount
+  }
+
+  func matches(_ other: Self) -> Bool {
+    type == other.type
+      && windowNumber == other.windowNumber
+      && eventNumber == other.eventNumber
+      && timestamp == other.timestamp
+      && x == other.x
+      && y == other.y
+      && modifierFlags == other.modifierFlags
+      && clickCount == other.clickCount
+  }
+
+  func matches(_ event: NSEvent, in window: NSWindow) -> Bool {
+    guard let identity = Self(event: event, window: window) else { return false }
+    return matches(identity)
+  }
+
+  var typeName: String {
+    type == .leftMouseDown ? "leftMouseDown" : "leftMouseUp"
+  }
+
+  var label: String {
+    "\(typeName)#\(eventNumber)"
+  }
+
+  func notificationFields(prefix: String) -> [AnyHashable: Any] {
+    [
+      "\(prefix).type": Int(type.rawValue),
+      "\(prefix).eventNumber": eventNumber,
+      "\(prefix).timestamp": timestamp,
+      "\(prefix).x": x,
+      "\(prefix).y": y,
+      "\(prefix).flags": modifierFlags,
+      "\(prefix).clickCount": clickCount,
+    ]
+  }
+}
+
+@MainActor
+private struct WorkspaceSearchDeliveryClick {
+  let generation: UUID
+  let scenario: String
+  let ordinal: Int
+  let targetKind: String
+  let windowNumber: Int
+  let down: WorkspaceSearchDeliveryEventIdentity
+  let up: WorkspaceSearchDeliveryEventIdentity
+
+  var armFields: [AnyHashable: Any] {
+    var fields: [AnyHashable: Any] = [
+      "generation": generation.uuidString,
+      "scenario": scenario,
+      "ordinal": ordinal,
+      "targetKind": targetKind,
+      "windowNumber": windowNumber,
+    ]
+    fields.merge(down.notificationFields(prefix: "down")) { _, new in new }
+    fields.merge(up.notificationFields(prefix: "up")) { _, new in new }
+    return fields
+  }
+
+  func identity(
+    for event: NSEvent,
+    in window: NSWindow
+  ) -> WorkspaceSearchDeliveryEventIdentity? {
+    guard let identity = WorkspaceSearchDeliveryEventIdentity(event: event, window: window),
+      identity.matches(down) || identity.matches(up)
+    else {
+      return nil
+    }
+    return identity
+  }
+
+  func eventFields(
+    _ event: WorkspaceSearchDeliveryEventIdentity,
+    phase: String
+  ) -> [AnyHashable: Any] {
+    var fields = armFields
+    fields["phase"] = phase
+    fields.merge(event.notificationFields(prefix: "event")) { _, new in new }
+    return fields
+  }
+}
+
+@MainActor
+private final class WorkspaceSearchDeliveryProbeWindow: NSWindow {
+  private var armedClick: WorkspaceSearchDeliveryClick?
+  private weak var trial: WorkspaceSearchDeliveryTrial?
+
+  func arm(_ click: WorkspaceSearchDeliveryClick, trial: WorkspaceSearchDeliveryTrial) {
+    armedClick = click
+    self.trial = trial
+    NotificationCenter.default.post(
+      name: WorkspaceSearchDeliveryProbeNotification.arm,
+      object: self,
+      userInfo: click.armFields
+    )
+  }
+
+  func disarm() {
+    guard let armedClick else { return }
+    NotificationCenter.default.post(
+      name: WorkspaceSearchDeliveryProbeNotification.disarm,
+      object: self,
+      userInfo: armedClick.armFields
+    )
+    self.armedClick = nil
+    trial = nil
+  }
+
+  override func sendEvent(_ event: NSEvent) {
+    let click = armedClick
+    let identity = click?.identity(for: event, in: self)
+    if let click, let identity {
+      trial?.recordRoute("window-entry:\(identity.label)")
+      NotificationCenter.default.post(
+        name: WorkspaceSearchDeliveryProbeNotification.windowEvent,
+        object: self,
+        userInfo: click.eventFields(identity, phase: "entry")
+      )
+    }
+    super.sendEvent(event)
+    if let click, let identity {
+      trial?.recordRoute("window-return:\(identity.label)")
+      if identity.type == .leftMouseUp {
+        trial?.recordMouseUpWindowReturn()
+      }
+      NotificationCenter.default.post(
+        name: WorkspaceSearchDeliveryProbeNotification.windowEvent,
+        object: self,
+        userInfo: click.eventFields(identity, phase: "return")
+      )
+    }
+  }
+}
+
+@MainActor
+private final class WorkspaceSearchDeliveryReceiptObserver: NSObject {
+  private let window: NSWindow
+  private let windowNumber: Int
+  private let generation: UUID
+  private let mouseUp: WorkspaceSearchDeliveryEventIdentity
+  private let onReceipt: @MainActor (String) -> Void
+
+  init(
+    window: NSWindow,
+    generation: UUID,
+    mouseUp: WorkspaceSearchDeliveryEventIdentity,
+    onReceipt: @escaping @MainActor (String) -> Void
+  ) {
+    self.window = window
+    windowNumber = window.windowNumber
+    self.generation = generation
+    self.mouseUp = mouseUp
+    self.onReceipt = onReceipt
+    super.init()
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(receiveMouseUpReceipt(_:)),
+      name: WorkspaceSearchDeliveryProbeNotification.localMouseUpReceipt,
+      object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(receiveMouseUpReceipt(_:)),
+      name: WorkspaceSearchDeliveryProbeNotification.trackingMouseUpReceipt,
+      object: nil
+    )
+  }
+
+  func removeObserver() {
+    NotificationCenter.default.removeObserver(
+      self,
+      name: WorkspaceSearchDeliveryProbeNotification.localMouseUpReceipt,
+      object: nil
+    )
+    NotificationCenter.default.removeObserver(
+      self,
+      name: WorkspaceSearchDeliveryProbeNotification.trackingMouseUpReceipt,
+      object: nil
+    )
+  }
+
+  @objc private func receiveMouseUpReceipt(_ notification: Notification) {
+    guard let userInfo = notification.userInfo,
+      let generationValue = userInfo["generation"] as? String,
+      UUID(uuidString: generationValue) == generation,
+      let event = notification.object as? NSEvent,
+      mouseUp.matches(event, in: window)
+    else {
+      return
+    }
+
+    if notification.name == WorkspaceSearchDeliveryProbeNotification.localMouseUpReceipt {
+      onReceipt("localMouseUpReceipt")
+      return
+    }
+    guard notification.name == WorkspaceSearchDeliveryProbeNotification.trackingMouseUpReceipt,
+      let receiptWindowNumber = (userInfo["windowNumber"] as? NSNumber)?.intValue,
+      receiptWindowNumber == windowNumber,
+      userInfo["dequeue"] as? Bool == true,
+      userInfo["mode"] as? String == RunLoop.Mode.eventTracking.rawValue,
+      userInfo["dequeuedDuringOwnedWindowSynchronousDown"] as? Bool == true,
+      userInfo["downSuperDispatchReturned"] as? Bool == true
+    else {
+      return
+    }
+    onReceipt("qualifiedTrackingReceipt")
+  }
+}
+
+private struct WorkspaceSearchPointerWitness {
+  let condition: WorkspaceSearchDeliveryPointerCondition
+  let requested: NSPoint?
+  let actual: NSPoint
+  let warpSucceeded: Bool
+  let matches: Bool
+
+  var summary: String {
+    "requested=\(requested.map(NSStringFromPoint) ?? "unavailable") "
+      + "actual=\(NSStringFromPoint(actual)) warpSucceeded=\(warpSucceeded) matches=\(matches)"
+  }
+}
+
+@MainActor
+private extension WorkspaceSearchDeliveryPointerCondition {
+  static func label(_ point: NSPoint) -> String {
+    "\(Int(point.x)):\(Int(point.y))"
+  }
+}
+
+@MainActor
+private func positionWorkspaceSearchPointer(
+  for trial: WorkspaceSearchDeliveryTrial,
+  window: NSWindow,
+  windowPoint: NSPoint
+) -> WorkspaceSearchPointerWitness {
+  let screen = window.screen ?? NSScreen.main
+  let target = window.convertPoint(toScreen: windowPoint)
+  let requested: NSPoint?
+  switch trial.pointer {
+  case .atTarget:
+    requested = target
+  case .outsideWindow:
+    requested = screen.flatMap { screen in
+      let inset: CGFloat = 32
+      let candidates = [
+        NSPoint(x: screen.frame.minX + inset, y: screen.frame.minY + inset),
+        NSPoint(x: screen.frame.minX + inset, y: screen.frame.maxY - inset),
+        NSPoint(x: screen.frame.maxX - inset, y: screen.frame.minY + inset),
+        NSPoint(x: screen.frame.maxX - inset, y: screen.frame.maxY - inset),
+      ]
+      return candidates.first {
+        screen.frame.contains($0) && !window.frame.contains($0)
+      }
+    }
+  }
+
+  var warpSucceeded = false
+  if let screen, let requested,
+    let displayNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+  {
+    let displayBounds = CGDisplayBounds(CGDirectDisplayID(displayNumber.uint32Value))
+    guard screen.frame.width > 0, screen.frame.height > 0,
+      displayBounds.width > 0, displayBounds.height > 0
+    else {
+      let actual = NSEvent.mouseLocation
+      return WorkspaceSearchPointerWitness(
+        condition: trial.pointer,
+        requested: requested,
+        actual: actual,
+        warpSucceeded: false,
+        matches: false
+      )
+    }
+    let pointInDisplay = CGPoint(
+      x: (requested.x - screen.frame.minX) * displayBounds.width / screen.frame.width,
+      y: (screen.frame.maxY - requested.y) * displayBounds.height / screen.frame.height
+    )
+    let warpPoint = CGPoint(
+      x: displayBounds.minX + pointInDisplay.x,
+      y: displayBounds.minY + pointInDisplay.y
+    )
+    warpSucceeded = CGWarpMouseCursorPosition(warpPoint) == .success
+  }
+
+  let actual = NSEvent.mouseLocation
+  let matches: Bool
+  switch trial.pointer {
+  case .atTarget:
+    matches = warpSucceeded && requested.map {
+      abs(actual.x - $0.x) <= 1 && abs(actual.y - $0.y) <= 1
+    } == true
+  case .outsideWindow:
+    matches = warpSucceeded && !window.frame.contains(actual)
+  }
+  return WorkspaceSearchPointerWitness(
+    condition: trial.pointer,
+    requested: requested,
+    actual: actual,
+    warpSucceeded: warpSucceeded,
+    matches: matches
+  )
+}
+
+@MainActor
 private func hostedWorkspaceSearchDescendant<T: NSView>(in view: NSView, as type: T.Type) -> T? {
   if let match = view as? T { return match }
   for subview in view.subviews {
@@ -1718,6 +2427,77 @@ private enum WorkspaceSearchPointerEventSequence {
 
 @MainActor
 private func clickWorkspaceSearchControl(_ windowPoint: NSPoint, in window: NSWindow) throws {
+  if let trial = WorkspaceSearchDeliveryExperiment.current {
+    let pointerWitness = positionWorkspaceSearchPointer(
+      for: trial,
+      window: window,
+      windowPoint: windowPoint
+    )
+    trial.recordPointerWitness(pointerWitness)
+    guard let probeWindow = window as? WorkspaceSearchDeliveryProbeWindow else {
+      throw WorkspaceSearchDeliveryError.probeWindowUnavailable
+    }
+
+    let timestamp = ProcessInfo.processInfo.systemUptime
+    let mouseDownEventNumber = WorkspaceSearchPointerEventSequence.nextEventNumber
+    WorkspaceSearchPointerEventSequence.nextEventNumber += 1
+    let mouseUpEventNumber = WorkspaceSearchPointerEventSequence.nextEventNumber
+    WorkspaceSearchPointerEventSequence.nextEventNumber += 1
+    let mouseDown = try #require(
+      NSEvent.mouseEvent(
+        with: .leftMouseDown,
+        location: windowPoint,
+        modifierFlags: [],
+        timestamp: timestamp,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: mouseDownEventNumber,
+        clickCount: 1,
+        pressure: 1
+      )
+    )
+    let mouseUp = try #require(
+      NSEvent.mouseEvent(
+        with: .leftMouseUp,
+        location: windowPoint,
+        modifierFlags: [],
+        timestamp: timestamp,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: mouseUpEventNumber,
+        clickCount: 1,
+        pressure: 0
+      )
+    )
+    let down = try #require(
+      WorkspaceSearchDeliveryEventIdentity(event: mouseDown, window: probeWindow)
+    )
+    let up = try #require(
+      WorkspaceSearchDeliveryEventIdentity(event: mouseUp, window: probeWindow)
+    )
+    let click = WorkspaceSearchDeliveryClick(
+      generation: UUID(),
+      scenario: "workspace-search-delivery-experiment",
+      ordinal: trial.ordinal,
+      targetKind: "\(trial.scenario.rawValue).\(trial.pointer.rawValue)",
+      windowNumber: probeWindow.windowNumber,
+      down: down,
+      up: up
+    )
+    trial.recordEventPair("down=\(down.label) up=\(up.label)")
+    try trial.arm(click, in: probeWindow)
+
+    switch trial.path {
+    case .splitWindowDown:
+      window.postEvent(mouseUp, atStart: true)
+      window.sendEvent(mouseDown)
+    case .queuedPair:
+      NSApp.postEvent(mouseUp, atStart: true)
+      NSApp.postEvent(mouseDown, atStart: true)
+    }
+    return
+  }
+
   let timestamp = ProcessInfo.processInfo.systemUptime
   let mouseDownEventNumber = WorkspaceSearchPointerEventSequence.nextEventNumber
   WorkspaceSearchPointerEventSequence.nextEventNumber += 1
