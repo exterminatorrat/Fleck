@@ -577,7 +577,9 @@ class CIDocsPathTests(unittest.TestCase):
         self.assertIn("  pull_request:\n    branches: [main]\n", workflow)
         self.assertIn(
             "concurrency:\n"
-            "  group: ci-${{ github.event.pull_request.number || github.ref }}\n"
+            "  group: ci-${{ github.event_name == 'workflow_dispatch' && "
+            "inputs.ordinary_test_diagnostic_selector != '' && 'focused-' || '' }}"
+            "${{ github.event.pull_request.number || github.ref }}\n"
             "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n",
             workflow,
         )
