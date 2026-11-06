@@ -9,11 +9,30 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Consolidate the stacked foundation pull requests (#68–#73, #75–#77, #93, and the #95 tab-overflow test fix) into one branch on current `main` with its CI scheduling, and record the held Sparkle release work in `docs/held-features.md`.
 
+## [1.7.10-beta.1] - 2026-11-05
+
+### Changed
+
+- Preserve this feature layer and both complete parent histories while integrating the current PR80 ancestry; production and fixture bytes are unchanged.
+
 ## [1.7.9-beta.1] - 2026-11-05
 
 ### Changed
 
 - Preserve this feature layer and both complete parent histories while integrating the current PR90 ancestry; production and fixture bytes are unchanged.
+
+## [1.7.9-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconciled the retained feature branch with the current published PR80 parent.
+  This source-only refresh is pending current-head CI.
+
+## [1.7.9-beta.1] - 2026-11-05
+
+### Fixed
+
+- Preserve the native folder renaming feature while integrating the current PR77 parent and its complete ordered history.
 
 ## [1.7.8-beta.1] - 2026-11-05
 
@@ -27,6 +46,19 @@ public release log. Packaging unchanged source does not add a changelog entry.
 ### Changed
 
 - Preserve this feature layer and both complete parent histories while integrating the current PR88 ancestry; production and fixture bytes are unchanged.
+
+## [1.7.8-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconciled the retained native folder-renaming feature with the current reviewed PR77 parent.
+  This source-only refresh is pending current-head CI.
+
+## [1.7.8-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
 
 ## [1.7.7-beta.1] - 2026-11-05
 
@@ -46,6 +78,12 @@ public release log. Packaging unchanged source does not add a changelog entry.
 ### Fixed
 
 - Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
+## [1.7.7-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
 
 ## [1.7.6-beta.1] - 2026-11-05
 
@@ -72,6 +110,12 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
 
+## [1.7.6-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native slider input coverage and current parent repairs without dropping this feature layer.
+
 ## [1.7.5-beta.1] - 2026-11-05
 
 ### Changed
@@ -96,6 +140,18 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
 
+## [1.7.5-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve newer validation errors across older save completion while retaining cumulative feature and test history.
+
+## [1.7.5-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await actual native folder validation and refocus while preserving native slider input coverage.
+
 ## [1.7.4-beta.1] - 2026-11-02
 
 ### Fixed
@@ -120,6 +176,19 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
 
+## [1.7.4-beta.1] - 2026-11-02
+
+### Fixed
+
+- Exercise real interface-font metric changes while preserving RTL tab navigation and verified parent repairs.
+
+## [1.7.4-beta.1] - 2026-11-02
+
+### Fixed
+
+- Keep newer folder-validation errors visible when an older unrelated save
+  completes, while still clearing an unchanged persistence error after retry.
+
 ## [1.7.3-beta.1] - 2026-11-02
 
 ### Fixed
@@ -143,6 +212,19 @@ public release log. Packaging unchanged source does not add a changelog entry.
 ### Fixed
 
 - Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
+
+## [1.7.3-beta.1] - 2026-11-02
+
+### Fixed
+
+- Integrate the current native folder-navigation base while preserving deferred tab-width
+  publication, overflow navigation, and the native fixture's accessibility-state restoration.
+
+## [1.7.3-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer while integrating verified parent title, accessibility, and native-fixture repairs.
 
 ## [1.7.2-beta.1] - 2026-11-02
 
@@ -162,6 +244,18 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Preserve native slider input coverage and current parent repairs without dropping this feature layer.
 
+## [1.7.2-beta.1] - 2026-10-29
+
+### Fixed
+
+- Ignore earlier and later folder overflow actions while a new folder is being composed,
+  including actions sent through retained accessibility controls.
+- Cover retained overflow actions from both scroll endpoints while preserving existing
+  pointer-path geometry and mounted scroll/document identity checks.
+
+Source-only repair checkpoint. Compilation, native behavior and full CI for this combined
+candidate remain unverified.
+
 ## [1.7.1-beta.1] - 2026-11-02
 
 ### Fixed
@@ -174,6 +268,13 @@ public release log. Packaging unchanged source does not add a changelog entry.
 ### Fixed
 
 - Preserve this feature layer while integrating verified parent title, accessibility, and native-fixture repairs.
+
+## [1.7.1-beta.1] - 2026-11-02
+
+### Fixed
+
+- Publish measured tab-strip width after native layout returns, preserving overflow
+  navigation while avoiding layout-triggered state publication during resizing.
 
 ## [1.7.0-beta.1] - 2026-10-28
 
@@ -242,6 +343,34 @@ unrun; hosted verification is pending.
 This checkpoint is part of the retained-feature 1.7.0-beta.1 development cohort, not a
 separate release. Local compilation, tests and native visual/accessibility behavior remain
 unrun; hosted verification is pending.
+
+## [1.7.0-beta.1] - 2026-10-27
+
+### Fixed
+
+- Use the native inline folder-name field for renaming, with Return/Escape, validated
+  focus-loss commits and deletion-safe editor ownership. Preserve the existing icon-based
+  new-folder controls and compact Unfiled layout while keeping keyboard navigation in its
+  owning host.
+- Show the tab navigation rail only when intrinsic tab content overflows, restore the
+  full viewport when it fits and return to the semantic leading edge as overflow ends.
+
+This focused change is part of the shared 1.7.0-beta.1 retained-feature release cohort,
+not a separate release. Source-only checkpoint: local compilation, tests and native
+keyboard, focus, IME, visual and accessibility behavior remain unverified.
+
+## [1.7.0-beta.1] - 2026-10-27
+
+### Fixed
+
+- Use the native inline folder-name field for renaming, with Return/Escape, validated
+  focus-loss commits and deletion-safe editor ownership. Preserve the existing icon-based
+  new-folder controls and compact Unfiled layout while keeping keyboard navigation in its
+  owning host.
+
+This focused change is part of the shared 1.7.0-beta.1 retained-feature release cohort,
+not a separate release. Source-only checkpoint: local compilation, tests and native
+keyboard, focus, IME, visual and accessibility behavior remain unverified.
 
 ## [1.5.26-beta.1] - 2026-11-05
 
