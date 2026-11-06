@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.22-beta.1] - 2026-11-06
+
+### Changed
+
+- Consolidate the status-menu and update-information pull requests (#78, #85) onto the foundation branch.
+
 ## [1.7.21-beta.1] - 2026-11-06
 
 ### Changed
@@ -33,6 +39,12 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Preserve this feature layer and both complete parent histories while integrating the current PR89 ancestry; production and fixture bytes are unchanged.
 
+## [1.7.12-beta.1] - 2026-11-05
+
+### Changed
+
+- Preserve this feature layer and both complete parent histories while integrating the current PR78 ancestry; production and fixture bytes are unchanged.
+
 ## [1.7.11-beta.1] - 2026-11-05
 
 ### Changed
@@ -50,6 +62,12 @@ public release log. Packaging unchanged source does not add a changelog entry.
 ### Changed
 
 - Preserve this feature layer and both complete parent histories while integrating the current PR79 ancestry; production and fixture bytes are unchanged.
+
+## [1.7.11-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconcile PR85 with the current reviewed PR78 parent while preserving PR85's Sparkle and restart-only model work. This is source-only integration; current-head CI is pending.
 
 ## [1.7.10-beta.1] - 2026-11-05
 
@@ -69,6 +87,13 @@ public release log. Packaging unchanged source does not add a changelog entry.
 ### Fixed
 
 - Preserve the original PR79 and PR89 changelog entries as separate ordered records.
+
+## [1.7.10-beta.1] - 2026-11-03
+
+### Fixed
+
+- Synchronize the critical-signal fixture on both preparation waiters registering
+  before opening the ASR load gate, instead of relying on scheduler yields.
 
 ## [1.7.9-beta.1] - 2026-11-05
 
@@ -108,6 +133,12 @@ public release log. Packaging unchanged source does not add a changelog entry.
 - Synchronize the Gemma termination fixture with helper event-stream attachment
   before checking the synchronous force count.
 
+## [1.7.9-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
 ## [1.7.8-beta.1] - 2026-11-05
 
 ### Changed
@@ -146,6 +177,12 @@ public release log. Packaging unchanged source does not add a changelog entry.
 ### Fixed
 
 - Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
+## [1.7.8-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
 
 ## [1.7.7-beta.1] - 2026-11-05
 
@@ -191,6 +228,12 @@ public release log. Packaging unchanged source does not add a changelog entry.
 - Advance the injected terminal-animation clock and await its real callback before
   checking sampler quiescence, retaining native terminal and no-speech assertions.
 
+## [1.7.7-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native slider input coverage and current parent repairs without dropping this feature layer.
+
 ## [1.7.6-beta.1] - 2026-11-05
 
 ### Changed
@@ -234,6 +277,12 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Reconcile PR89 with the current reviewed PR79 parent while preserving PR89's event-journal, authority, and subscription features. This is source-only integration; current-head CI is pending.
 
+## [1.7.6-beta.1] - 2026-11-05
+
+### Fixed
+
+- Preserve the status-menu feature while integrating the current PR77 parent and its complete ordered history.
+
 ## [1.7.6-beta.1] - 2026-11-02
 
 ### Fixed
@@ -251,6 +300,12 @@ public release log. Packaging unchanged source does not add a changelog entry.
 ### Fixed
 
 - Preserve native slider input coverage and current parent repairs without dropping this feature layer.
+
+## [1.7.6-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this descendant feature layer while integrating the verified current parent repairs.
 
 ## [1.7.5-beta.1] - 2026-11-05
 
@@ -284,6 +339,13 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Reconcile the current reviewed PR77 parent while preserving PR79's unique source. This is source-only integration; current-head CI is pending.
 
+## [1.7.5-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconciled the retained status-menu feature with the current reviewed PR77 parent.
+  This source-only refresh is pending current-head CI.
+
 ## [1.7.5-beta.1] - 2026-11-02
 
 ### Fixed
@@ -313,6 +375,13 @@ public release log. Packaging unchanged source does not add a changelog entry.
 ### Fixed
 
 - Await actual native folder validation and refocus while preserving native slider input coverage.
+
+## [1.7.5-beta.1] - 2026-11-02
+
+### Fixed
+
+- Embed the resolved Sparkle framework only when the app executable links it,
+  bind that executable to its bundled copy, and sign nested framework code first.
 
 ## [1.7.4-beta.1] - 2026-11-02
 
@@ -350,6 +419,19 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Keep newer folder-validation errors visible when an older unrelated save
   completes, while still clearing an unchanged persistence error after retry.
+
+## [1.7.4-beta.1] - 2026-10-30
+
+### Fixed
+
+- Inherit the reviewed root/folder-row focus-wrapper prerequisite without importing
+  unrelated folder-creation or rename-editor changes.
+- Inherit the folder-ID School-row fixture correction and strict visual/focus-layer
+  association regression coverage instead of selecting a row by a fixed width.
+
+Source-only dependency inheritance, not a new feature or proved runtime recovery.
+Compiler checks, test discovery/tests and native/visual/accessibility checks on this
+current source remain unrun.
 
 ## [1.7.3-beta.1] - 2026-11-02
 
@@ -400,6 +482,18 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Preserve this feature layer while integrating the verified current parent repairs.
 
+## [1.7.3-beta.1] - 2026-10-30
+
+### Fixed
+
+- Inherit the reviewed menu-panel native-frame adoption repair, including interaction
+  ownership/revision fencing, reentrant rollback and unchanged-axis validation.
+- Preserve observable size updates and immediate/deferred publication ordering with the
+  complete reviewed native-adoption regressions and existing display coverage.
+
+Source-only dependency inheritance. Compiler checks, test discovery/tests and native,
+real-event, display and pixel behavior in this source context remain unverified.
+
 ## [1.7.2-beta.1] - 2026-11-02
 
 ### Fixed
@@ -430,6 +524,19 @@ public release log. Packaging unchanged source does not add a changelog entry.
 ### Fixed
 
 - Preserve this descendant feature layer while integrating the verified current parent repairs.
+
+## [1.7.2-beta.1] - 2026-10-30
+
+### Fixed
+
+- Project the Activity scrollbar thumb origin into overlapping native-knob and track
+  intervals only for finite usable geometry, preserving width and length. Outside that
+  domain, geometry remains unchanged and unqualified.
+- Retain the corrected held-entry origin and original proportional motion reference,
+  with full-rectangle continuity regression coverage and held-state cleanup on release.
+
+Source-only candidate. Compiler checks, tests, native tracking, real-event behavior and
+pixel behavior remain unverified.
 
 ## [1.7.2-beta.1] - 2026-10-29
 
@@ -469,6 +576,13 @@ candidate remain unverified.
 
 - Preserve bounded MCP protocol behavior while integrating the verified parent repairs.
 
+## [1.7.1-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native status-menu actions while integrating the verified parent title,
+  accessibility, font, Settings, and native-fixture repairs.
+
 ## [1.7.1-beta.1] - 2026-10-29
 
 ### Fixed
@@ -482,6 +596,15 @@ candidate remain unverified.
 
 Source-only validation. Tests, compilation, native/visual/accessibility validation,
 hosted CI, and packaging were not run.
+
+## [1.7.1-beta.1] - 2026-10-29
+
+### Fixed
+
+- Keep the Activity scrollbar thumb proportionally positioned within the native knob by
+  preserving fractional vertical coordinates, with quarter-position regression coverage.
+
+Source-only correction. Compilation, tests and native visual behavior remain unverified.
 
 ## [1.7.0-beta.1] - 2026-10-28
 
@@ -707,6 +830,29 @@ pending. Existing 1.6.x candidates and all earlier development history remain pr
 This is one constituent of the shared 1.7.0-beta.1 retained-feature development cohort, not a
 separate release. Local compilation, tests and native behavior remain unrun; hosted checks are
 pending. Existing 1.6.x candidates and all earlier development history remain preserved.
+
+## [1.7.0-beta.1] - 2026-10-27
+
+### Added
+
+- Add native status-menu actions for Notes, Settings and About while preserving Quit,
+  secondary-click behavior and an explicitly unavailable update check.
+- Add explicit signed update-information checks shared by About and the status menu,
+  remaining unavailable without trusted configuration and packaged identity. Checks
+  do not download or install updates, and do not verify release artifact bytes.
+
+This focused layer belongs to the retained-feature 1.7.0-beta.1 release cohort.
+Local compilation, tests and native visual/accessibility behavior remain unverified.
+
+## [1.7.0-beta.1] - 2026-10-27
+
+### Added
+
+- Add native status-menu actions for Notes, Settings and About while preserving Quit,
+  secondary-click behavior and an explicitly unavailable update check.
+
+This focused layer belongs to the retained-feature 1.7.0-beta.1 release cohort.
+Local compilation, tests and native visual/accessibility behavior remain unverified.
 
 ## [1.5.26-beta.1] - 2026-11-05
 

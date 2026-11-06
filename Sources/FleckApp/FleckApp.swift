@@ -92,6 +92,7 @@
   @main
   struct FleckApp: App {
     @StateObject private var appState: AppState
+    @StateObject private var updateController: AppUpdateController
     @StateObject private var dictationRuntime: DictationRuntime
     @StateObject private var onboarding: OnboardingCoordinator
     @StateObject private var menuPanelGeometry = MenuPanelGeometryStore()
@@ -99,7 +100,11 @@
     private let statusItemContextMenuController: StatusItemContextMenuController
 
     init() {
-      statusItemContextMenuController = StatusItemContextMenuController()
+      let updateController = AppUpdateController()
+      _updateController = StateObject(wrappedValue: updateController)
+      let statusItemContextMenuController = StatusItemContextMenuController()
+      statusItemContextMenuController.bindUpdateController(updateController)
+      self.statusItemContextMenuController = statusItemContextMenuController
       let applicationSupportParent = FileManager.default.urls(
         for: .applicationSupportDirectory,
         in: .userDomainMask
@@ -191,7 +196,10 @@
           .fleckTheme(appState)
       }
       label: {
-        DictationSettingsEnvironmentBridge(runtime: dictationRuntime) {
+        DictationSettingsEnvironmentBridge(
+          runtime: dictationRuntime,
+          statusItemContextMenuController: statusItemContextMenuController
+        ) {
           Group {
             switch FleckMark.load(template: true) {
             case .image(let mark):
@@ -243,7 +251,7 @@
       }
 
       Settings {
-        SettingsView(runtime: dictationRuntime)
+        SettingsView(runtime: dictationRuntime, updateController: updateController)
           .environmentObject(appState)
           .fleckTheme(appState)
           .frame(
@@ -2310,30 +2318,52 @@
 
   struct DictationSettingsEnvironmentBridge<Content: View>: View {
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
     @ObservedObject var runtime: DictationRuntime
+    let statusItemContextMenuController: StatusItemContextMenuController?
     let content: Content
     private let openSettingsAction: (@MainActor () -> Void)?
 
     init(
       runtime: DictationRuntime,
       openSettingsAction: (@MainActor () -> Void)? = nil,
+      statusItemContextMenuController: StatusItemContextMenuController? = nil,
       @ViewBuilder content: () -> Content
     ) {
       self.runtime = runtime
       self.openSettingsAction = openSettingsAction
+      self.statusItemContextMenuController = statusItemContextMenuController
       self.content = content()
     }
 
     var body: some View {
       content
         .onAppear {
+          let requestOpenSettings = openSettings
+          let openPinnedWindow = openWindow
+          let runtime = self.runtime
+          let explicitOpenSettingsAction = openSettingsAction
           runtime.installOpenSettingsBridge {
-            if let openSettingsAction {
-              openSettingsAction()
+            if let explicitOpenSettingsAction {
+              explicitOpenSettingsAction()
             } else {
-              openSettings()
+              requestOpenSettings()
             }
           }
+          statusItemContextMenuController?.installActions(
+            showNotes: { [openPinnedWindow] in
+              NSApp.activate()
+              openPinnedWindow(id: OnboardingWindowPresenter.windowIdentifier)
+            },
+            openSettings: { [runtime] in
+              NSApp.activate()
+              runtime.requestSettings(.editing)
+            },
+            openAbout: { [runtime] in
+              NSApp.activate()
+              runtime.requestSettings(.about)
+            }
+          )
         }
     }
   }
