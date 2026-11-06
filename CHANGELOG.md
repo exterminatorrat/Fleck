@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.18-beta.1] - 2026-11-06
+
+### Changed
+
+- Consolidate the stacked foundation pull requests (#68–#73, #75–#77, #93, and the #95 tab-overflow test fix) into one branch on current `main` with its CI scheduling, and record the held Sparkle release work in `docs/held-features.md`.
+
 ## [1.7.3-beta.1] - 2026-11-02
 
 ### Fixed
