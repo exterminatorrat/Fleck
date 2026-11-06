@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.22-beta.1] - 2026-11-06
+
+### Changed
+
+- Consolidate the status-menu and update-information pull requests (#78, #85) onto the foundation branch.
+
 ## [1.7.18-beta.1] - 2026-11-06
 
 ### Changed
