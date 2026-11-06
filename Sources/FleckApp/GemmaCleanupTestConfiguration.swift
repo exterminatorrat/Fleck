@@ -97,8 +97,70 @@ enum GemmaCleanupTestConfiguration {
     startup: @escaping @MainActor () async throws -> Void,
     calibrate: @escaping @MainActor () async throws -> Void,
     applicationResourceRoot: URL? = Bundle.main.resourceURL,
-    moduleBundle: Bundle? = FleckAppResourceBundle.defaultModuleBundle()
+    moduleBundle: Bundle? = FleckAppResourceBundle.defaultModuleBundle(),
+    pendingCleanupModelID: String? = nil,
+    qualification: GemmaCleanupModelQualification? = nil
   ) throws -> AdmittedModelSignedConfiguration {
+    if pendingCleanupModelID == GemmaCleanup8BitModelSpecification.modelID,
+       let qualification,
+       let availableBytes = try? capacityProvider()
+    {
+      let architectureSupported = architectureProvider()
+      if let descriptor = GemmaCleanupModelSelection.resolveQualifiedAlternative(
+        pendingModelID: pendingCleanupModelID,
+        role: .cleanup,
+        qualification: qualification,
+        architectureSupported: architectureSupported,
+        physicalMemoryBytes: ProcessInfo.processInfo.physicalMemory,
+        availableDiskBytes: availableBytes
+      ) {
+        let manifest = GemmaCleanup8BitModelSpecification.manifest
+        let artifactIdentity = EnhancedModelArtifactIdentity(
+          role: .cleanup,
+          sourceRepository: descriptor.source,
+          modelID: descriptor.modelID,
+          revision: descriptor.revision,
+          license: descriptor.license,
+          runtimeABI: descriptor.runtimeABI,
+          conversion: descriptor.conversion,
+          quantization: descriptor.quantization,
+          files: descriptor.files,
+          downloadBytes: descriptor.downloadBytes,
+          installedBytes: descriptor.installedBytes,
+          requiredCapacityBytes: descriptor.requiredCapacityBytes
+        )
+        try AdmittedModelArtifactBinding.validate(
+          descriptor: descriptor,
+          artifact: artifactIdentity,
+          manifest: manifest
+        )
+        let hardware = AdmittedModelHardwareProfile(
+          architecture: "arm64",
+          requestedLanguages: Set(descriptor.languages),
+          availableBytes: availableBytes
+        )
+        let manager = try EnhancedModelManager(
+          admittedBaseRoot: admittedBaseRoot,
+          descriptor: descriptor,
+          manifest: manifest,
+          artifactIdentity: artifactIdentity,
+          trustedManifests: [manifest],
+          capacityProvider: capacityProvider,
+          architectureProvider: { architectureSupported },
+          cleanupWillBegin: modelMutationWillBegin,
+          removalWillBegin: modelMutationWillBegin,
+          localRepositoryName: GemmaCleanup8BitModelSpecification.localRepositoryName
+        )
+        return AdmittedModelSignedConfiguration(
+          rawDescriptor: GemmaCleanup8BitModelSpecification.rawDescriptor,
+          hardware: hardware,
+          manager: manager,
+          startup: startup,
+          calibrate: calibrate
+        )
+      }
+    }
+
     let manifest = try loadManifest(
       applicationResourceRoot: applicationResourceRoot,
       moduleBundle: moduleBundle

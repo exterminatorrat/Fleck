@@ -54,6 +54,12 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Preserve the R4B cleanup failure provenance feature while integrating the current PR77 parent and its complete ordered history.
 
+## [1.7.6-beta.1] - 2026-11-05
+
+### Fixed
+
+- Preserve the restart-only model binding feature while integrating the current PR77 parent and its complete ordered history.
+
 ## [1.7.6-beta.1] - 2026-11-02
 
 ### Fixed
@@ -73,6 +79,12 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Reconciled retained R4B cleanup-failure provenance with the current reviewed PR77 parent.
   This source-only refresh is pending current-head CI.
+
+## [1.7.5-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconcile PR84 with the current reviewed PR77 parent while preserving the restart-only model and cleanup features. This is source-only integration; current-head CI is pending.
 
 ## [1.7.5-beta.1] - 2026-11-02
 
@@ -207,6 +219,21 @@ and packaging remain unverified; hosted verification is pending.
 Part of the shared retained-feature 1.7.0 cohort, not a separate release.
 Source-only preparation. Local compilation, tests, native/visual/accessibility behavior
 and packaging remain unverified; hosted verification is pending.
+
+## [1.7.0-beta.1] - 2026-10-27
+
+### Changed
+
+- Preserve pending dictation and cleanup model requests for startup-only application,
+  retaining the existing Parakeet v2 and Gemma 4-bit defaults and coupled cleanup/filing.
+- Bind the retained Gemma 8-bit specification to exact metadata and fail-closed identity,
+  license, cleanup/filing evidence, measured RAM and storage requirements.
+- Label model settings from the actual descriptor instead of assigning a known model's
+  name to an unknown identity.
+
+This is one constituent of the shared 1.7.0-beta.1 development cohort, not a separate
+release or a qualified alternative model. No alternative availability or selection UI is
+added. Local compilation, tests and native/model behavior remain unverified.
 
 ## [1.5.26-beta.1] - 2026-11-05
 

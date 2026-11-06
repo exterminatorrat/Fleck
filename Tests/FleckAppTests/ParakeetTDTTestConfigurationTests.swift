@@ -39,6 +39,30 @@ private func removeTestRoot(_ url: URL) {
 }
 
 @Test @MainActor
+func pendingDictationSelectionKeepsV2AndRejectsOtherIdentities() throws {
+  let root = TestPaths.temporaryDirectory()
+  defer { TestPaths.remove(root) }
+  func configuration(_ modelID: String?) throws -> AdmittedModelSignedConfiguration {
+    try ParakeetTDTTestConfiguration.make(
+      admittedBaseRoot: root,
+      capacityProvider: { .max },
+      architectureProvider: { true },
+      startup: {},
+      calibrate: {},
+      pendingDictationModelID: modelID
+    )
+  }
+  let unchanged = try configuration(nil)
+  let explicit = try configuration("FluidInference/parakeet-tdt-0.6b-v2-coreml")
+  #expect(unchanged.rawDescriptor == explicit.rawDescriptor)
+  for unknown in ["", "unknown/model", "FluidInference/parakeet-tdt-0.6b-v3-coreml"] {
+    #expect(throws: ParakeetTDTTestConfigurationError.unexpectedManifestIdentity) {
+      _ = try configuration(unknown)
+    }
+  }
+}
+
+@Test @MainActor
 func parakeetConfigurationBindsExactManifestIdentityAndNamespace() throws {
   let test = try makeTestConfiguration()
   defer { removeTestRoot(test.baseRoot) }
