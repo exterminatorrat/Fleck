@@ -53,7 +53,14 @@ enum BridgeCommand: Equatable {
       return request.context.operationID
     case .undoChange(let request):
       return request.operationID
-    case .getCapabilities, .listSharedNotes, .readNote, .listTasks, .listActivity:
+    case .getCapabilities,
+      .listEvents,
+      .prepareEventSubscription,
+      .removeEventSubscription,
+      .listSharedNotes,
+      .readNote,
+      .listTasks,
+      .listActivity:
       return nil
     }
   }
@@ -406,6 +413,16 @@ enum BridgeOutput {
         .map(\.rawValue)
         .joined(separator: ", ")
       return "Grant revision \(summary.grantRevision)\nCapabilities: \(capabilities)"
+    case .events(let events):
+      return events.map { "\($0.name.rawValue)\t\($0.description)" }
+        .joined(separator: "\n")
+    case .pendingEventSubscription:
+      return "Event subscription is pending; callback delivery is unavailable."
+    case .verifiedEventSubscription(let receipt):
+      return "Verified event subscription \(receipt.subscriptionID); refresh before "
+        + "\(receipt.refreshBefore)."
+    case .eventUnsubscribed:
+      return "Pending event subscription removed."
     }
   }
 

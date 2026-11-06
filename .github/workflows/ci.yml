@@ -150,6 +150,8 @@ jobs:
         run: |
           unset FLECK_ENHANCED_CANDIDATE
           swift build -c release --product fleck-agent
+      - name: Test agent boundary audit regression controls
+        run: bash Tests/Scripts/audit-agent-boundary.test.sh
       - name: Audit agent boundary
         run: Scripts/audit-agent-boundary.sh
       - name: Test packaged app symbol stripping
