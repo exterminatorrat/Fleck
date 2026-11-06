@@ -9,11 +9,140 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Consolidate the stacked foundation pull requests (#68–#73, #75–#77, #93, and the #95 tab-overflow test fix) into one branch on current `main` with its CI scheduling, and record the held Sparkle release work in `docs/held-features.md`.
 
+## [1.7.9-beta.1] - 2026-11-05
+
+### Changed
+
+- Preserve this feature layer and both complete parent histories while integrating the current PR90 ancestry; production and fixture bytes are unchanged.
+
+## [1.7.8-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconciled the font-size edit lifecycle and native Mixed prompt with the current published PR90 parent.
+  This source-only refresh is pending current-head CI.
+
+## [1.7.8-beta.1] - 2026-11-05
+
+### Changed
+
+- Preserve this feature layer and both complete parent histories while integrating the current PR88 ancestry; production and fixture bytes are unchanged.
+
+## [1.7.7-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconciled the retained relative-paragraph codec feature with the current published PR88 parent.
+  This source-only refresh is pending current-head CI.
+
+## [1.7.7-beta.1] - 2026-11-05
+
+### Changed
+
+- Preserve this feature layer and both complete parent histories while integrating the current PR81 ancestry; production and fixture bytes are unchanged.
+
+## [1.7.7-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
+## [1.7.6-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconciled the retained list-selection clipboard feature with the current published PR81 parent.
+  This source-only refresh is pending current-head CI.
+
+## [1.7.6-beta.1] - 2026-11-05
+
+### Fixed
+
+- Preserve the retained checklist correctness feature while integrating the current PR77 parent and its complete ordered history.
+
+## [1.7.6-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
+
+## [1.7.6-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
+## [1.7.5-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconcile PR81 with the current reviewed PR77 parent while preserving the checklist and editor features. This is source-only integration; current-head CI is pending.
+
+## [1.7.5-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native slider input coverage and current parent repairs without dropping this feature layer.
+
+## [1.7.5-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
+
+## [1.7.5-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
+## [1.7.4-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve editor behavior while integrating verified current parent repairs.
+
+## [1.7.4-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native slider input coverage and current parent repairs without dropping this feature layer.
+
+## [1.7.4-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
+
+## [1.7.4-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
 ## [1.7.3-beta.1] - 2026-11-02
 
 ### Fixed
 
 - Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
+## [1.7.3-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve editor behavior while integrating verified current parent repairs.
+
+## [1.7.3-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native slider input coverage and current parent repairs without dropping this feature layer.
+
+## [1.7.3-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
 
 ## [1.7.2-beta.1] - 2026-11-02
 
@@ -21,12 +150,30 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
 
+## [1.7.2-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer while integrating the verified current parent repairs.
+
+## [1.7.2-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native slider input coverage and current parent repairs without dropping this feature layer.
+
 ## [1.7.1-beta.1] - 2026-11-02
 
 ### Fixed
 
 - Keep the merged process-validation layer version ahead of its retained 1.7.0
   feature cohort; preserve all parent and intermediate development-history entries.
+
+## [1.7.1-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer while integrating verified parent title, accessibility, and native-fixture repairs.
 
 ## [1.7.0-beta.1] - 2026-10-28
 
@@ -37,6 +184,64 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 Part of the approved substantial development cohort. Source-only correction; compilation,
 process tests and native behavior remain unverified locally.
+
+## [1.7.0-beta.1] - 2026-10-27
+
+### Fixed
+
+- Align wrapped checklist content without changing paragraph formatting, preserve completion
+  formatting while typing and pasting, and restore checklist selection through undo and redo.
+- Keep selected bullet glyphs free of selection highlights without replacing configured
+  backgrounds, and copy whole list items and managed-image references without changing selections.
+- Preserve relative paragraph tail indents through editor loading and saving, dictated
+  appends and agent rich-text mutations without changing their existing fallback or error behavior.
+- Commit font-size changes only after editing, with a centered field, hover/focus underline
+  and a native Mixed placeholder that leaves the numeric edit string empty.
+- Retain edited font sizes when the overflow popover closes without committing direct-field
+  drafts during toolbar reflow.
+
+This checkpoint is part of the retained-feature 1.7.0-beta.1 development cohort, not a
+separate release. Local compilation, tests and native visual/accessibility behavior remain
+unrun; hosted verification is pending.
+
+## [1.7.0-beta.1] - 2026-10-27
+
+### Fixed
+
+- Align wrapped checklist content without changing paragraph formatting, preserve completion
+  formatting while typing and pasting, and restore checklist selection through undo and redo.
+- Keep selected bullet glyphs free of selection highlights without replacing configured
+  backgrounds, and copy whole list items and managed-image references without changing selections.
+- Preserve relative paragraph tail indents through editor loading and saving, dictated
+  appends and agent rich-text mutations without changing their existing fallback or error behavior.
+
+This checkpoint is part of the retained-feature 1.7.0-beta.1 development cohort, not a
+separate release. Local compilation, tests and native visual/accessibility behavior remain
+unrun; hosted verification is pending.
+
+## [1.7.0-beta.1] - 2026-10-27
+
+### Fixed
+
+- Align wrapped checklist content without changing paragraph formatting, preserve completion
+  formatting while typing and pasting, and restore checklist selection through undo and redo.
+- Keep selected bullet glyphs free of selection highlights without replacing configured
+  backgrounds, and copy whole list items and managed-image references without changing selections.
+
+This checkpoint is part of the retained-feature 1.7.0-beta.1 development cohort, not a
+separate release. Local compilation, tests and native visual/accessibility behavior remain
+unrun; hosted verification is pending.
+
+## [1.7.0-beta.1] - 2026-10-27
+
+### Fixed
+
+- Align wrapped checklist content without changing paragraph formatting, preserve completion
+  formatting while typing and pasting, and restore checklist selection through undo and redo.
+
+This checkpoint is part of the retained-feature 1.7.0-beta.1 development cohort, not a
+separate release. Local compilation, tests and native visual/accessibility behavior remain
+unrun; hosted verification is pending.
 
 ## [1.5.26-beta.1] - 2026-11-05
 
@@ -265,6 +470,16 @@ and native behavior remain unverified; hosted verification is pending.
 Source-only repair checkpoint. Compilation, tests and native/visual/accessibility validation
 remain unrun for this change; hosted CI has not run for this checkpoint. Readiness focus
 ownership remains unresolved.
+
+## [1.5.9-beta.1] - 2026-10-27
+
+### Fixed
+
+- Inherit the explicit interface-font correction while preserving theme/hover surfaces,
+  bottom-only live-pill standby and the reviewed dictation regression guards.
+
+Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
+and native behavior remain unverified; hosted verification is pending.
 
 ## [1.5.8-beta.1] - 2026-11-02
 

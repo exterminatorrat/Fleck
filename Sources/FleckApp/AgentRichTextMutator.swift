@@ -53,11 +53,7 @@
 
       let richTextRTF = try serialize(result)
       guard
-        let decoded = try? NSAttributedString(
-          data: richTextRTF,
-          options: [.documentType: NSAttributedString.DocumentType.rtf],
-          documentAttributes: nil
-        ),
+        let decoded = try? NoteRichTextCodec.decode(richTextRTF),
         utf16Equal(decoded.string, draft.body)
       else {
         throw unavailable()
@@ -95,15 +91,11 @@
         throw unavailable()
       }
       guard
-        let attributed = try? NSMutableAttributedString(
-          data: appended.richTextRTF,
-          options: [.documentType: NSAttributedString.DocumentType.rtf],
-          documentAttributes: nil
-        )
+        let attributed = try? NoteRichTextCodec.decode(appended.richTextRTF)
       else {
         throw unavailable()
       }
-      return attributed
+      return NSMutableAttributedString(attributedString: attributed)
     }
 
     private static func replace(
@@ -150,11 +142,7 @@
         )
       }
       guard
-        let value = try? NSAttributedString(
-          data: richTextRTF,
-          options: [.documentType: NSAttributedString.DocumentType.rtf],
-          documentAttributes: nil
-        )
+        let value = try? NoteRichTextCodec.decode(richTextRTF)
       else {
         throw unavailable()
       }
@@ -212,12 +200,7 @@
       _ attributed: NSAttributedString
     ) throws -> Data {
       do {
-        return try attributed.data(
-          from: NSRange(location: 0, length: attributed.length),
-          documentAttributes: [
-            .documentType: NSAttributedString.DocumentType.rtf
-          ]
-        )
+        return try NoteRichTextCodec.encode(attributed)
       } catch {
         throw unavailable()
       }

@@ -1511,11 +1511,7 @@
       let source: NSAttributedString
       let loadedRichText: Bool
       if let richTextRTF,
-        let attributed = try? NSAttributedString(
-          data: richTextRTF,
-          options: [.documentType: NSAttributedString.DocumentType.rtf],
-          documentAttributes: nil
-        ),
+        let attributed = try? NoteRichTextCodec.decode(richTextRTF),
         let canonicalAttributed = canonicalAttributedText(attributed)
       {
         source = canonicalAttributed
@@ -1763,10 +1759,7 @@
           return
         }
         let snapshot = InlineNoteImageProjection.expanded(displaySnapshot)
-        let updatedRTF = try? snapshot.data(
-          from: NSRange(location: 0, length: snapshot.length),
-          documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
-        )
+        let updatedRTF = try? NoteRichTextCodec.encode(snapshot)
         text = snapshot.string
         richTextRTF = updatedRTF
         if let linkTextView = textView as? ListAwareTextView {
@@ -1839,6 +1832,83 @@
   }
 
   final class ListAwareTextView: NSTextView, @MainActor NSLayoutManagerDelegate {
+    @MainActor
+    private final class ChecklistIndentTextContainer: NSTextContainer {
+      weak var listAwareTextView: ListAwareTextView?
+
+      override func lineFragmentRect(
+        forProposedRect proposedRect: NSRect,
+        at characterIndex: Int,
+        writingDirection baseWritingDirection: NSWritingDirection,
+        remaining remainingRect: UnsafeMutablePointer<NSRect>?
+      ) -> NSRect {
+        let lineFragmentRect = super.lineFragmentRect(
+          forProposedRect: proposedRect,
+          at: characterIndex,
+          writingDirection: baseWritingDirection,
+          remaining: remainingRect
+        )
+        guard let textView = listAwareTextView,
+          characterIndex < (textView.string as NSString).length
+        else {
+          return lineFragmentRect
+        }
+
+        let ns = textView.string as NSString
+        let paragraphRange = ns.paragraphRange(
+          for: NSRange(location: characterIndex, length: 0)
+        )
+        guard let item = textView.parsedListItem(in: paragraphRange, string: ns),
+          item.parsed.style == .checklist,
+          characterIndex > item.contentRange.location,
+          characterIndex < NSMaxRange(item.contentRange),
+          let layoutManager = textView.layoutManager
+        else {
+          return lineFragmentRect
+        }
+
+        let firstContentGlyph = layoutManager.glyphIndexForCharacter(
+          at: item.contentRange.location
+        )
+        guard firstContentGlyph < layoutManager.numberOfGlyphs else {
+          return lineFragmentRect
+        }
+
+        let firstContentLineRect = layoutManager.lineFragmentRect(
+          forGlyphAt: firstContentGlyph,
+          effectiveRange: nil,
+          withoutAdditionalLayout: true
+        )
+        guard !firstContentLineRect.isEmpty else { return lineFragmentRect }
+
+        let firstContentOriginX = firstContentLineRect.minX
+          + layoutManager.location(forGlyphAt: firstContentGlyph).x
+        let continuationHeadIndent = (
+          textView.textStorage?.attribute(
+            .paragraphStyle,
+            at: characterIndex,
+            effectiveRange: nil
+          ) as? NSParagraphStyle
+        )?.headIndent ?? 0
+        let continuationOriginX = max(
+          lineFragmentRect.minX,
+          firstContentOriginX - continuationHeadIndent - lineFragmentPadding
+        )
+        guard continuationOriginX > lineFragmentRect.minX,
+          continuationOriginX < lineFragmentRect.maxX
+        else {
+          return lineFragmentRect
+        }
+
+        return NSRect(
+          x: continuationOriginX,
+          y: lineFragmentRect.minY,
+          width: max(0, lineFragmentRect.maxX - continuationOriginX),
+          height: lineFragmentRect.height
+        )
+      }
+    }
+
     private static let noteLinkSeparatorMenuTag = 0xF1EC
     private static let noteLinkRequestMenuTag = 0xF1ED
     private static let noteLinkOpenMenuTag = 0xF1EE
@@ -1915,7 +1985,7 @@
     override convenience init(frame frameRect: NSRect) {
       let storage = NSTextStorage()
       let layoutManager = NSLayoutManager()
-      let textContainer = NSTextContainer(
+      let textContainer = ChecklistIndentTextContainer(
         size: NSSize(width: frameRect.width, height: 10_000_000)
       )
       textContainer.widthTracksTextView = true
@@ -1931,11 +2001,13 @@
 
     override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
       super.init(frame: frameRect, textContainer: container)
+      (container as? ChecklistIndentTextContainer)?.listAwareTextView = self
       layoutManager?.delegate = self
     }
 
     required init?(coder: NSCoder) {
       super.init(coder: coder)
+      (textContainer as? ChecklistIndentTextContainer)?.listAwareTextView = self
       layoutManager?.delegate = self
     }
 
@@ -2077,6 +2149,31 @@
       forControlCharacterAt charIndex: Int
     ) -> NSLayoutManager.ControlCharacterAction {
       checklistPrefixWidth(at: charIndex) == nil ? action : .whitespace
+    }
+
+    func layoutManager(
+      _ layoutManager: NSLayoutManager,
+      shouldBreakLineByWordBeforeCharacterAt charIndex: Int
+    ) -> Bool {
+      let ns = string as NSString
+      guard charIndex >= 0, charIndex < ns.length else { return true }
+      let paragraphRange = ns.paragraphRange(
+        for: NSRange(location: charIndex, length: 0)
+      )
+      guard let item = parsedListItem(in: paragraphRange, string: ns),
+        item.parsed.style == .checklist,
+        item.contentRange.length > 0,
+        item.contentRange.location == charIndex,
+        ns.rangeOfComposedCharacterSequence(at: charIndex).location == charIndex
+      else {
+        return true
+      }
+      guard layoutManager.textStorage?.attribute(
+        .attachment,
+        at: charIndex,
+        effectiveRange: nil
+      ) == nil else { return true }
+      return false
     }
 
     func layoutManager(
@@ -2420,9 +2517,53 @@
 
     override func draw(_ dirtyRect: NSRect) {
       if checklistPresentationNeedsRefresh { refreshChecklistPresentation() }
+
+      var selectedBulletMarkers: [(range: NSRange, glyphs: NSRange, rect: NSRect)] = []
+      if let layoutManager, let textContainer {
+        for markerRange in selectedBulletMarkerRanges() {
+          let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: markerRange,
+            actualCharacterRange: nil
+          )
+          guard glyphRange.length > 0 else { continue }
+          let markerRect = layoutManager.boundingRect(
+            forGlyphRange: glyphRange,
+            in: textContainer
+          ).offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+          guard markerRect.intersects(dirtyRect) else { continue }
+          selectedBulletMarkers.append((markerRange, glyphRange, markerRect))
+        }
+      }
+
       NSGraphicsContext.saveGraphicsState()
+      if !selectedBulletMarkers.isEmpty {
+        let clippingPath = NSBezierPath(rect: dirtyRect)
+        clippingPath.windingRule = .evenOdd
+        for marker in selectedBulletMarkers {
+          clippingPath.append(NSBezierPath(rect: marker.rect.intersection(dirtyRect)))
+        }
+        clippingPath.addClip()
+      }
       super.draw(dirtyRect)
       NSGraphicsContext.restoreGraphicsState()
+
+      if let storage = textStorage {
+        for marker in selectedBulletMarkers {
+          if drawsBackground {
+            backgroundColor.setFill()
+            NSBezierPath(rect: marker.rect).fill()
+          }
+          if let background = storage.attribute(
+            .backgroundColor,
+            at: marker.range.location,
+            effectiveRange: nil
+          ) as? NSColor {
+            background.setFill()
+            NSBezierPath(rect: marker.rect).fill()
+          }
+          layoutManager?.drawGlyphs(forGlyphRange: marker.glyphs, at: textContainerOrigin)
+        }
+      }
 
       for item in checklistItems(in: dirtyRect) {
         guard let rect = checklistMarkerRect(for: item.markerRange), rect.intersects(dirtyRect) else {
@@ -2770,7 +2911,85 @@
           return
         }
       }
+      if let plainText = insertString as? String {
+        let text = NSAttributedString(string: plainText, attributes: typingAttributes)
+        let completedText = completedChecklistInsertion(
+          text, replacing: effectiveRange, clearingInheritedContinuation: true
+        )
+        if !completedText.isEqual(to: text) {
+          let insertionRange = replacementRange.location == NSNotFound && hasMarkedText()
+            ? markedRange() : effectiveRange
+          let originalLength = (string as NSString).length
+          let changeGeneration = textChangeGeneration
+          performUndoGroup {
+            super.insertText(completedText, replacementRange: replacementRange)
+            guard textChangeGeneration > changeGeneration, let storage = textStorage else { return }
+            let insertedLength = storage.length - originalLength + insertionRange.length
+            guard insertionRange.location >= 0,
+              insertionRange.location <= storage.length,
+              insertedLength > 0,
+              insertedLength <= storage.length - insertionRange.location
+            else { return }
+            let insertedRange = NSRange(location: insertionRange.location, length: insertedLength)
+            let nativeText = storage.attributedSubstring(from: insertedRange)
+            let normalizedText = completedChecklistInsertion(
+              nativeText, replacing: insertedRange, clearingInheritedContinuation: true
+            )
+            if !normalizedText.isEqual(to: nativeText) {
+              _ = replaceAttributedText(
+                in: insertedRange, with: normalizedText, selecting: selectedRange()
+              )
+            }
+          }
+          return
+        }
+      } else if let text = insertString as? NSAttributedString {
+        super.insertText(
+          completedChecklistInsertion(text, replacing: effectiveRange),
+          replacementRange: replacementRange
+        )
+        return
+      }
       super.insertText(insertString, replacementRange: replacementRange)
+    }
+
+    private func completedChecklistInsertion(
+      _ text: NSAttributedString,
+      replacing range: NSRange,
+      clearingInheritedContinuation: Bool = false
+    ) -> NSAttributedString {
+      let ns = string as NSString
+      guard text.length > 0,
+        range.location != NSNotFound,
+        range.location >= 0,
+        range.location <= ns.length,
+        range.length <= ns.length - range.location,
+        let item = checklistItem(
+          in: ns.paragraphRange(for: NSRange(location: range.location, length: 0)), string: ns
+        ),
+        item.completed,
+        range.location >= item.contentRange.location,
+        range.location <= NSMaxRange(item.contentRange)
+      else { return text }
+      var contentsEnd = 0
+      (text.string as NSString).getParagraphStart(
+        nil, end: nil, contentsEnd: &contentsEnd, for: NSRange(location: 0, length: 0)
+      )
+      let result = NSMutableAttributedString(attributedString: text)
+      if contentsEnd > 0 {
+        result.addAttribute(
+          .strikethroughStyle,
+          value: NSUnderlineStyle.single.rawValue,
+          range: NSRange(location: 0, length: contentsEnd)
+        )
+      }
+      if clearingInheritedContinuation, contentsEnd < result.length {
+        result.removeAttribute(
+          .strikethroughStyle,
+          range: NSRange(location: contentsEnd, length: result.length - contentsEnd)
+        )
+      }
+      return result
     }
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
@@ -2945,33 +3164,159 @@
     }
 
     override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
-      containsInlineImage(in: selectedRange()) ? [.rtf, .string] : super.writablePasteboardTypes
+      selectedRanges.map(\.rangeValue).contains { containsInlineImage(in: $0) }
+        ? [.rtf, .string]
+        : super.writablePasteboardTypes
+    }
+
+    override func writeSelection(
+      to pasteboard: NSPasteboard,
+      types: [NSPasteboard.PasteboardType]
+    ) -> Bool {
+      let ns = string as NSString
+      let selections = selectedRanges.map(\.rangeValue)
+      let expandedSelections = selections.map { selection -> NSRange in
+        guard selection.length > 0,
+          selection.location != NSNotFound,
+          selection.location >= 0,
+          selection.location <= ns.length,
+          selection.length <= ns.length - selection.location,
+          let item = bulletListItem(at: selection.location, string: ns),
+          selection.location == item.contentRange.location,
+          NSMaxRange(selection) >= NSMaxRange(item.contentRange)
+        else {
+          return selection
+        }
+        return NSRange(
+          location: item.paragraphRange.location,
+          length: NSMaxRange(selection) - item.paragraphRange.location
+        )
+      }
+      let containsImages = selections.contains { containsInlineImage(in: $0) }
+      let exportsText = !types.isEmpty
+        && types.allSatisfy { $0 == .rtf || $0 == .string }
+        && selections.contains { $0.length > 0 }
+      guard expandedSelections != selections || containsImages || exportsText,
+        let storage = textStorage
+      else {
+        return super.writeSelection(to: pasteboard, types: types)
+      }
+
+      let display = NSAttributedString(attributedString: storage)
+      let source = InlineNoteImageProjection.expanded(display)
+      let sourceSelections = expandedSelections.map {
+        InlineNoteImageProjection.sourceRange(forDisplayRange: $0, in: display)
+      }
+      let hasManagedImages = Self.containsInlineImage(in: display)
+      let exportTypes = hasManagedImages
+        ? types.filter { $0 == .rtf || $0 == .string }
+        : types
+      guard !exportTypes.isEmpty else { return false }
+      if !hasManagedImages && !exportsText {
+        let exporter = NSTextView(frame: bounds)
+        exporter.isRichText = isRichText
+        exporter.textStorage?.setAttributedString(source)
+        exporter.setSelectedRanges(
+          sourceSelections.map { NSValue(range: $0) },
+          affinity: selectionAffinity,
+          stillSelecting: false
+        )
+        return exporter.writeSelection(to: pasteboard, types: exportTypes)
+      }
+      return writeProjectedSelection(
+        sourceSelections,
+        from: source,
+        to: pasteboard,
+        types: exportTypes
+      )
+    }
+
+    private func writeProjectedSelection(
+      _ selections: [NSRange],
+      from source: NSAttributedString,
+      to pasteboard: NSPasteboard,
+      types: [NSPasteboard.PasteboardType]
+    ) -> Bool {
+      guard !selections.isEmpty,
+        selections.allSatisfy({
+          $0.location != NSNotFound
+            && $0.location >= 0
+            && $0.length >= 0
+            && $0.location <= source.length
+            && $0.length <= source.length - $0.location
+        })
+      else { return false }
+
+      let copiedText = NSMutableAttributedString(string: "")
+      for (index, selection) in selections.enumerated() {
+        if index > 0 {
+          copiedText.append(NSAttributedString(string: "\n"))
+        }
+        copiedText.append(source.attributedSubstring(from: selection))
+      }
+      let exportText = Self.clipboardSafeAttributedString(copiedText)
+      let item = NSPasteboardItem()
+      if types.contains(.rtf) {
+        let range = NSRange(location: 0, length: exportText.length)
+        guard let data = try? exportText.data(
+          from: range,
+          documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+        ), item.setData(data, forType: .rtf) else { return false }
+      }
+      if types.contains(.string), !item.setString(exportText.string, forType: .string) {
+        return false
+      }
+      return !item.types.isEmpty && pasteboard.writeObjects([item])
+    }
+
+    private static func clipboardSafeAttributedString(
+      _ text: NSAttributedString
+    ) -> NSAttributedString {
+      let result = NSMutableAttributedString(attributedString: text)
+      guard result.length > 0 else { return result }
+      var convertedColors: [(key: NSAttributedString.Key, range: NSRange, color: NSColor)] = []
+      result.enumerateAttributes(
+        in: NSRange(location: 0, length: result.length)
+      ) { attributes, range, _ in
+        for (key, value) in attributes {
+          guard let color = value as? NSColor,
+            let converted = color.usingColorSpace(.deviceRGB)
+          else { continue }
+          convertedColors.append((key, range, converted))
+        }
+      }
+      for (key, range, color) in convertedColors {
+        result.addAttribute(key, value: color, range: range)
+      }
+      return result
     }
 
     override func writeSelection(
       to pasteboard: NSPasteboard,
       type: NSPasteboard.PasteboardType
     ) -> Bool {
-      guard containsInlineImage(in: selectedRange()),
-        let storage = textStorage
-      else {
+      let selections = selectedRanges.map(\.rangeValue)
+      let ns = string as NSString
+      let expandsBullet = selections.contains { selection in
+        guard selection.length > 0,
+          selection.location != NSNotFound,
+          selection.location >= 0,
+          selection.location <= ns.length,
+          selection.length <= ns.length - selection.location,
+          let item = bulletListItem(at: selection.location, string: ns)
+        else { return false }
+        return selection.location == item.contentRange.location
+          && NSMaxRange(selection) >= NSMaxRange(item.contentRange)
+      }
+      let containsImages = selections.contains { containsInlineImage(in: $0) }
+      let exportsText = (type == .rtf || type == .string)
+        && textStorage != nil
+        && selections.contains { $0.length > 0 }
+      guard expandsBullet || containsImages || exportsText else {
         return super.writeSelection(to: pasteboard, type: type)
       }
-      let source = InlineNoteImageProjection.expanded(
-        storage.attributedSubstring(from: selectedRange())
-      )
-      switch type {
-      case .string:
-        return pasteboard.setString(source.string, forType: .string)
-      case .rtf:
-        guard let data = try? source.data(
-          from: NSRange(location: 0, length: source.length),
-          documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
-        ) else { return false }
-        return pasteboard.setData(data, forType: .rtf)
-      default:
-        return false
-      }
+      if containsImages, type != .rtf && type != .string { return false }
+      return writeSelection(to: pasteboard, types: [type])
     }
 
     private func containsInlineImage(in range: NSRange) -> Bool {
@@ -3041,21 +3386,38 @@
       hasRichFormatting: Bool,
       insertion: () -> Void
     ) {
-      insertion()
-      guard textChangeGeneration > context.changeGeneration else { return }
-      guard let updatedStorage = textStorage else { return }
-      let insertedLength = updatedStorage.length
-        - context.originalDocumentLength
-        + context.replacementRange.length
-      finishPaste(
-        insertedRange: NSRange(
+      performUndoGroup {
+        insertion()
+        guard textChangeGeneration > context.changeGeneration else { return }
+        guard let updatedStorage = textStorage else { return }
+        let insertedLength = updatedStorage.length
+          - context.originalDocumentLength
+          + context.replacementRange.length
+        let insertedRange = NSRange(
           location: context.replacementRange.location,
           length: insertedLength
-        ),
-        plainText: plainText,
-        destinationAttributes: context.destinationAttributes,
-        hasRichFormatting: hasRichFormatting
-      )
+        )
+        if insertedLength > 0,
+          NSMaxRange(insertedRange) <= updatedStorage.length
+        {
+          let nativeText = updatedStorage.attributedSubstring(from: insertedRange)
+          let completedText = completedChecklistInsertion(
+            nativeText, replacing: insertedRange,
+            clearingInheritedContinuation: !hasRichFormatting
+          )
+          if !completedText.isEqual(to: nativeText) {
+            _ = replaceAttributedText(
+              in: insertedRange, with: completedText, selecting: selectedRange()
+            )
+          }
+        }
+        finishPaste(
+          insertedRange: insertedRange,
+          plainText: plainText,
+          destinationAttributes: context.destinationAttributes,
+          hasRichFormatting: hasRichFormatting
+        )
+      }
     }
 
     private func pasteContext() -> PasteContext? {
@@ -3146,7 +3508,10 @@
       performUndoGroup {
         _ = replaceAttributedText(
           in: pendingPaste.range,
-          with: replacement,
+          with: completedChecklistInsertion(
+            replacement, replacing: pendingPaste.range,
+            clearingInheritedContinuation: option == .pasteTextOnly
+          ),
           selecting: NSRange(
             location: pendingPaste.range.location + replacement.length,
             length: 0
@@ -4075,6 +4440,7 @@
       let completed = !currentlyCompleted
       undoManager?.beginUndoGrouping()
       defer { undoManager?.endUndoGrouping() }
+      registerSelectionUndo(selection)
       registerStrikethroughUndo(
         enabled: currentlyCompleted,
         range: contentRange
@@ -4096,6 +4462,13 @@
         }
       }
       guard changed else { return false }
+      if selection.length == 0,
+        selection.location >= contentRange.location,
+        selection.location <= NSMaxRange(contentRange)
+      {
+        typingAttributes[.strikethroughStyle] = completed ? NSUnderlineStyle.single.rawValue : 0
+      }
+      registerSelectionUndo(selection)
       if completed {
         showChecklistCompletionAnimation(
           for: markerRange,
@@ -4184,6 +4557,39 @@
         contentRange: item.contentRange,
         completed: item.parsed.isChecklistComplete
       )
+    }
+
+    private func selectedBulletMarkerRanges() -> [NSRange] {
+      let ns = string as NSString
+      guard ns.length > 0 else { return [] }
+      var markers: [NSRange] = []
+      var seenMarkers = Set<NSRange>()
+      for selection in selectedRanges.map(\.rangeValue) where selection.length > 0 {
+        guard selection.location != NSNotFound,
+          selection.location >= 0,
+          selection.location < ns.length
+        else {
+          continue
+        }
+        let end = min(ns.length, NSMaxRange(selection))
+        var location = selection.location
+        while location < end {
+          let paragraphRange = ns.paragraphRange(
+            for: NSRange(location: location, length: 0)
+          )
+          if let item = parsedListItem(in: paragraphRange, string: ns),
+            case .bullet = item.parsed.style,
+            NSIntersectionRange(selection, item.markerRange).length > 0,
+            seenMarkers.insert(item.markerRange).inserted
+          {
+            markers.append(item.markerRange)
+          }
+          let nextLocation = NSMaxRange(paragraphRange)
+          guard nextLocation > location else { break }
+          location = nextLocation
+        }
+      }
+      return markers
     }
 
     private func parsedListItem(in paragraphRange: NSRange, string ns: NSString) -> (

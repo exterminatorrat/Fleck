@@ -198,6 +198,8 @@
     window.contentView = editor
     editor.allowsUndo = true
     editor.undoManager?.removeAllActions()
+    let originalSelection = NSRange(location: 2, length: 6)
+    editor.setSelectedRange(originalSelection)
 
     let event = try #require(NSEvent.mouseEvent(
       with: .leftMouseDown,
@@ -212,12 +214,14 @@
     ))
     editor.mouseDown(with: event)
     #expect(editor.string.hasPrefix("● "))
+    #expect(editor.selectedRange() == originalSelection)
     let completedGeometry = try checklistAlignmentGeometry(in: editor, markerLocation: 0)
     #expect(abs(completedGeometry.slot.width - 20) < 0.01)
     #expect(abs(completedGeometry.marker.minX - editor.textContainerOrigin.x) < 0.01)
     try #require(editor.undoManager).undo()
 
     #expect(editor.string == text)
+    #expect(editor.selectedRange() == originalSelection)
     let restoredGeometry = try checklistAlignmentGeometry(in: editor, markerLocation: 0)
     #expect(abs(restoredGeometry.slot.width - 20) < 0.01)
     #expect(abs(restoredGeometry.marker.minX - editor.textContainerOrigin.x) < 0.01)
@@ -227,6 +231,9 @@
       documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
     )
     #expect(restoredRTF == originalRTF)
+    try #require(editor.undoManager).redo()
+    #expect(editor.string.hasPrefix("● "))
+    #expect(editor.selectedRange() == originalSelection)
     window.contentView = nil
   }
 
