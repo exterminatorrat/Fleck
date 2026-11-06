@@ -1966,8 +1966,13 @@ func personalDictionaryPriorityStarStaysVisibleWithoutHoverAndDeleteRemainsHidde
     print(String(decoding: diagnosticDispatch.utf8.prefix(1000), as: UTF8.self) + " truncated=\(diagnosticDispatch.utf8.count > 1000)")
     try sendPersonalDictionaryMouseClick(at: diagnosticClickPoint, in: host, window: window)
     await settlePersonalDictionarySettingsHost(host)
-    try await Task.sleep(for: .milliseconds(120))
-    await settlePersonalDictionarySettingsHost(host)
+    let unstarDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+    while viewModel.entries.first(where: { $0.id == starredEntry.id })?.isPriority != false,
+      ContinuousClock.now < unstarDeadline
+    {
+      try await Task.sleep(for: .milliseconds(20))
+      await settlePersonalDictionarySettingsHost(host)
+    }
     let diagnosticPriorityAfterClick = viewModel.entries.first(where: { $0.id == starredEntry.id })?.isPriority
     let diagnosticState = "[F93-6178:star-click] dark=\(appearance == .dark)"
       + " beforePresent=\(diagnosticPriorityBeforeClick != nil) beforeStarred=\(diagnosticPriorityBeforeClick == true)"
