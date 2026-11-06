@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.23-beta.1] - 2026-11-06
+
+### Changed
+
+- Integration build of the consolidated foundation, editor, dictation, MCP and status/update branches for full CI.
+
 ## [1.7.22-beta.1] - 2026-11-06
 
 ### Changed
