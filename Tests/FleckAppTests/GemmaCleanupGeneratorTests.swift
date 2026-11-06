@@ -1484,6 +1484,7 @@ import Testing
   await helper.waitUntilStartedEventEnqueued()
 
   let acknowledgement = Task { await session.acknowledgement() }
+  await helper.waitUntilEventStreamAccessed()
   session.forceTerminate()
   session.forceTerminate()
   #expect(helper.forceTerminationCount == 1)
@@ -1960,7 +1961,7 @@ private final class GemmaFakeTransport: GemmaCleanupTransport, @unchecked Sendab
 }
 
 private final class GemmaFakeTransportSession: GemmaCleanupTransportSession, @unchecked Sendable {
-  let events: AsyncThrowingStream<Data, Error>
+  private let eventStream: AsyncThrowingStream<Data, Error>
   let terminationExpectation: GemmaCleanupTerminationExpectation
 
   private let eventContinuation: AsyncThrowingStream<Data, Error>.Continuation
@@ -1968,6 +1969,8 @@ private final class GemmaFakeTransportSession: GemmaCleanupTransportSession, @un
   private let blocksTerminationAcknowledgement: Bool
   private let dispositionFactory: GemmaFakeDispositionFactory
   private var startedEventEnqueued = false
+  private var eventStreamAccessed = false
+  private var eventStreamAccessContinuations: [CheckedContinuation<Void, Never>] = []
   private var terminationAcknowledgementCalled = false
   private var terminationAcknowledgementReleased = false
   private var terminationPhasesStorage: [GemmaCleanupTerminationPhase] = []
@@ -1986,7 +1989,7 @@ private final class GemmaFakeTransportSession: GemmaCleanupTransportSession, @un
     dispositionFactory: @escaping GemmaFakeDispositionFactory
   ) {
     let pair = AsyncThrowingStream<Data, Error>.makeStream()
-    events = pair.stream
+    eventStream = pair.stream
     eventContinuation = pair.continuation
     terminationExpectation = GemmaCleanupTerminationExpectation(
       cleanupRequestID: request.requestID,
@@ -1996,6 +1999,31 @@ private final class GemmaFakeTransportSession: GemmaCleanupTransportSession, @un
     self.blocksTerminationAcknowledgement = blocksTerminationAcknowledgement
     self.dispositionFactory = dispositionFactory
     terminationAcknowledgementReleased = !blocksTerminationAcknowledgement
+  }
+
+  var events: AsyncThrowingStream<Data, Error> {
+    lock.lock()
+    eventStreamAccessed = true
+    let continuations = eventStreamAccessContinuations
+    eventStreamAccessContinuations = []
+    lock.unlock()
+    for continuation in continuations {
+      continuation.resume()
+    }
+    return eventStream
+  }
+
+  func waitUntilEventStreamAccessed() async {
+    await withCheckedContinuation { continuation in
+      lock.lock()
+      if eventStreamAccessed {
+        lock.unlock()
+        continuation.resume()
+      } else {
+        eventStreamAccessContinuations.append(continuation)
+        lock.unlock()
+      }
+    }
   }
 
   func requestCancellation() {

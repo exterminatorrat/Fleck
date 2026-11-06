@@ -173,41 +173,82 @@ struct AppleSpeechAssetReadiness: Sendable {
     await equivalentLocale(requestedLocale)
   }
 
-  func release(_ reservation: AppleSpeechAssetReservation) async {
+  func release(
+    _ reservation: AppleSpeechAssetReservation,
+    diagnostics: AppleSpeechDiagnostics? = nil
+  ) async {
     guard reservation.ownsReservation else { return }
+    diagnostics?.record(
+      .reservationRelease,
+      .begin,
+      reservationOwned: true
+    )
     await releaseLocale(reservation.locale)
+    diagnostics?.record(
+      .reservationRelease,
+      .success,
+      reservationOwned: true
+    )
   }
 
   func reserveAndVerify(
     locale: Locale,
     status: @escaping @Sendable () async -> AppleSpeechAssetStatus,
-    shouldContinue: @escaping @Sendable () async -> Bool = { !Task.isCancelled }
+    shouldContinue: @escaping @Sendable () async -> Bool = { !Task.isCancelled },
+    diagnostics: AppleSpeechDiagnostics? = nil
   ) async throws -> AppleSpeechAssetReservation {
-    guard await shouldContinue() else { throw CancellationError() }
+    diagnostics?.record(.reservation, .begin)
+    guard await shouldContinue() else {
+      diagnostics?.record(.reservation, .cancelled)
+      throw CancellationError()
+    }
 
     let didReserve: Bool
     do {
       didReserve = try await reserveLocale(locale)
     } catch is CancellationError {
+      diagnostics?.record(.reservation, .cancelled)
       throw CancellationError()
     } catch {
+      diagnostics?.record(.reservation, .failure, error: error)
       throw DictationFailure.unavailable
     }
     let reservation = AppleSpeechAssetReservation(
       locale: locale,
       ownsReservation: didReserve
     )
+    diagnostics?.record(
+      .reservation,
+      .success,
+      reservationOwned: reservation.ownsReservation
+    )
 
     guard await shouldContinue() else {
-      await release(reservation)
+      diagnostics?.record(.reservation, .cancelled, reservationOwned: reservation.ownsReservation)
+      await release(reservation, diagnostics: diagnostics)
       throw CancellationError()
     }
-    guard await status() == .installed else {
-      await release(reservation)
+    diagnostics?.record(.reservedStatus, .begin, reservationOwned: reservation.ownsReservation)
+    let observedStatus = await status()
+    guard observedStatus == .installed else {
+      diagnostics?.record(
+        .reservedStatus,
+        .failure,
+        reservationOwned: reservation.ownsReservation,
+        assetStatus: observedStatus
+      )
+      await release(reservation, diagnostics: diagnostics)
       throw DictationFailure.unavailable
     }
+    diagnostics?.record(
+      .reservedStatus,
+      .success,
+      reservationOwned: reservation.ownsReservation,
+      assetStatus: observedStatus
+    )
     guard await shouldContinue() else {
-      await release(reservation)
+      diagnostics?.record(.reservation, .cancelled, reservationOwned: reservation.ownsReservation)
+      await release(reservation, diagnostics: diagnostics)
       throw CancellationError()
     }
     return reservation
@@ -355,6 +396,21 @@ enum AudioTapIngress {
       }
     }
   }
+
+  static func makeHandler(
+    for ingress: BoundedAudioIngress,
+    diagnostics: AppleSpeechDiagnostics?
+  ) -> AVAudioNodeTapBlock {
+    guard let diagnostics else { return makeHandler(for: ingress) }
+    return { buffer, _ in
+      diagnostics.observeTapBuffer(frameLength: buffer.frameLength)
+      do {
+        _ = ingress.yield(try AudioBufferTools.copy(buffer))
+      } catch {
+        ingress.fail(DictationFailure.transcriptionFailed)
+      }
+    }
+  }
 }
 
 protocol AppleSpeechSession: AnyObject, Sendable {
@@ -367,6 +423,10 @@ protocol AppleSpeechSession: AnyObject, Sendable {
   func finish() async throws -> String?
   func cancel() async
   func releaseResources() async
+}
+
+protocol AppleSpeechDiagnosticSession: AppleSpeechSession {
+  func configureDiagnostics(_ diagnostics: AppleSpeechDiagnostics) async
 }
 
 @MainActor
@@ -399,12 +459,17 @@ private final class SystemAppleSpeechInterruptionSource: AppleSpeechInterruption
 
 @MainActor
 final class AppleSpeechCapture: SpeechEngine {
+  private static var diagnosticAttemptOrdinal = 0
+
   let kind: DictationSpeechEngine = .standard
 
   private let requestPermission: () async -> DictationPermissionResult
   private let makeSession: () async throws -> any AppleSpeechSession
   private let interruptions: any AppleSpeechInterruptionSource
+  private let diagnosticsEnabled: Bool
+  private let diagnosticSink: @Sendable (AppleSpeechDiagnosticReceipt) -> Void
   private var session: (any AppleSpeechSession)?
+  private var diagnostics: AppleSpeechDiagnostics?
   private var terminalFailure: DictationFailure?
   private var terminalCommandIssued = false
   private var interruptionObservationActive = false
@@ -412,17 +477,23 @@ final class AppleSpeechCapture: SpeechEngine {
   init(
     requestPermission: @escaping () async -> DictationPermissionResult,
     makeSession: @escaping () async throws -> any AppleSpeechSession,
-    interruptions: any AppleSpeechInterruptionSource = SystemAppleSpeechInterruptionSource()
+    interruptions: any AppleSpeechInterruptionSource = SystemAppleSpeechInterruptionSource(),
+    diagnosticsEnabled: Bool = false,
+    diagnosticSink: @escaping @Sendable (AppleSpeechDiagnosticReceipt) -> Void =
+      AppleSpeechDiagnostics.log
   ) {
     self.requestPermission = requestPermission
     self.makeSession = makeSession
     self.interruptions = interruptions
+    self.diagnosticsEnabled = diagnosticsEnabled
+    self.diagnosticSink = diagnosticSink
   }
 
   convenience init(
     microphoneUID: String? = nil,
     permissions: DictationPermissionController = .init(),
-    microphoneSelectionChanged: @escaping @MainActor (MicrophoneSelection) -> Void = { _ in }
+    microphoneSelectionChanged: @escaping @MainActor (MicrophoneSelection) -> Void = { _ in },
+    diagnosticsEnabled: Bool? = nil
   ) {
     self.init(
       requestPermission: {
@@ -440,7 +511,8 @@ final class AppleSpeechCapture: SpeechEngine {
           microphoneSelectionChanged: microphoneSelectionChanged
         )
       },
-      interruptions: SystemAppleSpeechInterruptionSource()
+      interruptions: SystemAppleSpeechInterruptionSource(),
+      diagnosticsEnabled: diagnosticsEnabled ?? AppleSpeechDiagnostics.isEnabledInEnvironment
     )
   }
 
@@ -449,15 +521,53 @@ final class AppleSpeechCapture: SpeechEngine {
     level: @escaping @MainActor @Sendable (Float) -> Void
   ) async throws {
     guard session == nil else { throw DictationFailure.unavailable }
+    let attemptDiagnostics: AppleSpeechDiagnostics?
+    if diagnosticsEnabled {
+      Self.diagnosticAttemptOrdinal =
+        Self.diagnosticAttemptOrdinal == .max
+        ? 0
+        : Self.diagnosticAttemptOrdinal + 1
+      attemptDiagnostics = AppleSpeechDiagnostics(
+        attempt: Self.diagnosticAttemptOrdinal,
+        sink: diagnosticSink
+      )
+    } else {
+      attemptDiagnostics = nil
+    }
+    attemptDiagnostics?.record(.permission, .begin)
     guard case .granted = await requestPermission() else {
+      attemptDiagnostics?.record(.permission, .failure)
+      exportDiagnostics(attemptDiagnostics)
       throw DictationFailure.permissionDenied
     }
-    let session = try await makeSession()
+    attemptDiagnostics?.record(.permission, .success)
+    attemptDiagnostics?.record(.sessionConstruction, .begin)
+    let session: any AppleSpeechSession
+    do {
+      session = try await makeSession()
+    } catch {
+      attemptDiagnostics?.recordFailure(.sessionConstruction, error: error)
+      exportDiagnostics(attemptDiagnostics)
+      throw error
+    }
+    attemptDiagnostics?.record(.sessionConstruction, .success)
+    if let attemptDiagnostics,
+      let diagnosticSession = session as? any AppleSpeechDiagnosticSession
+    {
+      await diagnosticSession.configureDiagnostics(attemptDiagnostics)
+    }
+    attemptDiagnostics?.record(.deviceSupport, .begin)
     guard await session.supportsOnDeviceRecognition else {
+      attemptDiagnostics?.record(.deviceSupport, .failure)
+      attemptDiagnostics?.record(.release, .begin)
       await session.releaseResources()
+      attemptDiagnostics?.record(.release, .success)
+      exportDiagnostics(attemptDiagnostics)
       throw DictationFailure.unavailable
     }
+    attemptDiagnostics?.record(.deviceSupport, .success)
     self.session = session
+    diagnostics = attemptDiagnostics
     terminalFailure = nil
     terminalCommandIssued = false
     do {
@@ -472,7 +582,11 @@ final class AppleSpeechCapture: SpeechEngine {
         }
       }
     } catch {
-      await release(session)
+      if error is CancellationError {
+        attemptDiagnostics?.record(.cancel, .cancelled)
+      }
+      await release(session, diagnostics: attemptDiagnostics)
+      exportDiagnostics(attemptDiagnostics)
       throw error
     }
   }
@@ -480,52 +594,81 @@ final class AppleSpeechCapture: SpeechEngine {
   func finish() async throws -> String? {
     if let terminalFailure { throw terminalFailure }
     guard let session else { throw DictationFailure.unavailable }
+    let attemptDiagnostics = diagnostics
+    attemptDiagnostics?.record(.finish, .begin)
     terminalCommandIssued = true
     do {
       let text = try await session.finish()
-      await release(session)
+      attemptDiagnostics?.record(.finish, .success)
+      await release(session, diagnostics: attemptDiagnostics)
       if let terminalFailure { throw terminalFailure }
+      exportDiagnostics(attemptDiagnostics)
       return text?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     } catch {
-      await release(session)
+      attemptDiagnostics?.recordFailure(.finish, error: error)
+      await release(session, diagnostics: attemptDiagnostics)
+      exportDiagnostics(attemptDiagnostics)
       throw terminalFailure ?? error
     }
   }
 
   func cancel() async {
     guard let session else { return }
+    let attemptDiagnostics = diagnostics
     if !terminalCommandIssued {
       terminalCommandIssued = true
+      attemptDiagnostics?.record(.cancel, .begin)
       await session.cancel()
+      attemptDiagnostics?.record(.cancel, .success)
     }
-    await release(session)
+    await release(session, diagnostics: attemptDiagnostics)
+    exportDiagnostics(attemptDiagnostics)
   }
 
   func releaseResources() async {
     guard let session else { return }
+    let attemptDiagnostics = diagnostics
     if !terminalCommandIssued {
       terminalCommandIssued = true
+      attemptDiagnostics?.record(.cancel, .begin)
       await session.cancel()
+      attemptDiagnostics?.record(.cancel, .success)
     }
-    await release(session)
+    await release(session, diagnostics: attemptDiagnostics)
+    exportDiagnostics(attemptDiagnostics)
   }
 
   private func interrupt() async {
     guard terminalFailure == nil, let session else { return }
+    let attemptDiagnostics = diagnostics
     terminalFailure = .interrupted
+    attemptDiagnostics?.record(.cancel, .begin)
     if !terminalCommandIssued {
       terminalCommandIssued = true
     }
     await session.cancel()
-    await release(session)
+    attemptDiagnostics?.record(.cancel, .success)
+    await release(session, diagnostics: attemptDiagnostics)
+    exportDiagnostics(attemptDiagnostics)
   }
 
-  private func release(_ candidate: any AppleSpeechSession) async {
+  private func release(
+    _ candidate: any AppleSpeechSession,
+    diagnostics: AppleSpeechDiagnostics?
+  ) async {
     guard let session, session === candidate else { return }
+    diagnostics?.record(.release, .begin)
     stopInterruptionObservation()
     await candidate.releaseResources()
+    diagnostics?.record(.release, .success)
     guard self.session === candidate else { return }
     self.session = nil
+  }
+
+  private func exportDiagnostics(_ expected: AppleSpeechDiagnostics?) {
+    expected?.export()
+    guard let expected, self.diagnostics === expected else { return }
+    self.diagnostics = nil
   }
 
   private func stopInterruptionObservation() {
@@ -871,11 +1014,12 @@ private struct ModernAnalyzerInputSequence: AsyncSequence, @unchecked Sendable {
 }
 
 @available(macOS 26.0, *)
-private actor ModernAppleSpeechSession: AppleSpeechSession {
+private actor ModernAppleSpeechSession: AppleSpeechDiagnosticSession {
   private let locale = Locale(identifier: "en-US")
   private let microphoneUID: String?
   private let microphoneSelectionChanged: @MainActor (MicrophoneSelection) -> Void
   private let assetReadiness: AppleSpeechAssetReadiness
+  private var diagnostics: AppleSpeechDiagnostics?
   private var audioEngine: AVAudioEngine?
   private var analyzer: SpeechAnalyzer?
   private var converter: AVAudioConverter?
@@ -889,8 +1033,11 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
   private var transcript = AppleSpeechTranscriptAssembler()
   private var terminalError: Error?
   private var tapInstalled = false
+  private var didBeginFirstInputBuffer = false
+  private var didRecordInputBufferOutcome = false
   private var didFinalize = false
   private var didCancelAnalyzer = false
+  private var didRecordFirstConversion = false
   private var terminationRequested = false
 
   var supportsOnDeviceRecognition: Bool { true }
@@ -905,6 +1052,10 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
     self.assetReadiness = assetReadiness
   }
 
+  func configureDiagnostics(_ diagnostics: AppleSpeechDiagnostics) {
+    self.diagnostics = diagnostics
+  }
+
   func start(
     provisional: @escaping @MainActor @Sendable (String) -> Void,
     level: @escaping @MainActor @Sendable (Float) -> Void
@@ -913,15 +1064,20 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
     let audioEngine = AVAudioEngine()
     self.audioEngine = audioEngine
 
+    diagnostics?.record(.supportedLocale, .begin)
     guard let transcriberLocale = await assetReadiness.equivalentLocale(for: locale) else {
+      diagnostics?.record(.supportedLocale, .failure)
       throw DictationFailure.unavailable
     }
+    diagnostics?.record(.supportedLocale, .success)
     guard canContinue() else { throw CancellationError() }
 
     let inputNode = audioEngine.inputNode
     await microphoneSelectionChanged(CoreAudioMicrophone.select(savedUID: microphoneUID))
     guard canContinue() else { throw CancellationError() }
+    diagnostics?.record(.inputFormat, .begin)
     let naturalFormat = inputNode.inputFormat(forBus: 0)
+    diagnostics?.record(.inputFormat, .success, format: AppleSpeechDiagnosticFormat(naturalFormat))
     let transcriber = DictationTranscriber(
       locale: transcriberLocale,
       preset: .progressiveShortDictation
@@ -936,7 +1092,8 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
       shouldContinue: { [weak self] in
         guard let self else { return false }
         return await self.canContinue()
-      }
+      },
+      diagnostics: diagnostics
     )
 
     if reservation.ownsReservation {
@@ -947,12 +1104,15 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
       throw CancellationError()
     }
 
+    diagnostics?.record(.bestFormat, .begin, format: AppleSpeechDiagnosticFormat(naturalFormat))
     guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(
       compatibleWith: modules,
       considering: naturalFormat
     ) else {
+      diagnostics?.record(.bestFormat, .failure)
       throw DictationFailure.unavailable
     }
+    diagnostics?.record(.bestFormat, .success, format: AppleSpeechDiagnosticFormat(format))
     guard canContinue() else { throw CancellationError() }
 
     let analyzer = SpeechAnalyzer(
@@ -964,15 +1124,25 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
       await cancelAnalyzerOnce()
       throw CancellationError()
     }
-    try await analyzer.prepareToAnalyze(in: format)
+    diagnostics?.record(.analyzerPrepare, .begin, format: AppleSpeechDiagnosticFormat(format))
+    do {
+      try await analyzer.prepareToAnalyze(in: format)
+    } catch {
+      diagnostics?.recordFailure(.analyzerPrepare, error: error)
+      throw error
+    }
+    diagnostics?.record(.analyzerPrepare, .success, format: AppleSpeechDiagnosticFormat(format))
     guard canContinue() else {
       await cancelAnalyzerOnce()
       throw CancellationError()
     }
 
+    diagnostics?.record(.converter, .begin, format: AppleSpeechDiagnosticFormat(format))
     guard let converter = AVAudioConverter(from: naturalFormat, to: format) else {
+      diagnostics?.record(.converter, .failure)
       throw DictationFailure.unavailable
     }
+    diagnostics?.record(.converter, .success, format: AppleSpeechDiagnosticFormat(format))
     let ingress = BoundedAudioIngress(capacity: 8)
     let levelRelay = CoalescingLevelRelay(sink: level)
     self.converter = converter
@@ -982,49 +1152,74 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
     self.levelRelay = levelRelay
     transcript = AppleSpeechTranscriptAssembler()
     terminalError = nil
-    let inputs = ModernAnalyzerInputSequence(
-      buffers: ingress.buffers,
-      convert: { [weak self] buffer in
+    let diagnostics = diagnostics
+    let convert: @Sendable (AVAudioPCMBuffer) async throws -> AnalyzerInput
+    if let diagnostics {
+      convert = { [weak self, diagnostics] buffer in
+        guard let self else { throw CancellationError() }
+        return try await self.diagnosticAnalyzerInput(for: buffer, diagnostics: diagnostics)
+      }
+    } else {
+      convert = { [weak self] buffer in
         guard let self else { throw CancellationError() }
         return try await self.analyzerInput(for: buffer)
       }
-    )
+    }
+    let inputs = ModernAnalyzerInputSequence(buffers: ingress.buffers, convert: convert)
 
-    analysisTask = Task { [weak self] in
+    analysisTask = Task { [weak self, diagnostics] in
+      diagnostics?.record(.analyzerStart, .begin)
       do {
         try await analyzer.start(inputSequence: inputs)
+        diagnostics?.record(.analyzerStart, .success)
       } catch {
+        diagnostics?.recordFailure(.analyzerStart, error: error)
         await self?.fail(error)
       }
     }
-    resultsTask = Task { [weak self] in
+    resultsTask = Task { [weak self, diagnostics] in
+      diagnostics?.record(.resultsTermination, .begin)
       do {
         for try await result in transcriber.results {
           let text = String(result.text.characters)
           await self?.receive(text: text, isFinal: result.isFinal)
         }
+        diagnostics?.record(.resultsTermination, .success)
       } catch {
+        diagnostics?.recordFailure(.resultsTermination, error: error)
         await self?.fail(error)
       }
     }
 
+    diagnostics?.record(
+      .tapInstallation, .begin, format: AppleSpeechDiagnosticFormat(naturalFormat))
     inputNode.installTap(
       onBus: 0,
       bufferSize: 1_024,
       format: naturalFormat,
-      block: AudioTapIngress.makeHandler(for: ingress)
+      block: AudioTapIngress.makeHandler(for: ingress, diagnostics: diagnostics)
     )
     tapInstalled = true
+    diagnostics?.record(.tapInstallation, .success)
+    if let diagnostics {
+      diagnostics.record(.firstInputBuffer, .begin)
+      didBeginFirstInputBuffer = true
+    }
+    diagnostics?.record(.enginePrepare, .begin)
     audioEngine.prepare()
+    diagnostics?.record(.enginePrepare, .success)
+    diagnostics?.record(.engineStart, .begin)
     do {
       try audioEngine.start()
     } catch {
+      diagnostics?.recordFailure(.engineStart, error: error)
       stopAudio()
       ingress.finish()
       await analysisTask?.value
       await cancelAnalyzerOnce()
       throw error
     }
+    diagnostics?.record(.engineStart, .success)
   }
 
   func finish() async throws -> String? {
@@ -1103,6 +1298,40 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
     return AnalyzerInput(buffer: converted)
   }
 
+  private func diagnosticAnalyzerInput(
+    for buffer: AVAudioPCMBuffer,
+    diagnostics: AppleSpeechDiagnostics
+  ) throws -> AnalyzerInput {
+    guard let converter, let analyzerFormat, let levelRelay else {
+      throw CancellationError()
+    }
+    recordFirstTapBufferIfAvailable(using: diagnostics)
+    let converted: AVAudioPCMBuffer
+    if didRecordFirstConversion {
+      converted = try AudioBufferTools.convert(
+        buffer,
+        using: converter,
+        to: analyzerFormat
+      )
+    } else {
+      didRecordFirstConversion = true
+      diagnostics.record(.firstConversion, .begin)
+      do {
+        converted = try AudioBufferTools.convert(
+          buffer,
+          using: converter,
+          to: analyzerFormat
+        )
+      } catch {
+        diagnostics.recordFailure(.firstConversion, error: error)
+        throw error
+      }
+      diagnostics.record(.firstConversion, .success)
+    }
+    levelRelay.submit(AudioBufferTools.normalizedRMS(buffer))
+    return AnalyzerInput(buffer: converted)
+  }
+
   private func receive(text: String, isFinal: Bool) async {
     if isFinal {
       transcript.appendFinal(text)
@@ -1119,7 +1348,7 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
   private func releaseOwnedReservation() async {
     guard let ownedReservation else { return }
     self.ownedReservation = nil
-    await assetReadiness.release(ownedReservation)
+    await assetReadiness.release(ownedReservation, diagnostics: diagnostics)
   }
 
   private func fail(_ error: Error) {
@@ -1136,6 +1365,42 @@ private actor ModernAppleSpeechSession: AppleSpeechSession {
     if audioEngine.isRunning {
       audioEngine.stop()
     }
+    if let diagnostics {
+      recordFirstTapBufferAtStop(using: diagnostics)
+    }
+  }
+
+  private func recordFirstTapBufferIfAvailable(using diagnostics: AppleSpeechDiagnostics) {
+    guard didBeginFirstInputBuffer,
+      !didRecordInputBufferOutcome,
+      let observation = diagnostics.tapObservation()
+    else { return }
+    didRecordInputBufferOutcome = true
+    diagnostics.record(
+      .firstInputBuffer,
+      .success,
+      elapsedMilliseconds: observation.elapsedMilliseconds,
+      bufferCount: observation.bufferCount,
+      firstFrameLengthZero: observation.firstFrameLengthZero
+    )
+  }
+
+  private func recordFirstTapBufferAtStop(using diagnostics: AppleSpeechDiagnostics) {
+    guard didBeginFirstInputBuffer,
+      !didRecordInputBufferOutcome
+    else { return }
+    didRecordInputBufferOutcome = true
+    guard let observation = diagnostics.drainTapObservation() else {
+      diagnostics.record(.firstInputBuffer, terminationRequested ? .cancelled : .failure)
+      return
+    }
+    diagnostics.record(
+      .firstInputBuffer,
+      .success,
+      elapsedMilliseconds: observation.elapsedMilliseconds,
+      bufferCount: observation.bufferCount,
+      firstFrameLengthZero: observation.firstFrameLengthZero
+    )
   }
 
   private func finalizeAnalyzerOnce() async throws {

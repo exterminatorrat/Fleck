@@ -691,6 +691,20 @@ final class StreamingDictationSession: DictationProcessingSession {
         protectedDictionaryForms: resolution.protectedForms,
         appliedDictionaryEntryIDs: resolution.appliedEntryIDs
       )
+    case .serviceFallback:
+      return DictationProcessingResult(
+        rawTranscript: rawText,
+        dictionaryBaseline: resolution.baseline,
+        cleanedTranscript: nil,
+        insertedText: resolution.baseline,
+        cleanupOutcome: .usedRaw,
+        cleanupFallbackProvenance: .serviceFallback,
+        measurements: runtimeMeasurements,
+        captureContext: captureContext,
+        recognitionContextAcknowledgement: recognitionContextAcknowledgement,
+        protectedDictionaryForms: resolution.protectedForms,
+        appliedDictionaryEntryIDs: resolution.appliedEntryIDs
+      )
     }
   }
 

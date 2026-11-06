@@ -451,7 +451,7 @@ import Testing
     deadline: now.advanced(by: .seconds(1))
   ))
 
-  #expect(decision == .baseline(reason: .generationFailed))
+  #expect(decision == .baseline(reason: .backendUnavailable))
 }
 
 private func dynamicGemmaOnlyGenerator(

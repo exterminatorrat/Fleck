@@ -60,11 +60,29 @@ struct AdmittedModelSettingsPresentation: Equatable {
 
     self.descriptor = descriptor
     identity = descriptor?.modelID
-    switch context {
-    case .dictation:
-      modelLabel = descriptor == nil ? "Apple Speech" : "Parakeet TDT 0.6B v2"
-    case .cleanup(let fallbackLabel):
-      modelLabel = descriptor == nil ? fallbackLabel : "Gemma 3 1B"
+    if let descriptor {
+      switch context {
+      case .dictation:
+        modelLabel = descriptor.modelID == "FluidInference/parakeet-tdt-0.6b-v2-coreml"
+          ? "Parakeet TDT 0.6B v2"
+          : descriptor.modelID
+      case .cleanup:
+        switch descriptor.modelID {
+        case "mlx-community/gemma-3-1b-it-qat-4bit":
+          modelLabel = "Gemma 3 1B"
+        case "mlx-community/gemma-3-1b-it-8bit":
+          modelLabel = "Gemma 3 1B (8-bit)"
+        default:
+          modelLabel = descriptor.modelID
+        }
+      }
+    } else {
+      switch context {
+      case .dictation:
+        modelLabel = "Apple Speech"
+      case .cleanup(let fallbackLabel):
+        modelLabel = fallbackLabel
+      }
     }
 
     switch snapshot.phase {
@@ -356,6 +374,7 @@ private final class AdmittedModelSettingsCancellationRelay {
 @MainActor
 final class AdmittedModelSettingsViewModel: ObservableObject {
   @Published private(set) var presentation: AdmittedModelSettingsPresentation
+  @Published private(set) var isRepairOperationActive = false
 
   private let installer: any AdmittedModelInstalling
   private let context: AdmittedModelSettingsContext
@@ -374,6 +393,7 @@ final class AdmittedModelSettingsViewModel: ObservableObject {
       snapshot: installer.snapshot,
       context: context
     )
+    isRepairOperationActive = installer.snapshot.activeOperation == .repair
     subscribeToUpdates()
   }
 
@@ -430,6 +450,7 @@ final class AdmittedModelSettingsViewModel: ObservableObject {
 
   private func apply(_ snapshot: AdmittedModelInstallationSnapshot) {
     presentation = AdmittedModelSettingsPresentation(snapshot: snapshot, context: context)
+    isRepairOperationActive = snapshot.activeOperation == .repair
   }
 
   deinit {
