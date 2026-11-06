@@ -84,6 +84,7 @@ jobs:
     env:
       FLECK_BUILD_IDENTITY_MODE: ci-unverified
       PYTHONDONTWRITEBYTECODE: "1"
+      FLECK_TEST_APPKIT_WATCHDOG_SECONDS: "4800"
     steps:
       - name: Keep the runner display awake for AppKit tests
         run: |
@@ -191,6 +192,7 @@ jobs:
     env:
       FLECK_BUILD_IDENTITY_MODE: ci-unverified
       PYTHONDONTWRITEBYTECODE: "1"
+      FLECK_TEST_APPKIT_WATCHDOG_SECONDS: "4800"
       FLECK_NATIVE_CAPTURE_QA: "0"
     steps:
       - name: Keep the runner display awake for AppKit tests
@@ -375,7 +377,9 @@ jobs:
     needs: detect-changes
     if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 90
+    env:
+      FLECK_TEST_APPKIT_WATCHDOG_SECONDS: "4800"
     steps:
       - name: Keep the runner display awake for AppKit tests
         run: |

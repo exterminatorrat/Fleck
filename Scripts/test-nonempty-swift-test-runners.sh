@@ -2477,7 +2477,7 @@ for name in (ordinary_name, candidate_name):
         + normalized_workflow[end:]
     )
 if hashlib.sha256(normalized_workflow.encode()).hexdigest() != (
-    "efed7441684249674444aaefe19c3a1ec324c2a4386549aad19aabb977451b50"
+    "3c9ab8a257bf068d2b7dfc454c47784e3013423bb3325d1beeba6f61bd428a02"
 ):
     raise SystemExit("CI changed outside the declared split and native-capture boundary fixture")
 

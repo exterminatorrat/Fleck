@@ -15,6 +15,11 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Consolidate the stacked foundation pull requests (#68–#73, #75–#77, #93, and the #95 tab-overflow test fix) into one branch on current `main` with its CI scheduling, and record the held Sparkle release work in `docs/held-features.md`.
 
+### Fixed
+
+- Dismiss the new-folder composer immediately when a folder is created from the keyboard, so the composer no longer lingers through its removal animation.
+- Let hosted CI raise the AppKit test-host watchdog to 80 minutes; the 45-minute default stopped healthy full-suite runs on GitHub-hosted runners.
+
 ## [1.7.12-beta.1] - 2026-11-05
 
 ### Changed
