@@ -1913,6 +1913,7 @@ private final class WorkspaceSearchDeliveryTrial {
       matching: [.leftMouseDown, .leftMouseUp],
       handler: { [self, window] event in
         MainActor.assumeIsolated {
+          recordRoute("app-raw:{\(workspaceSearchRawEventLabel(event, in: window))}")
           if let identity = click.identity(for: event, in: window) {
             recordRoute(
               "app-monitor:\(identity.label):pointer=\(WorkspaceSearchDeliveryPointerCondition.label(NSEvent.mouseLocation))"
@@ -2109,6 +2110,9 @@ private final class WorkspaceSearchDeliveryProbeWindow: NSWindow {
 
   override func sendEvent(_ event: NSEvent) {
     let click = armedClick
+    if click != nil, event.type == .leftMouseDown || event.type == .leftMouseUp {
+      trial?.recordRoute("window-raw:{\(workspaceSearchRawEventLabel(event, in: self))}")
+    }
     let identity = click?.identity(for: event, in: self)
     if let click, let identity {
       trial?.recordRoute("window-entry:\(identity.label)")
@@ -2412,6 +2416,11 @@ private func printCompactSearchDismissDiagnostic(
 }
 
 @MainActor
+private func workspaceSearchRawEventLabel(_ event: NSEvent, in window: NSWindow) -> String {
+  "type=\(event.type.rawValue),number=\(event.eventNumber),timestamp=\(event.timestamp),window=\(event.windowNumber),sameWindow=\(event.window === window),point=\(NSStringFromPoint(event.locationInWindow)),flags=\(event.modifierFlags.rawValue),clicks=\(event.clickCount)"
+}
+
+@MainActor
 private func clickWorkspaceSearchControl(_ control: NSView, in window: NSWindow) throws {
   let point = control.convert(
     NSPoint(x: control.bounds.midX, y: control.bounds.midY),
@@ -2484,7 +2493,7 @@ private func clickWorkspaceSearchControl(_ windowPoint: NSPoint, in window: NSWi
       down: down,
       up: up
     )
-    trial.recordEventPair("down=\(down.label) up=\(up.label)")
+    trial.recordEventPair("down={\(workspaceSearchRawEventLabel(mouseDown, in: probeWindow))} up={\(workspaceSearchRawEventLabel(mouseUp, in: probeWindow))}")
     try trial.arm(click, in: probeWindow)
 
     switch trial.path {
