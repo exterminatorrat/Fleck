@@ -844,9 +844,10 @@
         ScrollView {
           VStack(alignment: .leading, spacing: 18) {
             Button(action: closeDetails) {
-              Label("Back to models", systemImage: "chevron.left")
+              Label("Back to Models", systemImage: "chevron.left")
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Back to Models")
             .accessibilityIdentifier("models-back")
 
             SettingsPageHeader(
