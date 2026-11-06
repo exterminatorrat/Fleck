@@ -1222,6 +1222,25 @@ func WorkspaceSearchHostingKeepsResultsScrollableInProductionOverlay()
 func WorkspaceSearchHostingActivatesNamedFolderResultThroughProductionScope()
   async throws
 {
+  try await runNamedFolderReturnFixture(cycle: 0)
+}
+
+@Test @MainActor
+func WorkspaceSearchHostingStressTestsNamedFolderReturnAcrossFreshWindows() async {
+  var failures: [String] = []
+  for cycle in 1...20 {
+    do {
+      try await runNamedFolderReturnFixture(cycle: cycle)
+    } catch {
+      failures.append("cycle \(cycle) threw a required expectation")
+    }
+  }
+  #expect(failures.isEmpty, "Named-folder focus failures: \(failures.joined(separator: ", "))")
+}
+
+@MainActor
+private func runNamedFolderReturnFixture(cycle: Int) async throws
+{
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent("workspace-search-folder-activation-" + UUID().uuidString, isDirectory: true)
   defer { try? FileManager.default.removeItem(at: root) }
@@ -1262,124 +1281,156 @@ func WorkspaceSearchHostingActivatesNamedFolderResultThroughProductionScope()
     )
     .environmentObject(state)
   )
-  let window = NSWindow(
+  let window = WorkspaceSearchFocusDiagnosticWindow(
     contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
     styleMask: [.titled],
     backing: .buffered,
     defer: false
   )
-  window.contentView = host
-  window.makeKeyAndOrderFront(nil)
-  await settleWorkspaceSearchHost(host)
+  defer {
+    window.contentView = nil
+    window.orderOut(nil)
+  }
 
-  let unfiledEditor = try #require(
-    hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
-      .first { $0.string == unfiled.body }
-  )
-  #expect(window.makeFirstResponder(unfiledEditor))
-  commands.textView?.setSelectedRange(NSRange(location: 0, length: 0))
-  commands.refreshFormattingState()
+#if DEBUG
+  searchController.searchCausalDiagnostic = { [weak window] message in
+    window?.recordSearchTrace(message)
+  }
+#endif
 
-  searchController.present(for: unfiled.id)
-  await settleWorkspaceSearchHost(host)
-  searchController.setQuery(target.title, in: state.workspace.notes)
-  try #require(
-    await waitForWorkspaceSearchHostState(host) {
-      searchController.resultsAreCurrent
-        && searchController.results.map(\.noteID) == [target.id]
-    },
-    "Timed out waiting for the named-folder search result to publish"
-  )
-  #expect(searchController.results.map(\.noteID) == [target.id])
-  let queryField = try #require(
-    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
-      .first { $0.placeholderString == "Search notes" }
-  )
-  #expect(window.makeFirstResponder(queryField))
-  let returnEvent = try #require(
-    NSEvent.keyEvent(
-      with: .keyDown,
-      location: .zero,
-      modifierFlags: [],
-      timestamp: 0,
-      windowNumber: window.windowNumber,
-      context: nil,
-      characters: "\r",
-      charactersIgnoringModifiers: "\r",
-      isARepeat: false,
-      keyCode: 36
+  var didPrintFocusTrace = false
+  do {
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+    await settleWorkspaceSearchHost(host)
+
+    let unfiledEditor = try #require(
+      hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+        .first { $0.string == unfiled.body }
     )
-  )
-  window.sendEvent(returnEvent)
-  let activated = try await waitForWorkspaceSearchHostState(host) {
-    guard state.workspace.selectedNoteID == target.id,
-      !searchController.isPresented,
-      let targetEditor = hostedWorkspaceSearchDescendants(
-        in: host,
-        as: ListAwareTextView.self
-      ).first(where: { $0.string == target.body })
-    else {
-      return false
+    #expect(window.makeFirstResponder(unfiledEditor))
+    commands.textView?.setSelectedRange(NSRange(location: 0, length: 0))
+    commands.refreshFormattingState()
+
+    searchController.present(for: unfiled.id)
+    await settleWorkspaceSearchHost(host)
+    searchController.setQuery(target.title, in: state.workspace.notes)
+    try #require(
+      await waitForWorkspaceSearchHostState(host) {
+        searchController.resultsAreCurrent
+          && searchController.results.map(\.noteID) == [target.id]
+      },
+      "Timed out waiting for the named-folder search result to publish"
+    )
+    #expect(searchController.results.map(\.noteID) == [target.id])
+    let queryField = try #require(
+      hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+        .first { $0.placeholderString == "Search notes" }
+    )
+    #expect(window.makeFirstResponder(queryField))
+    let returnEvent = try #require(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: 0,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: "\r",
+        charactersIgnoringModifiers: "\r",
+        isARepeat: false,
+        keyCode: 36
+      )
+    )
+    window.sendEvent(returnEvent)
+    let activated = try await waitForWorkspaceSearchHostState(host) {
+      guard state.workspace.selectedNoteID == target.id,
+        !searchController.isPresented,
+        let targetEditor = hostedWorkspaceSearchDescendants(
+          in: host,
+          as: ListAwareTextView.self
+        ).first(where: { $0.string == target.body })
+      else {
+        return false
+      }
+      return commands.textView === targetEditor
+        && window.firstResponder === targetEditor
     }
-    return commands.textView === targetEditor
-      && window.firstResponder === targetEditor
-  }
-  if !activated {
-    let targetEditor = hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+    let finalTargetEditor = hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
       .first { $0.string == target.body }
-    print(
-      "FLECK_SEARCH_RETURN_DIAGNOSTIC"
-        + " selected=\(state.workspace.selectedNoteID == target.id)"
+    window.recordSearchTrace(
+      "final-activation selected=\(state.workspace.selectedNoteID == target.id)"
         + " presented=\(searchController.isPresented)"
-        + " targetEditor=\(targetEditor != nil)"
-        + " commandsTarget=\(targetEditor != nil && commands.textView === targetEditor)"
-        + " responderTarget=\(targetEditor != nil && window.firstResponder === targetEditor)"
-        + " queryOwnsEditor=\(queryField.currentEditor() === window.firstResponder)"
+        + " target=\(finalTargetEditor.map { String(describing: ObjectIdentifier($0)) } ?? "nil")"
+        + " commands=\(commands.textView.map { String(describing: ObjectIdentifier($0)) } ?? "nil")"
+        + " responder=\(window.firstResponder.map { String(describing: ObjectIdentifier($0)) } ?? "nil")"
+        + " targetCommandsMatch=\(finalTargetEditor != nil && commands.textView === finalTargetEditor)"
+        + " targetResponderMatch=\(finalTargetEditor != nil && window.firstResponder === finalTargetEditor)"
         + " active=\(NSApp.isActive) key=\(window.isKeyWindow)"
-        + " responder=\(String(describing: window.firstResponder.map { type(of: $0) }))"
     )
+    if !activated {
+      let targetEditor = finalTargetEditor
+      print(
+        "FLECK_SEARCH_RETURN_DIAGNOSTIC"
+          + " selected=\(state.workspace.selectedNoteID == target.id)"
+          + " presented=\(searchController.isPresented)"
+          + " targetEditor=\(targetEditor.map { String(describing: ObjectIdentifier($0)) } ?? "nil")"
+          + " commandsEditor=\(commands.textView.map { String(describing: ObjectIdentifier($0)) } ?? "nil")"
+          + " nativeResponder=\(window.firstResponder.map { String(describing: ObjectIdentifier($0)) } ?? "nil")"
+          + " commandsTarget=\(targetEditor != nil && commands.textView === targetEditor)"
+          + " responderTarget=\(targetEditor != nil && window.firstResponder === targetEditor)"
+          + " queryOwnsEditor=\(queryField.currentEditor() === window.firstResponder)"
+          + " active=\(NSApp.isActive) key=\(window.isKeyWindow)"
+      )
+    }
+    window.printFocusTrace(cycle: cycle)
+    didPrintFocusTrace = true
+    try #require(
+      activated,
+      "Timed out waiting for Return activation to restore the target editor"
+    )
+
+    #expect(state.workspace.selectedNoteID == target.id)
+    #expect(state.folderID(for: target.id) == work.id)
+    #expect(!searchController.isPresented)
+    let targetEditor = try #require(
+      hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+        .first { $0.string == target.body }
+    )
+    #expect(commands.textView === targetEditor)
+    #expect(window.firstResponder === targetEditor)
+
+    let newNoteEvent = try #require(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [.command],
+        timestamp: 0,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: "t",
+        charactersIgnoringModifiers: "t",
+        isARepeat: false,
+        keyCode: 17
+      )
+    )
+    NSApp.sendEvent(newNoteEvent)
+    await settleWorkspaceSearchHost(host)
+    let createdNoteID = try #require(state.workspace.selectedNoteID)
+    let createdNote = try #require(
+      state.workspace.notes.first { $0.id == createdNoteID }
+    )
+    #expect(createdNote.id != target.id)
+    #expect(createdNote.folderID == work.id)
+
+    await runtime.shutdown()
+  } catch {
+    if !didPrintFocusTrace {
+      window.printFocusTrace(cycle: cycle)
+    }
+    await runtime.shutdown()
+    throw error
   }
-  try #require(
-    activated,
-    "Timed out waiting for Return activation to restore the target editor"
-  )
-
-  #expect(state.workspace.selectedNoteID == target.id)
-  #expect(state.folderID(for: target.id) == work.id)
-  #expect(!searchController.isPresented)
-  let targetEditor = try #require(
-    hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
-      .first { $0.string == target.body }
-  )
-  #expect(commands.textView === targetEditor)
-  #expect(window.firstResponder === targetEditor)
-
-  let newNoteEvent = try #require(
-    NSEvent.keyEvent(
-      with: .keyDown,
-      location: .zero,
-      modifierFlags: [.command],
-      timestamp: 0,
-      windowNumber: window.windowNumber,
-      context: nil,
-      characters: "t",
-      charactersIgnoringModifiers: "t",
-      isARepeat: false,
-      keyCode: 17
-    )
-  )
-  NSApp.sendEvent(newNoteEvent)
-  await settleWorkspaceSearchHost(host)
-  let createdNoteID = try #require(state.workspace.selectedNoteID)
-  let createdNote = try #require(
-    state.workspace.notes.first { $0.id == createdNoteID }
-  )
-  #expect(createdNote.id != target.id)
-  #expect(createdNote.folderID == work.id)
-
-  window.contentView = nil
-  window.orderOut(nil)
-  await runtime.shutdown()
 }
 
 @Test @MainActor
@@ -1709,6 +1760,47 @@ private func clickWorkspaceSearchControl(_ control: NSView, in window: NSWindow)
     to: nil
   )
   try clickWorkspaceSearchControl(point, in: window)
+}
+
+@MainActor
+private final class WorkspaceSearchFocusDiagnosticWindow: NSWindow {
+  private var trace: [String] = []
+  private var sequence = 0
+
+  func recordSearchTrace(_ message: String) {
+    sequence += 1
+    let editors = contentView.map { view in
+      hostedWorkspaceSearchDescendants(in: view, as: ListAwareTextView.self).map { editor in
+        "\(ObjectIdentifier(editor)):attached=\(editor.window === self),editable=\(editor.isEditable),selectable=\(editor.isSelectable),hidden=\(editor.isHiddenOrHasHiddenAncestor)"
+      }.joined(separator: ";")
+    } ?? ""
+    trace.append("\(sequence) \(message) responder=\(identity(of: firstResponder)) editors=[\(editors)]")
+    if trace.count > 512 { trace.remove(at: 256) }
+  }
+
+  override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+    let requested = identity(of: responder)
+    let previous = firstResponder
+    recordSearchTrace("make-first-responder-request requested=\(requested) previous=\(identity(of: previous))")
+    let result = super.makeFirstResponder(responder)
+    recordSearchTrace("make-first-responder-result result=\(result) requested=\(requested) responder=\(identity(of: firstResponder))")
+    if previous is ListAwareTextView && (firstResponder == nil || firstResponder === self) {
+      recordSearchTrace(
+        "editor-lost-first-responder-stack=" + Thread.callStackSymbols.prefix(16).joined(separator: " | ")
+      )
+    }
+    return result
+  }
+
+  func printFocusTrace(cycle: Int) {
+    for entry in trace {
+      print("FLECK_SEARCH_FOCUS_TRACE cycle=\(cycle) \(entry)")
+    }
+  }
+
+  private func identity(of responder: NSResponder?) -> String {
+    responder.map { "\(type(of: $0)):\(ObjectIdentifier($0))" } ?? "nil"
+  }
 }
 
 @MainActor

@@ -145,6 +145,16 @@
     private var focusRestoreTask: Task<Void, Never>?
     private var hasActivatedCurrentPresentation = false
 
+    #if DEBUG
+      var searchCausalDiagnostic: ((String) -> Void)?
+    #endif
+
+    func recordSearchCausalDiagnostic(_ message: @autoclosure () -> String) {
+      #if DEBUG
+        searchCausalDiagnostic?(message())
+      #endif
+    }
+
     init(
       searchOperation: @escaping SearchOperation = { query, notes, limit in
         await WorkspaceSearchEngine().search(query: query, in: notes, limit: limit)
@@ -196,6 +206,7 @@
     }
 
     func dismiss() {
+      recordSearchCausalDiagnostic("dismiss-enter presented=\(isPresented) origin=\(focusOrigin != nil)")
       guard isPresented || focusOrigin != nil else { return }
       cancelFocusRestore()
       cancelSearch()
@@ -209,10 +220,11 @@
       hasActivatedCurrentPresentation = false
       let origin = focusOrigin
       focusOrigin = nil
-      origin?.restore()
+      let restoredImmediately = origin?.restore() ?? false
+      recordSearchCausalDiagnostic("restore-immediate success=\(restoredImmediately)")
       if let origin {
         focusRestoreTask = Task { @MainActor [weak self] in
-          for _ in 0..<12 {
+          for attempt in 0..<12 {
             guard !Task.isCancelled else { return }
             await Task.yield()
             guard !Task.isCancelled,
@@ -221,7 +233,9 @@
             else {
               return
             }
-            if origin.restore() { break }
+            let restored = origin.restore()
+            self.recordSearchCausalDiagnostic("restore-attempt=\(attempt) success=\(restored)")
+            if restored { break }
           }
           guard let self, self.searchGeneration == restoreGeneration else { return }
           self.focusRestoreTask = nil
