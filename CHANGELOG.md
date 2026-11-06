@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.21-beta.1] - 2026-11-06
+
+### Changed
+
+- Consolidate the bounded MCP transport, event journal and owner-approved delivery pull requests (#79, #89, #91) onto the foundation branch.
+
 ## [1.7.20-beta.1] - 2026-11-06
 
 ### Changed
@@ -21,11 +27,29 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Consolidate the stacked foundation pull requests (#68–#73, #75–#77, #93, and the #95 tab-overflow test fix) into one branch on current `main` with its CI scheduling, and record the held Sparkle release work in `docs/held-features.md`.
 
+## [1.7.12-beta.1] - 2026-11-05
+
+### Changed
+
+- Preserve this feature layer and both complete parent histories while integrating the current PR89 ancestry; production and fixture bytes are unchanged.
+
 ## [1.7.11-beta.1] - 2026-11-05
 
 ### Changed
 
 - Preserve this feature layer and both complete parent histories while integrating the current PR83 ancestry; production and fixture bytes are unchanged.
+
+## [1.7.11-beta.1] - 2026-11-05
+
+### Fixed
+
+- Integrate PR91 with the current reviewed PR89 parent while preserving PR91's approved features and both complete changelog histories. This is source-only integration; no build or native checks were run.
+
+## [1.7.11-beta.1] - 2026-11-05
+
+### Changed
+
+- Preserve this feature layer and both complete parent histories while integrating the current PR79 ancestry; production and fixture bytes are unchanged.
 
 ## [1.7.10-beta.1] - 2026-11-05
 
@@ -39,6 +63,12 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Reconciled the retained capsule recovery feature branch with the current published PR83 parent.
   This source-only refresh is pending current-head CI.
+
+## [1.7.10-beta.1] - 2026-11-05
+
+### Fixed
+
+- Preserve the original PR79 and PR89 changelog entries as separate ordered records.
 
 ## [1.7.9-beta.1] - 2026-11-05
 
@@ -58,6 +88,18 @@ public release log. Packaging unchanged source does not add a changelog entry.
 ### Fixed
 
 - Preserve the native folder renaming feature while integrating the current PR77 parent and its complete ordered history.
+
+## [1.7.9-beta.1] - 2026-11-05
+
+### Changed
+
+- Integrate PR79's reviewed retained-output audit fixes into PR89 while preserving the event-journal, authority, and subscription feature layer.
+
+## [1.7.9-beta.1] - 2026-11-05
+
+### Fixed
+
+- Preserve the bounded MCP stdout-audit feature while integrating the current PR77 parent and its complete ordered history.
 
 ## [1.7.9-beta.1] - 2026-11-04
 
@@ -86,6 +128,13 @@ public release log. Packaging unchanged source does not add a changelog entry.
 - Reconciled the retained native folder-renaming feature with the current reviewed PR77 parent.
   This source-only refresh is pending current-head CI.
 
+## [1.7.8-beta.1] - 2026-11-05
+
+### Testing
+
+- Check both the retained audit's rejection boundary and each injected violation
+  in stdout regression controls, without changing the reviewed audit policy.
+
 ## [1.7.8-beta.1] - 2026-11-04
 
 ### Fixed
@@ -110,6 +159,18 @@ public release log. Packaging unchanged source does not add a changelog entry.
 ### Changed
 
 - Preserve this feature layer and both complete parent histories while integrating the current PR81 ancestry; production and fixture bytes are unchanged.
+
+## [1.7.7-beta.1] - 2026-11-05
+
+### Fixed
+
+- Retain the exact protocol descriptor audit allowance and isolate each stdout regression control.
+
+## [1.7.7-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconcile PR91 with the current reviewed PR89 parent while preserving PR91's owner-approved event delivery, transport, and monitoring work. This is source-only integration; current-head CI is pending.
 
 ## [1.7.7-beta.1] - 2026-11-02
 
@@ -161,6 +222,18 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Preserve the restart-only model binding feature while integrating the current PR77 parent and its complete ordered history.
 
+## [1.7.6-beta.1] - 2026-11-05
+
+### Fixed
+
+- Match the stdout audit to the bounded MCP protocol descriptor default while retaining rejection of other helper stdout writes.
+
+## [1.7.6-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconcile PR89 with the current reviewed PR79 parent while preserving PR89's event-journal, authority, and subscription features. This is source-only integration; current-head CI is pending.
+
 ## [1.7.6-beta.1] - 2026-11-02
 
 ### Fixed
@@ -204,6 +277,12 @@ public release log. Packaging unchanged source does not add a changelog entry.
 ### Changed
 
 - Reconcile PR84 with the current reviewed PR77 parent while preserving the restart-only model and cleanup features. This is source-only integration; current-head CI is pending.
+
+## [1.7.5-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconcile the current reviewed PR77 parent while preserving PR79's unique source. This is source-only integration; current-head CI is pending.
 
 ## [1.7.5-beta.1] - 2026-11-02
 
@@ -315,6 +394,12 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Preserve this descendant feature layer while integrating the verified current parent repairs.
 
+## [1.7.3-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer while integrating the verified current parent repairs.
+
 ## [1.7.2-beta.1] - 2026-11-02
 
 ### Fixed
@@ -339,6 +424,12 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Keep capsule recovery mouse releases bound to the pressed recovery generation,
   rejecting replacement actions instead of activating them after a state change.
+
+## [1.7.2-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this descendant feature layer while integrating the verified current parent repairs.
 
 ## [1.7.2-beta.1] - 2026-10-29
 
@@ -371,6 +462,12 @@ candidate remain unverified.
 
 - Publish measured tab-strip width after native layout returns, preserving overflow
   navigation while avoiding layout-triggered state publication during resizing.
+
+## [1.7.1-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve bounded MCP protocol behavior while integrating the verified parent repairs.
 
 ## [1.7.1-beta.1] - 2026-10-29
 
@@ -538,6 +635,78 @@ and packaging remain unverified; hosted verification is pending.
 This is one constituent of the shared 1.7.0-beta.1 development cohort, not a separate
 release or a qualified alternative model. No alternative availability or selection UI is
 added. Local compilation, tests and native/model behavior remain unverified.
+
+## [1.7.0-beta.1] - 2026-10-27
+
+### Added
+
+- Add bounded MCP stdio transport and modern request dispatch while retaining legacy tools,
+  request ownership, cancellation, output ordering and EOF settlement.
+- Add strict version-2 event contracts and wire compatibility checks. Subscription execution
+  and callback delivery remain unavailable in this foundational layer.
+- Add the content-free event journal with snapshot integrity/history fencing, default-off
+  scoped observation authority, global privacy exclusions and pending subscription/key lifecycle
+  persistence. Event commands and callback delivery remain unavailable until the next layer.
+- Connect owner-approved event subscriptions, verified HTTPS callbacks, signed delivery,
+  bounded outbox/receipt handling and global privacy controls. Observation remains off by
+  default and delivery requires current authorization, endpoint verification and owner consent.
+
+### Fixed
+
+- Handle closed output pipes without SIGPIPE termination, forward legacy notification-only
+  batches without responses, preserve cancellation ownership and reject unsupported replay age.
+- Fail closed on interrupted privacy-policy generations and pending-subscription lookups
+  behind the persisted trusted-clock watermark.
+
+### Fixed - 2026-10-28
+
+- Bind renewal choices and owner approvals to the current subscription control generation,
+  so an expired or recreated subscription cannot reuse an earlier checked renewal choice.
+
+This is one constituent of the shared 1.7.0-beta.1 retained-feature development cohort, not a
+separate release. Local compilation, tests and native behavior remain unrun; hosted checks are
+pending. Existing 1.6.x candidates and all earlier development history remain preserved.
+
+## [1.7.0-beta.1] - 2026-10-27
+
+### Added
+
+- Add bounded MCP stdio transport and modern request dispatch while retaining legacy tools,
+  request ownership, cancellation, output ordering and EOF settlement.
+- Add strict version-2 event contracts and wire compatibility checks. Subscription execution
+  and callback delivery remain unavailable in this foundational layer.
+- Add the content-free event journal with snapshot integrity/history fencing, default-off
+  scoped observation authority, global privacy exclusions and pending subscription/key lifecycle
+  persistence. Event commands and callback delivery remain unavailable until the next layer.
+
+### Fixed
+
+- Handle closed output pipes without SIGPIPE termination, forward legacy notification-only
+  batches without responses, preserve cancellation ownership and reject unsupported replay age.
+- Fail closed on interrupted privacy-policy generations and pending-subscription lookups
+  behind the persisted trusted-clock watermark.
+
+This is one constituent of the shared 1.7.0-beta.1 retained-feature development cohort, not a
+separate release. Local compilation, tests and native behavior remain unrun; hosted checks are
+pending. Existing 1.6.x candidates and all earlier development history remain preserved.
+
+## [1.7.0-beta.1] - 2026-10-27
+
+### Added
+
+- Add bounded MCP stdio transport and modern request dispatch while retaining legacy tools,
+  request ownership, cancellation, output ordering and EOF settlement.
+- Add strict version-2 event contracts and wire compatibility checks. Subscription execution
+  and callback delivery remain unavailable in this foundational layer.
+
+### Fixed
+
+- Handle closed output pipes without SIGPIPE termination, forward legacy notification-only
+  batches without responses, preserve cancellation ownership and reject unsupported replay age.
+
+This is one constituent of the shared 1.7.0-beta.1 retained-feature development cohort, not a
+separate release. Local compilation, tests and native behavior remain unrun; hosted checks are
+pending. Existing 1.6.x candidates and all earlier development history remain preserved.
 
 ## [1.5.26-beta.1] - 2026-11-05
 

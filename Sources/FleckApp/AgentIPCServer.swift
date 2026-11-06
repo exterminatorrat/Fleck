@@ -18,6 +18,24 @@
         Data,
         AgentWorkspaceCommand
       ) async throws -> AgentWorkspaceResponse
+    struct ExecutionResult: Sendable {
+      let response: AgentWorkspaceResponse
+      let responseDisposition: (@Sendable (Bool) async -> Void)?
+
+      init(
+        response: AgentWorkspaceResponse,
+        responseDisposition: (@Sendable (Bool) async -> Void)? = nil
+      ) {
+        self.response = response
+        self.responseDisposition = responseDisposition
+      }
+    }
+    typealias ExecuteWithDisposition =
+      @MainActor @Sendable (
+        UUID,
+        Data,
+        AgentWorkspaceCommand
+      ) async throws -> ExecutionResult
     typealias PeerUIDLookup = @Sendable (Int32) throws -> uid_t
     typealias ResponseWriter = @Sendable (Data, Int, Int32) -> Int
     typealias DescriptorCloser = @Sendable (Int32) -> Void
@@ -88,8 +106,11 @@
       let source: DispatchSourceRead
       var buffer = Data()
       var timeout: DispatchWorkItem?
+      var handlingPrepareEventSubscription = false
+      var responseTask: Task<Void, Never>?
       var response: Data?
       var responseOffset = 0
+      var responseDisposition: (@Sendable (Bool) async -> Void)?
       var writeSource: DispatchSourceWrite?
 
       var descriptor: Int32 { lifecycle.descriptor }
@@ -105,8 +126,14 @@
       let lifecycles: [DescriptorLifecycle]
     }
 
+    private struct PreparedResponse: Sendable {
+      let response: AgentWireResponse
+      let disposition: (@Sendable (Bool) async -> Void)?
+    }
+
     let maximumActiveClients: Int
     let idleReadTimeout: TimeInterval
+    let prepareEventSubscriptionExecutionTimeout: TimeInterval
 
     private let endpointURL: URL
     private let effectiveUID: uid_t
@@ -116,7 +143,7 @@
     private let descriptorCloser: DescriptorCloser
     private let stopWillCancelSources: @Sendable () -> Void
     private let sourceCancellationDidComplete: @Sendable (Int32) -> Void
-    private let execute: Execute
+    private let execute: ExecuteWithDisposition
     private let queue = DispatchQueue(label: "Fleck.AgentIPCServer")
     private let queueKey = DispatchSpecificKey<Void>()
     private let lock = NSLock()
@@ -126,10 +153,11 @@
     private var clients: [Int32: Client] = [:]
     private var boundSocket: BoundSocket?
 
-    init(
+    convenience init(
       endpointURL: URL = AgentBridgeEndpoint.socketURL(),
       maximumActiveClients: Int = 8,
       idleReadTimeout: TimeInterval = 10,
+      prepareEventSubscriptionExecutionTimeout: TimeInterval = 90,
       effectiveUID: uid_t = geteuid(),
       peerUID: @escaping PeerUIDLookup = AgentIPCServer.lookupPeerUID,
       responseWriter: @escaping ResponseWriter = AgentIPCServer.writeAll,
@@ -139,9 +167,45 @@
       sourceCancellationDidComplete: @escaping @Sendable (Int32) -> Void = { _ in },
       execute: @escaping Execute
     ) {
+      self.init(
+        endpointURL: endpointURL,
+        maximumActiveClients: maximumActiveClients,
+        idleReadTimeout: idleReadTimeout,
+        prepareEventSubscriptionExecutionTimeout: prepareEventSubscriptionExecutionTimeout,
+        effectiveUID: effectiveUID,
+        peerUID: peerUID,
+        responseWriter: responseWriter,
+        responseWriteWillBegin: responseWriteWillBegin,
+        descriptorCloser: descriptorCloser,
+        stopWillCancelSources: stopWillCancelSources,
+        sourceCancellationDidComplete: sourceCancellationDidComplete,
+        executeWithDisposition: { profileID, credential, command in
+          AgentIPCServer.ExecutionResult(
+            response: try await execute(profileID, credential, command)
+          )
+        }
+      )
+    }
+
+    init(
+      endpointURL: URL = AgentBridgeEndpoint.socketURL(),
+      maximumActiveClients: Int = 8,
+      idleReadTimeout: TimeInterval = 10,
+      prepareEventSubscriptionExecutionTimeout: TimeInterval = 90,
+      effectiveUID: uid_t = geteuid(),
+      peerUID: @escaping PeerUIDLookup = AgentIPCServer.lookupPeerUID,
+      responseWriter: @escaping ResponseWriter = AgentIPCServer.writeAll,
+      responseWriteWillBegin: @escaping @Sendable () -> Void = {},
+      descriptorCloser: @escaping DescriptorCloser = AgentIPCServer.closeDescriptor,
+      stopWillCancelSources: @escaping @Sendable () -> Void = {},
+      sourceCancellationDidComplete: @escaping @Sendable (Int32) -> Void = { _ in },
+      executeWithDisposition: @escaping ExecuteWithDisposition
+    ) {
       self.endpointURL = endpointURL
       self.maximumActiveClients = maximumActiveClients
       self.idleReadTimeout = idleReadTimeout
+      self.prepareEventSubscriptionExecutionTimeout =
+        prepareEventSubscriptionExecutionTimeout
       self.effectiveUID = effectiveUID
       self.peerUID = peerUID
       self.responseWriter = responseWriter
@@ -149,7 +213,7 @@
       self.descriptorCloser = descriptorCloser
       self.stopWillCancelSources = stopWillCancelSources
       self.sourceCancellationDidComplete = sourceCancellationDidComplete
-      self.execute = execute
+      self.execute = executeWithDisposition
       queue.setSpecific(key: queueKey, value: ())
     }
 
@@ -160,7 +224,12 @@
     func start() throws {
       try lock.withLock {
         guard listenerDescriptor == -1 else { return }
-        guard maximumActiveClients > 0, idleReadTimeout > 0 else {
+        guard
+          maximumActiveClients > 0,
+          idleReadTimeout > 0,
+          prepareEventSubscriptionExecutionTimeout > 0,
+          prepareEventSubscriptionExecutionTimeout.isFinite
+        else {
           throw AgentIPCServerError.unsafeEndpoint
         }
         try prepareEndpoint()
@@ -257,7 +326,13 @@
       state.1?.cancel()
       state.2?.requestClose()
       for client in state.3 {
+        if let disposition = client.responseDisposition {
+          Task { await disposition(false) }
+        }
+        client.responseDisposition = nil
         client.timeout?.cancel()
+        client.responseTask?.cancel()
+        client.responseTask = nil
         client.source.cancel()
         client.writeSource?.cancel()
         client.lifecycle.requestClose()
@@ -269,26 +344,38 @@
     }
 
     func response(to request: AgentWireRequest) async -> AgentWireResponse {
+      let preparedResponse = await preparedResponse(to: request)
+      await preparedResponse.disposition?(false)
+      return preparedResponse.response
+    }
+
+    private func preparedResponse(to request: AgentWireRequest) async -> PreparedResponse {
       guard AgentWireRequest.supportedProtocolVersions.contains(
         request.protocolVersion
       ) else {
-        return .failure(
-          protocolVersion: AgentWireResponse.currentProtocolVersion,
-          requestID: request.requestID,
-          error: AgentWorkspaceError(
-            code: .protocolVersionUnsupported,
-            recoveryAction: "Please update Fleck and the helper, then try again."
-          )
+        return PreparedResponse(
+          response: .failure(
+            protocolVersion: AgentWireResponse.currentProtocolVersion,
+            requestID: request.requestID,
+            error: AgentWorkspaceError(
+              code: .protocolVersionUnsupported,
+              recoveryAction: "Please update Fleck and the helper, then try again."
+            )
+          ),
+          disposition: nil
         )
       }
       guard request.command.isSupported(wireVersion: request.protocolVersion) else {
-        return .failure(
-          protocolVersion: request.protocolVersion,
-          requestID: request.requestID,
-          error: AgentWorkspaceError(
-            code: .protocolVersionUnsupported,
-            recoveryAction: "Please update Fleck and the helper, then try again."
-          )
+        return PreparedResponse(
+          response: .failure(
+            protocolVersion: request.protocolVersion,
+            requestID: request.requestID,
+            error: AgentWorkspaceError(
+              code: .protocolVersionUnsupported,
+              recoveryAction: "Please update Fleck and the helper, then try again."
+            )
+          ),
+          disposition: nil
         )
       }
       guard
@@ -299,30 +386,36 @@
         credential.count == 32,
         credential.base64EncodedString() == request.credentialBase64
       else {
-        return .failure(
-          protocolVersion: request.protocolVersion,
-          requestID: request.requestID,
-          error: AgentWorkspaceError(code: .invalidPayload)
+        return PreparedResponse(
+          response: .failure(
+            protocolVersion: request.protocolVersion,
+            requestID: request.requestID,
+            error: AgentWorkspaceError(code: .invalidPayload)
+          ),
+          disposition: nil
         )
       }
 
       let response: AgentWireResponse
+      var responseDisposition: (@Sendable (Bool) async -> Void)?
       do {
-        let result = try await execute(
+        let execution = try await execute(
           request.profileID,
           credential,
           request.command
         )
-        guard result.isSupported(wireVersion: request.protocolVersion) else {
+        guard execution.response.isSupported(wireVersion: request.protocolVersion) else {
+          await execution.responseDisposition?(false)
           throw AgentWorkspaceError(
             code: .protocolVersionUnsupported,
             recoveryAction: "Please update Fleck and the helper, then try again."
           )
         }
+        responseDisposition = execution.responseDisposition
         response = .success(
           protocolVersion: request.protocolVersion,
           requestID: request.requestID,
-          result: result
+          result: execution.response
         )
       } catch let error as AgentWorkspaceError {
         response = .failure(
@@ -338,13 +431,20 @@
         )
       }
       guard (try? AgentWireFraming.encode(response)) != nil else {
-        return .failure(
-          protocolVersion: request.protocolVersion,
-          requestID: request.requestID,
-          error: AgentWorkspaceError(code: .responseTooLarge)
+        await responseDisposition?(false)
+        return PreparedResponse(
+          response: .failure(
+            protocolVersion: request.protocolVersion,
+            requestID: request.requestID,
+            error: AgentWorkspaceError(code: .responseTooLarge)
+          ),
+          disposition: nil
         )
       }
-      return response
+      return PreparedResponse(
+        response: response,
+        disposition: responseDisposition
+      )
     }
 
     func peerIsAllowed(_ descriptor: Int32) -> Bool {
@@ -502,10 +602,16 @@
       var bytes = [UInt8](repeating: 0, count: 8_192)
       let count = Darwin.read(client.descriptor, &bytes, bytes.count)
       if count < 0, errno == EAGAIN || errno == EWOULDBLOCK {
-        resetTimeout(client)
+        if !client.handlingPrepareEventSubscription {
+          resetTimeout(client)
+        }
         return
       }
       guard count > 0 else {
+        finish(client)
+        return
+      }
+      guard !client.handlingPrepareEventSubscription else {
         finish(client)
         return
       }
@@ -543,27 +649,62 @@
           resetTimeout(client)
           return
         }
-        client.timeout?.cancel()
-        client.source.cancel()
-        Task { [weak self] in
-          guard let self else { return }
-          let frame = try? AgentWireFraming.encode(
-            await self.response(to: request)
+        let isPrepareEventSubscription: Bool
+        if case .prepareEventSubscription = request.command {
+          isPrepareEventSubscription = true
+          client.handlingPrepareEventSubscription = true
+          resetTimeout(
+            client,
+            after: prepareEventSubscriptionExecutionTimeout
           )
-          self.queue.async {
+        } else {
+          isPrepareEventSubscription = false
+          client.timeout?.cancel()
+          client.timeout = nil
+          client.source.cancel()
+        }
+        let responseTask = Task { [weak self, weak client] in
+          guard let self else { return }
+          let preparedResponse = await self.preparedResponse(to: request)
+          let frame = try? AgentWireFraming.encode(preparedResponse.response)
+          self.queue.async { [weak self, weak client] in
+            guard
+              let self,
+              let client,
+              self.lock.withLock({ self.clients[client.descriptor] === client })
+            else {
+              if let disposition = preparedResponse.disposition {
+                Task { await disposition(false) }
+              }
+              return
+            }
+            if isPrepareEventSubscription {
+              client.responseTask = nil
+              client.source.cancel()
+            }
             if let frame {
+              client.responseDisposition = preparedResponse.disposition
               self.beginWrite(frame, to: client)
             } else {
+              if let disposition = preparedResponse.disposition {
+                Task { await disposition(false) }
+              }
               self.finish(client)
             }
           }
+        }
+        if isPrepareEventSubscription {
+          client.responseTask = responseTask
         }
       } catch {
         finish(client)
       }
     }
 
-    private func resetTimeout(_ client: Client) {
+    private func resetTimeout(
+      _ client: Client,
+      after interval: TimeInterval? = nil
+    ) {
       client.timeout?.cancel()
       let timeout = DispatchWorkItem { [weak self, weak client] in
         guard let client else { return }
@@ -571,7 +712,7 @@
       }
       client.timeout = timeout
       queue.asyncAfter(
-        deadline: .now() + idleReadTimeout,
+        deadline: .now() + (interval ?? idleReadTimeout),
         execute: timeout
       )
     }
@@ -629,7 +770,7 @@
           return
         }
       }
-      finish(client)
+      finish(client, responseDelivered: true)
     }
 
     private static func writeAll(
@@ -647,7 +788,11 @@
       }
     }
 
-    private func finish(_ client: Client, cancelTimeout: Bool = true) {
+    private func finish(
+      _ client: Client,
+      cancelTimeout: Bool = true,
+      responseDelivered: Bool = false
+    ) {
       let active = lock.withLock { () -> Bool in
         guard clients[client.descriptor] === client else { return false }
         clients.removeValue(forKey: client.descriptor)
@@ -658,9 +803,16 @@
         client.timeout?.cancel()
       }
       client.timeout = nil
+      client.responseTask?.cancel()
+      client.responseTask = nil
       client.source.cancel()
       client.writeSource?.cancel()
       client.lifecycle.requestClose()
+      let disposition = client.responseDisposition
+      client.responseDisposition = nil
+      if let disposition {
+        Task { await disposition(responseDelivered) }
+      }
     }
 
     private static func closeDescriptor(_ descriptor: Int32) {
