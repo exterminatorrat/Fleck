@@ -280,7 +280,8 @@
   @Test func FleckErrorActionsPreserveFailureSemantics() throws {
     let fixture = try FleckErrorReferenceSupport.load()
     #expect(FleckErrorKind.allCases == [
-      .microphone, .dictation, .insertion, .noSpeech, .usedOriginal, .repairing, .attention,
+      .microphone, .speechRecognition, .dictation, .insertion,
+      .noSpeech, .usedOriginal, .repairing, .attention,
     ])
 
     let microphoneReference = try #require(fixture.errors["microphone"])
@@ -329,14 +330,15 @@
       failureKind: .generic
     )
     #expect(FleckErrorKind.resolve(context: routing, action: .copy)?.message == "Dictation failed")
-    #expect(FleckErrorKind.resolve(
-      context: DictationCapsuleContext(
-        status: .failed("Speech Recognition access is unavailable."),
-        failureStage: .capture,
-        failureKind: .speechRecognitionAccess
-      ),
-      action: nil
-    )?.message == "Dictation failed")
+    let speechRecognitionContext = DictationCapsuleContext(
+      status: .failed("Speech Recognition access is unavailable."),
+      failureStage: .capture,
+      failureKind: .speechRecognitionAccess
+    )
+    let speechRecognition = FleckErrorKind.resolve(context: speechRecognitionContext, action: nil)
+    #expect(speechRecognition == .speechRecognition)
+    #expect(speechRecognition?.message == "Speech access needed")
+    #expect(speechRecognition?.actionTitle == "Settings")
     #expect(FleckErrorKind.resolve(
       context: DictationCapsuleContext(status: .routingFailure(status: "Needs attention", message: "Routing failed.")),
       action: .copy
@@ -460,6 +462,7 @@
 
     #expect(controller.currentContext.status == .idle)
     #expect(controller.errorPresentationModel.presentation == nil)
+    #expect(controller.panel.frame.size != DictationCapsuleController.errorSurfaceSize)
     controller.dismiss()
   }
 

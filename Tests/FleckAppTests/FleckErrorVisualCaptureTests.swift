@@ -172,7 +172,7 @@ func FleckErrorNativeCaptureMatrixWritesOffscreenPNGsWhenRequested() throws {
       .noSpeech
     ),
     (
-      "used-original",
+      "used-original-reference-fixture",
       DictationCapsuleContext(
         status: .savedWithoutCleanup(destination: "Inbox"),
         cleanupOutcome: .usedRaw,
@@ -203,7 +203,7 @@ func FleckErrorNativeCaptureMatrixWritesOffscreenPNGsWhenRequested() throws {
         failureKind: .speechRecognitionAccess
       ),
       nil,
-      .attention
+      .speechRecognition
     ),
     (
       "persistence-copy",
@@ -250,6 +250,22 @@ func FleckErrorNativeCaptureMatrixWritesOffscreenPNGsWhenRequested() throws {
         let controller = DictationCapsuleController(panel: panel)
         controller.render(context, action: action)
         panel.orderOut(nil)
+        if errorName == "used-original-reference-fixture" {
+          #expect(controller.currentContext.status == .idle)
+          #expect(controller.errorPresentationModel.presentation == nil)
+          #expect(panel.frame.size != DictationCapsuleController.errorSurfaceSize)
+          controller.errorPresentationModel.reconcile(
+            context: context,
+            action: action,
+            entryFrame: nil,
+            animated: false,
+            reduceMotion: true
+          )
+          panel.setFrame(
+            NSRect(origin: panel.frame.origin, size: DictationCapsuleController.errorSurfaceSize),
+            display: false
+          )
+        }
         let host = try #require(panel.contentView)
         host.appearance = NSAppearance(named: appearance)
         host.layoutSubtreeIfNeeded()

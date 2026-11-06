@@ -9,6 +9,11 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Port retained-only regression coverage (bullet editing, editor input, dictation error and terminal presentation, relative RTF tails) and the Models back-button accessibility label from the retained source snapshot.
 
+### Fixed
+
+- Align retained speech-permission assertions and reference captures with the current permission and quiet saved-state contracts.
+- Isolate focused native diagnostics from full-CI concurrency without changing normal required coverage.
+
 ## [1.7.23-beta.1] - 2026-11-06
 
 ### Changed
