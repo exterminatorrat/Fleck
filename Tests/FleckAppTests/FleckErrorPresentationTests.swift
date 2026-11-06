@@ -532,7 +532,13 @@
 
     #expect(controller.errorPresentationModel.presentation?.kind == .attention)
     #expect(controller.errorPresentationModel.presentation?.actionTitle == "Destination")
-    #expect(controller.currentChooser == chooser)
+    #expect(!chooser.displaysMenu)
+    #expect(controller.currentChooser == nil)
+    #expect(controller.presentationModel.chooser == nil)
+    #expect(controller.currentContext.sessionID == captureID)
+    #expect(controller.currentContext.status == .routingFailure(
+      status: "Needs attention", message: "The destination did not save."
+    ))
     #expect(controller.presentationModel.action == .openDestination)
     let host = try #require(controller.panel.contentView)
     host.layoutSubtreeIfNeeded()
@@ -606,7 +612,9 @@
     #expect(presentation.widthCeiling == DictationCapsuleController.idleSize.width)
     #expect(expectedSize == DictationCapsuleController.idleSize)
     #expect(panel.frame.size == DictationCapsuleController.livePillHostSize)
-    #expect(controller.currentChooser == chooser)
+    #expect(controller.currentContext == context)
+    #expect(controller.currentChooser == nil)
+    #expect(controller.presentationModel.chooser == nil)
     #expect(controller.presentationModel.action == nil)
     #expect(!controller.panel.allowsActions)
     #expect(controller.errorPresentationModel.presentation == nil)

@@ -1205,7 +1205,9 @@ private func modelLibraryDescriptor(
       reduceTransparency: true,
       increasedContrast: false
     )
-    let header = SettingsPageHeader(section: section, searchRequest: nil)
+    let header = SettingsPageHeader(
+      section: section, searchAnchorEnabled: false, searchRequest: nil
+    )
       .environment(\.fleckThemeSnapshot, theme)
       .accessibilityElement(children: .combine)
       .accessibilityIdentifier("models-default-header")
