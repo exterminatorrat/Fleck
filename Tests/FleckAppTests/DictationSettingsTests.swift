@@ -84,7 +84,7 @@ import Testing
   #expect(modelsViewSource.contains(#".accessibilityIdentifier("models-action-\(entry.id)")"#))
   #expect(modelsViewSource.contains("Button(role: action == .remove ? .destructive : nil)"))
   #expect(!runtimeSource.contains("Window(\"Models\", id:"))
-  #expect(runtimeSource.contains("SettingsView(runtime: dictationRuntime)"))
+  #expect(runtimeSource.contains("SettingsView(runtime: dictationRuntime, updateController: updateController)"))
   #expect(runtimeSource.contains(".windowResizability(.contentMinSize)"))
   #expect(!source.contains("cleanupModelLabel"))
   #expect(!source.contains("runtime.availability.foundationModelAvailability"))
