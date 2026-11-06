@@ -3,6 +3,12 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.21-beta.1] - 2026-11-06
+
+### Changed
+
+- Consolidate the bounded MCP transport, event journal and owner-approved delivery pull requests (#79, #89, #91) onto the foundation branch.
+
 ## [1.7.18-beta.1] - 2026-11-06
 
 ### Changed
