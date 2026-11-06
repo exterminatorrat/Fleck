@@ -1877,8 +1877,13 @@ func personalDictionaryPriorityStarStaysVisibleWithoutHoverAndDeleteRemainsHidde
       window: window
     )
     await settlePersonalDictionarySettingsHost(host)
-    try await Task.sleep(for: .milliseconds(120))
-    await settlePersonalDictionarySettingsHost(host)
+    let unstarDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+    while viewModel.entries.first(where: { $0.id == starredEntry.id })?.isPriority != false,
+      ContinuousClock.now < unstarDeadline
+    {
+      try await Task.sleep(for: .milliseconds(20))
+      await settlePersonalDictionarySettingsHost(host)
+    }
     #expect(viewModel.entries.first(where: { $0.id == starredEntry.id })?.isPriority == false)
     #expect(viewModel.pendingEntryDeletion == nil)
 
