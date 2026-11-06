@@ -1,0 +1,61 @@
+name: Test build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Package Fleck test build
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      FLECK_BUILD_IDENTITY_MODE: ci-unverified
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Check out repository (actions/checkout v6.0.2, without credentials)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+      - name: Package Fleck app
+        run: |
+          unset FLECK_ENHANCED_CANDIDATE
+          mkdir -p .build/test-build-result
+          result_file="$PWD/.build/test-build-result/build-result.json"
+          Scripts/build-fleck-app.sh --result-file "$result_file"
+          app_path="$(Scripts/fleck-build-identity.py read-result \
+            --repo "$PWD" \
+            --result-file "$result_file" \
+            --flavor development)"
+          /usr/bin/codesign --verify --deep --strict "$app_path"
+          app_name="$(basename "$app_path" .app)"
+          mkdir -p "$RUNNER_TEMP/test-build"
+          /usr/bin/ditto -c -k --keepParent "$app_path" "$RUNNER_TEMP/test-build/$app_name.zip"
+          printf 'ARTIFACT_NAME=%s (%s)\n' "$app_name" "${GITHUB_SHA::12}" >> "$GITHUB_ENV"
+          {
+            printf '## Fleck test build\n\n'
+            printf -- '- App: `%s`\n- Commit: `%s`\n- Version: `%s`\n' "$app_name" "$GITHUB_SHA" "$(cat VERSION)"
+            printf -- '- Ad-hoc signed and not notarized. After unzipping, run `xattr -dr com.apple.quarantine "%s.app"` or right-click Open on first launch.\n' "$app_name"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload test build
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ runner.temp }}/test-build/*.zip
+          if-no-files-found: error
+          retention-days: 30
