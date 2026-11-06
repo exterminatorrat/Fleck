@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import QuartzCore
 import SwiftUI
 import Testing
 
@@ -1077,6 +1078,82 @@ private func advanceTabStripHostEventBoundary(_ view: NSView) async {
   }
 }
 
+private struct HostedTabReorderMotionSample {
+  let uptime: TimeInterval
+  let animationActive: Bool
+  let modelOffset: Double?
+  let presentationOffset: Double?
+  let convertedMinX: Double?
+  let windowVisible: Bool
+  let windowOcclusionVisible: Bool
+  let sourceInWindow: Bool
+  let sourceInDestination: Bool
+}
+
+private struct HostedTabReorderMotionSamples {
+  private static let capacity = 256
+  private var storage: [HostedTabReorderMotionSample?]
+  private var nextIndex = 0
+  private(set) var loopCount = 0
+  private(set) var firstSample: HostedTabReorderMotionSample?
+  private(set) var lastSample: HostedTabReorderMotionSample?
+  private(set) var firstActiveSample: HostedTabReorderMotionSample?
+  private(set) var lastActiveSample: HostedTabReorderMotionSample?
+  private(set) var activeSampleCount = 0
+
+  init() {
+    storage = Array(repeating: nil, count: Self.capacity)
+  }
+
+  var didWrap: Bool { loopCount > Self.capacity }
+
+  var retainedSamples: [HostedTabReorderMotionSample] {
+    let count = min(loopCount, Self.capacity)
+    let firstIndex = didWrap ? nextIndex : 0
+    return (0..<count).compactMap { storage[(firstIndex + $0) % Self.capacity] }
+  }
+
+  mutating func append(_ sample: HostedTabReorderMotionSample) {
+    if firstSample == nil { firstSample = sample }
+    lastSample = sample
+    if sample.animationActive {
+      activeSampleCount += 1
+      if firstActiveSample == nil { firstActiveSample = sample }
+      lastActiveSample = sample
+    }
+    storage[nextIndex] = sample
+    nextIndex = (nextIndex + 1) % Self.capacity
+    loopCount += 1
+  }
+}
+
+private struct HostedTabReorderAnimationDetails {
+  let from: Double?
+  let to: Double?
+  let duration: TimeInterval
+}
+
+private func hostedTabReorderDiagnosticNumber(_ value: Double?) -> String {
+  guard let value else { return "nil" }
+  return String(format: "%.6f", value)
+}
+
+private func hostedTabReorderDiagnosticSample(
+  _ sample: HostedTabReorderMotionSample?,
+  relativeTo uptime: TimeInterval
+) -> String {
+  guard let sample else { return "nil" }
+  return "t+\(hostedTabReorderDiagnosticNumber(sample.uptime - uptime))s "
+    + "active=\(sample.animationActive ? 1 : 0) "
+    + "model=\(hostedTabReorderDiagnosticNumber(sample.modelOffset)) "
+    + "presentation=\(hostedTabReorderDiagnosticNumber(sample.presentationOffset)) "
+    + "minX=\(hostedTabReorderDiagnosticNumber(sample.convertedMinX)) "
+    + "windowVisible=\(sample.windowVisible ? 1 : 0) "
+    + "windowOcclusionVisible=\(sample.windowOcclusionVisible ? 1 : 0) "
+    + "sourceInWindow=\(sample.sourceInWindow ? 1 : 0) "
+    + "sourceInDestination=\(sample.sourceInDestination ? 1 : 0)"
+}
+
 @Test func tabOverflowEndpointControlsStayEnabledForVisibleNotes() throws {
   let source = try tabNotesPanelSource()
   let tabStrip = try #require(
@@ -1188,22 +1265,85 @@ func reorderInteractionNativeLifetimeDoesNotEndBetweenPointerEvents() throws {
   if let presentation = sibling.layer?.presentation(), let root = destination.layer?.presentation() {
     positions.append(presentation.convert(presentation.bounds, to: root).minX)
   }
+  let animationRequestUptime = ProcessInfo.processInfo.systemUptime
   controller.moved(to: window.convertPoint(toScreen:
     destination.convert(NSPoint(x: second.maxX, y: 15), to: nil)))
   let deadline = ProcessInfo.processInfo.systemUptime + 1
   let intermediateRange = (first.minX + 1)..<(second.minX - 1)
   var observedAnimation = false
   var hasIntermediatePosition = false
+  var motionSamples = HostedTabReorderMotionSamples()
+  var animationDetails: HostedTabReorderAnimationDetails?
   repeat {
     await advanceTabStripHostEventBoundary(host)
-    observedAnimation = observedAnimation
-      || sibling.layer?.animation(forKey: "fleck.tab-reorder") != nil
-    if let presentation = sibling.layer?.presentation(), let root = destination.layer?.presentation() {
-      positions.append(presentation.convert(presentation.bounds, to: root).minX)
+    let sampleUptime = ProcessInfo.processInfo.systemUptime
+    let layer = sibling.layer
+    let animation = layer?.animation(forKey: "fleck.tab-reorder")
+    let animationActive = animation != nil
+    observedAnimation = observedAnimation || animationActive
+    if animationDetails == nil, let animation = animation as? CABasicAnimation {
+      animationDetails = HostedTabReorderAnimationDetails(
+        from: (animation.fromValue as? NSNumber)?.doubleValue,
+        to: (animation.toValue as? NSNumber)?.doubleValue,
+        duration: animation.duration)
     }
+    let presentation = layer?.presentation()
+    let rootPresentation = destination.layer?.presentation()
+    var convertedMinX: CGFloat?
+    if let presentation, let rootPresentation {
+      convertedMinX = presentation.convert(presentation.bounds, to: rootPresentation).minX
+      if let convertedMinX { positions.append(convertedMinX) }
+    }
+    motionSamples.append(HostedTabReorderMotionSample(
+      uptime: sampleUptime,
+      animationActive: animationActive,
+      modelOffset: layer.map { Double($0.transform.m41) },
+      presentationOffset: presentation.map { Double($0.transform.m41) },
+      convertedMinX: convertedMinX.map { Double($0) },
+      windowVisible: window.isVisible,
+      windowOcclusionVisible: window.occlusionState.contains(.visible),
+      sourceInWindow: sibling.window === window,
+      sourceInDestination: sibling.isDescendant(of: destination)))
     hasIntermediatePosition = positions.contains { intermediateRange.contains($0) }
   } while ProcessInfo.processInfo.systemUptime < deadline
     && (!hasIntermediatePosition || sibling.layer?.animation(forKey: "fleck.tab-reorder") != nil)
+  let observationEndUptime = ProcessInfo.processInfo.systemUptime
+  if !hasIntermediatePosition {
+    let firstActiveOffset = motionSamples.firstActiveSample.map { $0.uptime - animationRequestUptime }
+    let lastActiveOffset = motionSamples.lastActiveSample.map { $0.uptime - animationRequestUptime }
+    let activeObservedSpan = motionSamples.firstActiveSample.flatMap { first in
+      motionSamples.lastActiveSample.map { $0.uptime - first.uptime }
+    }
+    let currentSourceMatches = sourceView(destination) === sibling
+    let details = animationDetails
+    let retainedSamples = motionSamples.retainedSamples
+    let retainedTrace = retainedSamples
+      .map { hostedTabReorderDiagnosticSample($0, relativeTo: animationRequestUptime) }
+      .joined(separator: " | ")
+    print("[TAB-REORDER-ANIMATION-FAILURE] request=\(hostedTabReorderDiagnosticNumber(animationRequestUptime)) "
+      + "deadline=\(hostedTabReorderDiagnosticNumber(deadline)) "
+      + "end=\(hostedTabReorderDiagnosticNumber(observationEndUptime)) "
+      + "requestToDeadline=\(hostedTabReorderDiagnosticNumber(deadline - animationRequestUptime)) "
+      + "requestToEnd=\(hostedTabReorderDiagnosticNumber(observationEndUptime - animationRequestUptime)) "
+      + "loops=\(motionSamples.loopCount) retained=\(retainedSamples.count) "
+      + "wrapped=\(motionSamples.didWrap) activeSamples=\(motionSamples.activeSampleCount) "
+      + "activeFirst=\(hostedTabReorderDiagnosticNumber(firstActiveOffset)) "
+      + "activeLast=\(hostedTabReorderDiagnosticNumber(lastActiveOffset)) "
+      + "activeObservedSpan=\(hostedTabReorderDiagnosticNumber(activeObservedSpan)) "
+      + "animationFrom=\(hostedTabReorderDiagnosticNumber(details?.from)) "
+      + "animationTo=\(hostedTabReorderDiagnosticNumber(details?.to)) "
+      + "animationDuration=\(hostedTabReorderDiagnosticNumber(details?.duration)) "
+      + "windowVisible=\(window.isVisible) windowOcclusionVisible=\(window.occlusionState.contains(.visible)) "
+      + "windowKey=\(window.isKeyWindow) appActive=\(NSApp.isActive) "
+      + "sourceMatchesCurrentOwner=\(currentSourceMatches) sourceInWindow=\(sibling.window === window) "
+      + "sourceInDestination=\(sibling.isDescendant(of: destination)) sourceNoteMatches=\(sibling.noteID == notes[1].id)")
+    print("[TAB-REORDER-ANIMATION-FAILURE] first=\(hostedTabReorderDiagnosticSample(motionSamples.firstSample, relativeTo: animationRequestUptime))")
+    print("[TAB-REORDER-ANIMATION-FAILURE] last=\(hostedTabReorderDiagnosticSample(motionSamples.lastSample, relativeTo: animationRequestUptime))")
+    print("[TAB-REORDER-ANIMATION-FAILURE] firstActive=\(hostedTabReorderDiagnosticSample(motionSamples.firstActiveSample, relativeTo: animationRequestUptime))")
+    print("[TAB-REORDER-ANIMATION-FAILURE] lastActive=\(hostedTabReorderDiagnosticSample(motionSamples.lastActiveSample, relativeTo: animationRequestUptime))")
+    print("[TAB-REORDER-ANIMATION-FAILURE] positionCount=\(positions.count) positionMin=\(String(describing: positions.min())) positionMax=\(String(describing: positions.max())) range=\(intermediateRange)")
+    print("[TAB-REORDER-ANIMATION-FAILURE] samples=\(retainedTrace)")
+  }
   #expect(observedAnimation)
   #expect(hasIntermediatePosition)
   #expect(sibling.layer?.animation(forKey: "fleck.tab-reorder") == nil)
