@@ -3744,20 +3744,20 @@
       }
       folderCreationSource = source
       isNewFolderTextEditing = false
-      withAnimation(
-        folderCreationAnimation(for: source),
-        completionCriteria: .logicallyComplete
-      ) {
-        isCreatingFolder = false
-        folderNameDraft = ""
-        focusedRow = focusedRowBeforeComposition
-        isUnfiledDisclosureFocused = wasUnfiledDisclosureFocusedBeforeComposition
-      } completion: {
+      var transaction = Transaction(animation: folderCreationAnimation(for: source))
+      transaction.disablesAnimations = source == .keyboard
+      transaction.addAnimationCompletion(criteria: .logicallyComplete) {
         guard !isCreatingFolder else { return }
         frozenOverflow = nil
         frozenUnfiledDisclosure = nil
         focusedRowBeforeComposition = nil
         wasUnfiledDisclosureFocusedBeforeComposition = false
+      }
+      withTransaction(transaction) {
+        isCreatingFolder = false
+        folderNameDraft = ""
+        focusedRow = focusedRowBeforeComposition
+        isUnfiledDisclosureFocused = wasUnfiledDisclosureFocusedBeforeComposition
       }
     }
 
