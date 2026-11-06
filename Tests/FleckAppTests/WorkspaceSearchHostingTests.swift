@@ -391,7 +391,10 @@ func WorkspaceSearchHostingPointerDismissRestoresEditorFocus() async throws {
 
   let searchButton = try #require(workspaceSearchTrigger(in: host))
   try clickWorkspaceSearchControl(searchButton, in: window)
-  await settleWorkspaceSearchHost(host)
+  let presented = try await waitForWorkspaceSearchHostState(host) {
+    searchController.isPresented
+  }
+  #expect(presented, "Timed out waiting for the application-delivered search click")
 
   #expect(searchController.isPresented)
   #expect(searchController.presentationKind == .inline)
@@ -412,6 +415,13 @@ func WorkspaceSearchHostingPointerDismissRestoresEditorFocus() async throws {
   window.contentView = nil
   window.orderOut(nil)
   await runtime.shutdown()
+}
+
+@Test @MainActor
+func WorkspaceSearchHostingRepeatedPointerInputUsesApplicationDispatch() async throws {
+  for _ in 0..<8 {
+    try await WorkspaceSearchHostingPointerDismissRestoresEditorFocus()
+  }
 }
 
 @Test @MainActor
@@ -1747,8 +1757,8 @@ private func clickWorkspaceSearchControl(_ windowPoint: NSPoint, in window: NSWi
       clickCount: 1,
       pressure: 0
     ))
-  window.postEvent(mouseUp, atStart: true)
-  window.sendEvent(mouseDown)
+  NSApp.postEvent(mouseUp, atStart: true)
+  NSApp.postEvent(mouseDown, atStart: true)
 }
 
 @MainActor
