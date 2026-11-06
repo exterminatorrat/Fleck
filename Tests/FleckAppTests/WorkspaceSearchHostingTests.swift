@@ -1659,6 +1659,35 @@ private func printCompactSearchDismissDiagnostic(
   let containing = hostedWorkspaceSearchDescendants(in: host, as: NSView.self)
     .filter { $0 !== host && $0.convert($0.bounds, to: host).contains(dismissPoint) }
     .map { "\(type(of: $0))@\(NSStringFromRect($0.convert($0.bounds, to: host)))" }
+  var pendingAccessibilityElements: [Any] = [host]
+  var visitedAccessibilityElements: Set<ObjectIdentifier> = []
+  var dismissAccessibilityFrames: [String] = []
+  while let value = pendingAccessibilityElements.popLast(), visitedAccessibilityElements.count < 512 {
+    guard let element = value as? NSObject,
+      visitedAccessibilityElements.insert(ObjectIdentifier(element)).inserted
+    else { continue }
+    let labels = ["accessibilityLabel", "accessibilityTitle"].compactMap { name -> String? in
+      let selector = NSSelectorFromString(name)
+      guard element.responds(to: selector) else { return nil }
+      let value = element.perform(selector)?.takeUnretainedValue()
+      return (value as? String) ?? (value as? NSAttributedString)?.string
+    }
+    if labels.contains("Dismiss search"),
+      element.responds(to: NSSelectorFromString("accessibilityFrame")),
+      let frame = element.value(forKey: "accessibilityFrame") as? NSValue
+    {
+      let hostFrame = host.convert(window.convertFromScreen(frame.rectValue), from: nil)
+      dismissAccessibilityFrames.append(
+        "\(NSStringFromRect(hostFrame)):containsClick=\(hostFrame.contains(dismissPoint))"
+      )
+    }
+    let childrenSelector = NSSelectorFromString("accessibilityChildren")
+    if element.responds(to: childrenSelector),
+      let children = element.perform(childrenSelector)?.takeUnretainedValue() as? [Any]
+    {
+      pendingAccessibilityElements.append(contentsOf: children)
+    }
+  }
   print(
     "FLECK_COMPACT_SEARCH_DISMISS_DIAGNOSTIC"
       + " active=\(NSApp.isActive) key=\(window.isKeyWindow)"
@@ -1669,6 +1698,7 @@ private func printCompactSearchDismissDiagnostic(
       + " point=\(NSStringFromPoint(dismissPoint))"
       + " hit=[\(hitChain.joined(separator: " < "))]"
       + " containing=[\(containing.joined(separator: ", "))]"
+      + " dismissAX=[\(dismissAccessibilityFrames.joined(separator: ", "))]"
   )
 }
 
