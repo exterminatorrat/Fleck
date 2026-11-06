@@ -208,3 +208,145 @@ private func attributedString(from rtf: Data) throws -> NSAttributedString {
     documentAttributes: nil
   )
 }
+
+@Test @MainActor func noteRTFSerializationPreservesRelativeAndAbsoluteTailIndents() throws {
+  let attributed = NSMutableAttributedString(string: "relative\nzero\nabsolute")
+  let ranges = [
+    NSRange(location: 0, length: 9), NSRange(location: 9, length: 5),
+    NSRange(location: 14, length: 8),
+  ]
+  let tails: [CGFloat] = [-8, 0, 120]
+  for (range, tail) in zip(ranges, tails) {
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.firstLineHeadIndent = 4
+    paragraph.headIndent = 12
+    paragraph.tailIndent = tail
+    attributed.addAttribute(.paragraphStyle, value: paragraph, range: range)
+  }
+  let legacyRTF = try attributed.data(
+    from: NSRange(location: 0, length: attributed.length),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+  let legacyNative = try NSAttributedString(
+    data: legacyRTF, options: [.documentType: NSAttributedString.DocumentType.rtf],
+    documentAttributes: nil
+  )
+  let legacyDecoded = try NoteRichTextCodec.decode(legacyRTF)
+  let encoded = try NoteRichTextCodec.encode(attributed)
+  let decoded = try NoteRichTextCodec.decode(encoded)
+  let nativeDecoded = try NSAttributedString(
+    data: encoded, options: [.documentType: NSAttributedString.DocumentType.rtf],
+    documentAttributes: nil
+  )
+  #expect(decoded.string.utf16.elementsEqual(attributed.string.utf16))
+  #expect(nativeDecoded.string.utf16.elementsEqual(attributed.string.utf16))
+  for (range, tail) in zip(ranges, tails) {
+    let paragraph = try #require(
+      decoded.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
+        as? NSParagraphStyle
+    )
+    #expect(paragraph.firstLineHeadIndent == 4)
+    #expect(paragraph.headIndent == 12)
+    #expect(paragraph.tailIndent == tail)
+    let legacyStyle = try #require(
+      legacyNative.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
+        as? NSParagraphStyle
+    )
+    for unmodified in [legacyDecoded, nativeDecoded] {
+      let style = try #require(
+        unmodified.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
+          as? NSParagraphStyle
+      )
+      #expect(style.isEqual(legacyStyle))
+    }
+  }
+
+  let invalidRecords = [
+    #"[{"location":1,"length":8,"value":-8}]"#,
+    #"[{"location":0,"length":9,"value":8}]"#,
+    #"[{"location":0,"length":9,"value":-8},{"location":0,"length":9,"value":-16}]"#,
+    #"[{"location":0,"length":9,"value":-8},{"location":22,"length":1,"value":-16}]"#,
+    "invalid JSON",
+  ]
+  for records in invalidRecords {
+    var invalid = legacyRTF
+    let payload = Data(records.utf8).base64EncodedString()
+    invalid.insert(
+      contentsOf: Data("{\\*\\fleckrelativetailsv1 \(payload)}".utf8), at: 6
+    )
+    let decodedInvalid = try NoteRichTextCodec.decode(invalid)
+    #expect(decodedInvalid.isEqual(to: legacyNative))
+  }
+
+  let validRecord = #"[{"location":0,"length":9,"value":-8}]"#
+  for extraBytes in [0, 3] {
+    let json = validRecord + String(repeating: " ", count: 387 + extraBytes - validRecord.utf8.count)
+    let payload = Data(json.utf8).base64EncodedString()
+    #expect(payload.utf8.count == 516 + (extraBytes == 0 ? 0 : 4))
+    var bounded = legacyRTF
+    bounded.insert(contentsOf: Data("{\\*\\fleckrelativetailsv1 \(payload)}".utf8), at: 6)
+    let decodedBounded = try NoteRichTextCodec.decode(bounded)
+    if extraBytes == 0 {
+      let paragraph = try #require(
+        decodedBounded.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+      )
+      #expect(paragraph.tailIndent == -8)
+    } else {
+      #expect(decodedBounded.isEqual(to: legacyNative))
+    }
+  }
+}
+
+@Test @MainActor func noteRTFRelativeTailsSurviveUnicodeAndLineEndingNormalization() throws {
+  for ending in ["\n", "\r", "\r\n", "\u{2029}"] {
+    let contents = ["zero e\u{301}", "relative e\u{301}", "relative \u{1100}\u{1161}", "absolute é"]
+    let tails: [CGFloat] = [0, -8, -16, 120]
+    let source = NSMutableAttributedString(string: contents.joined(separator: ending), attributes: [.font: NSFont.systemFont(ofSize: 14)])
+    let sourceText = source.string as NSString
+    var location = 0
+    for tail in tails {
+      let range = sourceText.paragraphRange(for: NSRange(location: location, length: 0))
+      let style = NSMutableParagraphStyle()
+      style.firstLineHeadIndent = 4; style.headIndent = 12; style.tailIndent = tail
+      source.addAttribute(.paragraphStyle, value: style, range: range)
+      location = NSMaxRange(range)
+    }
+    let decoded = try NoteRichTextCodec.decode(NoteRichTextCodec.encode(source))
+    let decodedText = decoded.string as NSString
+    location = 0
+    for (content, tail) in zip(contents, tails) {
+      let range = decodedText.paragraphRange(for: NSRange(location: location, length: 0))
+      var contentEnd = 0
+      decodedText.getParagraphStart(nil, end: nil, contentsEnd: &contentEnd, for: range)
+      #expect(decodedText.substring(with: NSRange(location: location, length: contentEnd - location)) == content)
+      let style = try #require(decoded.attribute(.paragraphStyle, at: location, effectiveRange: nil) as? NSParagraphStyle)
+      #expect(style.firstLineHeadIndent == 4)
+      #expect(style.headIndent == 12)
+      #expect(style.tailIndent == tail)
+      location = NSMaxRange(range)
+    }
+    #expect(location == decodedText.length)
+  }
+}
+
+@Test @MainActor func noteRTFRelativeTailsPreserveInternalUnicodeLineSeparator() throws {
+  let text = "e\u{301}\u{2028}line\u{2029}relative"
+  let source = NSMutableAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 14)])
+  let firstRange = (text as NSString).paragraphRange(for: NSRange(location: 0, length: 0))
+  let relativeRange = NSRange(location: NSMaxRange(firstRange), length: source.length - NSMaxRange(firstRange))
+  let zero = NSMutableParagraphStyle()
+  source.addAttribute(.paragraphStyle, value: zero, range: firstRange)
+  let relative = NSMutableParagraphStyle(); relative.tailIndent = -8
+  source.addAttribute(.paragraphStyle, value: relative, range: relativeRange)
+  let decoded = try NoteRichTextCodec.decode(NoteRichTextCodec.encode(source))
+  let decodedText = decoded.string as NSString
+  let decodedFirst = decodedText.paragraphRange(for: NSRange(location: 0, length: 0))
+  var contentEnd = 0
+  decodedText.getParagraphStart(nil, end: nil, contentsEnd: &contentEnd, for: decodedFirst)
+  #expect(decodedText.substring(to: contentEnd) == "e\u{301}\u{2028}line")
+  #expect(decodedText.substring(from: NSMaxRange(decodedFirst)) == "relative")
+  let firstStyle = try #require(decoded.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
+  let relativeStyle = try #require(decoded.attribute(.paragraphStyle, at: NSMaxRange(decodedFirst), effectiveRange: nil) as? NSParagraphStyle)
+  #expect(firstStyle.tailIndent == 0)
+  #expect(relativeStyle.tailIndent == -8)
+}
