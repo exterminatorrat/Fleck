@@ -3709,6 +3709,7 @@
     ) {
       guard !trimmedFolderName.isEmpty else {
         if preservingFocus, editingFolderID != nil {
+          focusedRow = nil
           renameFocusRequest &+= 1
         }
         return
@@ -3729,6 +3730,7 @@
       } catch {
         appState.saveError = "Could not update folder: \(String(describing: error))"
         if preservingFocus, editingFolderID != nil {
+          focusedRow = nil
           renameFocusRequest &+= 1
         }
       }
@@ -3744,20 +3746,20 @@
       }
       folderCreationSource = source
       isNewFolderTextEditing = false
-      withAnimation(
-        folderCreationAnimation(for: source),
-        completionCriteria: .logicallyComplete
-      ) {
-        isCreatingFolder = false
-        folderNameDraft = ""
-        focusedRow = focusedRowBeforeComposition
-        isUnfiledDisclosureFocused = wasUnfiledDisclosureFocusedBeforeComposition
-      } completion: {
+      var transaction = Transaction(animation: folderCreationAnimation(for: source))
+      transaction.disablesAnimations = source == .keyboard
+      transaction.addAnimationCompletion(criteria: .logicallyComplete) {
         guard !isCreatingFolder else { return }
         frozenOverflow = nil
         frozenUnfiledDisclosure = nil
         focusedRowBeforeComposition = nil
         wasUnfiledDisclosureFocusedBeforeComposition = false
+      }
+      withTransaction(transaction) {
+        isCreatingFolder = false
+        folderNameDraft = ""
+        focusedRow = focusedRowBeforeComposition
+        isUnfiledDisclosureFocused = wasUnfiledDisclosureFocusedBeforeComposition
       }
     }
 
