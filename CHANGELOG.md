@@ -3,6 +3,35 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.3-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
+## [1.7.2-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
+
+## [1.7.1-beta.1] - 2026-11-02
+
+### Fixed
+
+- Keep the merged process-validation layer version ahead of its retained 1.7.0
+  feature cohort; preserve all parent and intermediate development-history entries.
+
+## [1.7.0-beta.1] - 2026-10-28
+
+### Fixed
+
+- Keep process-transport completion open until bounded stderr validation and graceful drain
+  finish, while streaming request lifecycle events without waiting for process shutdown.
+
+Part of the approved substantial development cohort. Source-only correction; compilation,
+process tests and native behavior remain unverified locally.
+
 ## [1.5.26-beta.1] - 2026-11-05
 
 ### Fixed
@@ -22,7 +51,19 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Preserve the complete pill feature and parent histories while integrating the verified live dictionary-star fixture correction.
 
+## [1.5.24-beta.1] - 2026-11-04
+
+### Fixed
+
+- Use the live priority-button accessibility frame for the personal dictionary star-click fixture.
+
 ## [1.5.24-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
+## [1.5.23-beta.1] - 2026-11-02
 
 ### Fixed
 
@@ -33,38 +74,6 @@ public release log. Packaging unchanged source does not add a changelog entry.
 ### Fixed
 
 - Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
-
-## [1.5.21-beta.1] - 2026-11-02
-
-### Fixed
-
-- Preserve native slider input coverage and current parent repairs without dropping this feature layer.
-
-## [1.5.20-beta.1] - 2026-11-02
-
-### Fixed
-
-- Preserve capsule standby placement and its explicit native fixture cleanup while
-  integrating reviewed note-tab accessibility, physical gradients and parent Settings work.
-
-## [1.5.16-beta.1] - 2026-11-02
-
-### Fixed
-
-- Carry verified readiness, Models input, native font and right-to-left title repairs
-  into the bottom-only pill source while preserving its standby and routing lifecycle.
-
-## [1.5.24-beta.1] - 2026-11-04
-
-### Fixed
-
-- Use the live priority-button accessibility frame for the personal dictionary star-click fixture.
-
-## [1.5.23-beta.1] - 2026-11-02
-
-### Fixed
-
-- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
 
 ## [1.5.22-beta.1] - 2026-11-02
 
@@ -84,7 +93,20 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 ### Fixed
 
+- Preserve native slider input coverage and current parent repairs without dropping this feature layer.
+
+## [1.5.21-beta.1] - 2026-11-02
+
+### Fixed
+
 - Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
+
+## [1.5.20-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve capsule standby placement and its explicit native fixture cleanup while
+  integrating reviewed note-tab accessibility, physical gradients and parent Settings work.
 
 ## [1.5.20-beta.1] - 2026-11-02
 
@@ -93,12 +115,65 @@ public release log. Packaging unchanged source does not add a changelog entry.
 - Preserve native opacity-slider drag, track-click, right-to-left, and disabled
   coverage when SwiftUI exposes an owned public accessibility slider instead of NSSlider.
 
+## [1.5.20-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
 ## [1.5.19-beta.1] - 2026-11-02
 
 ### Fixed
 
 - Preserve the theme, Settings and Models work while integrating reviewed native
   note-tab accessibility, physical title gradients and interface-font corrections.
+
+## [1.5.19-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
+
+## [1.5.19-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
+## [1.5.18-beta.1] - 2026-11-02
+
+### Fixed
+
+- Retain transactional multi-note filing while integrating reviewed native title
+  accessibility, physical gradient coordinates and interface-font picker corrections.
+
+## [1.5.18-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native folder composer before exercising retained overflow actions,
+  preserving strict scroll-position and geometry assertions.
+
+## [1.5.18-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve process-validation history while integrating the verified current font parent.
+
+## [1.5.17-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native note-tab accessibility activation and explicit physical title-gradient
+  coordinates when integrating the reviewed title parent, retaining optional interface
+  fonts and native font-picker Escape handling.
+
+## [1.5.16-beta.1] - 2026-11-02
+
+### Fixed
+
+- Carry verified readiness, Models input, native font and right-to-left title repairs
+  into the bottom-only pill source while preserving its standby and routing lifecycle.
 
 ## [1.5.15-beta.1] - 2026-11-02
 
@@ -165,25 +240,6 @@ delivery is claimed.
 Source-only dependency integration. Local compilation, tests, visual/accessibility inspection
 and native behavior remain unverified; hosted verification is pending.
 
-## [1.5.20-beta.1] - 2026-11-02
-
-### Fixed
-
-- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
-
-## [1.5.19-beta.1] - 2026-11-02
-
-### Fixed
-
-- Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
-
-## [1.5.18-beta.1] - 2026-11-02
-
-### Fixed
-
-- Retain transactional multi-note filing while integrating reviewed native title
-  accessibility, physical gradient coordinates and interface-font picker corrections.
-
 ## [1.5.9-beta.1] - 2026-11-02
 
 ### Fixed
@@ -203,27 +259,6 @@ and native behavior remain unverified; hosted verification is pending.
 Source-only repair checkpoint. Compilation, tests and native/visual/accessibility validation
 remain unrun for this change; hosted CI has not run for this checkpoint. Readiness focus
 ownership remains unresolved.
-
-## [1.5.19-beta.1] - 2026-11-02
-
-### Fixed
-
-- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
-
-## [1.5.18-beta.1] - 2026-11-02
-
-### Fixed
-
-- Await the owned native folder composer before exercising retained overflow actions,
-  preserving strict scroll-position and geometry assertions.
-
-## [1.5.17-beta.1] - 2026-11-02
-
-### Fixed
-
-- Preserve native note-tab accessibility activation and explicit physical title-gradient
-  coordinates when integrating the reviewed title parent, retaining optional interface
-  fonts and native font-picker Escape handling.
 
 ## [1.5.8-beta.1] - 2026-11-02
 
@@ -395,15 +430,6 @@ tests and native behavior remain unverified.
 
 Source checkpoint only; CI and native verification remain pending.
 
-## [1.4.24-beta.1] - 2026-10-31
-
-### Fixed
-
-- Integrate the reviewed Settings spacing, Models Backtab and folder-row focus/School fixture
-  corrections while preserving native resize, scrollbar tracking and folder-creation guards.
-
-Source checkpoint only; this combined source's CI and native/visual verification remain pending.
-
 ## [1.4.42-beta.1] - 2026-11-01
 
 ### Fixed
@@ -499,6 +525,15 @@ Source-only dependency integration; this checkpoint's CI and native validation r
   Backtab corrections while preserving theme-matched banners, inline opt-out and native resizing.
 
 Source-only dependency integration; this checkpoint's CI and native validation remain pending.
+
+## [1.4.24-beta.1] - 2026-10-31
+
+### Fixed
+
+- Integrate the reviewed Settings spacing, Models Backtab and folder-row focus/School fixture
+  corrections while preserving native resize, scrollbar tracking and folder-creation guards.
+
+Source checkpoint only; this combined source's CI and native/visual verification remain pending.
 
 ## [1.4.24-beta.1] - 2026-10-31
 
