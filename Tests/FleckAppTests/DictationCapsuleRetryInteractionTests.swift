@@ -128,6 +128,29 @@ private func retryWitnessCoordinate(_ value: Double?) -> String {
   return text
 }
 
+@MainActor
+private func awaitWindowServerFrame(of panel: NSPanel) async throws {
+  let primaryHeight = try #require(NSScreen.screens.first).frame.height
+  let expected = CGRect(x: panel.frame.minX, y: primaryHeight - panel.frame.maxY,
+    width: panel.frame.width, height: panel.frame.height)
+  func windowServerBounds() -> CGRect? {
+    let windows = CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(panel.windowNumber))
+      as? [[String: Any]]
+    guard let dictionary = windows?.first?[kCGWindowBounds as String] as? NSDictionary else { return nil }
+    return CGRect(dictionaryRepresentation: dictionary)
+  }
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: .seconds(5))
+  while clock.now < deadline {
+    if let bounds = windowServerBounds(),
+      abs(bounds.minX - expected.minX) < 1, abs(bounds.minY - expected.minY) < 1,
+      abs(bounds.width - expected.width) < 1, abs(bounds.height - expected.height) < 1
+    { return }
+    try await Task.sleep(for: .milliseconds(10))
+  }
+  try #require(Bool(false), "The window server never received the capsule panel frame")
+}
+
 @Test @MainActor func DictationCapsulePostedEventRetryQualification() async throws {
   let application = try #require(NSApp)
   try #require(application.isRunning, "Requires the existing AppKit test host's live NSApplication.run loop")
@@ -169,6 +192,7 @@ private func retryWitnessCoordinate(_ value: Double?) -> String {
   try #require(panel.windowNumber > 0)
   try #require(panel.isVisible && !panel.ignoresMouseEvents)
   try #require(controller.errorPresentationModel.canBeginAction)
+  try await awaitWindowServerFrame(of: panel)
   let (_, down, up) = try retryNativeEvents(controller, number: 20_900)
   try #require(down.window === panel && up.window === panel)
   try #require(down.locationInWindow == up.locationInWindow)
