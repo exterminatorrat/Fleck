@@ -9,11 +9,36 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Consolidate the stacked foundation pull requests (#68–#73, #75–#77, #93, and the #95 tab-overflow test fix) into one branch on current `main` with its CI scheduling, and record the held Sparkle release work in `docs/held-features.md`.
 
+## [1.7.6-beta.1] - 2026-11-05
+
+### Fixed
+
+- Preserve the retained Apple speech diagnostics feature while integrating the current PR77 parent and its complete ordered history.
+
+## [1.7.5-beta.1] - 2026-11-05
+
+### Changed
+
+- Reconciled the retained Apple Speech diagnostics feature with the current reviewed PR77 parent.
+  This source-only refresh is pending current-head CI.
+
+## [1.7.4-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
 ## [1.7.3-beta.1] - 2026-11-02
 
 ### Fixed
 
 - Preserve this feature layer and complete parent histories while integrating current native fixture lifecycle and qualified event-receipt repairs.
+
+## [1.7.3-beta.1] - 2026-11-02
+
+### Fixed
+
+- Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
 
 ## [1.7.2-beta.1] - 2026-11-02
 
@@ -21,12 +46,24 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 - Await the owned native composer before retained overflow actions while preserving this feature layer and both complete parent histories.
 
+## [1.7.2-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve native slider input coverage and current parent repairs without dropping this feature layer.
+
 ## [1.7.1-beta.1] - 2026-11-02
 
 ### Fixed
 
 - Keep the merged process-validation layer version ahead of its retained 1.7.0
   feature cohort; preserve all parent and intermediate development-history entries.
+
+## [1.7.1-beta.1] - 2026-11-02
+
+### Fixed
+
+- Preserve this feature layer while integrating verified parent title, accessibility, and native-fixture repairs.
 
 ## [1.7.0-beta.1] - 2026-10-28
 
@@ -37,6 +74,18 @@ public release log. Packaging unchanged source does not add a changelog entry.
 
 Part of the approved substantial development cohort. Source-only correction; compilation,
 process tests and native behavior remain unverified locally.
+
+## [1.7.0-beta.1] - 2026-10-27
+
+### Fixed
+
+- Add opt-in, bounded Apple Speech lifecycle diagnostics with per-attempt cancellation,
+  reservation ownership, first-buffer and conversion receipts, without transcript or device data.
+- Retain the first failure, redact unknown error domains, and balance release receipts when
+  asynchronous teardown overlaps without changing capture ownership.
+
+Source-only capture/diagnostics constituent of the retained-feature 1.7 release cohort.
+Local compilation, tests and native capture behavior remain unrun; hosted verification is pending.
 
 ## [1.5.26-beta.1] - 2026-11-05
 
