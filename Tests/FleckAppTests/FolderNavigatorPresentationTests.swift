@@ -450,9 +450,28 @@ struct FolderNavigatorPresentationTests {
     #expect(duplicateEditor.string == "Personal")
     try fixture.click(fixture.element(identifier: "folder-unfiled"))
 
-    try #require(await fixture.waitForRenameEditor(
+    let renameReady = try await fixture.waitForRenameEditor(
       folderID: folder.id, reportingValidationError: true
-    ))
+    )
+    if !renameReady {
+      let fields = fixture.textFields.filter { $0.accessibilityIdentifier() == renameIdentifier }
+      let field = fields.first
+      let currentEditor = field?.currentEditor() as? NSTextView
+      print(
+        "FLECK_FOLDER_DUPLICATE_BLUR_DIAGNOSTIC"
+          + " validationError=\(fixture.state.saveError?.hasPrefix("Could not update folder:") == true)"
+          + " fieldCount=\(fields.count)"
+          + " fieldAttached=\(field?.window === fixture.window)"
+          + " fieldHidden=\(field?.isHiddenOrHasHiddenAncestor ?? true)"
+          + " editorPresent=\(currentEditor != nil)"
+          + " editorOwnsFocus=\(currentEditor != nil && currentEditor === fixture.window.firstResponder)"
+          + " originalEditorOwnsFocus=\(duplicateEditor === fixture.window.firstResponder)"
+          + " active=\(NSApp.isActive) key=\(fixture.window.isKeyWindow)"
+          + " saving=\(fixture.state.saveStatus == .saving)"
+          + " responder=\(fixture.window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil")"
+      )
+    }
+    try #require(renameReady)
     try #require(fixture.state.saveError?.hasPrefix("Could not update folder:") == true)
     #expect(fixture.state.workspace.folders.first?.name == "Work")
     #expect(fixture.isRenameFieldVisible(identifier: renameIdentifier))

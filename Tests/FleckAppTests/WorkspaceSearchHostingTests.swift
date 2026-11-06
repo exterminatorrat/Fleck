@@ -301,7 +301,7 @@ func WorkspaceSearchHostingKeepsCompactSurfaceInsideMinimumWidth() async throws 
   )
   #expect(dismissPoint.x >= host.bounds.maxX - 40)
   #expect(dismissPoint.x <= host.bounds.maxX - 10)
-  clickWorkspaceSearchControl(host.convert(dismissPoint, to: nil), in: window)
+  try clickWorkspaceSearchControl(host.convert(dismissPoint, to: nil), in: window)
   let dismissed = try await waitForWorkspaceSearchHostState(host) {
     !searchController.isPresented
   }
@@ -390,7 +390,7 @@ func WorkspaceSearchHostingPointerDismissRestoresEditorFocus() async throws {
   editor.setSelectedRange(bodySelection)
 
   let searchButton = try #require(workspaceSearchTrigger(in: host))
-  clickWorkspaceSearchControl(searchButton, in: window)
+  try clickWorkspaceSearchControl(searchButton, in: window)
   await settleWorkspaceSearchHost(host)
 
   #expect(searchController.isPresented)
@@ -1703,30 +1703,52 @@ private func printCompactSearchDismissDiagnostic(
 }
 
 @MainActor
-private func clickWorkspaceSearchControl(_ control: NSView, in window: NSWindow) {
+private func clickWorkspaceSearchControl(_ control: NSView, in window: NSWindow) throws {
   let point = control.convert(
     NSPoint(x: control.bounds.midX, y: control.bounds.midY),
     to: nil
   )
-  clickWorkspaceSearchControl(point, in: window)
+  try clickWorkspaceSearchControl(point, in: window)
 }
 
 @MainActor
-private func clickWorkspaceSearchControl(_ windowPoint: NSPoint, in window: NSWindow) {
-  for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-    guard let event = NSEvent.mouseEvent(
-      with: eventType,
+private enum WorkspaceSearchPointerEventSequence {
+  static var nextEventNumber = 1
+}
+
+@MainActor
+private func clickWorkspaceSearchControl(_ windowPoint: NSPoint, in window: NSWindow) throws {
+  let timestamp = ProcessInfo.processInfo.systemUptime
+  let mouseDownEventNumber = WorkspaceSearchPointerEventSequence.nextEventNumber
+  WorkspaceSearchPointerEventSequence.nextEventNumber += 1
+  let mouseUpEventNumber = WorkspaceSearchPointerEventSequence.nextEventNumber
+  WorkspaceSearchPointerEventSequence.nextEventNumber += 1
+  let mouseDown = try #require(
+    NSEvent.mouseEvent(
+      with: .leftMouseDown,
       location: windowPoint,
       modifierFlags: [],
-      timestamp: ProcessInfo.processInfo.systemUptime,
+      timestamp: timestamp,
       windowNumber: window.windowNumber,
       context: nil,
-      eventNumber: 0,
+      eventNumber: mouseDownEventNumber,
       clickCount: 1,
-      pressure: eventType == .leftMouseDown ? 1 : 0
-    ) else { continue }
-    window.sendEvent(event)
-  }
+      pressure: 1
+    ))
+  let mouseUp = try #require(
+    NSEvent.mouseEvent(
+      with: .leftMouseUp,
+      location: windowPoint,
+      modifierFlags: [],
+      timestamp: timestamp,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: mouseUpEventNumber,
+      clickCount: 1,
+      pressure: 0
+    ))
+  window.postEvent(mouseUp, atStart: true)
+  window.sendEvent(mouseDown)
 }
 
 @MainActor
