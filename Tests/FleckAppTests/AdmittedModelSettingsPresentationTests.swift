@@ -667,25 +667,12 @@ private func waitForPresentation(
   _ viewModel: AdmittedModelSettingsViewModel,
   phase: AdmittedModelInstallPhase
 ) async {
-  guard viewModel.presentation.phase != phase else { return }
-
-  let observer = Task { @MainActor in
-    for await presentation in viewModel.$presentation.values {
-      if presentation.phase == phase { return true }
-    }
-    return false
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: .seconds(5))
+  while viewModel.presentation.phase != phase, clock.now < deadline {
+    try? await Task.sleep(for: .milliseconds(10))
   }
-  let phaseObserved = await withTaskGroup(of: Bool.self) { group in
-    group.addTask { await observer.value }
-    group.addTask {
-      try? await Task.sleep(for: .seconds(5))
-      return false
-    }
-    let phaseObserved = await group.next() ?? false
-    observer.cancel()
-    group.cancelAll()
-    return phaseObserved
-  }
+  let phaseObserved = viewModel.presentation.phase == phase
   #expect(phaseObserved)
 }
 
