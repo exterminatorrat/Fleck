@@ -121,6 +121,33 @@ private let clientProfileID = UUID(
   }
 }
 
+@Test func cancellationAfterReaderStartsRejectsResponseAndClosesDescriptor() async throws {
+  let frame = try responseFrame(requestID: requestID)
+  let gate = AgentIPCClientReadGate()
+  let sender = AgentIPCClientSendRunner(readGate: gate, frame: frame)
+  let task = Task.detached {
+    try await sender.send(request())
+  }
+
+  guard gate.waitUntilRead(timeout: 5) else {
+    task.cancel()
+    gate.releaseFrame()
+    _ = await task.result
+    Issue.record("The IPC send did not enter its reader before the test timeout")
+    return
+  }
+
+  task.cancel()
+  gate.releaseFrame()
+  switch await task.result {
+  case .success:
+    Issue.record("A cancelled IPC send must not accept a response")
+  case .failure(let error):
+    #expect(error is CancellationError)
+  }
+  #expect(gate.closeCount == 1)
+}
+
 @Test func partialFramesShareOneOverallResponseDeadline() throws {
   let frame = try responseFrame(requestID: requestID)
   var reads = [
@@ -147,6 +174,67 @@ private let clientProfileID = UUID(
     _ = try client.send(request())
   }
   #expect(allowedWaits == [60, 20])
+}
+
+@Test func prepareEventSubscriptionUsesLargerBoundedResponseBudget() throws {
+  let receipt = AgentEventPendingReceipt(
+    subscriptionID: "evt_" + String(repeating: "a", count: 64),
+    expiresAt: Date(timeIntervalSince1970: 1_000),
+    revision: 1,
+    grantRevision: 1
+  )
+  let frame = try AgentWireFraming.encode(
+    AgentWireResponse.success(
+      protocolVersion: 2,
+      requestID: requestID,
+      result: .pendingEventSubscription(receipt: receipt)
+    )
+  )
+  var now: TimeInterval = 0
+  var allowedWaits: [TimeInterval] = []
+  let client = AgentIPCClient(
+    responseTimeout: 60,
+    connect: { _ in 12 },
+    launch: {},
+    now: { now },
+    write: { _, _ in },
+    read: { _, timeout in
+      allowedWaits.append(timeout)
+      now = 65
+      return frame
+    },
+    close: { _ in }
+  )
+
+  #expect(
+    try client.send(prepareEventRequest())
+      == .pendingEventSubscription(receipt: receipt)
+  )
+  #expect(allowedWaits == [120])
+}
+
+@Test func prepareEventSubscriptionPreservesStructuredCallerErrors() throws {
+  let expected = AgentWorkspaceError(
+    code: .permissionRevoked,
+    recoveryAction: "Reauthorize the event subscription."
+  )
+  var reads = [
+    try AgentWireFraming.encode(
+      AgentWireResponse.failure(
+        protocolVersion: 2,
+        requestID: requestID,
+        error: expected
+      )
+    )
+  ]
+  let client = testClient { _, _ in reads.removeFirst() }
+
+  do {
+    _ = try client.send(prepareEventRequest())
+    Issue.record("Expected the event subscription error")
+  } catch let received as AgentWorkspaceError {
+    #expect(received == expected)
+  }
 }
 
 @Test func mismatchedRequestIDAndProtocolNeverExposeAResult() throws {
@@ -280,6 +368,21 @@ private func request(
   )
 }
 
+private func prepareEventRequest() -> AgentWireRequest {
+  request(
+    protocolVersion: 2,
+    command: .prepareEventSubscription(
+      request: AgentEventSubscriptionRequest(
+        event: .noteUpdated,
+        scope: .note(noteID: clientProfileID),
+        callbackURL: "https://example.test/hook",
+        signingSecret:
+          "whsec_" + Data(repeating: 0x42, count: 24).base64EncodedString()
+      )
+    )
+  )
+}
+
 private func testClient(
   read: @escaping AgentIPCClient.Reader
 ) -> AgentIPCClient {
@@ -290,6 +393,75 @@ private func testClient(
     read: read,
     close: { _ in }
   )
+}
+
+private actor AgentIPCClientSendRunner {
+  private let client: AgentIPCClient
+
+  init(readGate: AgentIPCClientReadGate, frame: Data) {
+    client = AgentIPCClient(
+      connect: { _ in 12 },
+      launch: {},
+      write: { _, _ in },
+      read: { _, _ in try readGate.read(frame) },
+      close: { _ in readGate.recordClose() }
+    )
+  }
+
+  func send(_ request: AgentWireRequest) throws -> AgentWorkspaceResponse {
+    try client.send(request)
+  }
+}
+
+private final class AgentIPCClientReadGate: @unchecked Sendable {
+  private let condition = NSCondition()
+  private var readerEntered = false
+  private var returnFrame = false
+  private var recordedCloseCount = 0
+
+  func read(_ frame: Data) throws -> Data {
+    condition.lock()
+    readerEntered = true
+    condition.broadcast()
+    let deadline = Date(timeIntervalSinceNow: 5)
+    while !returnFrame {
+      guard condition.wait(until: deadline) else {
+        condition.unlock()
+        throw AgentIPCClientError.responseTimedOut
+      }
+    }
+    condition.unlock()
+    return frame
+  }
+
+  func waitUntilRead(timeout: TimeInterval) -> Bool {
+    condition.lock()
+    defer { condition.unlock() }
+    let deadline = Date(timeIntervalSinceNow: timeout)
+    while !readerEntered {
+      guard condition.wait(until: deadline) else { return false }
+    }
+    return true
+  }
+
+  func releaseFrame() {
+    condition.lock()
+    returnFrame = true
+    condition.broadcast()
+    condition.unlock()
+  }
+
+  func recordClose() {
+    condition.lock()
+    recordedCloseCount += 1
+    condition.unlock()
+  }
+
+  var closeCount: Int {
+    condition.lock()
+    defer { condition.unlock() }
+    return recordedCloseCount
+  }
 }
 
 private func responseFrame(

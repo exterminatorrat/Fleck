@@ -129,15 +129,10 @@ enum GemmaCleanupTestActivation {
     applicationSupportURL: URL,
     bundleURL: URL = Bundle.main.bundleURL,
     modelMutationWillBegin: @escaping @Sendable () async -> Void = {},
-    configurationFactory: @escaping ConfigurationFactory = { baseRoot, hooks in
-      try GemmaCleanupTestConfiguration.make(
-        admittedBaseRoot: baseRoot,
-        modelMutationWillBegin: hooks.modelMutationWillBegin,
-        startup: hooks.startup,
-        calibrate: hooks.calibrate
-      )
-    },
-    probe: RuntimeProbe? = nil
+    configurationFactory: ConfigurationFactory? = nil,
+    probe: RuntimeProbe? = nil,
+    pendingCleanupModelID: String? = nil,
+    qualification: GemmaCleanupModelQualification? = nil
   ) -> Result {
     let admittedBaseRoot = applicationSupportURL
       .appendingPathComponent("CleanupModels", isDirectory: true)
@@ -153,6 +148,17 @@ enum GemmaCleanupTestActivation {
       helperExecutableURL: helperExecutableURL,
       probe: selectedProbe
     )
+    let selectedConfigurationFactory: ConfigurationFactory = configurationFactory ?? {
+      baseRoot, hooks in
+      try GemmaCleanupTestConfiguration.make(
+        admittedBaseRoot: baseRoot,
+        modelMutationWillBegin: hooks.modelMutationWillBegin,
+        startup: hooks.startup,
+        calibrate: hooks.calibrate,
+        pendingCleanupModelID: pendingCleanupModelID,
+        qualification: qualification
+      )
+    }
     let makeTransport: @Sendable (URL) -> any GemmaCleanupTransport = {
       repositoryURL in
       GemmaCleanupProcessTransport(
@@ -162,7 +168,7 @@ enum GemmaCleanupTestActivation {
     }
 
     do {
-      let configuration = try configurationFactory(
+      let configuration = try selectedConfigurationFactory(
         admittedBaseRoot,
         ConfigurationHooks(
           startup: { try await runtime.startup() },

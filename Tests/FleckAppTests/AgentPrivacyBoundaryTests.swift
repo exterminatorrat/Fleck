@@ -470,6 +470,12 @@ private func reviewedWireCommandName(
   switch command {
   case .getCapabilities:
     "getCapabilities"
+  case .listEvents:
+    "listEvents"
+  case .prepareEventSubscription:
+    "prepareEventSubscription"
+  case .removeEventSubscription:
+    "removeEventSubscription"
   case .listSharedNotes:
     "listSharedNotes"
   case .readNote:
@@ -494,6 +500,12 @@ private func reviewedWireCommandName(
     "listActivity"
   case .undoChange:
     "undoChange"
+  case .listEvents:
+    "listEvents"
+  case .prepareEventSubscription:
+    "prepareEventSubscription"
+  case .removeEventSubscription:
+    "removeEventSubscription"
   }
 }
 

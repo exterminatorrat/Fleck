@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       own_window_capture_probe:
@@ -27,13 +28,25 @@ on:
         required: false
         type: boolean
         default: false
+      ordinary_test_diagnostic_selector:
+        description: >-
+          Optional anchored Swift test identifier regex for a supplemental macOS
+          ordinary diagnostic; full CI coverage still runs separately.
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event_name == 'workflow_dispatch' && inputs.ordinary_test_diagnostic_selector != '' && 'focused-' || '' }}${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   detect-changes:
     name: Detect documentation-only changes
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.ordinary_test_diagnostic_selector == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -79,7 +92,12 @@ jobs:
     env:
       FLECK_BUILD_IDENTITY_MODE: ci-unverified
       PYTHONDONTWRITEBYTECODE: "1"
+      FLECK_TEST_APPKIT_WATCHDOG_SECONDS: "4800"
     steps:
+      - name: Keep the runner display awake for AppKit tests
+        run: |
+          sudo -n pmset -a displaysleep 0 sleep 0
+          pmset -g | grep -E '^ (displaysleep|sleep) '
       - name: Check out repository (actions/checkout v6.0.2)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -98,6 +116,9 @@ jobs:
           } | tee -a "$GITHUB_OUTPUT"
       - name: Toolchain
         run: |
+          sw_vers
+          uname -m
+          printf 'Runner OS: %s; architecture: %s\n' "$RUNNER_OS" "$RUNNER_ARCH"
           xcodebuild -version
           swift --version
       - name: Install and verify ripgrep
@@ -138,6 +159,8 @@ jobs:
         run: |
           unset FLECK_ENHANCED_CANDIDATE
           swift build -c release --product fleck-agent
+      - name: Test agent boundary audit regression controls
+        run: bash Tests/Scripts/audit-agent-boundary.test.sh
       - name: Audit agent boundary
         run: Scripts/audit-agent-boundary.sh
       - name: Test packaged app symbol stripping
@@ -166,7 +189,7 @@ jobs:
 
   macos-validation:
     name: macOS ordinary repeat and bundle validation
-    needs: [detect-changes, macos-build]
+    needs: detect-changes
     if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
     runs-on: macos-26
     timeout-minutes: 90
@@ -177,8 +200,13 @@ jobs:
     env:
       FLECK_BUILD_IDENTITY_MODE: ci-unverified
       PYTHONDONTWRITEBYTECODE: "1"
+      FLECK_TEST_APPKIT_WATCHDOG_SECONDS: "4800"
       FLECK_NATIVE_CAPTURE_QA: "0"
     steps:
+      - name: Keep the runner display awake for AppKit tests
+        run: |
+          sudo -n pmset -a displaysleep 0 sleep 0
+          pmset -g | grep -E '^ (displaysleep|sleep) '
       - name: Check out repository (actions/checkout v6.0.2)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -187,16 +215,16 @@ jobs:
       - name: Verify exact workflow source
         id: source
         env:
-          INITIAL_COMMIT: ${{ needs.macos-build.outputs.source_commit }}
-          INITIAL_TREE: ${{ needs.macos-build.outputs.source_tree }}
-          INITIAL_VERSION: ${{ needs.macos-build.outputs.product_version }}
+          DETECTED_COMMIT: ${{ needs.detect-changes.outputs.source_commit }}
+          DETECTED_TREE: ${{ needs.detect-changes.outputs.source_tree }}
+          DETECTED_VERSION: ${{ needs.detect-changes.outputs.product_version }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain)"
-          test "$(git rev-parse HEAD)" = "$INITIAL_COMMIT"
-          test "$(git rev-parse HEAD^{tree})" = "$INITIAL_TREE"
-          test "$(cat VERSION)" = "$INITIAL_VERSION"
+          test "$(git rev-parse HEAD)" = "$DETECTED_COMMIT"
+          test "$(git rev-parse HEAD^{tree})" = "$DETECTED_TREE"
+          test "$(cat VERSION)" = "$DETECTED_VERSION"
           {
             printf 'commit=%s\n' "$(git rev-parse HEAD)"
             printf 'tree=%s\n' "$(git rev-parse HEAD^{tree})"
@@ -283,7 +311,7 @@ jobs:
 
   macos:
     name: macOS build and tests
-    if: ${{ always() }}
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.ordinary_test_diagnostic_selector == '') }}
     needs: [detect-changes, docs-validation, macos-build, macos-validation, macos-enhanced]
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -357,8 +385,14 @@ jobs:
     needs: detect-changes
     if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 90
+    env:
+      FLECK_TEST_APPKIT_WATCHDOG_SECONDS: "4800"
     steps:
+      - name: Keep the runner display awake for AppKit tests
+        run: |
+          sudo -n pmset -a displaysleep 0 sleep 0
+          pmset -g | grep -E '^ (displaysleep|sleep) '
       - name: Check out repository (actions/checkout v6.0.2)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Toolchain
@@ -409,6 +443,10 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Keep the runner display awake for AppKit tests
+        run: |
+          sudo -n pmset -a displaysleep 0 sleep 0
+          pmset -g | grep -E '^ (displaysleep|sleep) '
       - name: Check out repository (actions/checkout v6.0.2, without credentials)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -427,7 +465,7 @@ jobs:
           {
             printf 'Git commit SHA: '
             git rev-parse --verify HEAD
-            printf 'Runner image: GitHub-hosted macos-26\n'
+            printf 'Runner profile: macos-26\n'
             sw_vers
             xcodebuild -version
             swift --version
@@ -464,6 +502,10 @@ jobs:
     env:
       FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC: ${{ inputs.folder_navigator_recording && '1' || '0' }}
     steps:
+      - name: Keep the runner display awake for AppKit tests
+        run: |
+          sudo -n pmset -a displaysleep 0 sleep 0
+          pmset -g | grep -E '^ (displaysleep|sleep) '
       - name: Check out repository (actions/checkout v6.0.2, without credentials)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -496,6 +538,10 @@ jobs:
     env:
       FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC: ${{ inputs.folder_navigator_recording && '1' || '0' }}
     steps:
+      - name: Keep the runner display awake for AppKit tests
+        run: |
+          sudo -n pmset -a displaysleep 0 sleep 0
+          pmset -g | grep -E '^ (displaysleep|sleep) '
       - name: Check out repository (actions/checkout v6.0.2, without credentials)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -519,3 +565,53 @@ jobs:
         run: |
           Scripts/run-nonempty-enhanced-tests.sh '^.*FolderNavigatorPresentationTests.*$'
           git diff --exit-code -- Package.resolved
+
+  ordinary-test-diagnostic:
+    name: Supplemental focused ordinary test diagnostic
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.ordinary_test_diagnostic_selector != '' }}
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      FLECK_NATIVE_CAPTURE_QA: "0"
+      FLECK_TEST_SELECTOR: ${{ inputs.ordinary_test_diagnostic_selector }}
+    steps:
+      - name: Keep the runner display awake for AppKit tests
+        run: |
+          sudo -n pmset -a displaysleep 0 sleep 0
+          pmset -g | grep -E '^ (displaysleep|sleep) '
+      - name: Check out repository (actions/checkout v6.0.2, without credentials)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify dispatched source pin
+        run: |
+          set -euo pipefail
+          source_commit="$(git rev-parse --verify 'HEAD^{commit}')"
+          test "$source_commit" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          printf 'Source commit: %s\n' "$source_commit"
+          printf 'Source tree: %s\n' "$(git rev-parse --verify 'HEAD^{tree}')"
+      - name: Report diagnostic toolchain
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          swift --version
+      - name: Run focused ordinary test diagnostic
+        run: |
+          set -euo pipefail
+          if [[ -z "$FLECK_TEST_SELECTOR" || ${#FLECK_TEST_SELECTOR} -gt 160 || \
+            "$FLECK_TEST_SELECTOR" != ^* || "$FLECK_TEST_SELECTOR" != *'$' ]]; then
+            printf '%s\n' 'error: selector must be a bounded, anchored test identifier regex' >&2
+            exit 2
+          fi
+          if [[ "$FLECK_TEST_SELECTOR" == '^.+$' || "$FLECK_TEST_SELECTOR" == '^.*$' ]]; then
+            printf '%s\n' 'error: focused diagnostics cannot select the full test graph' >&2
+            exit 2
+          fi
+          unset FLECK_ENHANCED_CANDIDATE FLECK_GLASS_SYNTHETIC_CAPTURE_DIR
+          Scripts/run-nonempty-swift-tests.sh "$FLECK_TEST_SELECTOR"

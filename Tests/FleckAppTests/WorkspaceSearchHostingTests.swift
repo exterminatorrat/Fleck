@@ -301,9 +301,19 @@ func WorkspaceSearchHostingKeepsCompactSurfaceInsideMinimumWidth() async throws 
   )
   #expect(dismissPoint.x >= host.bounds.maxX - 40)
   #expect(dismissPoint.x <= host.bounds.maxX - 10)
-  clickWorkspaceSearchControl(host.convert(dismissPoint, to: nil), in: window)
-  await settleWorkspaceSearchHost(host)
-  #expect(!searchController.isPresented)
+  try clickWorkspaceSearchControl(host.convert(dismissPoint, to: nil), in: window)
+  let dismissed = try await waitForWorkspaceSearchHostState(host) {
+    !searchController.isPresented
+  }
+  if !dismissed {
+    printCompactSearchDismissDiagnostic(
+      host: host,
+      window: window,
+      queryFrame: queryFrame,
+      dismissPoint: dismissPoint
+    )
+  }
+  #expect(dismissed, "Timed out waiting for the compact search close control to dismiss search")
 
   window.contentView = nil
   window.orderOut(nil)
@@ -380,8 +390,11 @@ func WorkspaceSearchHostingPointerDismissRestoresEditorFocus() async throws {
   editor.setSelectedRange(bodySelection)
 
   let searchButton = try #require(workspaceSearchTrigger(in: host))
-  clickWorkspaceSearchControl(searchButton, in: window)
-  await settleWorkspaceSearchHost(host)
+  try clickWorkspaceSearchControl(searchButton, in: window)
+  let presented = try await waitForWorkspaceSearchHostState(host) {
+    searchController.isPresented
+  }
+  #expect(presented, "Timed out waiting for the application-delivered search click")
 
   #expect(searchController.isPresented)
   #expect(searchController.presentationKind == .inline)
@@ -402,6 +415,13 @@ func WorkspaceSearchHostingPointerDismissRestoresEditorFocus() async throws {
   window.contentView = nil
   window.orderOut(nil)
   await runtime.shutdown()
+}
+
+@Test @MainActor
+func WorkspaceSearchHostingRepeatedPointerInputUsesApplicationDispatch() async throws {
+  for _ in 0..<8 {
+    try await WorkspaceSearchHostingPointerDismissRestoresEditorFocus()
+  }
 }
 
 @Test @MainActor
@@ -1301,20 +1321,36 @@ func WorkspaceSearchHostingActivatesNamedFolderResultThroughProductionScope()
     )
   )
   window.sendEvent(returnEvent)
+  let activated = try await waitForWorkspaceSearchHostState(host) {
+    guard state.workspace.selectedNoteID == target.id,
+      !searchController.isPresented,
+      let targetEditor = hostedWorkspaceSearchDescendants(
+        in: host,
+        as: ListAwareTextView.self
+      ).first(where: { $0.string == target.body })
+    else {
+      return false
+    }
+    return commands.textView === targetEditor
+      && window.firstResponder === targetEditor
+  }
+  if !activated {
+    let targetEditor = hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+      .first { $0.string == target.body }
+    print(
+      "FLECK_SEARCH_RETURN_DIAGNOSTIC"
+        + " selected=\(state.workspace.selectedNoteID == target.id)"
+        + " presented=\(searchController.isPresented)"
+        + " targetEditor=\(targetEditor != nil)"
+        + " commandsTarget=\(targetEditor != nil && commands.textView === targetEditor)"
+        + " responderTarget=\(targetEditor != nil && window.firstResponder === targetEditor)"
+        + " queryOwnsEditor=\(queryField.currentEditor() === window.firstResponder)"
+        + " active=\(NSApp.isActive) key=\(window.isKeyWindow)"
+        + " responder=\(String(describing: window.firstResponder.map { type(of: $0) }))"
+    )
+  }
   try #require(
-    await waitForWorkspaceSearchHostState(host) {
-      guard state.workspace.selectedNoteID == target.id,
-        !searchController.isPresented,
-        let targetEditor = hostedWorkspaceSearchDescendants(
-          in: host,
-          as: ListAwareTextView.self
-        ).first(where: { $0.string == target.body })
-      else {
-        return false
-      }
-      return commands.textView === targetEditor
-        && window.firstResponder === targetEditor
-    },
+    activated,
     "Timed out waiting for Return activation to restore the target editor"
   )
 
@@ -1613,30 +1649,116 @@ private func workspaceSearchTrigger(in view: NSView) -> NSView? {
 }
 
 @MainActor
-private func clickWorkspaceSearchControl(_ control: NSView, in window: NSWindow) {
+private func printCompactSearchDismissDiagnostic(
+  host: NSView,
+  window: NSWindow,
+  queryFrame: NSRect,
+  dismissPoint: NSPoint
+) {
+  let windowPoint = host.convert(dismissPoint, to: nil)
+  var hitChain: [String] = []
+  var hit = window.contentView?.hitTest(
+    window.contentView?.superview?.convert(windowPoint, from: nil) ?? windowPoint
+  )
+  while let view = hit, hitChain.count < 12 {
+    hitChain.append(
+      "\(type(of: view))@\(NSStringFromRect(view.convert(view.bounds, to: host)))"
+    )
+    hit = view.superview
+  }
+  let containing = hostedWorkspaceSearchDescendants(in: host, as: NSView.self)
+    .filter { $0 !== host && $0.convert($0.bounds, to: host).contains(dismissPoint) }
+    .map { "\(type(of: $0))@\(NSStringFromRect($0.convert($0.bounds, to: host)))" }
+  var pendingAccessibilityElements: [Any] = [host]
+  var visitedAccessibilityElements: Set<ObjectIdentifier> = []
+  var dismissAccessibilityFrames: [String] = []
+  while let value = pendingAccessibilityElements.popLast(), visitedAccessibilityElements.count < 512 {
+    guard let element = value as? NSObject,
+      visitedAccessibilityElements.insert(ObjectIdentifier(element)).inserted
+    else { continue }
+    let labels = ["accessibilityLabel", "accessibilityTitle"].compactMap { name -> String? in
+      let selector = NSSelectorFromString(name)
+      guard element.responds(to: selector) else { return nil }
+      let value = element.perform(selector)?.takeUnretainedValue()
+      return (value as? String) ?? (value as? NSAttributedString)?.string
+    }
+    if labels.contains("Dismiss search"),
+      element.responds(to: NSSelectorFromString("accessibilityFrame")),
+      let frame = element.value(forKey: "accessibilityFrame") as? NSValue
+    {
+      let hostFrame = host.convert(window.convertFromScreen(frame.rectValue), from: nil)
+      dismissAccessibilityFrames.append(
+        "\(NSStringFromRect(hostFrame)):containsClick=\(hostFrame.contains(dismissPoint))"
+      )
+    }
+    let childrenSelector = NSSelectorFromString("accessibilityChildren")
+    if element.responds(to: childrenSelector),
+      let children = element.perform(childrenSelector)?.takeUnretainedValue() as? [Any]
+    {
+      pendingAccessibilityElements.append(contentsOf: children)
+    }
+  }
+  print(
+    "FLECK_COMPACT_SEARCH_DISMISS_DIAGNOSTIC"
+      + " active=\(NSApp.isActive) key=\(window.isKeyWindow)"
+      + " responder=\(String(describing: window.firstResponder.map { type(of: $0) }))"
+      + " host=\(NSStringFromRect(host.bounds))"
+      + " fitting=\(NSStringFromSize(host.fittingSize))"
+      + " query=\(NSStringFromRect(queryFrame))"
+      + " point=\(NSStringFromPoint(dismissPoint))"
+      + " hit=[\(hitChain.joined(separator: " < "))]"
+      + " containing=[\(containing.joined(separator: ", "))]"
+      + " dismissAX=[\(dismissAccessibilityFrames.joined(separator: ", "))]"
+  )
+}
+
+@MainActor
+private func clickWorkspaceSearchControl(_ control: NSView, in window: NSWindow) throws {
   let point = control.convert(
     NSPoint(x: control.bounds.midX, y: control.bounds.midY),
     to: nil
   )
-  clickWorkspaceSearchControl(point, in: window)
+  try clickWorkspaceSearchControl(point, in: window)
 }
 
 @MainActor
-private func clickWorkspaceSearchControl(_ windowPoint: NSPoint, in window: NSWindow) {
-  for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-    guard let event = NSEvent.mouseEvent(
-      with: eventType,
+private enum WorkspaceSearchPointerEventSequence {
+  static var nextEventNumber = 1
+}
+
+@MainActor
+private func clickWorkspaceSearchControl(_ windowPoint: NSPoint, in window: NSWindow) throws {
+  let timestamp = ProcessInfo.processInfo.systemUptime
+  let mouseDownEventNumber = WorkspaceSearchPointerEventSequence.nextEventNumber
+  WorkspaceSearchPointerEventSequence.nextEventNumber += 1
+  let mouseUpEventNumber = WorkspaceSearchPointerEventSequence.nextEventNumber
+  WorkspaceSearchPointerEventSequence.nextEventNumber += 1
+  let mouseDown = try #require(
+    NSEvent.mouseEvent(
+      with: .leftMouseDown,
       location: windowPoint,
       modifierFlags: [],
-      timestamp: ProcessInfo.processInfo.systemUptime,
+      timestamp: timestamp,
       windowNumber: window.windowNumber,
       context: nil,
-      eventNumber: 0,
+      eventNumber: mouseDownEventNumber,
       clickCount: 1,
-      pressure: eventType == .leftMouseDown ? 1 : 0
-    ) else { continue }
-    window.sendEvent(event)
-  }
+      pressure: 1
+    ))
+  let mouseUp = try #require(
+    NSEvent.mouseEvent(
+      with: .leftMouseUp,
+      location: windowPoint,
+      modifierFlags: [],
+      timestamp: timestamp,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: mouseUpEventNumber,
+      clickCount: 1,
+      pressure: 0
+    ))
+  NSApp.postEvent(mouseUp, atStart: true)
+  NSApp.postEvent(mouseDown, atStart: true)
 }
 
 @MainActor

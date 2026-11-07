@@ -330,6 +330,43 @@ struct AgentPresentationTests {
     #expect(!banner.message.contains("body"))
   }
 
+  @Test func bannerSurfacesAndInlineOptOutUseExistingThemeAndPreferenceSeams() throws {
+    let sourceRoot = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+      .appendingPathComponent("Sources/FleckApp")
+    let banner = try String(
+      contentsOf: sourceRoot.appendingPathComponent("AgentChangeBanner.swift"), encoding: .utf8
+    )
+    let notes = try String(
+      contentsOf: sourceRoot.appendingPathComponent("NotesPanel.swift"), encoding: .utf8
+    )
+    let failure = try #require(
+      notes.components(separatedBy: "if let failure = dictationRuntime.captureFailure {").last?
+        .components(separatedBy: "if let banner = appState.agentBannerPresentation {").first
+    )
+    let routine = try #require(
+      notes.components(separatedBy: "if let banner = appState.agentBannerPresentation {").last?
+        .components(separatedBy: "            scopedEditor").first
+    )
+    for surface in [banner, failure] {
+      #expect(surface.contains(".foregroundStyle(theme.color(.textPrimary))"))
+      #expect(surface.contains(".background(theme.color(.raised))"))
+      #expect(!surface.contains(".quaternary"))
+    }
+    #expect(banner.contains("Button(\"Do not show again\", action: onDoNotShowAgain)"))
+    #expect(banner.contains(".accessibilityIdentifier(\"agent-banner-do-not-show-again\")"))
+    #expect(banner.contains(".accessibilityHint("))
+    #expect(banner.contains("Button(\"Undo\", action: onUndo)"))
+    #expect(banner.contains("action: onDismiss"))
+    #expect(routine.contains("appState.updatePreferences { $0.showAgentUpdateBanners = false }"))
+    #expect(routine.contains("onDismiss: { dismissBanner(occurrence) }"))
+    #expect(failure.contains("dictationRuntime.openSystemSettings(action)"))
+    #expect(failure.contains("action: { dismissBanner(occurrence) }"))
+    #expect(!failure.contains("showAgentUpdateBanners"))
+    #expect(!failure.contains("onDoNotShowAgain"))
+    #expect(!banner.contains("@State"))
+  }
+
   @Test @MainActor
   func agentUpdateBannerPreferencePersistsWithoutReplayingSuppressedActivity() async throws {
     let root = FileManager.default.temporaryDirectory
@@ -434,6 +471,66 @@ struct AgentPresentationTests {
     #expect(relaunched.agentBannerPresentation == nil)
     #expect(relaunched.latestAgentFeedback == afterRelaunch)
     #expect(relaunched.agentActivity.count == 1)
+  }
+
+  @Test(arguments: [false, true]) @MainActor
+  func inlineAgentBannerOptOutPersistsAndSuppressesOnlyRoutineUpdates(isPinned: Bool) async throws {
+    let previousAX = enableAgentPresentationAccessibility()
+    defer { restoreAgentPresentationAccessibility(previousAX) }
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("InlineAgentBannerOptOut-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = LocalStore(rootURL: root)
+    let state = AppState(store: store)
+    await state.waitUntilInitialLoad()
+    let note = Note(title: "Synthetic banner note")
+    state.workspace = Workspace(notes: [note], selectedNoteID: note.id)
+    let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+    let (window, host) = await hostedWindow(
+      rootView: FleckThemeTestRoot(state: state) {
+        NotesPanel(dictationRuntime: runtime, isPinned: isPinned, sizing: .container)
+      },
+      size: NSSize(width: isPinned ? 480 : 380, height: 430)
+    )
+    defer { window.contentView = nil; window.orderOut(nil) }
+    do {
+      let update = feedback(changeID: UUID(), noteID: note.id, noteTitle: note.title, actorName: "Codex")
+      state.publishAgentFeedback(update)
+      await settleAgentActivityHost(host)
+      let dismissLabel = "Dismiss Agent Activity update"
+      try #require(agentActivityAccessibilityElement(host, label: dismissLabel) != nil)
+      try #require(agentActivityAccessibilityElement(host, label: "Undo") != nil)
+      let optOut = try #require(agentActivityAccessibilityElement(
+        host, identifier: "agent-banner-do-not-show-again"
+      ))
+      state.saveError = "Retained save error"
+      state.agentCleanupError = "Retained agent error"
+      let activityCount = state.agentActivity.count
+      let press = NSSelectorFromString("accessibilityPerformPress")
+      try #require(optOut.responds(to: press))
+      _ = optOut.perform(press)
+      #expect(!state.preferences.showAgentUpdateBanners)
+      #expect(state.agentBannerPresentation == nil)
+      #expect(state.latestAgentFeedback == update)
+      #expect(state.agentActivity.count == activityCount)
+      #expect(state.saveError == "Retained save error")
+      #expect(state.agentCleanupError == "Retained agent error")
+      await settleAgentActivityHost(host)
+      #expect(agentActivityAccessibilityElement(host, label: dismissLabel) == nil)
+      let future = feedback(changeID: UUID(), noteID: note.id, noteTitle: note.title, actorName: "Codex")
+      state.publishAgentFeedback(future)
+      #expect(state.agentBannerPresentation == nil)
+      #expect(state.latestAgentFeedback == future)
+      try await state.saveNow().value
+      let relaunched = AppState(store: LocalStore(rootURL: root))
+      await relaunched.waitUntilInitialLoad()
+      #expect(!relaunched.preferences.showAgentUpdateBanners)
+      #expect(relaunched.agentBannerPresentation == nil)
+    } catch {
+      await runtime.shutdown()
+      throw error
+    }
+    await runtime.shutdown()
   }
 
   @Test @MainActor

@@ -46,10 +46,9 @@
       controller.presentIdle(dock: dock, onOpenFleck: {}, onDockChanged: { _ in })
       controller.render(.arming)
       #expect(controller.presentationModel.voiceOverLabel == "Starting dictation")
-      let size = DictationCapsuleController.size(for: .arming)
-      panel.setFrame(CGRect(origin: .zero, size: size), display: false)
+      #expect(!controller.fleckPillModel.usesFixedHost)
+      #expect(panel.frame.size == DictationCapsuleController.startingSize)
       let host = try #require(panel.contentView)
-      host.frame = CGRect(origin: .zero, size: size)
       host.layoutSubtreeIfNeeded()
 
       let descendants = allDescendants(of: host)
@@ -58,17 +57,17 @@
       }
       #expect(
         startingText != nil,
-        "Expected visible Starting text at the \(dock.rawValue) dock"
+        "Expected visible Starting text at the bottom dock"
       )
-      if startingText != nil {
+      if let startingText {
         #expect(
-          try hasBrightPixel(inStartingTextZoneFor: dock, hostedBy: host),
-          "Expected painted Starting text at the \(dock.rawValue) dock"
+          try hasBrightPixel(in: startingText, hostedBy: host),
+          "Expected painted Starting text at the bottom dock"
         )
       }
       #expect(
         !descendants.contains { $0.identifier?.rawValue == "fleck-rail-waveform" },
-        "Starting must not show a waveform at the \(dock.rawValue) dock"
+        "Starting must not show a waveform at the bottom dock"
       )
       controller.dismiss()
     }
@@ -81,19 +80,20 @@
 
   @MainActor
   private func hasBrightPixel(
-    inStartingTextZoneFor dock: DictationCapsuleDock,
+    in startingText: NSView,
     hostedBy host: NSView
   ) throws -> Bool {
-    let frame = dock == .right
-      ? CGRect(x: 8, y: 0, width: 70, height: host.bounds.height)
-      : CGRect(x: 29, y: 0, width: 67, height: host.bounds.height)
+    let frame = startingText.convert(startingText.bounds, to: host)
     let imageRep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
     host.cacheDisplay(in: host.bounds, to: imageRep)
     let scaleX = CGFloat(imageRep.pixelsWide) / host.bounds.width
+    let scaleY = CGFloat(imageRep.pixelsHigh) / host.bounds.height
     let minimumX = max(0, Int(floor(frame.minX * scaleX)))
     let maximumX = min(imageRep.pixelsWide, Int(ceil(frame.maxX * scaleX)))
+    let minimumY = max(0, Int(floor(frame.minY * scaleY)))
+    let maximumY = min(imageRep.pixelsHigh, Int(ceil(frame.maxY * scaleY)))
 
-    for y in 0..<imageRep.pixelsHigh {
+    for y in minimumY..<maximumY {
       for x in minimumX..<maximumX {
         guard let color = imageRep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else {
           continue

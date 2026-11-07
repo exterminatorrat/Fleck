@@ -2369,7 +2369,7 @@ for job_id, block, required_values in (
     (
         "macos-validation", validation,
         (
-            "needs: [detect-changes, macos-build]", "outputs.route == 'full'",
+            "needs: detect-changes", "outputs.route == 'full'",
             "runs-on: macos-26", "timeout-minutes: 90",
             'FLECK_NATIVE_CAPTURE_QA: "0"', "unset FLECK_ENHANCED_CANDIDATE FLECK_APP",
             "bash Tests/Scripts/validate-macos-no-launch.test.sh", "Scripts/validate-macos.sh",
@@ -2379,7 +2379,8 @@ for job_id, block, required_values in (
     (
         "macos", aggregate,
         (
-            "name: macOS build and tests", "if: ${{ always() }}",
+            "name: macOS build and tests",
+            "if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.ordinary_test_diagnostic_selector == '') }}",
             "needs: [detect-changes, docs-validation, macos-build, macos-validation, macos-enhanced]",
             "runs-on: ubuntu-latest",
         ),
@@ -2477,7 +2478,7 @@ for name in (ordinary_name, candidate_name):
         + normalized_workflow[end:]
     )
 if hashlib.sha256(normalized_workflow.encode()).hexdigest() != (
-    "c0526d0f47f739927ec144247dec9190bb1f67445ee6c78491f3bdcb4f8404ca"
+    "e8cdd4f9811be83caa83b40b1b8f0caa55f278d9de0b3abe5e65855288f64934"
 ):
     raise SystemExit("CI changed outside the declared split and native-capture boundary fixture")
 

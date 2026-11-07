@@ -57,6 +57,13 @@ Frontend and native-interface changes require visual inspection at the
 relevant sizes and accessibility settings. Source-only documentation changes
 do not require building or launching the application.
 
+## Held features
+
+Some finished features are deliberately held out of the public branches. Before
+integrating features, read [the held-features record](docs/held-features.md).
+When a held feature is relevant, ask the maintainer whether to release the hold,
+and build from its recorded source instead of rewriting it.
+
 ## Respect external-write boundaries
 
 Do not push, open or close a pull request, merge, publish a release, change

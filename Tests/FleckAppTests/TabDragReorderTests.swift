@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import QuartzCore
 import SwiftUI
 import Testing
 
@@ -281,8 +282,11 @@ private func nativeTabDragMaximumPixelComponentDelta(from source: NSImage, to re
 }
 
 @Test func tabStripAllocatesItsActualOverflowViewportAtSupportedWidths() throws {
-  #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 380) == 324)
-  #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 520) == 464)
+  #expect(!TabOverflowPresentation.overflows(contentWidth: 240, totalStripWidth: 240))
+  #expect(TabOverflowPresentation.overflows(contentWidth: 240.01, totalStripWidth: 240))
+  #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 380, showsOverflow: false) == 380)
+  #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 380, showsOverflow: true) == 324)
+  #expect(TabOverflowPresentation.tabViewportWidth(totalStripWidth: 520, showsOverflow: true) == 464)
 
   let source = try tabNotesPanelSource()
   let tabStrip = try #require(
@@ -294,7 +298,11 @@ private func nativeTabDragMaximumPixelComponentDelta(from source: NSImage, to re
   )
 
   #expect(tabStrip.contains("GeometryReader { proxy in"))
-  #expect(tabStrip.contains("TabOverflowPresentation.tabViewportWidth(totalStripWidth: proxy.size.width)"))
+  #expect(tabStrip.contains("TabOverflowPresentation.overflows("))
+  #expect(tabStrip.contains("TabOverflowPresentation.tabViewportWidth("))
+  #expect(tabStrip.contains("TabStripContentWidthObserver { width in"))
+  #expect(tabStrip.contains("tabStripContentWidth = width"))
+  #expect(tabStrip.contains("if hasOverflow"))
   #expect(tabStrip.contains(".frame(width: tabViewportWidth, alignment: .leading)"))
   #expect(tabStrip.contains(".frame(height: 37)"))
   #expect(scrollViewport.contains("HStack(spacing: 6) {"))
@@ -322,9 +330,11 @@ private func nativeTabDragMaximumPixelComponentDelta(from source: NSImage, to re
   #expect(!tabStrip.contains("scrollProxy.scrollTo(lastNoteID, anchor: .trailing)"))
   #expect(tabStrip.contains("accessibilityLabel(\"Reveal earlier tabs\")"))
   #expect(tabStrip.contains("accessibilityLabel(\"Reveal later tabs\")"))
+  #expect(tabStrip.contains("accessibilityIdentifier(\"note-tab-overflow-earlier\")"))
+  #expect(tabStrip.contains("accessibilityIdentifier(\"note-tab-overflow-later\")"))
   #expect(tabStrip.contains(".help(\"Show earlier tabs\")"))
   #expect(tabStrip.contains(".help(\"Show later tabs\")"))
-  #expect(tabStrip.contains(".frame(width: 56, height: 37"))
+  #expect(tabStrip.contains("width: TabOverflowPresentation.tabOverflowRailWidth,"))
   #expect(tabStrip.components(separatedBy: ".frame(width: 28, height: 37)").count - 1 == 2)
   #expect(tabStrip.components(separatedBy: ".contentShape(Rectangle())").count - 1 == 2)
   #expect(!tabStrip.contains("accessibilityHidden(!hasHidden"))
@@ -358,6 +368,128 @@ private func nativeTabDragMaximumPixelComponentDelta(from source: NSImage, to re
 
   #expect(!tabStrip.contains("LinearGradient"))
   #expect(!tabStrip.contains("windowBackgroundColor"))
+}
+
+@Test func noteTabTitleFadeLeavesBadgesAndReorderHitAreaOutsideItsMask() throws {
+  let source = try tabNotesPanelSource()
+  let tabStrip = try #require(
+    source.components(separatedBy: "private var tabStrip").last?
+      .components(separatedBy: "private var motion").first
+  )
+  let titleLabelStart = try #require(source.range(of: "  private struct NoteTabTitleLabel"))
+  let titleLabelEnd = try #require(
+    source.range(of: "\n  enum FontSizeSubmission", range: titleLabelStart.upperBound..<source.endIndex)
+  )
+  let titleLabel = source[titleLabelStart.lowerBound..<titleLabelEnd.lowerBound]
+  let pinBadge = try #require(tabStrip.range(of: "if note.isPinned"))
+  let title = try #require(tabStrip.range(of: "NoteTabTitleLabel(title: note.displayTitle)"))
+  let sharedBadge = try #require(
+    tabStrip.range(of: "if appState.isSharedWithAnyActiveProfile(note.id)")
+  )
+
+  #expect(pinBadge.lowerBound < title.lowerBound)
+  #expect(title.lowerBound < sharedBadge.lowerBound)
+  #expect(titleLabel.contains("ViewThatFits(in: .horizontal)"))
+  #expect(titleLabel.contains(".mask { NoteTabTitleFadeMask() }"))
+  #expect(titleLabel.contains(".accessibilityLabel(title)"))
+  #expect(!titleLabel.contains(".fleckUIFont"))
+  #expect(TabTitlePresentation.maximumWidth == 160)
+  #expect(TabTitlePresentation.fadeWidth == 12)
+  #expect(tabStrip.contains("AgentSharingPresentation.sharedBadgeAccessibilityLabel"))
+  #expect(tabStrip.contains(".contentShape(Capsule())"))
+  #expect(tabStrip.contains(".modifier(ReorderDragSource(begin:"))
+  #expect(tabStrip.contains(".accessibilityIdentifier(\"note-tab-\\(note.id.uuidString)\")"))
+  #expect(tabStrip.contains("_ = activateNoteAndScope(note.id)"))
+  #expect(tabStrip.contains(".contextMenu {"))
+}
+
+@Test @MainActor
+func noteTabLongTitleIsCappedWhileShortTitleAndActivationRemainNatural() async throws {
+  let longTitle = String(repeating: "Long title ", count: 20)
+  let shortNote = Note(title: "Short")
+  let longNote = Note(title: longTitle, isPinned: true)
+  let fixture = await NotesPanelTitleFixture(notes: [shortNote, longNote], width: 520)
+  defer { fixture.close() }
+
+  let shortIdentifier = "note-tab-\(shortNote.id.uuidString)"
+  let longIdentifier = "note-tab-\(longNote.id.uuidString)"
+  let shortFrame = try #require(fixture.accessibilityFrame(for: shortIdentifier))
+  let longFrame = try #require(fixture.accessibilityFrame(for: longIdentifier))
+
+  #expect(shortFrame.width < TabTitlePresentation.maximumWidth)
+  #expect(longFrame.width > shortFrame.width)
+  #expect(longFrame.width <= TabTitlePresentation.maximumWidth + 56)
+  #expect(fixture.accessibilityLabel(for: longIdentifier)?.contains(longNote.displayTitle) == true)
+
+  fixture.state.workspace.selectedNoteID = shortNote.id
+  clickHostedPointer(
+    atScreen: NSPoint(x: longFrame.midX, y: longFrame.midY),
+    in: fixture.window
+  )
+  await settleTabStripHost(fixture.host)
+  #expect(fixture.state.workspace.selectedNoteID == longNote.id)
+}
+
+@Test @MainActor
+func noteTabAccessibilityPressActivatesTheOriginalButtonInLTRAndRTL() async throws {
+  for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+    let notes = [Note(title: "First verification note"), Note(title: "Second verification note")]
+    let fixture = await NotesPanelTitleFixture(notes: notes, width: 520, layoutDirection: direction)
+    defer { fixture.close() }
+
+    let element = try #require(hostedPointerElement(
+      fixture.host,
+      identifier: "note-tab-\(notes[1].id.uuidString)"
+    ))
+    #expect(element.value(forKey: "accessibilityRole") as? String == NSAccessibility.Role.button.rawValue)
+    let selector = NSSelectorFromString("accessibilityPerformPress")
+    let method = try #require(class_getInstanceMethod(type(of: element), selector))
+    let encoding = try #require(method_getTypeEncoding(method))
+    let returnType = String(cString: encoding).first
+    try #require(returnType == "B" || returnType == "c")
+    let press = unsafeBitCast(
+      method_getImplementation(method),
+      to: (@convention(c) (AnyObject, Selector) -> Bool).self
+    )
+    #expect(press(element, selector))
+    await settleTabStripHost(fixture.host)
+    #expect(fixture.state.workspace.selectedNoteID == notes[1].id)
+  }
+}
+
+@Test @MainActor
+func noteTabLongTitleRemainsCappedAndAccessibleAtRTLAccessibilitySize() async throws {
+  let title = String(repeating: "Long title ", count: 24)
+  let notes = (0..<3).map { Note(title: "\($0) \(title)") }
+  let fixture = await NotesPanelTitleFixture(notes: notes, width: 260)
+  defer { fixture.close() }
+
+  let identifier = "note-tab-\(notes[0].id.uuidString)"
+  let narrowFrame = try #require(fixture.accessibilityFrame(for: identifier))
+  #expect(narrowFrame.width <= TabTitlePresentation.maximumWidth + 56)
+  #expect(fixture.accessibilityLabel(for: identifier)?.contains(notes[0].displayTitle) == true)
+
+  await fixture.resize(to: 520)
+  let wideFrame = try #require(fixture.accessibilityFrame(for: identifier))
+  #expect(wideFrame.width <= TabTitlePresentation.maximumWidth + 56)
+
+  await fixture.setEnvironment(layoutDirection: .rightToLeft, dynamicTypeSize: .accessibility2)
+  let rtlAccessibilityFrame = try #require(fixture.accessibilityFrame(for: identifier))
+  #expect(rtlAccessibilityFrame.width <= TabTitlePresentation.maximumWidth + 56)
+  #expect(fixture.accessibilityLabel(for: identifier)?.contains(notes[0].displayTitle) == true)
+}
+
+@Test @MainActor
+func noteTabFadeAlphaEndsAtSemanticTrailingEdgeInLTRAndRTL() throws {
+  let leadingX: CGFloat = 2
+  let trailingX = TabTitlePresentation.maximumWidth - 2
+  let ltrLeadingAlpha = try noteTabFadeAlpha(layoutDirection: .leftToRight, atX: leadingX)
+  let ltrTrailingAlpha = try noteTabFadeAlpha(layoutDirection: .leftToRight, atX: trailingX)
+  let rtlLeadingAlpha = try noteTabFadeAlpha(layoutDirection: .rightToLeft, atX: leadingX)
+  let rtlTrailingAlpha = try noteTabFadeAlpha(layoutDirection: .rightToLeft, atX: trailingX)
+
+  #expect(ltrLeadingAlpha > ltrTrailingAlpha + 0.5)
+  #expect(rtlTrailingAlpha > rtlLeadingAlpha + 0.5)
 }
 
 @Test @MainActor
@@ -420,6 +552,180 @@ func hostedNotesPanelTabOverflowLeftControlReturnsFromTrailingOffset() async thr
   window.contentView = nil
   window.orderOut(nil)
   await runtime.shutdown()
+}
+
+@Test(arguments: [0, 1, 3])
+@MainActor
+func noteTabOverflowControlsStayHiddenWhenShortCollectionsFit(noteCount: Int) async {
+  let notes = (0..<noteCount).map { Note(title: "Note \($0)") }
+  let fixture = await NotesPanelTitleFixture(notes: notes, width: 520)
+  defer { fixture.close() }
+
+  #expect(!fixture.hasOverflowControls)
+}
+
+@Test @MainActor
+func noteTabOverflowRecalculatesForResizeAndTitleChanges() async {
+  let longTitle = String(repeating: "Long title ", count: 4)
+  let notes = (0..<3).map { Note(title: "\($0) \(longTitle)") }
+  let fixture = await NotesPanelTitleFixture(notes: notes, width: 380)
+  defer { fixture.close() }
+
+  #expect(fixture.hasOverflowControls)
+  await fixture.resize(to: 1_200)
+  #expect(!fixture.hasOverflowControls)
+  await fixture.resize(to: 380)
+  #expect(fixture.hasOverflowControls)
+  await fixture.setNotes((0..<3).map { Note(title: "Note \($0)") })
+  #expect(!fixture.hasOverflowControls)
+}
+
+@Test @MainActor
+func noteTabOverflowTracksDynamicTypeAndKeepsRTLControlsAccessible() async throws {
+  let notes = (0..<6).map {
+    Note(title: String(repeating: "i", count: 12) + String($0))
+  }
+  let fixture = await NotesPanelTitleFixture(
+    notes: notes,
+    width: 520,
+    dynamicTypeSize: .large
+  )
+  defer { fixture.close() }
+
+  #expect(!fixture.hasOverflowControls)
+  let firstTabIdentifier = "note-tab-\(notes[0].id.uuidString)"
+  let largeSystemFrame = try #require(fixture.accessibilityFrame(for: firstTabIdentifier))
+  await fixture.setEnvironment(layoutDirection: .rightToLeft, dynamicTypeSize: .accessibility2)
+  #expect(!fixture.hasOverflowControls)
+  let accessibilitySystemFrame = try #require(
+    fixture.accessibilityFrame(for: firstTabIdentifier)
+  )
+  #expect(abs(accessibilitySystemFrame.width - largeSystemFrame.width) <= 1)
+
+  let menloFont = try #require(
+    NSFontManager.shared.font(withFamily: "Menlo", traits: [], weight: 5, size: 13)
+  )
+  #expect(menloFont.familyName == "Menlo")
+  let noteIDsBeforeFontChange = fixture.state.workspace.notes.map(\.id)
+  let noteTitlesBeforeFontChange = fixture.state.workspace.notes.map(\.title)
+  let contentWidthBeforeFontChange = fixture.host.bounds.width
+  #expect(contentWidthBeforeFontChange == 520)
+  await fixture.setInterfaceFontFamily("Menlo")
+  #expect(fixture.state.workspace.notes.map(\.id) == noteIDsBeforeFontChange)
+  #expect(fixture.state.workspace.notes.map(\.title) == noteTitlesBeforeFontChange)
+  #expect(fixture.host.bounds.width == contentWidthBeforeFontChange)
+  let menloFrame = try #require(fixture.accessibilityFrame(for: firstTabIdentifier))
+  #expect(menloFrame.width > accessibilitySystemFrame.width)
+  #expect(fixture.hasOverflowControls)
+  #expect(fixture.accessibilityLabel(for: "note-tab-overflow-earlier") == "Reveal earlier tabs")
+  #expect(fixture.accessibilityLabel(for: "note-tab-overflow-later") == "Reveal later tabs")
+  await fixture.resize(to: 1_400)
+  #expect(!fixture.hasOverflowControls)
+}
+
+@Test @MainActor
+func hostedNotesPanelRTLTabOverflowControlsRevealSemanticEnds() async throws {
+  let notes = (0..<12).map { index in
+    Note(title: "Note " + String(index) + " " + String(repeating: "Long title ", count: 8))
+  }
+  let fixture = await NotesPanelTitleFixture(
+    notes: notes,
+    width: 380,
+    layoutDirection: .rightToLeft
+  )
+  defer { fixture.close() }
+
+  #expect(fixture.hasOverflowControls)
+  let scrollView = try #require(hostedTabScrollView(in: fixture.host))
+  let viewport = fixture.window.convertToScreen(
+    scrollView.contentView.convert(scrollView.contentView.bounds, to: nil)
+  )
+
+  func tabIsVisible(_ noteID: UUID) -> Bool {
+    guard let element = hostedPointerElement(
+      fixture.host,
+      identifier: "note-tab-\(noteID.uuidString)"
+    ),
+    let frame = (element.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue
+    else { return false }
+    return viewport.intersects(frame)
+  }
+
+  func clickControl(_ identifier: String) async throws {
+    let element = try #require(hostedPointerElement(fixture.host, identifier: identifier))
+    let frame = try #require(element.value(forKey: "accessibilityFrame") as? NSValue).rectValue
+    clickHostedPointer(
+      atScreen: NSPoint(x: frame.midX, y: frame.midY),
+      in: fixture.window
+    )
+    await settleTabStripHost(fixture.host)
+  }
+
+  try await clickControl("note-tab-overflow-later")
+  let laterOffset = scrollView.contentView.bounds.origin.x
+  #expect(tabIsVisible(notes[11].id))
+  try await clickControl("note-tab-overflow-earlier")
+  let earlierOffset = scrollView.contentView.bounds.origin.x
+  #expect(earlierOffset > laterOffset + 1)
+  #expect(tabIsVisible(notes[0].id))
+  try await clickControl("note-tab-overflow-later")
+  let returnedOffset = scrollView.contentView.bounds.origin.x
+  #expect(returnedOffset < earlierOffset - 1)
+  #expect(abs(returnedOffset - laterOffset) <= 1)
+  #expect(tabIsVisible(notes[11].id))
+}
+
+@Test @MainActor
+func hostedNotesPanelRTLTabOverflowControlsRevealSemanticEndsAtAccessibilitySize() async throws {
+  let notes = (0..<12).map { index in
+    Note(title: "Note " + String(index) + " " + String(repeating: "Long title ", count: 8))
+  }
+  let fixture = await NotesPanelTitleFixture(
+    notes: notes,
+    width: 380,
+    layoutDirection: .rightToLeft,
+    dynamicTypeSize: .accessibility2
+  )
+  defer { fixture.close() }
+
+  #expect(fixture.hasOverflowControls)
+  let scrollView = try #require(hostedTabScrollView(in: fixture.host))
+  let viewport = fixture.window.convertToScreen(
+    scrollView.contentView.convert(scrollView.contentView.bounds, to: nil)
+  )
+
+  func tabIsVisible(_ noteID: UUID) -> Bool {
+    guard let element = hostedPointerElement(
+      fixture.host,
+      identifier: "note-tab-\(noteID.uuidString)"
+    ),
+    let frame = (element.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue
+    else { return false }
+    return viewport.intersects(frame)
+  }
+
+  func clickControl(_ identifier: String) async throws {
+    let element = try #require(hostedPointerElement(fixture.host, identifier: identifier))
+    let frame = try #require(element.value(forKey: "accessibilityFrame") as? NSValue).rectValue
+    clickHostedPointer(
+      atScreen: NSPoint(x: frame.midX, y: frame.midY),
+      in: fixture.window
+    )
+    await settleTabStripHost(fixture.host)
+  }
+
+  try await clickControl("note-tab-overflow-later")
+  let laterOffset = scrollView.contentView.bounds.origin.x
+  #expect(tabIsVisible(notes[11].id))
+  try await clickControl("note-tab-overflow-earlier")
+  let earlierOffset = scrollView.contentView.bounds.origin.x
+  #expect(earlierOffset > laterOffset + 1)
+  #expect(tabIsVisible(notes[0].id))
+  try await clickControl("note-tab-overflow-later")
+  let returnedOffset = scrollView.contentView.bounds.origin.x
+  #expect(returnedOffset < earlierOffset - 1)
+  #expect(abs(returnedOffset - laterOffset) <= 1)
+  #expect(tabIsVisible(notes[11].id))
 }
 
 @Test func tabContextMenuExposesCurrentFolderMoveDestinations() throws {
@@ -779,6 +1085,168 @@ private func clickHostedPointer(atScreen point: NSPoint, in window: NSWindow) {
 }
 
 @MainActor
+private final class NotesPanelTitleFixture {
+  let root: URL
+  let state: AppState
+  let runtime: DictationRuntime
+  let host: NSHostingView<AnyView>
+  let window: NSWindow
+  private let previousAccessibilityValue: Any?
+  private var layoutDirection: LayoutDirection
+  private var dynamicTypeSize: DynamicTypeSize
+  private var interfaceFontFamily: String?
+
+  init(
+    notes: [Note],
+    width: CGFloat,
+    layoutDirection: LayoutDirection = .leftToRight,
+    dynamicTypeSize: DynamicTypeSize = .large,
+    interfaceFontFamily: String? = nil
+  ) async {
+    let application = NSApplication.shared
+    let accessibilityAttribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+    previousAccessibilityValue = application.accessibilityAttributeValue(accessibilityAttribute)
+    application.accessibilitySetValue(true, forAttribute: accessibilityAttribute)
+    root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("note-tab-title-" + UUID().uuidString, isDirectory: true)
+    state = AppState(
+      store: LocalStore(rootURL: root),
+      saveOperation: { _, _, _, _ in .committed }
+    )
+    await state.waitUntilInitialLoad()
+    state.workspace = Workspace(notes: notes, selectedNoteID: notes.first?.id)
+    runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+    self.layoutDirection = layoutDirection
+    self.dynamicTypeSize = dynamicTypeSize
+    self.interfaceFontFamily = interfaceFontFamily
+    let rootView = NotesPanel(dictationRuntime: runtime, sizing: .container)
+      .environmentObject(state)
+      .environment(\.layoutDirection, layoutDirection)
+      .environment(\.dynamicTypeSize, dynamicTypeSize)
+      .fleckUIFontFamily(interfaceFontFamily)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    host = NSHostingView(rootView: AnyView(rootView))
+    window = NSWindow(
+      contentRect: NSRect(x: -10_000, y: -10_000, width: width, height: 430),
+      styleMask: [.titled, .resizable],
+      backing: .buffered,
+      defer: false
+    )
+    window.isReleasedWhenClosed = false
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+    await settle()
+  }
+
+  func resize(to width: CGFloat) async {
+    window.setContentSize(NSSize(width: width, height: 430))
+    host.frame = NSRect(origin: .zero, size: NSSize(width: width, height: 430))
+    await settle()
+  }
+
+  func setEnvironment(
+    layoutDirection: LayoutDirection,
+    dynamicTypeSize: DynamicTypeSize
+  ) async {
+    self.layoutDirection = layoutDirection
+    self.dynamicTypeSize = dynamicTypeSize
+    host.rootView = makeRootView()
+    await settle()
+  }
+
+  func setInterfaceFontFamily(_ family: String?) async {
+    interfaceFontFamily = family
+    host.rootView = makeRootView()
+    await settle()
+  }
+
+  func setNotes(_ notes: [Note]) async {
+    state.workspace = Workspace(notes: notes, selectedNoteID: notes.first?.id)
+    await settle()
+  }
+
+  var hasOverflowControls: Bool {
+    hostedPointerElement(host, identifier: "note-tab-overflow-earlier") != nil
+      && hostedPointerElement(host, identifier: "note-tab-overflow-later") != nil
+  }
+
+  func accessibilityLabel(for identifier: String) -> String? {
+    guard let element = hostedPointerElement(host, identifier: identifier) else { return nil }
+    let selector = NSSelectorFromString("accessibilityLabel")
+    guard element.responds(to: selector) else { return nil }
+    return element.perform(selector)?.takeUnretainedValue() as? String
+  }
+
+  func accessibilityFrame(for identifier: String) -> NSRect? {
+    guard let element = hostedPointerElement(host, identifier: identifier),
+      let frame = (element.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue,
+      !frame.isEmpty
+    else { return nil }
+    return frame
+  }
+
+  func close() {
+    window.contentView = nil
+    window.orderOut(nil)
+    window.close()
+    NSApplication.shared.accessibilitySetValue(
+      previousAccessibilityValue,
+      forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+    )
+    let runtime = self.runtime
+    let root = self.root
+    Task {
+      await runtime.shutdown()
+      try? FileManager.default.removeItem(at: root)
+    }
+  }
+
+  private func makeRootView() -> AnyView {
+    AnyView(
+      NotesPanel(dictationRuntime: runtime, sizing: .container)
+        .environmentObject(state)
+        .environment(\.layoutDirection, layoutDirection)
+        .environment(\.dynamicTypeSize, dynamicTypeSize)
+        .fleckUIFontFamily(interfaceFontFamily)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    )
+  }
+
+  private func settle() async {
+    await settleTabStripHost(host)
+  }
+}
+
+@MainActor
+private func noteTabFadeAlpha(
+  layoutDirection: LayoutDirection,
+  atX position: CGFloat
+) throws -> CGFloat {
+  let width = TabTitlePresentation.maximumWidth
+  let height: CGFloat = 24
+  let renderer = ImageRenderer(content:
+    Color.white
+      .frame(width: width, height: height)
+      .mask { NoteTabTitleFadeMask() }
+      .environment(\.layoutDirection, layoutDirection)
+  )
+  renderer.scale = 1
+  renderer.isOpaque = false
+  let image = try #require(renderer.cgImage)
+  try #require(image.width > 0)
+  try #require(image.height > 0)
+  let bitmap = NSBitmapImageRep(cgImage: image)
+  try #require(bitmap.pixelsWide > 0)
+  try #require(bitmap.pixelsHigh > 0)
+  let scale = CGFloat(bitmap.pixelsWide) / width
+  let pixelX = min(bitmap.pixelsWide - 1, max(0, Int((position * scale).rounded(.down))))
+  let color = try #require(
+    bitmap.colorAt(x: pixelX, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB)
+  )
+  return color.alphaComponent
+}
+
+@MainActor
 private func hostedPointerElement(_ value: Any?, identifier: String) -> NSObject? {
   guard let element = value as? NSObject else { return nil }
   let identifierSelector = NSSelectorFromString("accessibilityIdentifier")
@@ -812,6 +1280,82 @@ private func advanceTabStripHostEventBoundary(_ view: NSView) async {
       }
     }
   }
+}
+
+private struct HostedTabReorderMotionSample {
+  let uptime: TimeInterval
+  let animationActive: Bool
+  let modelOffset: Double?
+  let presentationOffset: Double?
+  let convertedMinX: Double?
+  let windowVisible: Bool
+  let windowOcclusionVisible: Bool
+  let sourceInWindow: Bool
+  let sourceInDestination: Bool
+}
+
+private struct HostedTabReorderMotionSamples {
+  private static let capacity = 256
+  private var storage: [HostedTabReorderMotionSample?]
+  private var nextIndex = 0
+  private(set) var loopCount = 0
+  private(set) var firstSample: HostedTabReorderMotionSample?
+  private(set) var lastSample: HostedTabReorderMotionSample?
+  private(set) var firstActiveSample: HostedTabReorderMotionSample?
+  private(set) var lastActiveSample: HostedTabReorderMotionSample?
+  private(set) var activeSampleCount = 0
+
+  init() {
+    storage = Array(repeating: nil, count: Self.capacity)
+  }
+
+  var didWrap: Bool { loopCount > Self.capacity }
+
+  var retainedSamples: [HostedTabReorderMotionSample] {
+    let count = min(loopCount, Self.capacity)
+    let firstIndex = didWrap ? nextIndex : 0
+    return (0..<count).compactMap { storage[(firstIndex + $0) % Self.capacity] }
+  }
+
+  mutating func append(_ sample: HostedTabReorderMotionSample) {
+    if firstSample == nil { firstSample = sample }
+    lastSample = sample
+    if sample.animationActive {
+      activeSampleCount += 1
+      if firstActiveSample == nil { firstActiveSample = sample }
+      lastActiveSample = sample
+    }
+    storage[nextIndex] = sample
+    nextIndex = (nextIndex + 1) % Self.capacity
+    loopCount += 1
+  }
+}
+
+private struct HostedTabReorderAnimationDetails {
+  let from: Double?
+  let to: Double?
+  let duration: TimeInterval
+}
+
+private func hostedTabReorderDiagnosticNumber(_ value: Double?) -> String {
+  guard let value else { return "nil" }
+  return String(format: "%.6f", value)
+}
+
+private func hostedTabReorderDiagnosticSample(
+  _ sample: HostedTabReorderMotionSample?,
+  relativeTo uptime: TimeInterval
+) -> String {
+  guard let sample else { return "nil" }
+  return "t+\(hostedTabReorderDiagnosticNumber(sample.uptime - uptime))s "
+    + "active=\(sample.animationActive ? 1 : 0) "
+    + "model=\(hostedTabReorderDiagnosticNumber(sample.modelOffset)) "
+    + "presentation=\(hostedTabReorderDiagnosticNumber(sample.presentationOffset)) "
+    + "minX=\(hostedTabReorderDiagnosticNumber(sample.convertedMinX)) "
+    + "windowVisible=\(sample.windowVisible ? 1 : 0) "
+    + "windowOcclusionVisible=\(sample.windowOcclusionVisible ? 1 : 0) "
+    + "sourceInWindow=\(sample.sourceInWindow ? 1 : 0) "
+    + "sourceInDestination=\(sample.sourceInDestination ? 1 : 0)"
 }
 
 @Test func tabOverflowEndpointControlsStayEnabledForVisibleNotes() throws {
@@ -925,24 +1469,95 @@ func reorderInteractionNativeLifetimeDoesNotEndBetweenPointerEvents() throws {
   if let presentation = sibling.layer?.presentation(), let root = destination.layer?.presentation() {
     positions.append(presentation.convert(presentation.bounds, to: root).minX)
   }
+  let animationRequestUptime = ProcessInfo.processInfo.systemUptime
   controller.moved(to: window.convertPoint(toScreen:
     destination.convert(NSPoint(x: second.maxX, y: 15), to: nil)))
   let deadline = ProcessInfo.processInfo.systemUptime + 1
   let intermediateRange = (first.minX + 1)..<(second.minX - 1)
   var observedAnimation = false
   var hasIntermediatePosition = false
+  var motionSamples = HostedTabReorderMotionSamples()
+  var animationDetails: HostedTabReorderAnimationDetails?
   repeat {
     await advanceTabStripHostEventBoundary(host)
-    observedAnimation = observedAnimation
-      || sibling.layer?.animation(forKey: "fleck.tab-reorder") != nil
-    if let presentation = sibling.layer?.presentation(), let root = destination.layer?.presentation() {
-      positions.append(presentation.convert(presentation.bounds, to: root).minX)
+    let sampleUptime = ProcessInfo.processInfo.systemUptime
+    let layer = sibling.layer
+    let animation = layer?.animation(forKey: "fleck.tab-reorder")
+    let animationActive = animation != nil
+    observedAnimation = observedAnimation || animationActive
+    if animationDetails == nil, let animation = animation as? CABasicAnimation {
+      animationDetails = HostedTabReorderAnimationDetails(
+        from: (animation.fromValue as? NSNumber)?.doubleValue,
+        to: (animation.toValue as? NSNumber)?.doubleValue,
+        duration: animation.duration)
     }
+    let presentation = layer?.presentation()
+    let rootPresentation = destination.layer?.presentation()
+    var convertedMinX: CGFloat?
+    if let presentation, let rootPresentation {
+      convertedMinX = presentation.convert(presentation.bounds, to: rootPresentation).minX
+      if let convertedMinX { positions.append(convertedMinX) }
+    }
+    motionSamples.append(HostedTabReorderMotionSample(
+      uptime: sampleUptime,
+      animationActive: animationActive,
+      modelOffset: layer.map { Double($0.transform.m41) },
+      presentationOffset: presentation.map { Double($0.transform.m41) },
+      convertedMinX: convertedMinX.map { Double($0) },
+      windowVisible: window.isVisible,
+      windowOcclusionVisible: window.occlusionState.contains(.visible),
+      sourceInWindow: sibling.window === window,
+      sourceInDestination: sibling.isDescendant(of: destination)))
     hasIntermediatePosition = positions.contains { intermediateRange.contains($0) }
   } while ProcessInfo.processInfo.systemUptime < deadline
     && (!hasIntermediatePosition || sibling.layer?.animation(forKey: "fleck.tab-reorder") != nil)
+  let observationEndUptime = ProcessInfo.processInfo.systemUptime
+  if !hasIntermediatePosition {
+    let firstActiveOffset = motionSamples.firstActiveSample.map { $0.uptime - animationRequestUptime }
+    let lastActiveOffset = motionSamples.lastActiveSample.map { $0.uptime - animationRequestUptime }
+    let activeObservedSpan = motionSamples.firstActiveSample.flatMap { first in
+      motionSamples.lastActiveSample.map { $0.uptime - first.uptime }
+    }
+    let currentSourceMatches = sourceView(destination) === sibling
+    let details = animationDetails
+    let retainedSamples = motionSamples.retainedSamples
+    let retainedTrace = retainedSamples
+      .map { hostedTabReorderDiagnosticSample($0, relativeTo: animationRequestUptime) }
+      .joined(separator: " | ")
+    print("[TAB-REORDER-ANIMATION-FAILURE] request=\(hostedTabReorderDiagnosticNumber(animationRequestUptime)) "
+      + "deadline=\(hostedTabReorderDiagnosticNumber(deadline)) "
+      + "end=\(hostedTabReorderDiagnosticNumber(observationEndUptime)) "
+      + "requestToDeadline=\(hostedTabReorderDiagnosticNumber(deadline - animationRequestUptime)) "
+      + "requestToEnd=\(hostedTabReorderDiagnosticNumber(observationEndUptime - animationRequestUptime)) "
+      + "loops=\(motionSamples.loopCount) retained=\(retainedSamples.count) "
+      + "wrapped=\(motionSamples.didWrap) activeSamples=\(motionSamples.activeSampleCount) "
+      + "activeFirst=\(hostedTabReorderDiagnosticNumber(firstActiveOffset)) "
+      + "activeLast=\(hostedTabReorderDiagnosticNumber(lastActiveOffset)) "
+      + "activeObservedSpan=\(hostedTabReorderDiagnosticNumber(activeObservedSpan)) "
+      + "animationFrom=\(hostedTabReorderDiagnosticNumber(details?.from)) "
+      + "animationTo=\(hostedTabReorderDiagnosticNumber(details?.to)) "
+      + "animationDuration=\(hostedTabReorderDiagnosticNumber(details?.duration)) "
+      + "windowVisible=\(window.isVisible) windowOcclusionVisible=\(window.occlusionState.contains(.visible)) "
+      + "windowKey=\(window.isKeyWindow) appActive=\(NSApp.isActive) "
+      + "sourceMatchesCurrentOwner=\(currentSourceMatches) sourceInWindow=\(sibling.window === window) "
+      + "sourceInDestination=\(sibling.isDescendant(of: destination)) sourceNoteMatches=\(sibling.noteID == notes[1].id)")
+    print("[TAB-REORDER-ANIMATION-FAILURE] first=\(hostedTabReorderDiagnosticSample(motionSamples.firstSample, relativeTo: animationRequestUptime))")
+    print("[TAB-REORDER-ANIMATION-FAILURE] last=\(hostedTabReorderDiagnosticSample(motionSamples.lastSample, relativeTo: animationRequestUptime))")
+    print("[TAB-REORDER-ANIMATION-FAILURE] firstActive=\(hostedTabReorderDiagnosticSample(motionSamples.firstActiveSample, relativeTo: animationRequestUptime))")
+    print("[TAB-REORDER-ANIMATION-FAILURE] lastActive=\(hostedTabReorderDiagnosticSample(motionSamples.lastActiveSample, relativeTo: animationRequestUptime))")
+    print("[TAB-REORDER-ANIMATION-FAILURE] positionCount=\(positions.count) positionMin=\(String(describing: positions.min())) positionMax=\(String(describing: positions.max())) range=\(intermediateRange)")
+    print("[TAB-REORDER-ANIMATION-FAILURE] samples=\(retainedTrace)")
+  }
   #expect(observedAnimation)
   #expect(hasIntermediatePosition)
+  #expect(sibling.layer?.animation(forKey: "fleck.tab-reorder") == nil)
+  let finalLayer = try #require(sibling.layer)
+  let finalRoot = try #require(destination.layer)
+  if let presentation = finalLayer.presentation(), let root = finalRoot.presentation() {
+    positions.append(presentation.convert(presentation.bounds, to: root).minX)
+  } else {
+    positions.append(finalLayer.convert(finalLayer.bounds, to: finalRoot).minX)
+  }
   let finalPosition = try #require(positions.last)
   #expect(abs(finalPosition - first.minX) < 1)
   #expect(controller.preview?.frames[notes[1].id] == second)

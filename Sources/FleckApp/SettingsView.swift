@@ -270,6 +270,27 @@
     }
   }
 
+  enum SettingsWindowChromeLayout {
+    static let minimumTrafficLightInset: CGFloat = 14
+
+    static func trafficLightTopInset(
+      sidebarFrame: NSRect,
+      searchFrame: NSRect,
+      headingFrame: NSRect,
+      buttonHeight: CGFloat
+    ) -> CGFloat? {
+      guard !searchFrame.isEmpty, !headingFrame.isEmpty, buttonHeight > 0,
+        sidebarFrame.contains(searchFrame), sidebarFrame.contains(headingFrame),
+        searchFrame.minY >= headingFrame.maxY
+      else { return nil }
+      let lowerGap = searchFrame.minY - headingFrame.maxY
+      let buttonBottom = searchFrame.maxY + lowerGap
+      let inset = sidebarFrame.maxY - buttonBottom - buttonHeight
+      guard inset.isFinite, inset >= minimumTrafficLightInset else { return nil }
+      return inset
+    }
+  }
+
   private struct SettingsWindowChromeConfigurator: NSViewRepresentable {
     func makeNSView(context: Context) -> SettingsWindowChromeView {
       SettingsWindowChromeView()
@@ -283,6 +304,7 @@
   private final class SettingsWindowChromeView: NSView {
     private var adjustmentScheduled = false
     private var observedButtons: [NSButton] = []
+    private var trafficLightTopInset = SettingsWindowChromeLayout.minimumTrafficLightInset
 
     deinit {
       NotificationCenter.default.removeObserver(self)
@@ -291,6 +313,7 @@
     override func viewWillMove(toWindow newWindow: NSWindow?) {
       if newWindow !== window {
         stopObservingTrafficLights()
+        trafficLightTopInset = SettingsWindowChromeLayout.minimumTrafficLightInset
       }
       super.viewWillMove(toWindow: newWindow)
     }
@@ -339,7 +362,7 @@
     private func adjustTrafficLights() {
       guard let window,
         let contentView = window.contentView,
-        let sidebarSurface = settingsSidebarSurface(in: contentView)
+        let sidebarSurface = settingsView(identifier: "settings-sidebar-surface", in: contentView)
       else {
         return
       }
@@ -353,8 +376,32 @@
 
       let sidebarFrame = sidebarSurface.convert(sidebarSurface.bounds, to: nil)
       let buttonFrames = buttons.map { $0.convert($0.bounds, to: nil) }
+      if let searchField = settingsView(identifier: "settings-search-field", in: contentView)
+        as? NSSearchField,
+        let heading = settingsView(identifier: "settings-fleck-sidebar-heading", in: contentView),
+        heading.visibleRect.contains(heading.bounds),
+        let buttonHeight = buttonFrames.map(\.height).max()
+      {
+        let searchFrame = searchField.convert(searchField.bounds, to: nil)
+        let headingFrame = heading.convert(heading.bounds, to: nil)
+        var ancestor: NSView? = heading
+        while let view = ancestor, !(view is NSOutlineView) {
+          ancestor = view.superview
+        }
+        if let outline = ancestor as? NSOutlineView,
+          outline.visibleRect.minY <= outline.bounds.minY,
+          let inset = SettingsWindowChromeLayout.trafficLightTopInset(
+            sidebarFrame: sidebarFrame,
+            searchFrame: searchFrame,
+            headingFrame: headingFrame,
+            buttonHeight: buttonHeight
+          )
+        {
+          trafficLightTopInset = inset
+        }
+      }
       let targetMinX = sidebarFrame.minX + 14
-      let targetMaxY = sidebarFrame.maxY - 14
+      let targetMaxY = sidebarFrame.maxY - trafficLightTopInset
       guard let currentMinX = buttonFrames.map(\.minX).min() else { return }
       guard let currentMaxY = buttonFrames.map(\.maxY).max() else { return }
       let offsetX = targetMinX - currentMinX
@@ -403,12 +450,12 @@
       scheduleTrafficLightAdjustment()
     }
 
-    private func settingsSidebarSurface(in view: NSView) -> NSView? {
-      if view.accessibilityIdentifier() == "settings-sidebar-surface" {
+    private func settingsView(identifier: String, in view: NSView) -> NSView? {
+      if view.accessibilityIdentifier() == identifier {
         return view
       }
       for subview in view.subviews {
-        if let surface = settingsSidebarSurface(in: subview) {
+        if let surface = settingsView(identifier: identifier, in: subview) {
           return surface
         }
       }
@@ -418,46 +465,72 @@
 
   struct SettingsPageHeader: View {
     @Environment(\.fleckThemeSnapshot) private var theme
+    @Environment(\.fleckUIFont) private var uiFont
     @ScaledMetric(relativeTo: .title2) private var generalTitleSize = 20
     let section: SettingsSection
     let searchRequest: SettingsSearchRequest?
     let title: String?
+    let description: String?
+    let titleAccessibilityIdentifier: String?
+    let searchAnchorEnabled: Bool
     let accessory: AnyView?
 
     init(
       section: SettingsSection,
       title: String? = nil,
+      description: String? = nil,
+      titleAccessibilityIdentifier: String? = nil,
+      searchAnchorEnabled: Bool = true,
       searchRequest: SettingsSearchRequest?,
       accessory: AnyView? = nil
     ) {
       self.section = section
       self.title = title
+      self.description = description
+      self.titleAccessibilityIdentifier = titleAccessibilityIdentifier
+      self.searchAnchorEnabled = searchAnchorEnabled
       self.searchRequest = searchRequest
       self.accessory = accessory
     }
 
+    @ViewBuilder
     var body: some View {
-      HStack(alignment: .top, spacing: 12) {
-        VStack(alignment: .leading, spacing: 4) {
-          Text(title ?? section.title)
-            .font(
-              section == .editing
-                ? .system(size: generalTitleSize, weight: .semibold)
-                : .title2.weight(.semibold)
-            )
-            .background(SettingsPageHeaderProbe())
-          if section != .editing {
-            Text(section.description)
-              .font(.callout)
-              .foregroundStyle(theme.color(.textSecondary))
-              .fixedSize(horizontal: false, vertical: true)
-          }
+      let titleStack = VStack(alignment: .leading, spacing: 4) {
+        headerTitle
+        if section != .editing {
+          Text(description ?? section.description)
+            .fleckUIFont(.callout)
+            .foregroundStyle(theme.color(.textSecondary))
+            .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+
+      HStack(alignment: .top, spacing: 12) {
+        if searchAnchorEnabled {
+          titleStack.settingsSearchAnchor(.section(section), request: searchRequest)
+        } else {
+          titleStack
+        }
         if let accessory { accessory }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
-      .settingsSearchAnchor(.section(section), request: searchRequest)
+    }
+
+    @ViewBuilder
+    private var headerTitle: some View {
+      let titleView = Text(title ?? section.title)
+        .font(
+          section == .editing
+            ? uiFont.font(size: generalTitleSize, weight: .semibold)
+            : uiFont.font(.title2, weight: .semibold)
+        )
+        .background(SettingsPageHeaderProbe())
+      if let titleAccessibilityIdentifier {
+        titleView.accessibilityIdentifier(titleAccessibilityIdentifier)
+      } else {
+        titleView
+      }
     }
   }
 
@@ -474,7 +547,7 @@
     var body: some View {
       VStack(alignment: .leading, spacing: 8) {
         Text(title)
-          .font(.headline)
+          .fleckUIFont(.headline)
 
         VStack(alignment: .leading, spacing: 12) {
           content
@@ -511,9 +584,9 @@
       HStack(alignment: .top, spacing: 16) {
         VStack(alignment: .leading, spacing: 3) {
           Text(title)
-            .font(.body.weight(.semibold))
+            .fleckUIFont(.body, weight: .semibold)
           Text(detail)
-            .font(.caption)
+            .fleckUIFont(.caption)
             .foregroundStyle(theme.color(.caption))
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -541,6 +614,7 @@
 
   private struct SettingsToggleRow: View {
     @Environment(\.fleckThemeSnapshot) private var theme
+    @Environment(\.fleckUIFont) private var uiFont
     @ScaledMetric(relativeTo: .body) private var generalTitleSize = 13
     @ScaledMetric(relativeTo: .callout) private var generalDetailSize = 12
     let title: String
@@ -569,12 +643,12 @@
       HStack(alignment: .top, spacing: 16) {
         VStack(alignment: .leading, spacing: 3) {
           Text(title)
-            .font(.system(size: generalTitleSize, weight: .regular))
+            .font(uiFont.font(size: generalTitleSize))
             .background(
               SettingsTypographyProbe(identifier: "settings-general-title-\(title)")
             )
           Text(detail)
-            .font(.system(size: generalDetailSize, weight: .regular))
+            .font(uiFont.font(size: generalDetailSize))
             .foregroundStyle(theme.color(.textSecondary))
             .fixedSize(horizontal: false, vertical: true)
             .background(
@@ -609,6 +683,7 @@
 
   private struct GeneralSettingsGroup<Content: View>: View {
     @Environment(\.fleckThemeSnapshot) private var theme
+    @Environment(\.fleckUIFont) private var uiFont
     @ScaledMetric(relativeTo: .callout) private var titleSize = 12
     let title: String
     let content: Content
@@ -621,7 +696,7 @@
     var body: some View {
       VStack(alignment: .leading, spacing: 8) {
         Text(title)
-          .font(.system(size: titleSize, weight: .medium))
+          .font(uiFont.font(size: titleSize, weight: .medium))
           .background(
             SettingsTypographyProbe(identifier: "settings-general-section-\(title)")
           )
@@ -884,11 +959,18 @@
   struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.fleckThemeSnapshot) private var theme
+    @Environment(\.fleckUIFont) private var uiFont
+    #if DEBUG
+    @Environment(\.settingsReadinessReturnObservationSource)
+      private var readinessReturnObservationSource: AnyObject?
+    #endif
     @ObservedObject var runtime: DictationRuntime
     @ObservedObject private var personalDictionarySettingsViewModel:
       PersonalDictionarySettingsViewModel
     @ObservedObject private var historyController: DictationHistoryController
     private let buildIdentity: BuildIdentity
+    private let openSystemSettingsAction: @MainActor (DictationSystemSettingsAction) -> Void
+    private let updateController: AppUpdateController?
     @State private var selectedSection = SettingsSection.editing
     @State private var showsHistoryClearConfirmation = false
     @State private var recoveryActions: [DictationSystemSettingsAction] = []
@@ -897,15 +979,27 @@
     @State private var isSettingsSearchFieldFocused = false
     @State private var searchQuery = ""
     @State private var isReadinessPopoverPresented = false
+    @State private var readinessKeyboardReturnRequest: SettingsKeyboardFocusReturnRequest?
+    @StateObject private var readinessReturnAttachment = SettingsKeyboardFocusReturnAttachment()
     @State private var searchFocusRequest: UUID?
     @State private var highlightedSearchTarget: SettingsSearchTarget?
     @State private var searchRequest: SettingsSearchRequest?
     @State private var vocabularyPageScrollRequestID: UUID?
     @State private var isDictationPrivacyExpanded = false
+    @State private var isUIFontPickerPresented = false
 
-    init(runtime: DictationRuntime, buildIdentity: BuildIdentity = .current()) {
+    init(
+      runtime: DictationRuntime,
+      buildIdentity: BuildIdentity = .current(),
+      updateController: AppUpdateController? = nil,
+      openSystemSettingsAction: (@MainActor (DictationSystemSettingsAction) -> Void)? = nil
+    ) {
       self.runtime = runtime
       self.buildIdentity = buildIdentity
+      self.updateController = updateController
+      self.openSystemSettingsAction = openSystemSettingsAction ?? { action in
+        runtime.openSystemSettings(action)
+      }
       _personalDictionarySettingsViewModel = ObservedObject(
         wrappedValue: runtime.personalDictionarySettingsViewModel
       )
@@ -978,7 +1072,10 @@
                   case .agents:
                     AgentSettingsView()
                   case .about:
-                    AboutSettingsView(identity: buildIdentity)
+                    AboutSettingsView(
+                      identity: buildIdentity,
+                      updateController: updateController
+                    )
                   }
                 }
                 .environment(\.settingsSearchRequest, searchRequest)
@@ -1020,6 +1117,7 @@
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .ignoresSafeArea(.container, edges: .top)
       .background(theme.color(.window))
+      .background(FleckWindowTheme().frame(width: 0, height: 0))
       .background(SettingsWindowChromeConfigurator())
       .environment(\.fleckChromeAppearance, appState.preferences.chromeAppearance)
       .tint(theme.color(.accent))
@@ -1027,6 +1125,7 @@
         recordingSelection.transition(to: newSection)
         if newSection != .dictation {
           isReadinessPopoverPresented = false
+          readinessKeyboardReturnRequest = nil
         }
       }
       .onChange(of: searchQuery) { _, _ in
@@ -1180,10 +1279,15 @@
       selectedSection = .models
     }
 
+    private var uiFontDisplayName: String {
+      guard let family = appState.preferences.uiFontFamily else { return "System" }
+      return uiFont.fontName == nil ? "\(family) (unavailable — using System)" : family
+    }
+
     private var appearance: some View {
       VStack(alignment: .leading, spacing: 12) {
         Text("Interface")
-          .font(.headline)
+          .fleckUIFont(.headline)
         SettingsPreferenceRow(
           "Appearance",
           detail: "Follow macOS, or keep Fleck in Light or Dark mode."
@@ -1208,6 +1312,32 @@
         }
         .settingsSearchAnchor(.appearanceColorTheme, request: searchRequest)
         SettingsPreferenceRow(
+          "Interface font",
+          detail: "Use an installed font for Fleck’s interface. Note text and saved formatting stay unchanged."
+        ) {
+          Button(uiFontDisplayName) {
+            isUIFontPickerPresented = true
+          }
+          .lineLimit(1)
+          .accessibilityLabel("Interface font")
+          .accessibilityValue(uiFontDisplayName)
+          .accessibilityHint("Choose an installed interface font or return to System.")
+          .popover(isPresented: $isUIFontPickerPresented, arrowEdge: .bottom) {
+            FontFamilyPicker(
+              currentFamily: appState.preferences.uiFontFamily ?? ".AppleSystemUIFont",
+              isMixed: false,
+              targetLabel: "Fleck interface",
+              onCommit: { family in
+                appState.updatePreferences { $0.uiFontFamily = family }
+                isUIFontPickerPresented = false
+              },
+              onCancel: { isUIFontPickerPresented = false }
+            )
+            .frame(width: 280, height: 320)
+            .fleckPopoverTheme(theme)
+          }
+        }
+        SettingsPreferenceRow(
           "Window appearance",
           detail: "Use solid chrome or subtle glass while keeping the editor canvas opaque."
         ) {
@@ -1230,7 +1360,7 @@
         .settingsSearchAnchor(.appearanceGlassOpacity, request: searchRequest)
 
         Text("Menu size")
-          .font(.headline)
+          .fleckUIFont(.headline)
           .padding(.top, 12)
         SettingsPreferenceRow(
           "Width",
@@ -1352,13 +1482,13 @@
                 Text(
                   "This shortcut may replace normal typing or navigation while Fleck is active."
                 )
-                .font(.caption)
+                .fleckUIFont(.caption)
                 .foregroundStyle(theme.color(.caption))
                 .multilineTextAlignment(.trailing)
               }
               if conflicts.contains(action) {
                 Label("Conflicts with another shortcut", systemImage: "exclamationmark.triangle.fill")
-                  .font(.caption)
+                  .fleckUIFont(.caption)
                   .foregroundStyle(theme.color(.warning))
               }
             }
@@ -1368,7 +1498,7 @@
         Text(
           "Click a shortcut, then press the key combination. Conflicts are highlighted. Restore brings back the default shortcut."
         )
-        .font(.caption)
+        .fleckUIFont(.caption)
         .foregroundStyle(theme.color(.caption))
       }
     }
@@ -1382,7 +1512,7 @@
           Text(
             "Audio stays in memory only and is discarded when capture finishes, is cancelled, is interrupted, or fails. History is local, contains no audio, and expires after 30 days. Turning history off affects future successful captures only."
           )
-          .font(.caption)
+          .fleckUIFont(.caption)
           .foregroundStyle(theme.color(.caption))
           .padding(.top, 4)
           .accessibilityIdentifier("settings-dictation-privacy-content")
@@ -1404,14 +1534,45 @@
           isReady ? "Ready" : "Needs attention",
           systemImage: isReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
         )
-        .font(.callout.weight(.medium))
+        .fleckUIFont(.callout, weight: .medium)
       }
       .buttonStyle(.bordered)
       .controlSize(.small)
       .popover(isPresented: $isReadinessPopoverPresented, arrowEdge: .top) {
         dictationReadinessPopover
+          .fleckPopoverTheme(theme)
+          .onExitCommand {
+            let inputID = SettingsSearchInputModality.shared.inputID
+            if selectedSection == .dictation {
+              readinessReturnAttachment.publishReturnRequest(
+                inputID: inputID, to: $readinessKeyboardReturnRequest
+              )
+            } else {
+              readinessKeyboardReturnRequest = nil
+            }
+            #if DEBUG
+            let returnRequest = readinessKeyboardReturnRequest
+            SettingsSearchInputModality.shared.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[F93-readiness-return:exit] pending=\(returnRequest != nil) windowPresent=\(returnRequest?.window != nil) keyMatch=\(returnRequest?.window != nil && NSApp.keyWindow != nil && returnRequest?.window === NSApp.keyWindow) parentMatch=\(returnRequest?.window != nil && NSApp.keyWindow?.parent != nil && returnRequest?.window === NSApp.keyWindow?.parent) inputMatch=\(returnRequest?.inputID == inputID)"
+            )
+            #endif
+            isReadinessPopoverPresented = false
+          }
+          #if DEBUG
+          .onDisappear {
+            let returnRequest = readinessKeyboardReturnRequest
+            SettingsSearchInputModality.shared.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[F93-readiness-return:disappear] pending=\(returnRequest != nil) dictation=\(selectedSection == .dictation)"
+            )
+          }
+          #endif
       }
-      .settingsSearchAnchor(.dictationStatus, request: searchRequest)
+      .settingsSearchAnchor(.dictationStatus, request: searchRequest) {
+        readinessReturnAttachment
+      }
+      .environment(\.settingsKeyboardFocusReturnRequest, $readinessKeyboardReturnRequest)
       .accessibilityLabel("Dictation readiness")
       .accessibilityValue(isReady ? "Ready" : "Needs attention")
       .accessibilityHint("Show dictation readiness and recovery actions.")
@@ -1426,7 +1587,7 @@
           Button("Enable Input Monitoring") {
             Task { @MainActor in
               guard let settings = await runtime.recoverModifierMonitoring() else { return }
-              runtime.openSystemSettings(settings)
+              openSystemSettingsAction(settings)
             }
           }
           .disabled(!dictationModifierPresentation.isPickerEnabled)
@@ -1449,20 +1610,20 @@
             isReady ? "Dictation is ready" : "Dictation needs attention",
             systemImage: isReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
           )
-          .font(.headline)
+          .fleckUIFont(.headline)
           .foregroundStyle(theme.color(isReady ? .success : .warning))
 
           if isReady {
             Text("Dictation is ready to capture and process your voice locally.")
-              .font(.callout)
+              .fleckUIFont(.callout)
               .foregroundStyle(theme.color(.textSecondary))
           } else {
             ForEach(availabilityIssues, id: \.title) { issue in
               VStack(alignment: .leading, spacing: 2) {
                 Text(issue.title)
-                  .font(.callout.weight(.medium))
+                  .fleckUIFont(.callout, weight: .medium)
                 Text(issue.detail)
-                  .font(.caption)
+                  .fleckUIFont(.caption)
                   .foregroundStyle(theme.color(.caption))
                   .fixedSize(horizontal: false, vertical: true)
               }
@@ -1470,7 +1631,7 @@
 
             ForEach(recoveryActions, id: \.pane) { action in
               Button(action.title) {
-                runtime.openSystemSettings(action)
+                openSystemSettingsAction(action)
               }
               .buttonStyle(.bordered)
             }
@@ -1479,9 +1640,9 @@
               Divider()
               VStack(alignment: .leading, spacing: 6) {
                 Text("Modifier key")
-                  .font(.callout.weight(.medium))
+                  .fleckUIFont(.callout, weight: .medium)
                 Text(dictationModifierPresentation.statusCopy)
-                  .font(.caption)
+                  .fleckUIFont(.caption)
                   .foregroundStyle(theme.color(.caption))
                   .fixedSize(horizontal: false, vertical: true)
                 dictationModifierRecoveryButton
@@ -1505,7 +1666,7 @@
     private var capture: some View {
       VStack(alignment: .leading, spacing: 12) {
         Text(DictationSettingsGroup.capture.rawValue)
-          .font(.headline)
+          .fleckUIFont(.headline)
         SettingsPreferenceRow(
           "Modifier key",
           detail: dictationModifierPresentation.statusCopy
@@ -1524,7 +1685,7 @@
             .disabled(!dictationModifierPresentation.isPickerEnabled)
             if let guidance = dictationModifierPresentation.guidanceCopy {
               Text(guidance)
-                .font(.caption)
+                .fleckUIFont(.caption)
                 .foregroundStyle(theme.color(.caption))
                 .multilineTextAlignment(.trailing)
             }
@@ -1559,7 +1720,7 @@
     private var experienceAndHistory: some View {
       VStack(alignment: .leading, spacing: 12) {
         Text(DictationSettingsGroup.experience.rawValue)
-          .font(.headline)
+          .fleckUIFont(.headline)
         SettingsToggleRow(
           title: "Show status capsule",
           detail: "Show a compact status surface while Fleck is listening.",
@@ -1807,6 +1968,7 @@
 
   struct PersonalDictionarySettingsSection: View {
     @Environment(\.fleckThemeSnapshot) private var theme
+    @Environment(\.fleckUIFont) private var uiFont
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var viewModel: PersonalDictionarySettingsViewModel
     @Binding var searchRequest: SettingsSearchRequest?
@@ -2069,7 +2231,7 @@
           Button(title) {
             viewModel.filter = viewModel.filter == .suggestions ? .all : .suggestions
           }
-          .font(.footnote.weight(.medium))
+          .fleckUIFont(.footnote, weight: .medium)
           .buttonStyle(.bordered)
           .controlSize(.small)
           .accessibilityLabel(title)
@@ -2132,7 +2294,7 @@
           .padding(6)
           .contentShape(Rectangle())
       }
-      .buttonStyle(.plain)
+      .buttonStyle(FleckQuietButtonStyle(cornerRadius: 7))
       .contentShape(Rectangle())
       .focusEffectDisabled()
       .keyboardShortcut("f", modifiers: .command)
@@ -2157,8 +2319,8 @@
         Button("Import / Export…") {
           toggleOptions()
         }
-        .font(.footnote)
-        .buttonStyle(.plain)
+        .fleckUIFont(.footnote)
+        .buttonStyle(FleckQuietButtonStyle(cornerRadius: 7))
         .foregroundStyle(theme.color(.textSecondary))
         .focused($isOptionsTriggerFocused)
         .accessibilityIdentifier("settings-vocabulary-options-trigger")
@@ -2166,6 +2328,7 @@
         .id(SettingsSearchTarget.vocabularyTransferFooter)
         .popover(isPresented: optionsPresentation, arrowEdge: .bottom) {
           optionsPopover
+            .fleckPopoverTheme(theme)
         }
         Spacer(minLength: 0)
       }
@@ -2177,7 +2340,7 @@
         ScrollView {
           VStack(alignment: .leading, spacing: 10) {
             Text("Transfer")
-              .font(.headline)
+              .fleckUIFont(.headline)
               .settingsSearchAnchor(.vocabularyTransfer, request: optionsSearchRequest)
 
             Button("Export Dictionary") {
@@ -2209,7 +2372,7 @@
             Text(
               "CSV excludes pending suggestions and cannot restore a complete personal dictionary."
             )
-            .font(.caption)
+            .fleckUIFont(.caption)
             .foregroundStyle(theme.color(.caption))
             .fixedSize(horizontal: false, vertical: true)
 
@@ -2253,7 +2416,7 @@
     private var sortPopover: some View {
       VStack(alignment: .leading, spacing: 8) {
         Text("SORT BY")
-          .font(.system(size: 10, weight: .bold, design: .rounded))
+          .font(uiFont.font(size: 10, weight: .bold, design: .rounded))
           .tracking(1.2)
           .foregroundStyle(theme.color(.caption))
           .padding(.horizontal, 8)
@@ -2267,7 +2430,7 @@
 
         if viewModel.filter != .suggestions {
           Text("Usage reflects saved data, not live dictation.")
-            .font(.caption2)
+            .fleckUIFont(.caption2)
             .foregroundStyle(theme.color(.caption))
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 8)
@@ -2275,7 +2438,7 @@
       }
       .padding(8)
       .frame(width: 196)
-      .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .fleckThemedSurface(cornerRadius: 12)
       .overlay {
         RoundedRectangle(cornerRadius: 12, style: .continuous)
           .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.8)
@@ -2286,6 +2449,10 @@
       .onDisappear {
         hoveredSortOrder = nil
         focusedSortOrder = nil
+        guard isViewPresent, selectedSection == .vocabulary, isSearchExpanded,
+          !isOptionsPresented, !hasModalPresentation
+        else { return }
+        isSearchFocused = true
       }
     }
 
@@ -2316,7 +2483,7 @@
             .accessibilityHidden(true)
 
           Text(order.rawValue)
-            .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+            .font(uiFont.font(size: 13, weight: isSelected ? .semibold : .regular))
 
           Spacer(minLength: 0)
 
@@ -2366,7 +2533,7 @@
           .padding(6)
           .contentShape(Rectangle())
       }
-      .buttonStyle(.plain)
+      .buttonStyle(FleckQuietButtonStyle(cornerRadius: 7))
       .contentShape(Rectangle())
       .help("Sort \(sortOrderForCurrentFilter.rawValue)")
       .accessibilityLabel("Sort vocabulary")
@@ -2379,6 +2546,7 @@
       .settingsSearchAnchor(.vocabularySort, request: visibleSearchRequest)
       .popover(isPresented: $isSortPresented, arrowEdge: .bottom) {
         sortPopover
+          .fleckPopoverTheme(theme)
       }
     }
 
@@ -2397,7 +2565,7 @@
             .contentShape(Rectangle())
         }
       }
-      .buttonStyle(.plain)
+      .buttonStyle(FleckQuietButtonStyle(cornerRadius: 7))
       .contentShape(Rectangle())
       .disabled(isReloading)
       .help("Refresh dictionary")
@@ -2416,19 +2584,19 @@
           Text("Reloading dictionary…")
             .foregroundStyle(theme.color(.caption))
         }
-        .font(.caption)
+        .fleckUIFont(.caption)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Reloading dictionary")
       } else if let errorMessage = viewModel.errorMessage {
         Label(errorMessage, systemImage: "exclamationmark.triangle")
           .foregroundStyle(theme.color(.error))
-          .font(.caption)
+          .fleckUIFont(.caption)
           .accessibilityLabel("Personal dictionary error")
           .accessibilityValue(errorMessage)
       } else if let statusMessage = viewModel.statusMessage {
         Label(statusMessage, systemImage: "checkmark.circle")
           .foregroundStyle(theme.color(.caption))
-          .font(.caption)
+          .fleckUIFont(.caption)
           .accessibilityLabel("Personal dictionary status")
           .accessibilityValue(statusMessage)
       }
@@ -2506,7 +2674,7 @@
             .foregroundStyle(theme.color(.textSecondary))
         }
       }
-      .font(.callout)
+      .fleckUIFont(.callout)
       .foregroundStyle(theme.color(.textSecondary))
       .padding(16)
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -2568,7 +2736,7 @@
           .fixedSize(horizontal: false, vertical: true)
         if !suggestion.observedForms.isEmpty {
           Text(suggestion.observedForms.joined(separator: ", "))
-            .font(.caption)
+            .fleckUIFont(.caption)
             .foregroundStyle(theme.color(.caption))
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -2862,7 +3030,6 @@
       presentationGeneration += 1
       searchPresentationSource = source
       isOptionsTriggerFocused = false
-      isSearchTriggerFocused = false
       withAnimation(motion.presentationAnimation(for: source)) {
         isSearchExpanded = true
         isSearchFocused = true
@@ -2978,13 +3145,13 @@
         Button(action: onEdit) {
           HStack(spacing: 6) {
             Text(title)
-              .font(.body)
+              .fleckUIFont(.body)
               .underline(focusedAction == .edit || accessibilityFocusedAction == .edit)
               .multilineTextAlignment(.leading)
               .fixedSize(horizontal: false, vertical: true)
             if !entry.isEnabled {
               Text("Disabled")
-                .font(.caption)
+                .fleckUIFont(.caption)
                 .foregroundStyle(theme.color(.textSecondary))
             }
             Spacer(minLength: 8)
@@ -3121,7 +3288,7 @@
               .accessibilityLabel("Correct from")
               .accessibilityHint("The spelling or phrase Fleck should replace")
             Text("For multiple corrections, separate each one with a comma or new line.")
-              .font(.caption)
+              .fleckUIFont(.caption)
               .foregroundStyle(theme.color(.caption))
           }
 
@@ -3134,7 +3301,7 @@
 
         if let errorMessage {
           Label(errorMessage, systemImage: "exclamationmark.triangle")
-            .font(.caption)
+            .fleckUIFont(.caption)
             .foregroundStyle(theme.color(.error))
             .accessibilityLabel("Vocabulary editor error")
             .accessibilityValue(errorMessage)
@@ -3198,18 +3365,18 @@
         TextField("Preferred form", text: $preferredForm)
         TextField("Aliases", text: $aliases)
         Text("Separate aliases with commas or new lines.")
-          .font(.caption)
+          .fleckUIFont(.caption)
           .foregroundStyle(theme.color(.caption))
         if let errorMessage {
           Label(errorMessage, systemImage: "exclamationmark.triangle")
             .foregroundStyle(theme.color(.error))
-            .font(.caption)
+            .fleckUIFont(.caption)
             .accessibilityLabel("Suggestion edit error")
             .accessibilityValue(errorMessage)
         } else if let statusMessage {
           Label(statusMessage, systemImage: "info.circle")
             .foregroundStyle(theme.color(.caption))
-            .font(.caption)
+            .fleckUIFont(.caption)
             .accessibilityLabel("Suggestion edit status")
             .accessibilityValue(statusMessage)
         }
@@ -3238,17 +3405,17 @@
     var body: some View {
       VStack(alignment: .leading, spacing: 12) {
         Text("Review Dictionary Import")
-          .font(.title2.weight(.semibold))
+          .fleckUIFont(.title2, weight: .semibold)
         if let errorMessage = viewModel.errorMessage {
           Label(errorMessage, systemImage: "exclamationmark.triangle")
             .foregroundStyle(theme.color(.error))
-            .font(.caption)
+            .fleckUIFont(.caption)
             .accessibilityLabel("Dictionary import error")
             .accessibilityValue(errorMessage)
         } else if let statusMessage = viewModel.statusMessage {
           Label(statusMessage, systemImage: "info.circle")
             .foregroundStyle(theme.color(.caption))
-            .font(.caption)
+            .fleckUIFont(.caption)
             .accessibilityLabel("Dictionary import status")
             .accessibilityValue(statusMessage)
         }
@@ -3270,7 +3437,7 @@
                   VStack(alignment: .trailing, spacing: 2) {
                     Text(row.title)
                     if let detail = row.detail {
-                      Text(detail).font(.caption).foregroundStyle(theme.color(.caption))
+                      Text(detail).fleckUIFont(.caption).foregroundStyle(theme.color(.caption))
                     }
                   }
                 } label: {

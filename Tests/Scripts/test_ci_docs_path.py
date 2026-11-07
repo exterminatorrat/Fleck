@@ -504,10 +504,90 @@ class CIDocsPathTests(unittest.TestCase):
         for forbidden in ("swift", "xcodebuild", "brew install", "package", "sign"):
             self.assertNotIn(forbidden, docs.casefold())
         self.assertIn("name: macOS build and tests", aggregate)
-        self.assertIn("if: ${{ always() }}", aggregate)
+        self.assertIn(
+            "if: ${{ always() && (github.event_name != 'workflow_dispatch' || "
+            "inputs.ordinary_test_diagnostic_selector == '') }}",
+            aggregate,
+        )
         self.assertIn("DOCS_WORKFLOW_SHA256", aggregate)
         self.assertIn("test \"$DETECTED_COMMIT\" = \"$GITHUB_SHA\"", aggregate)
         self.assertIn("python3 -B -m unittest discover -s Tests/Scripts -p test_ci_docs_path.py", build)
+
+    def test_focused_ordinary_diagnostic_is_opt_in_and_outside_full_gate(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        selector = re.search(
+            r"^      ordinary_test_diagnostic_selector:\n(?:^        .*\n)+",
+            workflow,
+            re.M,
+        )
+        self.assertIsNotNone(selector)
+        for required in ("required: false", "type: string", "default: ''"):
+            self.assertIn(required, selector.group(0))
+
+        diagnostic = job_block(workflow, "ordinary-test-diagnostic")
+        aggregate = job_block(workflow, "macos")
+        detector = job_block(workflow, "detect-changes")
+        self.assertIn(
+            "if: ${{ github.event_name != 'workflow_dispatch' || "
+            "inputs.ordinary_test_diagnostic_selector == '' }}",
+            detector,
+        )
+        self.assertIn(
+            "if: ${{ github.event_name == 'workflow_dispatch' && "
+            "inputs.ordinary_test_diagnostic_selector != '' }}",
+            diagnostic,
+        )
+        self.assertIn("runs-on: macos-26", diagnostic)
+        self.assertIn("timeout-minutes: 45", diagnostic)
+        self.assertIn('FLECK_NATIVE_CAPTURE_QA: "0"', diagnostic)
+        self.assertIn(
+            "FLECK_TEST_SELECTOR: ${{ inputs.ordinary_test_diagnostic_selector }}",
+            diagnostic,
+        )
+        self.assertIn(
+            'Scripts/run-nonempty-swift-tests.sh "$FLECK_TEST_SELECTOR"',
+            diagnostic,
+        )
+        self.assertIn("${#FLECK_TEST_SELECTOR} -gt 160", diagnostic)
+        self.assertIn(
+            '"$FLECK_TEST_SELECTOR" == \'^.+$\'',
+            diagnostic,
+        )
+        self.assertNotIn("ordinary-test-diagnostic", aggregate)
+        self.assertIn(
+            "needs: [detect-changes, docs-validation, macos-build, "
+            "macos-validation, macos-enhanced]",
+            aggregate,
+        )
+
+        run_step = re.search(
+            r"^      - name: Run focused ordinary test diagnostic\n"
+            r"(?P<step>.*?)(?=^      - name: |\Z)",
+            diagnostic,
+            re.M | re.S,
+        )
+        self.assertIsNotNone(run_step)
+        self.assertNotIn(
+            "${{ inputs.ordinary_test_diagnostic_selector }}",
+            run_step.group("step"),
+        )
+
+    def test_workflow_schedules_full_ci_once_per_main_bound_head(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("  pull_request:\n    branches: [main]\n", workflow)
+        self.assertIn(
+            "concurrency:\n"
+            "  group: ci-${{ github.event_name == 'workflow_dispatch' && "
+            "inputs.ordinary_test_diagnostic_selector != '' && 'focused-' || '' }}"
+            "${{ github.event.pull_request.number || github.ref }}\n"
+            "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n",
+            workflow,
+        )
+        validation = job_block(workflow, "macos-validation")
+        self.assertIn("    needs: detect-changes\n", validation)
+        self.assertNotIn("needs.macos-build", validation)
+        for key in ("source_commit", "source_tree", "product_version"):
+            self.assertIn(f"needs.detect-changes.outputs.{key}", validation)
 
 
 if __name__ == "__main__":

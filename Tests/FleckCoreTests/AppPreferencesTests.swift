@@ -51,6 +51,33 @@ import Testing
   #expect(decoded.pinnedLocalModelKeys == sortedPinKeys)
 }
 
+@Test func pendingModelSelectionsDefaultToLegacyAndRoundTrip() throws {
+  let defaults = AppPreferences()
+  #expect(defaults.pendingDictationModelID == nil)
+  #expect(defaults.pendingCleanupModelID == nil)
+
+  let legacy = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: Data(#"{"fontFamily":"Menlo"}"#.utf8)
+  )
+  #expect(legacy.pendingDictationModelID == nil)
+  #expect(legacy.pendingCleanupModelID == nil)
+
+  let pending = AppPreferences(
+    pendingDictationModelID: "FluidInference/parakeet-tdt-0.6b-v2-coreml",
+    pendingCleanupModelID: "mlx-community/gemma-3-1b-it-8bit"
+  )
+  let encoded = try JSONEncoder().encode(pending)
+  let json = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+  #expect(
+    json["pendingDictationModelID"] as? String == "FluidInference/parakeet-tdt-0.6b-v2-coreml"
+  )
+  #expect(json["pendingCleanupModelID"] as? String == "mlx-community/gemma-3-1b-it-8bit")
+  #expect(
+    try JSONDecoder().decode(AppPreferences.self, from: encoded) == pending
+  )
+}
+
 @Test func newPreferencesUseAvenirReadingDefaults() {
   let value = AppPreferences()
 
@@ -259,6 +286,36 @@ import Testing
   )
   #expect(roundTrip.dictationModifierKey == .rightOption)
   #expect(roundTrip.dictationCapsuleDock == .bottom)
+}
+
+@Test func legacySideDockPreferencesNormalizeToBottomWithoutChangingOtherPreferences() throws {
+  #expect(DictationCapsuleDock.allCases == [.bottom])
+
+  for dock in [DictationCapsuleDock.left, .right] {
+    let data = Data(
+      """
+      {"fontFamily":"Menlo","fontSize":14,"uiFontFamily":"Avenir Next","panelOpacity":0.67,"dictationHistoryEnabled":false,"dictationCapsuleDock":"\(dock.rawValue)"}
+      """.utf8
+    )
+    let decoded = try JSONDecoder().decode(AppPreferences.self, from: data)
+    #expect(decoded.dictationCapsuleDock == .bottom)
+    #expect(decoded.fontFamily == "Menlo")
+    #expect(decoded.fontSize == 14)
+    #expect(decoded.uiFontFamily == "Avenir Next")
+    #expect(decoded.panelOpacity == 0.67)
+    #expect(!decoded.dictationHistoryEnabled)
+
+    #expect(AppPreferences(dictationCapsuleDock: dock).dictationCapsuleDock == .bottom)
+
+    var assigned = AppPreferences()
+    assigned.dictationCapsuleDock = dock
+    #expect(assigned.dictationCapsuleDock == .bottom)
+    let roundTrip = try JSONDecoder().decode(
+      AppPreferences.self,
+      from: JSONEncoder().encode(assigned)
+    )
+    #expect(roundTrip.dictationCapsuleDock == .bottom)
+  }
 }
 
 @Test func dictationShortcutGuideDefaultsVisibleAndPersistsDismissal() throws {

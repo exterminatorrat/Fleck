@@ -708,7 +708,7 @@
             } label: {
               Image(systemName: "xmark")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(FleckQuietButtonStyle())
             .accessibilityLabel("Dismiss search")
             .help("Dismiss search")
             .onKeyPress(.upArrow) {
@@ -824,12 +824,7 @@
         }
         .padding(12)
         .frame(maxWidth: 360, alignment: .leading)
-        .background {
-          RoundedRectangle(cornerRadius: 10)
-            .fill(.regularMaterial)
-            .accessibilityHidden(true)
-            .allowsHitTesting(false)
-        }
+        .fleckThemedSurface(cornerRadius: 10)
         .overlay {
           RoundedRectangle(cornerRadius: 10)
             .strokeBorder(.quaternary)

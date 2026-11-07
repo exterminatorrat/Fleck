@@ -51,14 +51,24 @@ struct FormattingToolbarHoverTests {
 
     #expect(field.contains(".textFieldStyle(.plain)"))
     #expect(field.contains(".focusEffectDisabled()"))
+    #expect(field.contains(".multilineTextAlignment(.center)"))
+    #expect(field.contains(".monospacedDigit()"))
+    #expect(field.contains(".frame(width: 48)"))
     #expect(field.contains(".focused($isFontSizeFocused)"))
-    #expect(field.contains(".fleckNeutralControlOutline("))
-    #expect(field.contains("isFocused: isFontSizeFocused"))
-    #expect(field.contains("idleOpacity: 0.22"))
+    #expect(field.contains(".overlay(alignment: .bottom)"))
+    #expect(field.contains("isFontSizeFocused"))
+    #expect(field.contains("theme.color(.accent)"))
+    #expect(field.contains("isFontSizeHovered ? Color.primary.opacity(0.22) : .clear"))
+    #expect(field.contains(".onHover { isFontSizeHovered = $0 }"))
+    #expect(!field.contains(".fleckNeutralControlOutline("))
+    #expect(!field.contains(".border("))
+    #expect(field.contains(".accessibilityLabel(\"Font size\")"))
     #expect(!field.contains(".textFieldStyle(.roundedBorder)"))
     #expect(field.contains(".onSubmit { applyFontSizeText(targetNoteID: targetNoteID) }"))
     #expect(field.contains("if wasFocused && !isFocused {"))
     #expect(field.contains("applyFontSizeText(targetNoteID: targetNoteID)"))
+    #expect(field.contains(".accessibilityValue(commands.isFontSizeMixed ? \"Mixed\" : fontSizeDisplay)"))
+    #expect(field.contains(".accessibilityHint(\"Enter a size from 1 through 512 points.\")"))
   }
 
   private func notesPanelSource() throws -> String {

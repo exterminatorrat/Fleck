@@ -91,8 +91,8 @@ if [[ ! -x "$open_path" || ! -x "$sample_path" || ! -x "$codesign_path" ]]; then
   exit 1
 fi
 if [[ ! "$host_watchdog_seconds" =~ ^[1-9][0-9]{0,3}$ ]] ||
-  (( host_watchdog_seconds > 2700 )); then
-  printf '%s\n' 'error: AppKit test host watchdog interval must be between 1 and 2700 seconds' >&2
+  (( host_watchdog_seconds > 4800 )); then
+  printf '%s\n' 'error: AppKit test host watchdog interval must be between 1 and 4800 seconds' >&2
   exit 1
 fi
 
@@ -549,7 +549,7 @@ cat > "$expected_host_contents/Info.plist" <<'PLIST'
   <key>LSUIElement</key>
   <false/>
   <key>NSPrincipalClass</key>
-  <string>NSApplication</string>
+  <string>AppKitTestProbeApplication</string>
 </dict>
 </plist>
 PLIST

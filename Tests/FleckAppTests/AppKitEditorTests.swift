@@ -2775,7 +2775,10 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
         fontPickerAccessibilityElements(host, label: $0.label).isEmpty
       })
       if width == 1_600 {
-        #expect(visibleCount == iconMenus.count)
+        #expect(
+          visibleCount == iconMenus.count,
+          "profile=\(profile.label) requested=\(width) host=\(host.bounds.size) content=\(window.contentView?.bounds.size ?? .zero) formatting=\(state.preferences.showFormattingBar) selected=\(state.selectedNote != nil) present=\(iconMenus.filter { !fontPickerAccessibilityElements(host, label: $0.label).isEmpty }.map(\.label))"
+        )
         #expect(fontPickerAccessibilityElements(host, label: "More formatting").isEmpty)
       } else {
         #expect(fontPickerAccessibilityElements(host, label: "More formatting").count == 1)
@@ -2822,14 +2825,11 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
   ]
   let fullLabels = leadingLabels + ["Delete"]
   func accessibilitySnapshot() -> [String: [NSObject]] {
-    let labelSelector = NSSelectorFromString("accessibilityLabel")
     let childrenSelector = NSSelectorFromString("accessibilityChildren")
     var elementsByLabel: [String: [NSObject]] = [:]
     func collect(_ value: Any) {
       guard let element = value as? NSObject else { return }
-      if element.responds(to: labelSelector),
-        let label = element.perform(labelSelector)?.takeUnretainedValue() as? String
-      {
+      if let label = hostedAccessibilityLabel(element) {
         elementsByLabel[label, default: []].append(element)
       }
       let children = element.responds(to: childrenSelector)
@@ -2851,7 +2851,10 @@ private func temporaryForegroundColor(in textView: NSTextView, at index: Int) ->
       .insetBy(dx: -1, dy: -1)
     for label in labels {
       let controls = snapshot[label] ?? []
-      #expect(controls.count == 1)
+      #expect(
+        controls.count == 1,
+        "label=\(label) requested=\(panelWidth) host=\(host.bounds.size) content=\(contentView.bounds.size) labels=\(snapshot.keys.sorted())"
+      )
       let control = try #require(controls.first)
       let frame = try #require(
         control.value(forKey: "accessibilityFrame") as? NSValue
@@ -3307,7 +3310,10 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
     previousCount = count
     width -= 1
   }
-  let measuredTransition = try #require(transition)
+  let measuredTransition = try #require(
+    transition,
+    "startingWidth=\(startingWidth) startingPrefix=\(startingCount) finalWidth=\(width) finalPrefix=\(previousCount)"
+  )
   await setWidth(measuredTransition.upper)
   let measuredUpperCount = visibleCount()
   await setWidth(measuredTransition.lower)
@@ -3390,7 +3396,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   await setWidth(measuredTransition.upper)
   let directSize = try #require(
     hostedDescendants(in: host, as: NSTextField.self).first {
-      $0.accessibilityLabel() == "Font size"
+      hostedTextFieldMatches($0, label: "Font size")
     }
   )
   #expect(window.makeFirstResponder(directSize))
@@ -3402,7 +3408,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   await setWidth(measuredTransition.lower)
   let transitionedSize = try #require(
     hostedDescendants(in: host, as: NSTextField.self).first {
-      $0.accessibilityLabel() == "Font size"
+      hostedTextFieldMatches($0, label: "Font size")
     }
   )
   #expect(transitionedSize.stringValue == "123")
@@ -3456,7 +3462,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   await settleHostedView(host)
   #expect(window.contentView?.bounds.width == 380)
   #expect(hostedDescendants(in: host, as: NSTextField.self).allSatisfy {
-    $0.accessibilityLabel() != "Font size" && $0.placeholderString != "Font size"
+    !hostedTextFieldMatches($0, label: "Font size")
   })
 
   let editor = try #require(hostedPanelEditor(in: host))
@@ -3479,7 +3485,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   #expect(window.contentView?.bounds.width == 800)
   let field = try #require(
     hostedDescendants(in: host, as: NSTextField.self).first {
-      $0.accessibilityLabel() == "Font size" || $0.placeholderString == "Font size"
+      hostedTextFieldMatches($0, label: "Font size")
     }
   )
   #expect(field.stringValue == "28")
@@ -3541,7 +3547,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   await settleHostedView(host)
   #expect(window.contentView?.bounds.width == 380)
   #expect(hostedDescendants(in: host, as: NSTextField.self).allSatisfy {
-    $0.accessibilityLabel() != "Font size" && $0.placeholderString != "Font size"
+    !hostedTextFieldMatches($0, label: "Font size")
   })
 
   let editor = try #require(hostedPanelEditor(in: host))
@@ -3565,7 +3571,7 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   #expect(window.contentView?.bounds.width == 800)
   let field = try #require(
     hostedDescendants(in: host, as: NSTextField.self).first {
-      $0.accessibilityLabel() == "Font size" || $0.placeholderString == "Font size"
+      hostedTextFieldMatches($0, label: "Font size")
     }
   )
   #expect(field.stringValue.isEmpty)
@@ -3652,6 +3658,194 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
     let row = try #require(visibleAccessibilityElement(label: label, owner: window))
     #expect(hostedAccessibilityValue(row) == expectedValue)
   }
+}
+
+@Test(arguments: [800.0, 380.0]) @MainActor
+func toolbarFontSizeNativePromptAndEditLifecycle(width: Double) async throws {
+  let previousAXEnhancedUserInterface = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let attributedText = NSMutableAttributedString(
+    string: "SmallLarge",
+    attributes: [.font: NSFont.systemFont(ofSize: 14)]
+  )
+  attributedText.addAttribute(
+    .font, value: NSFont.systemFont(ofSize: 28), range: NSRange(location: 5, length: 5)
+  )
+  let rtf = try attributedText.data(
+    from: NSRange(location: 0, length: attributedText.length),
+    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+  )
+  let note = Note(title: "Font size lifecycle", body: "SmallLarge", richTextRTF: rtf)
+  let state = await hostedPanelState(
+    root: root, workspace: Workspace(notes: [note], selectedNoteID: note.id, folders: [])
+  )
+  state.updatePreferences {
+    $0.panelWidth = width
+    $0.uiFontFamily = "Menlo"
+  }
+  let commands = EditorCommands()
+  let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+  defer {
+    for child in window.childWindows ?? [] { child.orderOut(nil) }
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+  window.setContentSize(NSSize(width: width, height: 430))
+  await settleHostedView(host)
+  let editor = try #require(hostedPanelEditor(in: host))
+  let storage = try #require(editor.textStorage)
+
+  @MainActor
+  func presentedField() async throws -> NSTextField {
+    if visibleHostedTextFields(label: "Font size", as: NSTextField.self, owner: window).isEmpty {
+      #expect(width == 380)
+      try await pressHostedToolbarAction("Font Size", in: host)
+      await settleHostedView(host)
+    }
+    let field = try #require(
+      visibleHostedTextFields(label: "Font size", as: NSTextField.self, owner: window).first
+    )
+    let fieldWindow = try #require(field.window)
+    #expect((fieldWindow === window) == (width == 800))
+    #expect(ownedWindowTree(window).contains { $0 === fieldWindow })
+    let alignmentRect = field.alignmentRect(forFrame: field.frame)
+    #expect(abs(alignmentRect.width - 48) < 0.5)
+    #expect(field.alignment == .center)
+    #expect(field.font?.familyName == "Menlo")
+    return field
+  }
+
+  @MainActor
+  func finishEditing(_ field: NSTextField) async throws {
+    if width == 380 {
+      let more = try #require(fontPickerAccessibilityElement(host, label: "More formatting"))
+      window.makeKeyAndOrderFront(nil)
+      try sendHostedAccessibilityPress(more, to: window)
+      await settleHostedView(host)
+      #expect(visibleHostedTextFields(label: "Font size", as: NSTextField.self, owner: window).isEmpty)
+      if visibleAccessibilityElement(label: "Font Size", owner: window) != nil {
+        let expandedMore = try #require(
+          fontPickerAccessibilityElement(host, label: "More formatting")
+        )
+        try sendHostedAccessibilityPress(expandedMore, to: window)
+        await settleHostedView(host)
+      }
+    } else {
+      #expect(window.makeFirstResponder(editor))
+      await settleHostedView(host)
+      #expect(field.currentEditor() == nil)
+    }
+  }
+
+  @MainActor
+  func replaceFieldText(_ value: String) async throws -> NSTextField {
+    let field = try await presentedField()
+    let fieldWindow = try #require(field.window)
+    fieldWindow.makeKeyAndOrderFront(nil)
+    #expect(fieldWindow.makeFirstResponder(field))
+    await settleHostedView(host)
+    let fieldEditor = try #require(field.currentEditor() as? NSTextView)
+    fieldEditor.insertText(
+      value, replacementRange: NSRange(location: 0, length: fieldEditor.string.utf16.count)
+    )
+    await settleHostedView(host)
+    #expect(fieldEditor.string == value)
+    return field
+  }
+
+  @MainActor
+  func accessibilityValue() throws -> String? {
+    let element = try #require(visibleAccessibilityElement(label: "Font size", owner: window))
+    return hostedAccessibilityValue(element)
+  }
+
+  #expect(window.makeFirstResponder(editor))
+  editor.setSelectedRange(NSRange(location: 5, length: 5))
+  commands.refreshFormattingState()
+  await settleHostedView(host)
+  if width == 380 {
+    #expect(visibleHostedTextFields(label: "Font size", as: NSTextField.self, owner: window).isEmpty)
+  }
+  var field = try await presentedField()
+  #expect(field.stringValue == "28")
+  let fieldWindow = try #require(field.window)
+  fieldWindow.makeKeyAndOrderFront(nil)
+  #expect(fieldWindow.makeFirstResponder(field))
+  await settleHostedView(host)
+  let unchangedEditor = try #require(field.currentEditor() as? NSTextView)
+  #expect(unchangedEditor.string == "28")
+  if width == 380 {
+    try await finishEditing(field)
+    window.makeKeyAndOrderFront(nil)
+    #expect(window.makeFirstResponder(editor))
+  }
+  editor.setSelectedRange(NSRange(location: 0, length: 10))
+  commands.refreshFormattingState()
+  await settleHostedView(host)
+  #expect(commands.isFontSizeMixed)
+  if width == 800 {
+    #expect(unchangedEditor.string == "28")
+    try await finishEditing(field)
+  }
+  field = try await presentedField()
+  #expect(field.stringValue.isEmpty)
+  #expect(editor.selectedRange() == NSRange(location: 0, length: 10))
+  #expect((storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize == 14)
+  #expect((storage.attribute(.font, at: 5, effectiveRange: nil) as? NSFont)?.pointSize == 28)
+
+  let cell = try #require(field.cell as? NSTextFieldCell)
+  let fieldFont = try #require(field.font)
+  let placeholder = cell.placeholderAttributedString
+    ?? NSAttributedString(string: cell.placeholderString ?? "", attributes: [.font: fieldFont])
+  #expect(placeholder.string == "Mixed")
+  let textRect = cell.titleRect(forBounds: field.bounds)
+  #expect(placeholder.size().width <= textRect.width + 0.5)
+  #expect(placeholder.size().height <= textRect.height + 0.5)
+  #expect(try accessibilityValue() == "Mixed")
+  let mixedWindow = try #require(field.window)
+  #expect(mixedWindow.makeFirstResponder(field))
+  await settleHostedView(host)
+  #expect((field.currentEditor() as? NSTextView)?.string.isEmpty == true)
+  try await finishEditing(field)
+  field = try await presentedField()
+  #expect(commands.isFontSizeMixed && field.stringValue.isEmpty)
+  #expect((storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize == 14)
+  #expect((storage.attribute(.font, at: 5, effectiveRange: nil) as? NSFont)?.pointSize == 28)
+
+  for invalid in ["0", "513", "nan", "not a number", ""] {
+    field = try await replaceFieldText(invalid)
+    try await finishEditing(field)
+    field = try await presentedField()
+    #expect(field.stringValue.isEmpty && commands.isFontSizeMixed)
+    #expect(editor.selectedRange() == NSRange(location: 0, length: 10))
+    #expect((storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize == 14)
+    #expect((storage.attribute(.font, at: 5, effectiveRange: nil) as? NSFont)?.pointSize == 28)
+    #expect(try accessibilityValue() == "Mixed")
+  }
+
+  field = try await replaceFieldText("24")
+  try await finishEditing(field)
+  field = try await presentedField()
+  #expect(field.stringValue == "24" && !commands.isFontSizeMixed)
+  #expect(editor.selectedRange() == NSRange(location: 0, length: 10))
+  #expect((storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize == 24)
+  #expect((storage.attribute(.font, at: 5, effectiveRange: nil) as? NSFont)?.pointSize == 24)
+  #expect(try accessibilityValue() == "24")
+
+  field = try await replaceFieldText("20")
+  let submitWindow = try #require(field.window)
+  try sendHostedKeyDown("\r", keyCode: 36, to: submitWindow)
+  await settleHostedView(host)
+  #expect(field.stringValue == "20" && commands.currentFontSize == 20)
+  #expect(editor.selectedRange() == NSRange(location: 0, length: 10))
+  #expect((storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize == 20)
+  #expect((storage.attribute(.font, at: 5, effectiveRange: nil) as? NSFont)?.pointSize == 20)
+  #expect(try accessibilityValue() == "20")
+  try await finishEditing(field)
+  field = try await presentedField()
+  #expect(field.stringValue == "20" && commands.currentFontSize == 20)
 }
 
 @Test func formattingBarCanAlwaysBeCollapsedAndRestoredFromTheHeader() throws {
@@ -3741,27 +3935,20 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
 
 @Test func folderCreationPolishUsesSmoothMotionAndFleckPills() throws {
   let source = try notesPanelSource()
-  let navigator = try #require(
-    source.components(separatedBy: "private struct FolderNavigator").last
-  )
+  let navigatorStart = try #require(source.range(of: "private struct FolderNavigator: View"))
+  let navigator = String(source[navigatorStart.lowerBound...])
   let bodyStart = try #require(navigator.range(of: "var body: some View"))
   let rootDefinition = try #require(navigator.range(of: "private var rootRow"))
   let body = String(navigator[bodyStart.upperBound..<rootDefinition.lowerBound])
-  let editor = navigator
-    .components(separatedBy: "@ViewBuilder\n    private func folderEditor")
-    .dropFirst()
-    .first ?? ""
-  let styleTail = navigator
-    .components(separatedBy: "private struct FolderActionButtonStyle: ButtonStyle")
-    .dropFirst()
-    .first ?? ""
-  let style = styleTail
-    .components(separatedBy: "@ViewBuilder\n    private func folderEditor")
-    .first ?? styleTail
+  let composerStart = try #require(navigator.range(of: "private var folderComposer: some View"))
+  let fieldStart = try #require(navigator.range(of: "private struct NativeFolderNameField"))
+  let trashStart = try #require(navigator.range(of: "private var trashRow: some View"))
+  let editorStart = try #require(navigator.range(of: "private func folderEditor("))
+  let rowLabelStart = try #require(navigator.range(of: "private func rowLabel("))
+  let composer = String(navigator[composerStart.lowerBound..<fieldStart.lowerBound])
+  let field = String(navigator[fieldStart.lowerBound..<trashStart.lowerBound])
+  let editor = String(navigator[editorStart.lowerBound..<rowLabelStart.lowerBound])
   let normalizedNavigator = navigator
-    .split(whereSeparator: \.isWhitespace)
-    .joined(separator: " ")
-  let normalizedEditor = editor
     .split(whereSeparator: \.isWhitespace)
     .joined(separator: " ")
 
@@ -3777,53 +3964,50 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
   #expect(navigator.contains("if reduceMotion { return .opacity.animation(motion.state) }"))
   #expect(!body.contains(".animation(motion.spatial, value: isCreatingFolder)"))
 
-  #expect(editor.contains("let accent = theme.color(.accent)"))
-  #expect(
-    normalizedEditor.contains(
-      ".buttonStyle(FolderActionButtonStyle(role: .save, accent: accent, motion: motion))"
-    )
-  )
-  #expect(
-    normalizedEditor.contains(
-      ".buttonStyle(FolderActionButtonStyle(role: .cancel, accent: accent, motion: motion))"
-    )
-  )
-  #expect(editor.contains("Button(\"Save\")"))
-  #expect(editor.contains("Button(\"Cancel\", role: .cancel)"))
-  #expect(editor.contains("Save folder name"))
-  #expect(editor.contains("Cancel folder name"))
+  #expect(composer.contains("beginNewFolder(source: currentInteractionSource)"))
+  #expect(composer.contains("NativeFolderNameField("))
+  #expect(composer.contains("isEditing: $isNewFolderTextEditing"))
+  #expect(composer.contains("onSubmit: { commitFolderEditing(source: .keyboard) }"))
+  #expect(composer.contains("onCancel: { cancelFolderEditing(source: .keyboard) }"))
+  #expect(composer.contains("commitFolderEditing(source: currentInteractionSource)"))
+  #expect(composer.contains("cancelFolderEditing(source: currentInteractionSource)"))
+  #expect(composer.contains("Image(systemName: \"checkmark\")"))
+  #expect(composer.contains("Image(systemName: \"xmark\")"))
+  #expect(composer.contains(".frame(width: 24, height: 24)"))
+  #expect(composer.contains(".buttonStyle(.plain)"))
+  #expect(composer.contains(".disabled(trimmedFolderName.isEmpty)"))
+  #expect(composer.contains(".accessibilityLabel(\"Create folder\")"))
+  #expect(composer.contains(".accessibilityLabel(\"Cancel new folder\")"))
 
-  #expect(style.contains("enum Role: Equatable"))
-  #expect(style.contains("let role: Role"))
-  #expect(style.contains("let accent: Color"))
-  #expect(style.contains("let motion: AppMotion"))
-  #expect(style.contains("@Environment(\\.isEnabled) private var isEnabled"))
-  #expect(style.contains(".font(.caption.weight(isSave ? .semibold : .medium))"))
-  #expect(style.contains(".padding(.horizontal, 8)"))
-  #expect(style.contains(".frame(height: 22)"))
-  #expect(
-    style.contains("RoundedRectangle(cornerRadius: 6, style: .continuous)")
-  )
-  #expect(style.contains("accent.opacity(configuration.isPressed ? 0.24 : 0.16)"))
-  #expect(
-    style.contains(
-      "Color.primary.opacity(configuration.isPressed ? 0.10 : 0.06)"
-    )
-  )
-  #expect(
-    style.contains(
-      ".scaleEffect(isEnabled && configuration.isPressed ? motion.pressScale : 1)"
-    )
-  )
-  #expect(style.contains(".opacity(isEnabled ? 1 : 0.48)"))
-  #expect(style.contains(".animation(motion.quick, value: configuration.isPressed)"))
-  #expect(editor.contains("folderNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty"))
-  #expect(!style.contains("Image(systemName:"))
-  #expect(!style.lowercased().contains("material"))
-  #expect(!style.lowercased().contains("gradient"))
-  #expect(!style.lowercased().contains("shadow"))
-  #expect(!style.lowercased().contains("outline"))
-  #expect(!style.lowercased().contains("stroke"))
+  #expect(editor.contains("NativeFolderNameField("))
+  #expect(editor.contains("isEditing: $isRenamingFolderTextEditing"))
+  #expect(editor.contains("placeholder: label"))
+  #expect(editor.contains("accessibilityIdentifier: accessibilityIdentifier"))
+  #expect(editor.contains("focusRequest: renameFocusRequest"))
+  #expect(editor.contains("onSubmit: { commitFolderEditing() }"))
+  #expect(editor.contains("onCancel: { cancelFolderEditing() }"))
+  #expect(editor.contains(".fixedSize(horizontal: true, vertical: false)"))
+
+  #expect(field.contains("field.isBezeled = false"))
+  #expect(field.contains("field.drawsBackground = false"))
+  #expect(field.contains("field.focusRingType = .none"))
+  #expect(field.contains("field.setAccessibilityIdentifier(accessibilityIdentifier)"))
+  #expect(field.contains("field.delegate = context.coordinator"))
+  #expect(field.contains("case #selector(NSResponder.insertNewline(_:))"))
+  #expect(field.contains("case #selector(NSResponder.cancelOperation(_:))"))
+  #expect(field.components(separatedBy: "guard !textView.hasMarkedText() else { return false }").count == 3)
+  #expect(field.contains("onSubmit()"))
+  #expect(field.contains("onCancel()"))
+  #expect(field.contains("guard !hasFocused else { return }"))
+  #expect(field.contains("self.isActive, self.focusGeneration == generation, field.window != nil"))
+  #expect(field.contains("self.hasFocused = field.window?.makeFirstResponder(field) == true"))
+  #expect(field.contains("window?.firstResponder === editor"))
+  #expect(field.contains("coordinator.focusGeneration &+= 1"))
+  #expect(field.contains("field.onOwnershipChange = nil"))
+  #expect(field.contains("cell.font = font"))
+  #expect(field.contains("let caretRoom: CGFloat = 2"))
+  #expect(navigator.contains("@Environment(\\.fleckUIFont) private var uiFont"))
+  #expect(navigator.contains(".font(uiFont.font(.caption).monospacedDigit())"))
 }
 
 @Test func folderNoteDropTargetsDoNotNavigateOrSpringOpen() throws {
@@ -3949,10 +4133,14 @@ func ownedWindowFindShortcutsDispatchExactlyOnceAndRespectEveryEditorGuard() asy
     navigator.components(separatedBy: "private var rootRow").last?
       .components(separatedBy: "@ViewBuilder\n    private func folderRow").first
   )
-  let folderRow = try #require(
-    navigator.components(separatedBy: "private func folderRow").last?
-      .components(separatedBy: "private struct FolderActionButtonStyle").first
+  let folderRowStart = try #require(navigator.range(of: "private func folderRow("))
+  let folderEditorStart = try #require(
+    navigator.range(
+      of: "private func folderEditor(",
+      range: folderRowStart.upperBound..<navigator.endIndex
+    )
   )
+  let folderRow = String(navigator[folderRowStart.lowerBound..<folderEditorStart.lowerBound])
   let rowLabel = try #require(
     navigator.components(separatedBy: "private func rowLabel").last?
       .components(separatedBy: "private func noteDropDelegate").first
@@ -5248,10 +5436,14 @@ private func withHostedTitleEditors(
     navigator.components(separatedBy: "private var rootRow").last?
       .components(separatedBy: "@ViewBuilder\n    private func folderRow").first
   )
-  let folderRow = try #require(
-    navigator.components(separatedBy: "private func folderRow").last?
-      .components(separatedBy: "private struct FolderActionButtonStyle").first
+  let folderRowStart = try #require(navigator.range(of: "private func folderRow("))
+  let folderEditorStart = try #require(
+    navigator.range(
+      of: "private func folderEditor(",
+      range: folderRowStart.upperBound..<navigator.endIndex
+    )
   )
+  let folderRow = String(navigator[folderRowStart.lowerBound..<folderEditorStart.lowerBound])
   #expect(rowLabelBody.contains("RoundedRectangle(cornerRadius: 6)"))
   #expect(rowLabelBody.contains("isSelected ? theme.color(.selectionFill) : .clear"))
   #expect(rootRow.contains("isFocused: focusedRow == .unfiled"))
@@ -5278,6 +5470,8 @@ private func withHostedTitleEditors(
 }
 
 @Test @MainActor func hostedUnfiledDisclosureKeepsFolderToolbarFramesStable() async throws {
+  let previousNavigatorAccessibility = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousNavigatorAccessibility) }
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)
   defer { try? FileManager.default.removeItem(at: root) }
@@ -5310,7 +5504,7 @@ private func withHostedTitleEditors(
   await settleHostedView(host)
 
   let before = hostedNavigatorKeyViewFrames(in: host)
-  let beforeFolderFrame = try #require(hostedSchoolFolderFrame(in: host))
+  let beforeFolderFrame = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
   let beforeHostSize = host.bounds.size
   let beforeEditorFrame = host.convert(editor.bounds, from: editor)
   let unfiledControl = try #require(hostedNavigatorKeyViews(in: host).first)
@@ -5323,7 +5517,7 @@ private func withHostedTitleEditors(
   #expect(window.makeFirstResponder(unfiledControl))
   await settleHostedView(host)
   let focused = hostedNavigatorKeyViewFrames(in: host)
-  let focusedFolderFrame = try #require(hostedSchoolFolderFrame(in: host))
+  let focusedFolderFrame = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
 
   #expect(state.preferences.isUnfiledCompact)
   #expect(focused.count == before.count)
@@ -5338,10 +5532,10 @@ private func withHostedTitleEditors(
     to: window
   )
   forceHostedViewUpdate(host)
-  let expandingFolderFrame = try #require(hostedSchoolFolderFrame(in: host))
+  let expandingFolderFrame = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
   try await Task.sleep(for: .milliseconds(300))
   await settleHostedView(host)
-  let expandedFolderFrame = try #require(hostedSchoolFolderFrame(in: host))
+  let expandedFolderFrame = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
 
   #expect(!state.preferences.isUnfiledCompact)
   #expect(expandingFolderFrame == expandedFolderFrame)
@@ -5445,6 +5639,88 @@ private func withHostedTitleEditors(
     await settleHostedView(host)
     #expect(state.workspace.selectedNoteID == folderNote.id)
   }
+}
+
+@Test @MainActor func hostedFolderRowAssociationDistinguishesVisualAndFocusLayers() async throws {
+  let previousNavigatorAccessibility = enableHostedAccessibility()
+  defer { restoreHostedAccessibility(previousNavigatorAccessibility) }
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let folder = try Folder(id: UUID(), name: "School")
+  let unfiledNote = Note(title: "Unfiled", body: "Body")
+  let filedNote = Note(title: "Filed", body: "Body", folderID: folder.id)
+  let state = await hostedPanelState(
+    root: root,
+    workspace: Workspace(
+      notes: [unfiledNote, filedNote],
+      selectedNoteID: unfiledNote.id,
+      folders: [folder]
+    )
+  )
+  let (window, host) = hostedPanel(root: root, state: state, commands: EditorCommands())
+  defer {
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+  await settleHostedView(host)
+  let identifier = "folder-\(folder.id.uuidString)"
+  let elements = hostedAccessibilityElements(in: host, identifier: identifier)
+  try #require(elements.count == 1)
+  let screenFrame = try #require(elements[0].value(forKey: "accessibilityFrame") as? NSValue)
+    .rectValue
+  let ownerFrame = host.convert(window.convertFromScreen(screenFrame), from: nil)
+  let candidates = hostedNavigatorKeyViews(in: host)
+  let visualRows = try #require(
+    hostedNavigatorVisualKeyViews(
+      ownerFrame: ownerFrame, candidates: candidates, in: host, isUnfiled: false
+    )
+  )
+  try #require(visualRows.count == 1)
+  let visual = visualRows[0]
+  let visualFrame = visual.convert(visual.bounds, to: host)
+  #expect(ownerFrame.contains(visualFrame))
+  #expect(visualFrame != ownerFrame)
+  #expect(hostedNavigatorKeyView(matchingAccessibilityIdentifier: identifier, in: host) === visual)
+
+  let owners = candidates.filter { $0.convert($0.bounds, to: host) == ownerFrame }
+  try #require(owners.count == 1)
+  #expect(
+    hostedNavigatorVisualKeyViews(
+      ownerFrame: ownerFrame, candidates: candidates.filter { $0 !== owners[0] },
+      in: host, isUnfiled: false
+    ) == nil
+  )
+  #expect(
+    hostedNavigatorVisualKeyViews(
+      ownerFrame: ownerFrame, candidates: candidates + [owners[0]], in: host, isUnfiled: false
+    ) == nil
+  )
+  #expect(
+    hostedNavigatorVisualKeyViews(
+      ownerFrame: ownerFrame, candidates: candidates.filter { $0 !== visual },
+      in: host, isUnfiled: false
+    ) == nil
+  )
+  let visualParent = try #require(visual.superview)
+  let conflictingVisual = NSView(frame: visual.frame.insetBy(dx: 1, dy: 1))
+  visualParent.addSubview(conflictingVisual)
+  defer { conflictingVisual.removeFromSuperview() }
+  #expect(conflictingVisual.convert(conflictingVisual.bounds, to: host) != visualFrame)
+  #expect(
+    hostedNavigatorVisualKeyViews(
+      ownerFrame: ownerFrame, candidates: candidates + [conflictingVisual],
+      in: host, isUnfiled: false
+    ) == nil
+  )
+  let unexplained = NSView(frame: ownerFrame.insetBy(dx: 1, dy: 1))
+  host.addSubview(unexplained)
+  defer { unexplained.removeFromSuperview() }
+  #expect(
+    hostedNavigatorVisualKeyViews(
+      ownerFrame: ownerFrame, candidates: candidates + [unexplained], in: host, isUnfiled: false
+    ) == nil
+  )
 }
 
 private struct HostedSelectionPillGeometry {
@@ -6252,8 +6528,12 @@ private func hostedNavigatorKeyViewFrames(in view: NSView) -> [CGRect] {
 }
 
 @MainActor
-private func hostedSchoolFolderFrame(in view: NSView) -> CGRect? {
-  hostedNavigatorKeyViewFrames(in: view).first { abs($0.width - 108) < 0.5 }
+private func hostedSchoolFolderFrame(folderID: UUID, in view: NSView) -> CGRect? {
+  guard let row = hostedNavigatorKeyView(
+    matchingAccessibilityIdentifier: "folder-\(folderID.uuidString)",
+    in: view
+  ) else { return nil }
+  return row.convert(row.bounds, to: view)
 }
 
 @MainActor
@@ -6314,15 +6594,75 @@ private func hostedNavigatorKeyView(
     return window.convertToScreen(windowFrame)
   }
   let accessibilityCenter = CGPoint(x: screenFrame.midX, y: screenFrame.midY)
-  let matchingKeyViews = zip(keyViews, candidateScreenFrames).filter {
+  let overlappingKeyViews = zip(keyViews, candidateScreenFrames).filter {
     $0.1.contains(accessibilityCenter)
   }.map(\.0)
+  #expect(!overlappingKeyViews.isEmpty)
+  let ownerFrame = view.convert(window.convertFromScreen(screenFrame), from: nil)
+  let associatedKeyViews = hostedNavigatorVisualKeyViews(
+    ownerFrame: ownerFrame,
+    candidates: keyViews,
+    in: view,
+    isUnfiled: identifier == "folder-unfiled"
+  )
+  #expect(associatedKeyViews != nil)
+  guard let matchingKeyViews = associatedKeyViews else { return nil }
   #expect(!matchingKeyViews.isEmpty)
-  guard let matchingKeyView = matchingKeyViews.first else { return nil }
+  guard !matchingKeyViews.isEmpty else { return nil }
+  let matchingKeyView = matchingKeyViews[0]
   let matchingFrames = matchingKeyViews.map { $0.convert($0.bounds, to: view) }
   let matchingFrame = matchingKeyView.convert(matchingKeyView.bounds, to: view)
   #expect(matchingFrames.allSatisfy { $0 == matchingFrame })
   return matchingKeyView
+}
+
+@MainActor
+private func hostedNavigatorVisualKeyViews(
+  ownerFrame: CGRect,
+  candidates: [NSView],
+  in host: NSView,
+  isUnfiled: Bool
+) -> [NSView]? {
+  guard let window = host.window, !ownerFrame.isEmpty else { return nil }
+  let center = NSPoint(x: ownerFrame.midX, y: ownerFrame.midY)
+  let overlapping = candidates.filter {
+    $0.convert($0.bounds, to: host).contains(center)
+  }
+  guard !overlapping.isEmpty,
+    overlapping.allSatisfy({
+      $0.window === window && !$0.isHiddenOrHasHiddenAncestor && $0.isDescendant(of: host)
+    })
+  else { return nil }
+  let roles = overlapping.map { candidate in
+    (
+      view: candidate,
+      frame: candidate.convert(candidate.bounds, to: host),
+      contentHosts: sequence(first: candidate, next: { $0 === host ? nil : $0.superview })
+        .dropFirst()
+        .compactMap { $0 as? ReorderSourceHostingView }
+    )
+  }
+  if isUnfiled {
+    guard roles.allSatisfy({ $0.contentHosts.isEmpty && $0.frame == ownerFrame }) else { return nil }
+    return roles.map(\.view)
+  }
+  let owners = roles.filter { $0.contentHosts.isEmpty && $0.frame == ownerFrame }
+  let visualRows = roles.filter { $0.contentHosts.count == 1 }
+  guard owners.count == 1, visualRows.count == 1, roles.count == 2 else { return nil }
+  let owner = owners[0].view
+  let visualRow = visualRows[0]
+  let contentHost = visualRow.contentHosts[0]
+  let contentFrame = contentHost.convert(contentHost.bounds, to: host)
+  guard let scroll = owner.enclosingScrollView,
+    contentHost.enclosingScrollView === scroll,
+    ownerFrame.contains(contentFrame),
+    contentFrame.contains(visualRow.frame),
+    ownerFrame.contains(visualRow.frame),
+    visualRow.frame.minX == ownerFrame.minX,
+    visualRow.frame.maxX == ownerFrame.maxX,
+    visualRow.frame.midY == ownerFrame.midY
+  else { return nil }
+  return [visualRow.view]
 }
 
 @MainActor
@@ -6859,14 +7199,24 @@ private func sendHostedKeyDown(
   }
 }
 
+@MainActor
+private func hostedAccessibilityLabel(_ element: NSObject) -> String? {
+  for attribute in ["accessibilityLabel", "accessibilityTitle"] {
+    let selector = NSSelectorFromString(attribute)
+    guard element.responds(to: selector),
+      let value = element.perform(selector)?.takeUnretainedValue()
+    else { continue }
+    if let text = value as? String, !text.isEmpty { return text }
+    if let text = value as? NSAttributedString, !text.string.isEmpty { return text.string }
+  }
+  return nil
+}
+
 // SwiftUI accessibility nodes expose the informal AppKit API, not NSAccessibilityProtocol.
 @MainActor private func fontPickerAccessibilityElement(_ value: Any, label: String) -> NSObject? {
   guard let element = value as? NSObject else { return nil }
-  let labelSelector = NSSelectorFromString("accessibilityLabel")
   let childrenSelector = NSSelectorFromString("accessibilityChildren")
-  let name = element.responds(to: labelSelector)
-    ? element.perform(labelSelector)?.takeUnretainedValue() as? String : nil
-  if name == label { return element }
+  if hostedAccessibilityLabel(element) == label { return element }
   let children = element.responds(to: childrenSelector)
     ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
   for child in children ?? [] {
@@ -6877,10 +7227,7 @@ private func sendHostedKeyDown(
 
 @MainActor private func fontPickerAccessibilityElements(_ value: Any, label: String) -> [NSObject] {
   guard let element = value as? NSObject else { return [] }
-  let labelSelector = NSSelectorFromString("accessibilityLabel")
-  let name = element.responds(to: labelSelector)
-    ? element.perform(labelSelector)?.takeUnretainedValue() as? String : nil
-  var matches = name == label ? [element] : []
+  var matches = hostedAccessibilityLabel(element) == label ? [element] : []
   let childrenSelector = NSSelectorFromString("accessibilityChildren")
   let children = element.responds(to: childrenSelector)
     ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
@@ -6960,7 +7307,7 @@ private func hostedThemeCapture(in view: NSView) throws -> NSBitmapImageRep {
 }
 
 @MainActor
-private func hostedNativeWindowCapture(_ window: NSWindow) async throws -> NSBitmapImageRep {
+func hostedNativeWindowCapture(_ window: NSWindow) async throws -> NSBitmapImageRep {
   let targetWindowID = CGWindowID(window.windowNumber)
   let clock = ContinuousClock()
   let deadline = clock.now.advanced(by: .seconds(2))
@@ -7070,8 +7417,18 @@ private func expectOneReachableFormattingActionAcrossVisibleWindows(owner: NSWin
     ["Highlight"], ["Bullets"], ["Numbers"], ["Checklist"], ["Delete"],
   ]
   for labels in actions {
-    #expect(visibleFormattingActionCount(labels: labels, owner: owner) == 1)
+    #expect(
+      visibleFormattingActionCount(labels: labels, owner: owner) == 1,
+      "labels=\(labels) ownerContent=\(owner.contentView?.bounds.size ?? .zero) visibleWindows=\(ownedWindowTree(owner).filter(\.isVisible).map(\.frame))"
+    )
   }
+}
+
+@MainActor
+private func hostedTextFieldMatches(_ field: NSTextField, label: String) -> Bool {
+  let placeholder = field.placeholderAttributedString?.string ?? field.placeholderString
+  return field.accessibilityLabel() == label || placeholder == label
+    || (label == "Font size" && (placeholder == "Size" || placeholder == "Mixed"))
 }
 
 @MainActor
@@ -7084,7 +7441,7 @@ private func visibleHostedTextFields<T: NSTextField>(
     .filter(\.isVisible)
     .compactMap(\.contentView)
     .flatMap { hostedDescendants(in: $0, as: type) }
-    .filter { $0.accessibilityLabel() == label || $0.placeholderString == label }
+    .filter { hostedTextFieldMatches($0, label: label) }
 }
 
 @MainActor

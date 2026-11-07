@@ -73,6 +73,10 @@ public enum DictationCapsuleDock: String, Codable, CaseIterable, Sendable {
   case bottom
   case left
   case right
+
+  public static var allCases: [Self] { [.bottom] }
+
+  public var supportedPlacement: Self { .bottom }
 }
 
 public struct DictationDestination: Codable, Equatable, Sendable {
@@ -126,11 +130,16 @@ public struct DictationInsertionReceipt: Equatable, Sendable {
   public let captureID: UUID
   public let noteID: UUID
   public let insertedSuffix: String
+  public let filing: DictationFilingCommit?
 
-  public init(captureID: UUID, noteID: UUID, insertedSuffix: String) {
+  public init(
+    captureID: UUID, noteID: UUID, insertedSuffix: String,
+    filing: DictationFilingCommit? = nil
+  ) {
     self.captureID = captureID
     self.noteID = noteID
     self.insertedSuffix = insertedSuffix
+    self.filing = filing
   }
 }
 

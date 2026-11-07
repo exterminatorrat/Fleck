@@ -85,17 +85,20 @@ public struct AgentProfileCapabilities: Codable, Equatable, Sendable {
   public let grantRevision: UInt64
   public let allowedCapabilities: Set<AgentCapability>
   public let grants: [AgentResourceGrant]
+  public let allowsEventObservation: Bool
 
   public init(
     profileID: UUID,
     grantRevision: UInt64,
     allowedCapabilities: Set<AgentCapability>,
-    grants: [AgentResourceGrant]
+    grants: [AgentResourceGrant],
+    allowsEventObservation: Bool = false
   ) {
     self.profileID = profileID
     self.grantRevision = grantRevision
     self.allowedCapabilities = allowedCapabilities
     self.grants = Self.sortedGrants(grants)
+    self.allowsEventObservation = allowsEventObservation
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -103,6 +106,7 @@ public struct AgentProfileCapabilities: Codable, Equatable, Sendable {
     case grantRevision
     case allowedCapabilities
     case grants
+    case allowsEventObservation
   }
 
   public init(from decoder: Decoder) throws {
@@ -115,6 +119,11 @@ public struct AgentProfileCapabilities: Codable, Equatable, Sendable {
     grants = Self.sortedGrants(
       try container.decode([AgentResourceGrant].self, forKey: .grants)
     )
+    allowsEventObservation =
+      try container.decodeIfPresent(
+        Bool.self,
+        forKey: .allowsEventObservation
+      ) ?? false
   }
 
   public func encode(to encoder: Encoder) throws {
@@ -126,6 +135,9 @@ public struct AgentProfileCapabilities: Codable, Equatable, Sendable {
       forKey: .allowedCapabilities
     )
     try container.encode(Self.sortedGrants(grants), forKey: .grants)
+    if allowsEventObservation {
+      try container.encode(true, forKey: .allowsEventObservation)
+    }
   }
 
   private static func sortedGrants(

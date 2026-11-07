@@ -96,7 +96,9 @@
       reduceTransparency: false,
       increasedContrast: false
     )
-    @Published var saveError: String?
+    @Published var saveError: String? {
+      didSet { saveErrorGeneration = UUID() }
+    }
     @Published private(set) var selectedNoteFileReferences: [NoteFileReferencePresentation] = []
     @Published private(set) var noteFileReferenceError: String?
     @Published private(set) var startupMigrationError: FleckProductMigrationError?
@@ -105,7 +107,12 @@
     @Published private(set) var trashedNotes: [TrashedNote] = []
     @Published private(set) var latestAgentFeedback: AgentChangeFeedback?
     @Published private(set) var agentProfiles: [AgentIntegrationProfile] = []
+    @Published private(set) var cursorSetupStatus = CursorSetupStatus.idle
     @Published private(set) var agentActivity: [AgentActivityRecord] = []
+    @Published private(set) var agentEventSubscriptions: [AgentEventOwnerSummary] = []
+    @Published var agentEventMonitoringError: String?
+    @Published private(set) var agentPrivateNoteIDs: Set<UUID> = []
+    @Published private(set) var agentPrivateFolderIDs: Set<UUID> = []
     @Published private(set) var agentBannerPresentation: AgentBannerPresentation?
     let agentActivityIndicator = AgentActivityIndicatorPresentation()
     @Published private(set) var isAgentConnectorInstalled = false
@@ -131,11 +138,34 @@
     let agentActivityStore: AgentActivityStore
     let agentCapabilityStore: AgentCapabilityStore
     let agentCapabilityAuthority: any AgentCapabilityAuthorizing
+    private let agentEventMonitoringRuntime: AgentEventMonitoringRuntime?
     private let agentProfileProvisionOperation: AgentProfileProvisionOperation
     private let agentProfileDisconnectOperation: AgentProfileDisconnectOperation
     private let restoreOperation: RestoreOperation
     private let replaceAgentCapabilitiesOperation:
       AgentCapabilityBatchReplaceOperation
+    private lazy var cursorSetupFlow = CursorSetupFlow(
+      prepareConnector: { [weak self] in
+        guard let self else { throw CursorSetupFlowError.unavailable }
+        return try await self.prepareCursorHelper()
+      },
+      loadActiveProfiles: { [weak self] in
+        guard let self, await self.refreshAgentProfiles() else {
+          throw CursorSetupFlowError.unavailable
+        }
+        return self.agentProfiles
+      },
+      createProfile: { [weak self] in
+        guard let self, let profile = await self.addAgentProfile(named: "Cursor") else {
+          throw CursorSetupFlowError.unavailable
+        }
+        return profile
+      },
+      openURL: { NSWorkspace.shared.open($0) },
+      statusChanged: { [weak self] status in
+        self?.cursorSetupStatus = status
+      }
+    )
     private struct NoteAccessTransactionLock {
       let ownerID: UUID
       let capturedContext: AgentNoteAccessContext
@@ -152,12 +182,14 @@
     private var smartCaptureTransferOwnerID: UUID?
     private var smartCaptureTransferWaiters: [CheckedContinuation<Void, Never>] = []
     private var pendingRestoreNoteIDs: Set<UUID> = []
+    private var privacyPolicyMutationInProgress = false
     private var debouncedSaveTask: Task<Void, Error>?
     private var awaitedSaveCount = 0
     private var transactionOwnedSaveCount = 0
     private var persistenceTransactionWaiters: [CheckedContinuation<Void, Never>] = []
     private var initialLoadWaiters: [CheckedContinuation<Void, Never>] = []
     private var saveStatusResetTask: Task<Void, Never>?
+    private var saveErrorGeneration = UUID()
     private var themeSystemObserver: FleckThemeSystemObserver?
     private var agentConnectorStatusGeneration: UInt64 = 0
     private var pendingTrashNotes: [UUID: Note] = [:] {
@@ -178,6 +210,7 @@
       agentActivityStore: AgentActivityStore? = nil,
       agentCapabilityStore: AgentCapabilityStore? = nil,
       agentCapabilityAuthority: (any AgentCapabilityAuthorizing)? = nil,
+      agentEventMonitoringRuntime: AgentEventMonitoringRuntime? = nil,
       replaceAgentCapabilities: AgentCapabilityBatchReplaceOperation? = nil,
       provisionAgentProfile: AgentProfileProvisionOperation? = nil,
       disconnectAgentProfile: AgentProfileDisconnectOperation? = nil,
@@ -257,6 +290,7 @@
       self.agentCapabilityStore = capabilityStore
       self.agentCapabilityAuthority =
         agentCapabilityAuthority ?? AgentCapabilityAuthority(store: capabilityStore)
+      self.agentEventMonitoringRuntime = agentEventMonitoringRuntime
       self.replaceAgentCapabilitiesOperation =
         replaceAgentCapabilities ?? { replacements, expectedGrantRevisions in
           try await capabilityStore.replaceProfiles(
@@ -287,14 +321,17 @@
         if let startupMigrationError {
           isAgentWorkspaceAvailable = false
           saveError = Self.migrationFailureMessage(for: startupMigrationError)
+          await startAgentEventMonitoring()
           finishInitialLoad()
           return
         }
         guard await load() else {
+          await startAgentEventMonitoring()
           finishInitialLoad()
           return
         }
         guard await refreshAgentProfiles() else {
+          await startAgentEventMonitoring()
           finishInitialLoad()
           return
         }
@@ -305,11 +342,14 @@
           )
           isAgentWorkspaceAvailable = true
           agentCleanupError = nil
+          agentPrivateNoteIDs = agentCapabilityState.privacyPolicy?.deniedNoteIDs ?? []
+          agentPrivateFolderIDs = agentCapabilityState.privacyPolicy?.deniedFolderIDs ?? []
         } catch {
           isAgentWorkspaceAvailable = false
           agentCleanupError = Self.agentCapabilityFailureMessage
         }
         refreshAgentActivity()
+        await startAgentEventMonitoring()
         finishInitialLoad()
       }
     }
@@ -650,6 +690,231 @@
       }
     }
 
+    func refreshAgentEventMonitoring() async {
+      guard let agentEventMonitoringRuntime else {
+        agentEventSubscriptions = []
+        agentEventMonitoringError = nil
+        return
+      }
+      do {
+        agentEventSubscriptions = try await agentEventMonitoringRuntime.ownerSummaries(
+          workspace: isAgentWorkspaceAvailable ? workspace : nil
+        )
+        agentEventMonitoringError = nil
+      } catch {
+        agentEventMonitoringError = Self.agentEventMonitoringRefreshFailureMessage
+      }
+    }
+
+    func setAgentEventMonitoring(
+      subscriptionID: String,
+      enabled: Bool,
+      allowsAutomaticRenewal: Bool,
+      expectedConsentGenerationID: UUID? = nil
+    ) async {
+      guard let agentEventMonitoringRuntime else {
+        agentEventMonitoringError = Self.agentEventMonitoringFailureMessage
+        return
+      }
+      var operationError: String?
+      do {
+        guard !enabled || expectedConsentGenerationID != nil else {
+          throw AgentWorkspaceError(code: .revisionConflict)
+        }
+        try await agentEventMonitoringRuntime.setOwnerDeliveryConsent(
+          subscriptionID: subscriptionID,
+          enabled: enabled,
+          allowsAutomaticRenewal: enabled && allowsAutomaticRenewal,
+          workspaceProvider: enabled ? agentEventWorkspaceProvider() : nil,
+          expectedConsentGenerationID: expectedConsentGenerationID
+        )
+        agentEventMonitoringError = nil
+      } catch {
+        operationError =
+          enabled
+          ? "Could not approve or resume this event subscription."
+          : "Could not pause this event subscription."
+      }
+      await refreshAgentEventMonitoring()
+      if let operationError {
+        agentEventMonitoringError = operationError
+      }
+    }
+
+    func removeAgentEventMonitoringSubscription(subscriptionID: String) async {
+      guard let agentEventMonitoringRuntime else {
+        agentEventMonitoringError = Self.agentEventMonitoringFailureMessage
+        return
+      }
+      var operationError: String?
+      do {
+        try await agentEventMonitoringRuntime.removeSubscription(
+          subscriptionID: subscriptionID
+        )
+        agentEventMonitoringError = nil
+      } catch {
+        operationError = "Could not remove this event subscription."
+      }
+      await refreshAgentEventMonitoring()
+      if let operationError {
+        agentEventMonitoringError = operationError
+      }
+    }
+
+    func setAgentNotePrivate(noteID: UUID, isPrivate: Bool) async {
+      var deniedNoteIDs = agentPrivateNoteIDs
+      if isPrivate {
+        deniedNoteIDs.insert(noteID)
+      } else {
+        deniedNoteIDs.remove(noteID)
+      }
+      await replaceAgentPrivacyPolicy(
+        deniedNoteIDs: deniedNoteIDs,
+        deniedFolderIDs: agentPrivateFolderIDs
+      )
+    }
+
+    func setAgentFolderPrivate(folderID: UUID, isPrivate: Bool) async {
+      var deniedFolderIDs = agentPrivateFolderIDs
+      if isPrivate {
+        deniedFolderIDs.insert(folderID)
+      } else {
+        deniedFolderIDs.remove(folderID)
+      }
+      await replaceAgentPrivacyPolicy(
+        deniedNoteIDs: agentPrivateNoteIDs,
+        deniedFolderIDs: deniedFolderIDs
+      )
+    }
+
+    private func replaceAgentPrivacyPolicy(
+      deniedNoteIDs: Set<UUID>,
+      deniedFolderIDs: Set<UUID>
+    ) async {
+      guard !privacyPolicyMutationInProgress else {
+        agentEventMonitoringError = "Wait for the current global privacy change to finish."
+        return
+      }
+      let previousPolicy = agentCapabilityState.privacyPolicy
+      guard
+        previousPolicy?.deniedNoteIDs != deniedNoteIDs
+          || previousPolicy?.deniedFolderIDs != deniedFolderIDs
+      else {
+        return
+      }
+      privacyPolicyMutationInProgress = true
+      defer { privacyPolicyMutationInProgress = false }
+
+      let changedFolderIDs = (previousPolicy?.deniedFolderIDs ?? [])
+        .symmetricDifference(deniedFolderIDs)
+      let changedNoteIDs = (previousPolicy?.deniedNoteIDs ?? [])
+        .symmetricDifference(deniedNoteIDs)
+      let affectedNotes = Set(
+        workspace.notes.compactMap { note in
+          guard let folderID = note.folderID, changedFolderIDs.contains(folderID) else {
+            return changedNoteIDs.contains(note.id) ? note.id : nil
+          }
+          return note.id
+        }
+      ).union(changedNoteIDs)
+      let previouslyDeniedNotes = previousPolicy?.deniedNoteIDs ?? []
+      let previouslyDeniedFolders = previousPolicy?.deniedFolderIDs ?? []
+      let temporaryExclusions = Set(
+        affectedNotes.filter { noteID in
+          guard let note = workspace.notes.first(where: { $0.id == noteID }) else {
+            return !previouslyDeniedNotes.contains(noteID)
+          }
+          let folderPreviouslyDenied = note.folderID.map(previouslyDeniedFolders.contains) ?? false
+          return !previouslyDeniedNotes.contains(noteID)
+            && !folderPreviouslyDenied
+        }
+      )
+      for noteID in temporaryExclusions {
+        setAgentCapabilityNoteExclusion(noteID, excluded: true)
+      }
+
+      var operationError: String?
+      do {
+        try await pauseEventMonitoringSubscriptions(
+          profileIDs: [],
+          noteIDs: affectedNotes,
+          folderIDs: changedFolderIDs,
+          disposition: .permissionChanged
+        )
+        agentCapabilityState = try await agentCapabilityStore.replacePrivacyPolicy(
+          deniedNoteIDs: deniedNoteIDs,
+          deniedFolderIDs: deniedFolderIDs,
+          expectedGeneration: previousPolicy?.generation
+        )
+        agentPrivateNoteIDs = deniedNoteIDs
+        agentPrivateFolderIDs = deniedFolderIDs
+        for noteID in affectedNotes
+        where !deniedNoteIDs.contains(noteID)
+          && !pendingRestoreNoteIDs.contains(noteID)
+          && workspace.notes.first(where: { $0.id == noteID })?.folderID.map({
+            !deniedFolderIDs.contains($0)
+          }) != false
+        {
+          setAgentCapabilityNoteExclusion(noteID, excluded: false)
+        }
+        agentCleanupError = nil
+        agentEventMonitoringError = nil
+      } catch {
+        for noteID in temporaryExclusions
+        where !previouslyDeniedNotes.contains(noteID)
+          && !pendingRestoreNoteIDs.contains(noteID)
+          && workspace.notes.first(where: { $0.id == noteID })?.folderID.map({
+            !previouslyDeniedFolders.contains($0)
+          }) != false
+        {
+          setAgentCapabilityNoteExclusion(noteID, excluded: false)
+        }
+        operationError = "Could not update global Agent privacy."
+      }
+      await refreshAgentEventMonitoring()
+      if let operationError {
+        agentEventMonitoringError = operationError
+      }
+    }
+
+    private func agentEventWorkspaceProvider() -> AgentEventWorkspaceProvider {
+      { [weak self] in
+        guard let self else {
+          throw AgentWorkspaceError(code: .fleckUnavailable)
+        }
+        try await self.flushPendingPersistenceForAgent()
+        return try await MainActor.run {
+          guard self.isAgentWorkspaceAvailable, !self.isPersistenceBlocked else {
+            throw AgentWorkspaceError(code: .fleckUnavailable)
+          }
+          return self.workspace
+        }
+      }
+    }
+
+    private func startAgentEventMonitoring() async {
+      guard let agentEventMonitoringRuntime else { return }
+      await agentEventMonitoringRuntime.start(
+        workspaceProvider: agentEventWorkspaceProvider()
+      )
+      await refreshAgentEventMonitoring()
+    }
+
+    private func pauseEventMonitoringSubscriptions(
+      profileIDs: Set<UUID>,
+      noteIDs: Set<UUID> = [],
+      folderIDs: Set<UUID> = [],
+      disposition: AgentEventOutboxNonDeliveryDisposition
+    ) async throws {
+      guard let agentEventMonitoringRuntime else { return }
+      try await agentEventMonitoringRuntime.pauseSubscriptions(
+        profileIDs: profileIDs,
+        noteIDs: noteIDs,
+        folderIDs: folderIDs,
+        disposition: disposition
+      )
+    }
+
     private func acquireNoteAccessTransactionLocks(
       for noteIDs: Set<UUID>,
       ownerID: UUID,
@@ -778,11 +1043,17 @@
 
     private func performAgentCapabilitySave(
       operation: @escaping @Sendable () async throws -> AgentCapabilityState,
-      failureMessage: String
+      failureMessage: String,
+      profileIDs: Set<UUID> = []
     ) async -> AgentCapabilitySaveResult {
       do {
+        try await pauseEventMonitoringSubscriptions(
+          profileIDs: profileIDs,
+          disposition: .permissionChanged
+        )
         agentCapabilityState = try await operation()
         agentCleanupError = nil
+        await refreshAgentEventMonitoring()
         return .succeeded
       } catch let error as AgentWorkspaceError where error.code == .revisionConflict {
         agentCleanupError = AgentCapabilityPresentation.conflictMessage
@@ -802,7 +1073,13 @@
           destination: DictationDestination(noteID: $0.id, title: $0.displayTitle),
           semanticContext: $0.body,
           contentRevision: $0.revision,
-          presentationContext: $0.folderID.flatMap { folderNames[$0] } ?? "Unfiled"
+          presentationContext: $0.folderID.flatMap { folderNames[$0] } ?? "Unfiled",
+          headings: DictationSectionInsertion.headings(
+            in: $0,
+            defaults: NoteTextAppendDefaults(
+              fontFamily: preferences.fontFamily, fontSize: preferences.fontSize
+            )
+          )
         )
       }
     }
@@ -885,11 +1162,17 @@
       }
 
       do {
+        try await pauseEventMonitoringSubscriptions(
+          profileIDs: Set(replacements.map { $0.profile.profileID }),
+          noteIDs: [noteID],
+          disposition: .permissionChanged
+        )
         agentCapabilityState = try await replaceAgentCapabilitiesOperation(
           replacements,
           expectedGrantRevisions
         )
         agentCleanupError = nil
+        await refreshAgentEventMonitoring()
         return .succeeded
       } catch let error as AgentWorkspaceError where error.code == .revisionConflict {
         agentCleanupError = AgentCapabilityPresentation.conflictMessage
@@ -923,7 +1206,8 @@
         operation: {
           try await operation(replacements, expectedGrantRevisions)
         },
-        failureMessage: "Could not update Agent capabilities. Try again."
+        failureMessage: "Could not update Agent capabilities. Try again.",
+        profileIDs: [replacement.profileID]
       )
     }
 
@@ -947,7 +1231,8 @@
         operation: {
           try await operation(replacements, expectedGrantRevisions)
         },
-        failureMessage: "Could not update Agent access. Try again."
+        failureMessage: "Could not update Agent access. Try again.",
+        profileIDs: Set(replacements.map { $0.profile.profileID })
       )
     }
 
@@ -967,7 +1252,8 @@
         operation: {
           try await operation(replacements, expectedGrantRevisions)
         },
-        failureMessage: "Could not update Agent access. Try again."
+        failureMessage: "Could not update Agent access. Try again.",
+        profileIDs: Set(replacements.map { $0.profile.profileID })
       )
     }
 
@@ -982,12 +1268,18 @@
         return .revisionConflict
       }
       do {
+        try await pauseEventMonitoringSubscriptions(
+          profileIDs: [profileID],
+          noteIDs: noteIDs,
+          disposition: .permissionChanged
+        )
         agentCapabilityState = try await agentCapabilityStore.assignUnassignedLegacyNotes(
           noteIDs,
           to: profileID,
           expectedGrantRevision: expectedGrantRevision
         )
         agentCleanupError = nil
+        await refreshAgentEventMonitoring()
         return .succeeded
       } catch let error as AgentWorkspaceError where error.code == .revisionConflict {
         agentCleanupError = AgentCapabilityPresentation.conflictMessage
@@ -998,11 +1290,183 @@
       }
     }
 
+    func saveSmartFiling(
+      _ plan: DictationFilingPlan,
+      captureID: UUID
+    ) async throws -> DictationInsertionReceipt {
+      try Task.checkCancellation()
+      let digest = DictationFilingLedger.digest(plan.text)
+      if let receipt = try committedFilingReceipt(text: plan.text, captureID: captureID) {
+        return receipt
+      }
+      guard plan.isValid(against: activeDestinations()), !plan.outputs.isEmpty else {
+        throw DictationFilingSaveError.invalidPlan
+      }
+      let noteIDs = Set(plan.outputs.map(\.destinationID))
+      let ownerID = UUID()
+      guard acquireSmartCaptureTransferLock(for: noteIDs, ownerID: ownerID) else {
+        throw SmartCaptureTransferBusy()
+      }
+      defer { releaseSmartCaptureTransferLock(for: noteIDs, ownerID: ownerID) }
+      beginAwaitedSave()
+      defer { endAwaitedSave() }
+
+      let defaults = NoteTextAppendDefaults(
+        fontFamily: preferences.fontFamily, fontSize: preferences.fontSize
+      )
+      let originals = workspace.notes.filter { noteIDs.contains($0.id) }
+      var attempted = workspace
+      var insertions: [DictationFilingInsertion] = []
+      for original in originals {
+        let outputs = plan.outputs.enumerated().filter {
+          $0.element.destinationID == original.id
+        }.sorted {
+          let lhs = $0.element.heading?.insertionUTF16Offset ?? original.body.utf16.count
+          let rhs = $1.element.heading?.insertionUTF16Offset ?? original.body.utf16.count
+          return lhs == rhs ? $0.offset > $1.offset : lhs > rhs
+        }
+        var note = original
+        var ranges: [(location: Int, length: Int, digest: String)] = []
+        for output in outputs {
+          let inserted = try DictationSectionInsertion.inserting(
+            output.element.text, into: note,
+            atUTF16Offset: output.element.heading?.insertionUTF16Offset
+              ?? original.body.utf16.count,
+            defaults: defaults
+          )
+          ranges = ranges.map {
+            ($0.location >= inserted.location ? $0.location + inserted.length : $0.location,
+             $0.length, $0.digest)
+          }
+          ranges.append((inserted.location, inserted.length, inserted.digest))
+          note.body = inserted.body
+          note.richTextRTF = inserted.richTextRTF
+        }
+        attempted.updateContent(id: note.id, body: note.body, rtf: note.richTextRTF)
+        guard let updated = attempted.notes.first(where: { $0.id == note.id }) else {
+          throw DictationFilingSaveError.invalidPlan
+        }
+        insertions += ranges.map {
+          DictationFilingInsertion(
+            noteID: note.id, noteRevision: updated.revision,
+            location: $0.location, length: $0.length, digest: $0.digest
+          )
+        }
+      }
+      let committed = DictationFilingCommit(
+        captureID: captureID, inputDigest: digest, insertions: insertions
+      )
+      let priorLedger = workspace.dictationFilingLedger
+      attempted.dictationFilingLedger.commits.append(committed)
+      guard attempted.dictationFilingLedger.isValid,
+        let firstOutput = plan.outputs.first,
+        insertions.contains(where: { $0.noteID == firstOutput.destinationID }),
+        let first = committed.insertions.first
+      else {
+        throw DictationFilingSaveError.invalidPlan
+      }
+      workspace = attempted
+      do {
+        try await saveSmartCaptureTransfer(ownerID: ownerID, requiresCommit: true).value
+      } catch {
+        rollbackSmartFiling(originals: originals, attempted: attempted, ledger: priorLedger)
+        throw error
+      }
+      return DictationInsertionReceipt(
+        captureID: captureID, noteID: first.noteID, insertedSuffix: "", filing: committed
+      )
+    }
+
+    private func undoSmartFiling(_ receipt: DictationInsertionReceipt) async -> Bool {
+      guard let committed = receipt.filing, committed.captureID == receipt.captureID,
+        committed.state == .committed,
+        committed.insertions.first?.noteID == receipt.noteID,
+        let ledgerIndex = workspace.dictationFilingLedger.commits.firstIndex(of: committed)
+      else { return false }
+      let noteIDs = Set(committed.insertions.map(\.noteID))
+      let ownerID = UUID()
+      guard acquireSmartCaptureTransferLock(for: noteIDs, ownerID: ownerID) else {
+        return false
+      }
+      defer { releaseSmartCaptureTransferLock(for: noteIDs, ownerID: ownerID) }
+      beginAwaitedSave()
+      defer { endAwaitedSave() }
+      let defaults = NoteTextAppendDefaults(
+        fontFamily: preferences.fontFamily, fontSize: preferences.fontSize
+      )
+      let originals = workspace.notes.filter { noteIDs.contains($0.id) }
+      guard originals.count == noteIDs.count else { return false }
+      var attempted = workspace
+      do {
+        for original in originals {
+          let insertions = committed.insertions.filter { $0.noteID == original.id }
+            .sorted { $0.location > $1.location }
+          guard insertions.allSatisfy({ $0.noteRevision == original.revision }) else {
+            return false
+          }
+          var note = original
+          for insertion in insertions {
+            let removed = try DictationSectionInsertion.removing(
+              range: NSRange(location: insertion.location, length: insertion.length),
+              digest: insertion.digest, from: note, defaults: defaults
+            )
+            note.body = removed.body
+            note.richTextRTF = removed.richTextRTF
+          }
+          attempted.updateContent(id: note.id, body: note.body, rtf: note.richTextRTF)
+        }
+      } catch { return false }
+      let priorLedger = workspace.dictationFilingLedger
+      attempted.dictationFilingLedger.commits[ledgerIndex].state = .undone
+      workspace = attempted
+      do {
+        try await saveSmartCaptureTransfer(ownerID: ownerID, requiresCommit: true).value
+        return true
+      } catch {
+        rollbackSmartFiling(originals: originals, attempted: attempted, ledger: priorLedger)
+        return false
+      }
+    }
+
+    private func rollbackSmartFiling(
+      originals: [Note], attempted: Workspace, ledger: DictationFilingLedger
+    ) {
+      for original in originals {
+        if let index = workspace.notes.firstIndex(where: { $0.id == original.id }),
+          workspace.notes[index] == attempted.notes.first(where: { $0.id == original.id })
+        {
+          workspace.notes[index] = original
+        }
+      }
+      if workspace.dictationFilingLedger == attempted.dictationFilingLedger {
+        workspace.dictationFilingLedger = ledger
+      }
+    }
+
+    private func committedFilingReceipt(
+      text: String, captureID: UUID
+    ) throws -> DictationInsertionReceipt? {
+      guard let committed = workspace.dictationFilingLedger.commits.first(where: {
+        $0.captureID == captureID
+      }) else { return nil }
+      guard smartCaptureTransferOwnerID == nil else { throw SmartCaptureTransferBusy() }
+      guard committed.state == .committed,
+        committed.inputDigest == DictationFilingLedger.digest(text),
+        let first = committed.insertions.first
+      else { throw DictationFilingSaveError.conflictingCapture }
+      return DictationInsertionReceipt(
+        captureID: captureID, noteID: first.noteID, insertedSuffix: "", filing: committed
+      )
+    }
+
     func saveSmartCapture(
       text: String,
       captureID: UUID,
       destinationID: UUID?
     ) async throws -> DictationInsertionReceipt {
+      if let receipt = try committedFilingReceipt(text: text, captureID: captureID) {
+        return receipt
+      }
       beginAwaitedSave()
       defer { endAwaitedSave() }
       let destinationIndex: Int
@@ -1173,6 +1637,7 @@
     }
 
     func undoSmartCapture(_ receipt: DictationInsertionReceipt) async -> Bool {
+      if receipt.filing != nil { return await undoSmartFiling(receipt) }
       guard let index = workspace.notes.firstIndex(where: { $0.id == receipt.noteID }) else {
         return false
       }
@@ -1622,7 +2087,9 @@
       }
     }
 
-    private func saveSmartCaptureTransfer(ownerID: UUID) -> Task<Void, Error> {
+    private func saveSmartCaptureTransfer(
+      ownerID: UUID, requiresCommit: Bool = false
+    ) -> Task<Void, Error> {
       guard startupMigrationError == nil,
         smartCaptureTransferOwnerID == ownerID
       else {
@@ -1632,7 +2099,7 @@
       markSaveStarted()
       let snapshot = saveSnapshot()
       return Task {
-        try await persist(snapshot)
+        try await persist(snapshot, requiresCommit: requiresCommit)
       }
     }
 
@@ -1679,6 +2146,7 @@
             preferences,
             generation
           )
+          agentEventMonitoringRuntime?.workspaceDidCommit()
           pendingRestoreNoteIDs.remove(trashedNote.id)
           setAgentCapabilityNoteExclusion(trashedNote.id, excluded: false)
 
@@ -1801,6 +2269,10 @@
 
     private static let agentCapabilityFailureMessage =
       "Agent workspace is unavailable. Reopen Fleck after resolving capability storage."
+    private static let agentEventMonitoringFailureMessage =
+      "Event monitoring status is unavailable."
+    private static let agentEventMonitoringRefreshFailureMessage =
+      "Could not refresh event subscription status. The status shown may be out of date."
     private static let restoreTrashCleanupFailureMessage =
       "The note was restored, but Trash cleanup could not finish. Try again."
 
@@ -1820,18 +2292,22 @@
       )
     }
 
-    private func persist(_ snapshot: SaveSnapshot) async throws {
+    private func persist(_ snapshot: SaveSnapshot, requiresCommit: Bool = false) async throws {
+      let saveErrorGenerationAtStart = saveErrorGeneration
       do {
         if let beforeSaveOperation {
           await beforeSaveOperation()
         }
         try Task.checkCancellation()
-        _ = try await saveOperation(
+        let result = try await saveOperation(
           snapshot.workspace,
           snapshot.preferences,
           snapshot.trashedNotes,
           snapshot.generation
         )
+        if requiresCommit, result != .committed {
+          throw DictationFilingSaveError.superseded
+        }
       } catch {
         if Task.isCancelled || error is CancellationError {
           throw CancellationError()
@@ -1841,6 +2317,7 @@
         throw error
       }
 
+      agentEventMonitoringRuntime?.workspaceDidCommit()
       for note in snapshot.trashedNotes {
         pendingTrashNotes.removeValue(forKey: note.id)
       }
@@ -1855,7 +2332,9 @@
         }
       }
       guard !Task.isCancelled else { return }
-      saveError = trashRefreshError?.localizedDescription
+      if saveErrorGeneration == saveErrorGenerationAtStart {
+        saveError = trashRefreshError?.localizedDescription
+      }
       markSaveSucceeded()
     }
 
@@ -1939,6 +2418,7 @@
       agentCommitProofs.append(commitProof)
       saveError = nil
       markSaveSucceeded()
+      agentEventMonitoringRuntime?.workspaceDidCommit()
     }
 
     func publishAgentFeedback(_ feedback: AgentChangeFeedback) {
@@ -1983,7 +2463,77 @@
       }
     }
 
-    func addAgentProfile(named name: String) async {
+    func setUpCursor(
+      profileID: UUID? = nil,
+      expectedCapabilities: AgentProfileCapabilities? = nil
+    ) async {
+      guard isAgentWorkspaceAvailable else {
+        if !cursorSetupStatus.isInProgress {
+          cursorSetupStatus = .failure
+        }
+        return
+      }
+      await cursorSetupFlow.setUp(profileID: profileID) { [weak self] profile, isNewProfile in
+        guard
+          let self,
+          self.isAgentWorkspaceAvailable,
+          self.agentProfiles.contains(where: {
+            $0.id == profile.id && $0.displayName == "Cursor" && !$0.isRevoked
+          }),
+          let current = self.capabilityProfile(profile.id)
+        else {
+          return false
+        }
+        if isNewProfile {
+          return current.grantRevision == 0
+            && current.allowedCapabilities.isEmpty
+            && current.grants.isEmpty
+            && !current.allowsEventObservation
+        }
+        guard profileID == profile.id, let expectedCapabilities else { return false }
+        return current == expectedCapabilities
+      }
+    }
+
+    private func prepareCursorHelper() async throws -> URL {
+      await refreshAgentConnectorStatus()
+      guard !Task.isCancelled else { throw CancellationError() }
+      if !isAgentConnectorInstalled {
+        await installAgentBridge()
+      }
+      guard !Task.isCancelled else { throw CancellationError() }
+      guard isAgentConnectorInstalled else {
+        agentCleanupError =
+          "Could not prepare the local Agent Connector for Cursor. Use the manual setup below."
+        throw CursorSetupFlowError.unavailable
+      }
+      do {
+        return try AgentBridgeInstaller.live().installedHelperURL
+      } catch {
+        agentCleanupError =
+          "Could not prepare the local Agent Connector for Cursor. Use the manual setup below."
+        throw CursorSetupFlowError.unavailable
+      }
+    }
+
+    func cursorManualConfiguration(profileID: UUID) -> String? {
+      guard
+        isAgentWorkspaceAvailable,
+        isAgentConnectorInstalled,
+        agentProfiles.contains(where: {
+          $0.id == profileID && $0.displayName == "Cursor" && !$0.isRevoked
+        }),
+        capabilityProfile(profileID) != nil,
+        let helperURL = try? AgentBridgeInstaller.live().installedHelperURL
+      else { return nil }
+      return AgentClientSetup(
+        installedHelperURL: helperURL,
+        profileID: profileID
+      ).cursorManualConfiguration
+    }
+
+    @discardableResult
+    func addAgentProfile(named name: String) async -> AgentIntegrationProfile? {
       do {
         let provisioning = try await agentProfileStore.create(name: name)
         do {
@@ -2007,23 +2557,48 @@
           }
           throw error
         }
-        await refreshAgentProfiles()
+        guard await refreshAgentProfiles() else { return nil }
         agentCleanupError = nil
+        return provisioning.profile
       } catch {
         await refreshAgentConnectorStatus()
-        agentCleanupError = "Could not add \(name): \(error.localizedDescription)"
+        agentCleanupError = name == "Cursor"
+          ? "Could not prepare the Cursor profile. The manual setup remains available."
+          : "Could not add \(name): \(error.localizedDescription)"
+        return nil
       }
     }
 
     func revokeAgentProfile(_ profile: AgentIntegrationProfile) async {
       var localCleanupFailed = false
+      var eventPauseFailed = false
+      do {
+        try await pauseEventMonitoringSubscriptions(
+          profileIDs: [profile.id],
+          disposition: .profileRevoked
+        )
+      } catch {
+        agentEventMonitoringError = Self.agentEventMonitoringFailureMessage
+        eventPauseFailed = true
+      }
       do {
         try await agentProfileStore.revoke(profileID: profile.id)
       } catch {
         localCleanupFailed = true
         agentCleanupError = "Could not revoke \(profile.displayName): \(error.localizedDescription)"
       }
+      if eventPauseFailed, !localCleanupFailed {
+        do {
+          try await pauseEventMonitoringSubscriptions(
+            profileIDs: [profile.id],
+            disposition: .profileRevoked
+          )
+        } catch {
+          agentEventMonitoringError = Self.agentEventMonitoringFailureMessage
+        }
+      }
       await refreshAgentProfiles()
+      await refreshAgentEventMonitoring()
       guard !agentProfiles.contains(where: { $0.id == profile.id }) else { return }
       do {
         try await agentProfileDisconnectOperation(profile.id)

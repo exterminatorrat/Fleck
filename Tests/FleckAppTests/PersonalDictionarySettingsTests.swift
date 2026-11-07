@@ -230,6 +230,7 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
     viewModel: viewModel,
     size: NSSize(width: 540, height: 500)
   )
+  window.acceptsMouseMovedEvents = true
   defer {
     window.contentView = nil
     window.orderOut(nil)
@@ -323,7 +324,7 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
   try #require(
     offRowPointIsVisible && !geometryBeforePointer.rowFrame.contains(pointerOutsideRows)
   )
-  try movePersonalDictionaryDeleteAdmissionPointer(
+  try await movePersonalDictionaryDeleteAdmissionPointer(
     to: pointerOutsideRows,
     in: host,
     window: window,
@@ -385,7 +386,7 @@ func personalDictionaryNativeConfirmationClaimsDeletionBeforeDismissal() async t
   try #require(
     geometryAfterExit.rowFullyVisible && screen.visibleFrame.contains(rowCenterScreenPoint)
   )
-  try movePersonalDictionaryDeleteAdmissionPointer(
+  try await movePersonalDictionaryDeleteAdmissionPointer(
     to: rowCenter,
     in: host,
     window: window,
@@ -1308,6 +1309,20 @@ func personalDictionaryVocabularySearchUsesResponsiveInlineFieldAndAccessibleDis
     encoding: .utf8
   )
 
+  let themeSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/FleckThemeSnapshot.swift"),
+    encoding: .utf8
+  )
+  let buttonStart = try #require(themeSource.range(of: "private struct FleckQuietButtonBody: View"))
+  let buttonEnd = try #require(
+    themeSource.range(of: "extension View {", range: buttonStart.upperBound..<themeSource.endIndex)
+  )
+  let buttonSource = themeSource[buttonStart.lowerBound..<buttonEnd.lowerBound]
+  #expect(buttonSource.contains(".contentShape(Rectangle())"))
+  #expect(buttonSource.contains("let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)"))
+  #expect(buttonSource.contains("shape.fill("))
+  #expect(buttonSource.contains("isEnabled && (isHovered || configuration.isPressed)"))
+
   #expect(settingsSource.contains("ViewThatFits(in: .horizontal)"))
   #expect(settingsSource.contains("private var dictionaryToolbar: some View"))
   #expect(settingsSource.contains("private var searchControl: some View"))
@@ -1521,6 +1536,7 @@ func personalDictionaryCommandFRoutesFromSidebarAndContentWithoutBreakingSearchO
 
 @Test @MainActor
 func personalDictionaryToolbarUsesPaddedTargetsInlineSearchAndKeyboardDismissal() async throws {
+  var diagnosticReopenedRecorded = false
   let layouts: [(
     name: String,
     width: CGFloat,
@@ -1687,6 +1703,20 @@ func personalDictionaryToolbarUsesPaddedTargetsInlineSearchAndKeyboardDismissal(
     )
     #expect(!(reopenedSearchField is NSSearchField))
     #expect(reopenedSearchField.placeholderString == "Search vocabulary")
+    let diagnosticReopenedEditor = reopenedSearchField.currentEditor()
+    if !(diagnosticReopenedEditor is NSTextView), !diagnosticReopenedRecorded {
+      diagnosticReopenedRecorded = true
+      let diagnosticResponderEditor = window.firstResponder as? NSTextView
+      let diagnostic = "[F93-6178:reopened-editor] width=\(layout.width) height=\(layout.height)"
+        + " dark=\(layout.appearance == .dark) active=\(NSApp.isActive)"
+        + " key=\(window.isKeyWindow) keyOwned=\(NSApp.keyWindow === window) visible=\(window.isVisible)"
+        + " hostOwned=\(host.window === window) fieldOwned=\(reopenedSearchField.window === window)"
+        + " hidden=\(reopenedSearchField.isHiddenOrHasHiddenAncestor) bounds=\(reopenedSearchField.bounds)"
+        + " editorPresent=\(diagnosticReopenedEditor != nil) responderIsEditor=\(diagnosticResponderEditor != nil)"
+        + " responderIsField=\(window.firstResponder === reopenedSearchField)"
+        + " responderOwnsField=\((diagnosticResponderEditor?.delegate as AnyObject?) === reopenedSearchField)"
+      print(String(decoding: diagnostic.utf8.prefix(1000), as: UTF8.self) + " truncated=\(diagnostic.utf8.count > 1000)")
+    }
     let reopenedEditor = try #require(reopenedSearchField.currentEditor() as? NSTextView)
     #expect(window.firstResponder === reopenedEditor)
 
@@ -1843,12 +1873,55 @@ func personalDictionaryPriorityStarStaysVisibleWithoutHoverAndDeleteRemainsHidde
       host,
       name: "dictionary-priority-star-\(appearance == .dark ? "dark" : "light")"
     )
+    #expect(screenshot.size == host.bounds.size)
     let goldFrame = CGRect(
       x: host.bounds.maxX - 64,
       y: host.bounds.minY,
       width: 64,
       height: host.bounds.height
     )
+    let diagnosticPriorityFrame = personalDictionaryHostFrame(fromScreenFrame: priorityFrame, in: host)
+    let diagnosticRowClickPoint = NSPoint(x: starredRowFrame.maxX - 13, y: starredRowFrame.midY)
+    let diagnosticPriorityBeforeClick = viewModel.entries.first(where: { $0.id == starredEntry.id })?.isPriority
+    let diagnosticRevisionBeforeClick = viewModel.revision
+    let diagnosticTarget = personalDictionaryPriorityStarColor(
+      appearance: appearance, windowAppearance: window.appearance
+    ).usingColorSpace(.deviceRGB)
+    let diagnosticTargetRGBA = diagnosticTarget.map {
+      [$0.redComponent, $0.greenComponent, $0.blueComponent, $0.alphaComponent]
+    } ?? []
+    let diagnosticScaleX = CGFloat(screenshot.pixelsWide) / host.bounds.width
+    let diagnosticScaleY = CGFloat(screenshot.pixelsHigh) / host.bounds.height
+    let diagnosticOriginY = host.isFlipped
+      ? host.bounds.maxY - goldFrame.maxY : goldFrame.minY - host.bounds.minY
+    let diagnosticROI: [CGFloat] = [
+      max(((goldFrame.minX - host.bounds.minX) * diagnosticScaleX).rounded(.down), 0),
+      max((diagnosticOriginY * diagnosticScaleY).rounded(.down), 0),
+      min(((goldFrame.maxX - host.bounds.minX) * diagnosticScaleX).rounded(.up), CGFloat(screenshot.pixelsWide)),
+      min(((diagnosticOriginY + goldFrame.height) * diagnosticScaleY).rounded(.up), CGFloat(screenshot.pixelsHigh)),
+    ]
+    let diagnosticPixelX = ((diagnosticPriorityFrame.midX - host.bounds.minX) * diagnosticScaleX).rounded(.down)
+    let diagnosticPixelY = ((host.isFlipped
+      ? host.bounds.maxY - diagnosticPriorityFrame.midY
+      : diagnosticPriorityFrame.midY - host.bounds.minY) * diagnosticScaleY).rounded(.down)
+    var diagnosticSampleRGBA: [CGFloat] = []
+    if diagnosticPixelX.isFinite, diagnosticPixelY.isFinite,
+      diagnosticPixelX >= 0, diagnosticPixelY >= 0,
+      diagnosticPixelX < CGFloat(screenshot.pixelsWide), diagnosticPixelY < CGFloat(screenshot.pixelsHigh),
+      let sample = screenshot.colorAt(x: Int(diagnosticPixelX), y: Int(diagnosticPixelY))?.usingColorSpace(.deviceRGB)
+    {
+      diagnosticSampleRGBA = [sample.redComponent, sample.greenComponent, sample.blueComponent, sample.alphaComponent]
+    }
+    let diagnosticPaint = "[F93-6178:star-paint] dark=\(appearance == .dark) active=\(NSApp.isActive)"
+      + " key=\(window.isKeyWindow) keyOwned=\(NSApp.keyWindow === window) visible=\(window.isVisible)"
+      + " bounds=\(host.bounds) bitmap=\(screenshot.pixelsWide)x\(screenshot.pixelsHigh) flipped=\(host.isFlipped)"
+      + " gold=\(goldFrame) roi=\(diagnosticROI) paintAX=\(diagnosticPriorityFrame)"
+      + " row=\(starredRowFrame) rowPoint=\(diagnosticRowClickPoint)"
+      + " rowPointInAX=\(diagnosticPriorityFrame.contains(diagnosticRowClickPoint))"
+      + " rowPointInVisible=\(host.visibleRect.contains(diagnosticRowClickPoint))"
+      + " targetRGBA=\(diagnosticTargetRGBA) sampleRGBA=\(diagnosticSampleRGBA) pixel=\(diagnosticPixelX),\(diagnosticPixelY)"
+      + " explicitAppearance=\(window.appearance != nil) effectiveDark=\(host.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)"
+    print(String(decoding: diagnosticPaint.utf8.prefix(1000), as: UTF8.self) + " truncated=\(diagnosticPaint.utf8.count > 1000)")
     #expect(
       personalDictionaryAccentPixelCount(
         in: screenshot,
@@ -1871,14 +1944,45 @@ func personalDictionaryPriorityStarStaysVisibleWithoutHoverAndDeleteRemainsHidde
       ) > 3
     )
 
-    try clickPersonalDictionaryTrailingStarAtPaddedEdge(
-      in: host,
-      rowFrame: starredRowFrame,
-      window: window
+    let dispatchPriorityAXFrame = try personalDictionarySettingsAccessibilityFrame(
+      starredPriorityID,
+      in: host
     )
+    try #require(abs(dispatchPriorityAXFrame.width - 32) < 1)
+    try #require(abs(dispatchPriorityAXFrame.height - 32) < 1)
+    let dispatchPriorityFrame = personalDictionaryHostFrame(
+      fromScreenFrame: dispatchPriorityAXFrame,
+      in: host
+    )
+    let diagnosticClickPoint = NSPoint(
+      x: dispatchPriorityFrame.maxX - 1,
+      y: dispatchPriorityFrame.midY
+    )
+    try #require(dispatchPriorityFrame.contains(diagnosticClickPoint))
+    let diagnosticDispatch = "[F93-6178:star-dispatch] dark=\(appearance == .dark)"
+      + " ax=\(dispatchPriorityFrame) click=\(diagnosticClickPoint)"
+      + " inAX=\(dispatchPriorityFrame.contains(diagnosticClickPoint))"
+      + " active=\(NSApp.isActive) key=\(window.isKeyWindow) keyOwned=\(NSApp.keyWindow === window)"
+      + " visible=\(window.isVisible)"
+    print(String(decoding: diagnosticDispatch.utf8.prefix(1000), as: UTF8.self) + " truncated=\(diagnosticDispatch.utf8.count > 1000)")
+    try sendPersonalDictionaryMouseClick(at: diagnosticClickPoint, in: host, window: window)
     await settlePersonalDictionarySettingsHost(host)
-    try await Task.sleep(for: .milliseconds(120))
-    await settlePersonalDictionarySettingsHost(host)
+    let unstarDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+    while viewModel.entries.first(where: { $0.id == starredEntry.id })?.isPriority != false,
+      ContinuousClock.now < unstarDeadline
+    {
+      try await Task.sleep(for: .milliseconds(20))
+      await settlePersonalDictionarySettingsHost(host)
+    }
+    let diagnosticPriorityAfterClick = viewModel.entries.first(where: { $0.id == starredEntry.id })?.isPriority
+    let diagnosticState = "[F93-6178:star-click] dark=\(appearance == .dark)"
+      + " beforePresent=\(diagnosticPriorityBeforeClick != nil) beforeStarred=\(diagnosticPriorityBeforeClick == true)"
+      + " afterPresent=\(diagnosticPriorityAfterClick != nil) afterStarred=\(diagnosticPriorityAfterClick == true)"
+      + " revisionBefore=\(diagnosticRevisionBeforeClick) revisionAfter=\(viewModel.revision)"
+      + " active=\(NSApp.isActive) key=\(window.isKeyWindow) keyOwned=\(NSApp.keyWindow === window) visible=\(window.isVisible)"
+      + " editPresent=\(viewModel.entryEdit != nil) deletePresent=\(viewModel.pendingEntryDeletion != nil)"
+      + " errorPresent=\(viewModel.errorMessage != nil) sheetPresent=\(window.attachedSheet != nil)"
+    print(String(decoding: diagnosticState.utf8.prefix(1000), as: UTF8.self) + " truncated=\(diagnosticState.utf8.count > 1000)")
     #expect(viewModel.entries.first(where: { $0.id == starredEntry.id })?.isPriority == false)
     #expect(viewModel.pendingEntryDeletion == nil)
 
@@ -2150,8 +2254,26 @@ func personalDictionarySortPopoverKeepsSearchAndKeyboardInteractionsAccessible()
   )
   let sortSource = settingsSource[sortStart.lowerBound..<reloadStart.lowerBound]
 
+  let themeSource = try String(
+    contentsOf: repository.appendingPathComponent("Sources/FleckApp/FleckThemeSnapshot.swift"),
+    encoding: .utf8
+  )
+  let surfaceStart = try #require(themeSource.range(of: "private struct FleckThemedSurface: ViewModifier"))
+  let surfaceEnd = try #require(
+    themeSource.range(
+      of: "struct FleckQuietButtonStyle: ButtonStyle",
+      range: surfaceStart.upperBound..<themeSource.endIndex
+    )
+  )
+  let surfaceSource = themeSource[surfaceStart.lowerBound..<surfaceEnd.lowerBound]
+  #expect(surfaceSource.contains("@Environment(\\.fleckThemeSnapshot) private var theme"))
+  #expect(surfaceSource.contains("content.background("))
+  #expect(surfaceSource.contains("theme.color(.card)"))
+  #expect(surfaceSource.contains("in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)"))
+
   #expect(sortSource.contains("Text(\"SORT BY\")"))
-  #expect(sortSource.contains(".background(.regularMaterial"))
+  #expect(sortSource.contains(".fleckThemedSurface(cornerRadius: 12)"))
+  #expect(sortSource.contains("sortPopover\n          .fleckPopoverTheme(theme)"))
   #expect(sortSource.contains("sortOrdersForCurrentFilter"))
   #expect(sortSource.contains("SettingsVocabularySortOrder.allCases"))
   #expect(sortSource.contains("viewModel.filter == .suggestions"))
@@ -2572,6 +2694,11 @@ private func personalDictionaryDeletePointerState(
 }
 
 @MainActor
+private enum PersonalDictionaryDeleteAdmissionEventSequence {
+  static var nextEventNumber = 30_000
+}
+
+@MainActor
 private func movePersonalDictionaryDeleteAdmissionPointer(
   to point: NSPoint,
   in host: NSView,
@@ -2581,7 +2708,7 @@ private func movePersonalDictionaryDeleteAdmissionPointer(
   entryID: UUID,
   deleteIdentifier: String,
   viewModel: PersonalDictionarySettingsViewModel
-) throws {
+) async throws {
   do {
     let pointOnScreen = personalDictionaryScreenPoint(
       fromHostPoint: point,
@@ -2608,6 +2735,8 @@ private func movePersonalDictionaryDeleteAdmissionPointer(
     let pointerInWindow = window.convertFromScreen(
       NSRect(origin: pointerOnScreen, size: .zero)
     ).origin
+    let eventNumber = PersonalDictionaryDeleteAdmissionEventSequence.nextEventNumber
+    PersonalDictionaryDeleteAdmissionEventSequence.nextEventNumber += 1
     let event = try #require(
       NSEvent.mouseEvent(
         with: .mouseMoved,
@@ -2616,12 +2745,38 @@ private func movePersonalDictionaryDeleteAdmissionPointer(
         timestamp: ProcessInfo.processInfo.systemUptime,
         windowNumber: window.windowNumber,
         context: nil,
-        eventNumber: 1,
+        eventNumber: eventNumber,
         clickCount: 0,
         pressure: 0
       )
     )
-    window.sendEvent(event)
+    var wasDeliveredToOwnedWindow = false
+    let monitor = try #require(
+      NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { observedEvent in
+        let observedEventNumber = observedEvent.eventNumber
+        let observedWindowNumber = observedEvent.windowNumber
+        MainActor.assumeIsolated {
+          if observedEventNumber == eventNumber
+            && observedWindowNumber == window.windowNumber
+          {
+            wasDeliveredToOwnedWindow = true
+          }
+        }
+        return observedEvent
+      }
+    )
+    defer { NSEvent.removeMonitor(monitor) }
+    NSApplication.shared.postEvent(event, atStart: false)
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(2))
+    while !wasDeliveredToOwnedWindow && clock.now < deadline {
+      try Task.checkCancellation()
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    try #require(
+      wasDeliveredToOwnedWindow,
+      "Owned mouse-moved event must reach AppKit dispatch"
+    )
   } catch {
     print(
       personalDictionaryDeleteAdmissionDiagnostic(
@@ -2855,19 +3010,6 @@ private func personalDictionaryHostFrame(
 }
 
 @MainActor
-private func clickPersonalDictionaryTrailingStarAtPaddedEdge(
-  in host: NSView,
-  rowFrame: CGRect,
-  window: NSWindow
-) throws {
-  try sendPersonalDictionaryMouseClick(
-    at: NSPoint(x: rowFrame.maxX - 13, y: rowFrame.midY),
-    in: host,
-    window: window
-  )
-}
-
-@MainActor
 private func clickPersonalDictionaryControlAtPaddedEdge(
   _ identifier: String,
   in host: NSView,
@@ -2968,6 +3110,7 @@ private func capturePersonalDictionaryHost(
       bitsPerPixel: 0
     )
   )
+  image.size = host.bounds.size
   host.cacheDisplay(in: host.bounds, to: image)
 
   if let directory = ProcessInfo.processInfo.environment[

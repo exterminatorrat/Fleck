@@ -730,8 +730,91 @@
   enum TabOverflowPresentation {
     static let tabOverflowRailWidth: CGFloat = 56
 
-    static func tabViewportWidth(totalStripWidth: CGFloat) -> CGFloat {
-      max(0, totalStripWidth - tabOverflowRailWidth)
+    static func overflows(contentWidth: CGFloat, totalStripWidth: CGFloat) -> Bool {
+      contentWidth > totalStripWidth
+    }
+
+    static func tabViewportWidth(totalStripWidth: CGFloat, showsOverflow: Bool) -> CGFloat {
+      max(0, totalStripWidth - (showsOverflow ? tabOverflowRailWidth : 0))
+    }
+  }
+
+  private struct TabStripContentWidthObserver: NSViewRepresentable {
+    let onWidthChange: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> WidthObserverView {
+      return WidthObserverView(onWidthChange: onWidthChange)
+    }
+
+    func updateNSView(_ view: WidthObserverView, context: Context) {
+      view.onWidthChange = onWidthChange
+    }
+
+    final class WidthObserverView: NSView {
+      var onWidthChange: (CGFloat) -> Void
+      private var measuredWidth: CGFloat?
+
+      init(onWidthChange: @escaping (CGFloat) -> Void) {
+        self.onWidthChange = onWidthChange
+        super.init(frame: .zero)
+      }
+
+      required init?(coder: NSCoder) { nil }
+
+      override func layout() {
+        super.layout()
+        let width = bounds.width
+        guard width.isFinite, measuredWidth != width else { return }
+        measuredWidth = width
+        DispatchQueue.main.async { [weak self] in
+          guard let self, self.measuredWidth == width else { return }
+          self.onWidthChange(width)
+        }
+      }
+    }
+  }
+
+  enum TabTitlePresentation {
+    static let maximumWidth: CGFloat = 160
+    static let fadeWidth: CGFloat = 12
+  }
+
+  struct NoteTabTitleFadeMask: View {
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    var body: some View {
+      HStack(spacing: 0) {
+        Color.white
+        LinearGradient(
+          colors: [.white, .clear],
+          startPoint: UnitPoint(x: layoutDirection == .leftToRight ? 0 : 1, y: 0.5),
+          endPoint: UnitPoint(x: layoutDirection == .leftToRight ? 1 : 0, y: 0.5)
+        )
+        .environment(\.layoutDirection, .leftToRight)
+        .frame(width: TabTitlePresentation.fadeWidth)
+      }
+      .frame(width: TabTitlePresentation.maximumWidth, alignment: .leading)
+    }
+  }
+
+  private struct NoteTabTitleLabel: View {
+    let title: String
+
+    var body: some View {
+      ViewThatFits(in: .horizontal) {
+        Text(title)
+          .lineLimit(1)
+          .fixedSize(horizontal: true, vertical: false)
+        Text(title)
+          .lineLimit(1)
+          .fixedSize(horizontal: true, vertical: false)
+          .frame(width: TabTitlePresentation.maximumWidth, alignment: .leading)
+          .clipped()
+          .mask { NoteTabTitleFadeMask() }
+      }
+      .frame(maxWidth: TabTitlePresentation.maximumWidth, alignment: .leading)
+      .fixedSize(horizontal: true, vertical: false)
+      .accessibilityLabel(title)
     }
   }
 
@@ -916,6 +999,7 @@
     @StateObject private var fluidTabDrag = FluidTabDragController()
     @StateObject private var menuWindowDrop = MenuWindowNoteDropCoordinator()
     @StateObject private var menuPanelResize = MenuPanelResizeController()
+    @State private var tabStripContentWidth: CGFloat = 0
     @State private var tabColorPickerNoteID: UUID?
     @State private var activeFolderID: UUID?
     @State private var bannerDismissalState = NotesPanelBannerDismissalState()
@@ -982,7 +1066,7 @@
               if bannerDismissalState.isPresented(occurrence) {
                 HStack(spacing: 8) {
                   Label(failure.message, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
+                    .fleckUIFont(.caption)
                   Spacer()
                   ForEach(failure.actions, id: \.pane) { action in
                     Button(action.title) {
@@ -997,7 +1081,8 @@
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
-                .background(.quaternary.opacity(0.35))
+                .foregroundStyle(theme.color(.textPrimary))
+                .background(theme.color(.raised))
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel("Dictation unavailable")
               }
@@ -1012,6 +1097,9 @@
                   presentation: banner,
                   motion: motion,
                   onUndo: { Task { await appState.undoLatestAgentChange() } },
+                  onDoNotShowAgain: {
+                    appState.updatePreferences { $0.showAgentUpdateBanners = false }
+                  },
                   onDismiss: { dismissBanner(occurrence) }
                 )
                 .animation(motion.quick, value: banner)
@@ -1022,14 +1110,14 @@
               .layoutPriority(1)
             if let error = appState.saveError {
               Text("Could not save: \(error)")
-                .font(.caption)
+                .fleckUIFont(.caption)
                 .foregroundStyle(theme.color(.error))
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let error = appState.noteFileReferenceError {
               Text(error)
-                .font(.caption)
+                .fleckUIFont(.caption)
                 .foregroundStyle(theme.color(.error))
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1044,12 +1132,10 @@
         .accessibilityHidden(isBlockingOverlayPresented)
       }
       .frame(
-        width: storedPanelSize?.width,
-        height: storedPanelSize?.height
-      )
-      .frame(
-        maxWidth: sizing == .container ? .infinity : nil,
-        maxHeight: sizing == .container ? .infinity : nil
+        minWidth: storedPanelSize?.width,
+        maxWidth: sizing == .container ? .infinity : storedPanelSize?.width,
+        minHeight: storedPanelSize?.height,
+        maxHeight: sizing == .container ? .infinity : storedPanelSize?.height
       )
       .background {
         if !isPinned, sizing == .storedPreferences {
@@ -1089,6 +1175,10 @@
           }
         }
       }
+      .background(
+        FleckWindowTheme(usesOpaqueBackground: isPinned || chromeMaterialPolicy == .opaque)
+          .frame(width: 0, height: 0)
+      )
       .tint(theme.color(.accent))
       .foregroundStyle(theme.color(.textPrimary))
       .environment(\.fleckChromeAppearance, appState.preferences.chromeAppearance)
@@ -1355,13 +1445,13 @@
           .font(.system(size: 28))
           .foregroundStyle(theme.color(.error))
         Text("Fleck needs your help")
-          .font(.headline)
+          .fleckUIFont(.headline)
         Text(
           "Fleck found both legacy and current note data. Nothing was changed. "
             + "Close Fleck and resolve the two Application Support folders "
             + "before reopening it."
         )
-        .font(.callout)
+        .fleckUIFont(.callout)
         .multilineTextAlignment(.center)
         .foregroundStyle(theme.color(.textSecondary))
         Text(String(describing: error))
@@ -1412,6 +1502,7 @@
             }
           )
           .frame(width: 320)
+          .fleckPopoverTheme(theme)
         }
         Button {
           let pointerActivation = searchPointerActivationPending
@@ -1538,7 +1629,7 @@
         .accessibilityLabel("Customize")
         .help("Customize")
       }
-      .buttonStyle(.plain)
+      .buttonStyle(FleckQuietButtonStyle())
       .padding(.horizontal, 14)
       .padding(.vertical, 11)
     }
@@ -1601,7 +1692,14 @@
     private var tabStrip: some View {
       ScrollViewReader { scrollProxy in
         GeometryReader { proxy in
-          let tabViewportWidth = TabOverflowPresentation.tabViewportWidth(totalStripWidth: proxy.size.width)
+          let hasOverflow = TabOverflowPresentation.overflows(
+            contentWidth: tabStripContentWidth,
+            totalStripWidth: proxy.size.width
+          )
+          let tabViewportWidth = TabOverflowPresentation.tabViewportWidth(
+            totalStripWidth: proxy.size.width,
+            showsOverflow: hasOverflow
+          )
         HStack(spacing: 0) {
           ZStack(alignment: .trailing) {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -1627,7 +1725,7 @@
                   Image(systemName: "pin.fill")
                     .font(.caption2)
                 }
-                Text(note.displayTitle).lineLimit(1)
+                NoteTabTitleLabel(title: note.displayTitle)
                 if appState.isSharedWithAnyActiveProfile(note.id) {
                   Image(systemName: "point.3.connected.trianglepath.dotted")
                     .font(.caption2)
@@ -1637,6 +1735,7 @@
               .foregroundStyle(note.id == appState.workspace.selectedNoteID
                 ? selectedTabLabelInk(for: note)
                 : theme.color(.textPrimary))
+              .fleckUIFont(.body)
               .padding(.horizontal, 10)
               .padding(.vertical, 6)
               .contentShape(Capsule())
@@ -1767,13 +1866,19 @@
               arrowEdge: .bottom
             ) {
               tabColorPicker(noteID: note.id)
+                .fleckPopoverTheme(theme)
             }
                 }
               }
               .padding(.horizontal, 12)
+              .fixedSize(horizontal: true, vertical: false)
+              .background {
+                TabStripContentWidthObserver { width in
+                  tabStripContentWidth = width
+                }
+              }
               .frame(height: 37, alignment: .center)
               .animation(motion.spatial, value: visibleNotes.map(\.id))
-              .fixedSize(horizontal: true, vertical: false)
               .frame(minWidth: tabViewportWidth, alignment: .leading)
               }
                 Color.clear
@@ -1784,36 +1889,49 @@
           }
           .frame(width: tabViewportWidth, alignment: .leading)
 
-          HStack(spacing: 0) {
-            Button {
-              scrollProxy.scrollTo(TabScrollTarget.leading, anchor: .leading)
-            } label: {
-              Image(systemName: "chevron.left")
-                .font(.caption)
-                .frame(width: 28, height: 28)
-                .frame(width: 28, height: 37)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Reveal earlier tabs")
-            .help("Show earlier tabs")
-            .disabled(visibleNotes.isEmpty)
+          if hasOverflow {
+            HStack(spacing: 0) {
+              Button {
+                scrollProxy.scrollTo(TabScrollTarget.leading, anchor: .leading)
+              } label: {
+                Image(systemName: "chevron.left")
+                  .font(.caption)
+                  .frame(width: 28, height: 28)
+                  .frame(width: 28, height: 37)
+                  .contentShape(Rectangle())
+              }
+              .buttonStyle(.plain)
+              .accessibilityLabel("Reveal earlier tabs")
+              .accessibilityIdentifier("note-tab-overflow-earlier")
+              .help("Show earlier tabs")
+              .disabled(visibleNotes.isEmpty)
 
-            Button {
-              scrollProxy.scrollTo(TabScrollTarget.trailing, anchor: .trailing)
-            } label: {
-              Image(systemName: "chevron.right")
-                .font(.caption)
-                .frame(width: 28, height: 28)
-                .frame(width: 28, height: 37)
-                .contentShape(Rectangle())
+              Button {
+                scrollProxy.scrollTo(TabScrollTarget.trailing, anchor: .trailing)
+              } label: {
+                Image(systemName: "chevron.right")
+                  .font(.caption)
+                  .frame(width: 28, height: 28)
+                  .frame(width: 28, height: 37)
+                  .contentShape(Rectangle())
+              }
+              .buttonStyle(.plain)
+              .accessibilityLabel("Reveal later tabs")
+              .accessibilityIdentifier("note-tab-overflow-later")
+              .help("Show later tabs")
+              .disabled(visibleNotes.isEmpty)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Reveal later tabs")
-            .help("Show later tabs")
-            .disabled(visibleNotes.isEmpty)
+            .frame(
+              width: TabOverflowPresentation.tabOverflowRailWidth,
+              height: 37,
+              alignment: .center
+            )
           }
-          .frame(width: 56, height: 37, alignment: .center)
+        }
+        .onChange(of: hasOverflow) { wasOverflowing, isOverflowing in
+          if wasOverflowing && !isOverflowing {
+            scrollProxy.scrollTo(TabScrollTarget.leading, anchor: .leading)
+          }
         }
         }
         .frame(height: 37)
@@ -2190,7 +2308,7 @@
 
         agentActivityContent
           .frame(maxWidth: 520, maxHeight: 400)
-          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+          .fleckThemedSurface(cornerRadius: 14)
           .clipShape(RoundedRectangle(cornerRadius: 14))
           .shadow(radius: 20, y: 8)
           .accessibilityElement(children: .contain)
@@ -2619,6 +2737,7 @@
     @EnvironmentObject private var appState: AppState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.fleckThemeSnapshot) private var theme
+    @Environment(\.fleckUIFont) private var uiFont
     @FocusState private var focusedRow: FocusedRow?
     @FocusState private var isUnfiledDisclosureFocused: Bool
     @Binding private var draggedSource: NoteDropSource?
@@ -2637,6 +2756,8 @@
     @State private var rowFrames: [NoteDropTarget: CGRect] = [:]
     @State private var folderCreationSource: AppInteractionSource = .keyboard
     @State private var isNewFolderTextEditing = false
+    @State private var isRenamingFolderTextEditing = false
+    @State private var renameFocusRequest: UInt64 = 0
     @State private var focusedRowBeforeComposition: FocusedRow?
     @State private var wasUnfiledDisclosureFocusedBeforeComposition = false
     private let folderNavigatorMaxHeight: CGFloat = 32
@@ -2740,6 +2861,12 @@
       .onChange(of: isUnfiledCompact) { _, _ in
         if isCreatingFolder { frozenUnfiledDisclosure = nil }
       }
+      .onChange(of: isRenamingFolderTextEditing) { wasEditing, isEditing in
+        guard let editingFolderID, wasEditing, !isEditing,
+          appState.workspace.folders.contains(where: { $0.id == editingFolderID })
+        else { return }
+        commitFolderEditing(source: currentInteractionSource, preservingFocus: true)
+      }
       .animation(
         motion.allowsSpatialMotion(for: unfiledInteractionSource) ? folderMorphAnimation : nil,
         value: isUnfiledCompact
@@ -2765,6 +2892,9 @@
       }
       .onChange(of: appState.workspace.folders.map(\.id)) { _, ids in
         if let folderReorder, folderReorder.originalIDs != ids { self.folderReorder = nil }
+        if let editingFolderID, !ids.contains(editingFolderID) {
+          cancelFolderEditing()
+        }
       }
       .onDisappear { folderReorder = nil }
       .onExitCommand {
@@ -2850,6 +2980,7 @@
     private func overflowControls(scrollProxy: ScrollViewProxy) -> some View {
       HStack(spacing: 0) {
         Button {
+          guard !isCreatingFolder else { return }
           scrollProxy.scrollTo(FolderScrollTarget.leading, anchor: .leading)
         } label: {
           Image(systemName: "chevron.left")
@@ -2862,6 +2993,7 @@
         .help("Show earlier folders")
 
         Button {
+          guard !isCreatingFolder else { return }
           scrollProxy.scrollTo(FolderScrollTarget.trailing, anchor: .trailing)
         } label: {
           Image(systemName: "chevron.right")
@@ -2927,6 +3059,9 @@
     private struct NativeFolderNameField: NSViewRepresentable {
       @Binding var text: String
       @Binding var isEditing: Bool
+      var placeholder = "New folder"
+      var accessibilityIdentifier = "folder-new-name"
+      var focusRequest: UInt64 = 0
       let onSubmit: () -> Void
       let onCancel: () -> Void
 
@@ -2939,13 +3074,42 @@
         )
       }
 
+      func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView field: OwnershipReportingTextField,
+        context: Context
+      ) -> CGSize? {
+        let font = field.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let currentText = (field.currentEditor() as? NSTextView)?.string ?? text
+        let textCell = NSTextFieldCell(textCell: currentText)
+        let placeholderCell = NSTextFieldCell(textCell: placeholder)
+        for cell in [textCell, placeholderCell] {
+          cell.font = font
+          cell.isBezeled = field.isBezeled
+          cell.isBordered = field.isBordered
+          cell.drawsBackground = field.drawsBackground
+          cell.controlSize = field.cell?.controlSize ?? .regular
+        }
+        let textWidth = (currentText as NSString).size(withAttributes: [.font: font]).width
+        let placeholderTextWidth = (placeholder as NSString)
+          .size(withAttributes: [.font: font]).width
+        let caretRoom: CGFloat = 2
+        let idealWidth = max(
+          max(textWidth, textCell.cellSize.width),
+          max(placeholderTextWidth, placeholderCell.cellSize.width)
+        ) + caretRoom
+        let idealHeight = max(textCell.cellSize.height, placeholderCell.cellSize.height)
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? idealWidth
+        return CGSize(width: width, height: idealHeight)
+      }
+
       func makeNSView(context: Context) -> OwnershipReportingTextField {
         let field = OwnershipReportingTextField(string: text)
-        field.placeholderString = "New folder"
+        field.placeholderString = placeholder
         field.isBezeled = false
         field.drawsBackground = false
         field.focusRingType = .none
-        field.setAccessibilityIdentifier("folder-new-name")
+        field.setAccessibilityIdentifier(accessibilityIdentifier)
         field.delegate = context.coordinator
         field.onOwnershipChange = { [weak coordinator = context.coordinator] ownsEditor in
           coordinator?.setEditingOwnership(ownsEditor)
@@ -2959,6 +3123,10 @@
         context.coordinator.isEditing = $isEditing
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onCancel = onCancel
+        if context.coordinator.focusRequest != focusRequest {
+          context.coordinator.focusRequest = focusRequest
+          context.coordinator.hasFocused = false
+        }
         if (field.currentEditor() as? NSTextView)?.hasMarkedText() != true,
           field.stringValue != text
         {
@@ -3010,6 +3178,7 @@
         var onCancel: () -> Void
         var isActive = true
         var hasFocused = false
+        var focusRequest: UInt64 = 0
         var focusGeneration: UInt64 = 0
 
         init(
@@ -3103,6 +3272,7 @@
       let unfiledNotes = appState.visibleNotes(in: nil)
       return HStack(spacing: 0) {
         Button {
+          focusedRow = .unfiled
           onSelect(nil)
         } label: {
           rowLabel(
@@ -3118,11 +3288,6 @@
           )
         }
         .buttonStyle(.plain)
-        .modifier(
-          FolderRowFocusPublisher(onFocusChange: { isFocused in
-            updateFocusedRow(.unfiled, isFocused: isFocused)
-          })
-        )
         .focusable()
         .focused($focusedRow, equals: .unfiled)
         .focusEffectDisabled()
@@ -3182,9 +3347,13 @@
     @ViewBuilder
     private func folderRow(_ folder: Folder) -> some View {
       if editingFolderID == folder.id {
-        folderEditor(label: "Folder name", focus: .folder(folder.id))
+        folderEditor(
+          label: "Folder name",
+          accessibilityIdentifier: "folder-rename-\(folder.id.uuidString)"
+        )
       } else {
         Button {
+          focusedRow = .folder(folder.id)
           onSelect(folder.id)
         } label: {
           rowLabel(
@@ -3198,14 +3367,6 @@
           )
         }
         .buttonStyle(.plain)
-        .modifier(
-          FolderRowFocusPublisher(onFocusChange: { isFocused in
-            updateFocusedRow(.folder(folder.id), isFocused: isFocused)
-          })
-        )
-        .focusable()
-        .focused($focusedRow, equals: .folder(folder.id))
-        .focusEffectDisabled()
         .background(nativeNoteDropAnchor(.folder(folder.id)))
         .modifier(ReorderDropTarget(
           destinationID: folder.id, type: FolderDragPayload.folderType,
@@ -3232,6 +3393,9 @@
             folderReorder = nil
           })
         }))
+        .focusable()
+        .focused($focusedRow, equals: .folder(folder.id))
+        .focusEffectDisabled()
         .contextMenu {
           Button("Move Left", systemImage: "arrow.left") { moveFolder(folder.id, offset: -1) }
           Button("Move Right", systemImage: "arrow.right") { moveFolder(folder.id, offset: 1) }
@@ -3257,78 +3421,21 @@
       }
     }
 
-    private struct FolderActionButtonStyle: ButtonStyle {
-      enum Role: Equatable {
-        case save
-        case cancel
-      }
-
-      let role: Role
-      let accent: Color
-      let motion: AppMotion
-      @Environment(\.fleckThemeSnapshot) private var theme
-      @Environment(\.isEnabled) private var isEnabled
-
-      func makeBody(configuration: Configuration) -> some View {
-        let isSave = role == .save
-        return configuration.label
-          .font(.caption.weight(isSave ? .semibold : .medium))
-          .foregroundStyle(isSave ? accent : theme.color(.textSecondary))
-          .frame(height: 22)
-          .padding(.horizontal, 8)
-          .background(
-            isSave
-              ? accent.opacity(configuration.isPressed ? 0.24 : 0.16)
-              : Color.primary.opacity(configuration.isPressed ? 0.10 : 0.06),
-            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-          )
-          .scaleEffect(isEnabled && configuration.isPressed ? motion.pressScale : 1)
-          .opacity(isEnabled ? 1 : 0.48)
-          .animation(motion.quick, value: configuration.isPressed)
-      }
-    }
-
     @ViewBuilder
-    private func folderEditor(label: String, focus: FocusedRow) -> some View {
-      let accent = theme.color(.accent)
-      HStack(spacing: 5) {
-        TextField(label, text: $folderNameDraft)
-          .textFieldStyle(.plain)
-          .focusEffectDisabled()
-          .focused($focusedRow, equals: focus)
-          .fleckNeutralControlOutline(
-            isFocused: focusedRow == focus,
-            cornerRadius: 6,
-            idleOpacity: 0.22
-          )
-          .onSubmit { commitFolderEditing() }
-          .onExitCommand { cancelFolderEditing() }
-        Button("Save") { commitFolderEditing() }
-          .buttonStyle(FolderActionButtonStyle(role: .save, accent: accent, motion: motion))
-          .disabled(
-            folderNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-          )
-          .accessibilityLabel("Save folder name")
-        Button("Cancel", role: .cancel) { cancelFolderEditing() }
-          .buttonStyle(FolderActionButtonStyle(role: .cancel, accent: accent, motion: motion))
-          .accessibilityLabel("Cancel folder name")
-      }
-      .accessibilityElement(children: .contain)
-    }
-
-    private struct FolderRowFocusPublisher: ViewModifier {
-      @Environment(\.isFocused) private var isNativeFocused
-      let onFocusChange: (Bool) -> Void
-
-      init(onFocusChange: @escaping (Bool) -> Void) {
-        self.onFocusChange = onFocusChange
-      }
-
-      func body(content: Content) -> some View {
-        content.onChange(of: isNativeFocused) { _, isFocused in
-          onFocusChange(isFocused)
-        }
-      }
+    private func folderEditor(
+      label: String,
+      accessibilityIdentifier: String
+    ) -> some View {
+      NativeFolderNameField(
+        text: $folderNameDraft,
+        isEditing: $isRenamingFolderTextEditing,
+        placeholder: label,
+        accessibilityIdentifier: accessibilityIdentifier,
+        focusRequest: renameFocusRequest,
+        onSubmit: { commitFolderEditing() },
+        onCancel: { cancelFolderEditing() }
+      )
+      .fixedSize(horizontal: true, vertical: false)
     }
 
     @ViewBuilder
@@ -3363,7 +3470,7 @@
           Spacer(minLength: 4)
         }
         Text(count, format: .number)
-          .font(.caption.monospacedDigit())
+          .font(uiFont.font(.caption).monospacedDigit())
           .foregroundStyle(theme.color(.caption))
       }
       .padding(.horizontal, 8)
@@ -3521,8 +3628,8 @@
 
     private var isFolderTextInputActive: Bool {
       if isCreatingFolder { return isNewFolderTextEditing }
-      guard let editingFolderID else { return false }
-      return focusedRow == .folder(editingFolderID)
+      guard editingFolderID != nil else { return false }
+      return isRenamingFolderTextEditing
     }
 
     private var currentInteractionSource: AppInteractionSource {
@@ -3556,6 +3663,7 @@
     private func beginNewFolder(source: AppInteractionSource) {
       guard !isCreatingFolder else { return }
       editingFolderID = nil
+      isRenamingFolderTextEditing = false
       folderNameDraft = ""
       folderCreationSource = source
       frozenOverflow = overflowPresentation.overflows
@@ -3589,28 +3697,48 @@
       frozenUnfiledDisclosure = nil
       focusedRowBeforeComposition = nil
       wasUnfiledDisclosureFocusedBeforeComposition = false
+      isRenamingFolderTextEditing = false
       editingFolderID = id
       folderNameDraft = folder.name
-      focusedRow = .folder(id)
       return true
     }
 
-    private func commitFolderEditing(source: AppInteractionSource = .keyboard) {
-      guard !trimmedFolderName.isEmpty else { return }
+    private func commitFolderEditing(
+      source: AppInteractionSource = .keyboard,
+      preservingFocus: Bool = false
+    ) {
+      guard !trimmedFolderName.isEmpty else {
+        if preservingFocus, editingFolderID != nil {
+          focusedRow = nil
+          renameFocusRequest &+= 1
+        }
+        return
+      }
       do {
         if isCreatingFolder {
           _ = try appState.createFolder(named: folderNameDraft)
         } else if let editingFolderID {
           try appState.renameFolder(id: editingFolderID, name: folderNameDraft)
         }
-        cancelFolderEditing(source: source)
+        if preservingFocus {
+          editingFolderID = nil
+          isRenamingFolderTextEditing = false
+          folderNameDraft = ""
+        } else {
+          cancelFolderEditing(source: source)
+        }
       } catch {
         appState.saveError = "Could not update folder: \(String(describing: error))"
+        if preservingFocus, editingFolderID != nil {
+          focusedRow = nil
+          renameFocusRequest &+= 1
+        }
       }
     }
 
     private func cancelFolderEditing(source: AppInteractionSource = .keyboard) {
       editingFolderID = nil
+      isRenamingFolderTextEditing = false
       guard isCreatingFolder else {
         folderNameDraft = ""
         focusedRow = nil
@@ -3618,20 +3746,20 @@
       }
       folderCreationSource = source
       isNewFolderTextEditing = false
-      withAnimation(
-        folderCreationAnimation(for: source),
-        completionCriteria: .logicallyComplete
-      ) {
-        isCreatingFolder = false
-        folderNameDraft = ""
-        focusedRow = focusedRowBeforeComposition
-        isUnfiledDisclosureFocused = wasUnfiledDisclosureFocusedBeforeComposition
-      } completion: {
+      var transaction = Transaction(animation: folderCreationAnimation(for: source))
+      transaction.disablesAnimations = source == .keyboard
+      transaction.addAnimationCompletion(criteria: .logicallyComplete) {
         guard !isCreatingFolder else { return }
         frozenOverflow = nil
         frozenUnfiledDisclosure = nil
         focusedRowBeforeComposition = nil
         wasUnfiledDisclosureFocusedBeforeComposition = false
+      }
+      withTransaction(transaction) {
+        isCreatingFolder = false
+        folderNameDraft = ""
+        focusedRow = focusedRowBeforeComposition
+        isUnfiledDisclosureFocused = wasUnfiledDisclosureFocusedBeforeComposition
       }
     }
 
@@ -3648,14 +3776,6 @@
       guard isCreatingFolder else { return false }
       return FolderNavigatorOcclusionPresentation(composerLeadingX: composerLeadingX)
         .covers(rowFrames[target])
-    }
-
-    private func updateFocusedRow(_ row: FocusedRow, isFocused: Bool) {
-      if isFocused {
-        focusedRow = row
-      } else if focusedRow == row {
-        focusedRow = nil
-      }
     }
 
     private func activateFocusedRow() {
@@ -3821,7 +3941,7 @@
 
         TrashView(onDone: onDone)
           .frame(maxWidth: 520, maxHeight: 400)
-          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+          .fleckThemedSurface(cornerRadius: 14)
           .clipShape(RoundedRectangle(cornerRadius: 14))
           .shadow(radius: 20, y: 8)
           .accessibilityElement(children: .contain)
@@ -3852,9 +3972,9 @@
         VStack(alignment: .leading, spacing: 16) {
           VStack(alignment: .leading, spacing: 6) {
             Text("Delete \(folder.name)?")
-              .font(.headline)
+              .fleckUIFont(.headline)
             Text("Notes in this folder move to Unfiled. No notes are deleted.")
-              .font(.callout)
+              .fleckUIFont(.callout)
               .foregroundStyle(theme.color(.textSecondary))
           }
 
@@ -3868,7 +3988,7 @@
         }
         .padding(20)
         .frame(maxWidth: 360)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .fleckThemedSurface(cornerRadius: 14)
         .shadow(radius: 20, y: 8)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Delete folder confirmation")
@@ -3891,9 +4011,9 @@
         VStack(alignment: .leading, spacing: 16) {
           VStack(alignment: .leading, spacing: 6) {
             Text("Move “\(note.displayTitle)” to Trash?")
-              .font(.headline)
+              .fleckUIFont(.headline)
             Text("This note can be restored from Trash for 30 days.")
-              .font(.callout)
+              .fleckUIFont(.callout)
               .foregroundStyle(theme.color(.textSecondary))
           }
 
@@ -3910,7 +4030,7 @@
         }
         .padding(20)
         .frame(maxWidth: 360)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .fleckThemedSurface(cornerRadius: 14)
         .shadow(radius: 20, y: 8)
       }
     }
@@ -3950,11 +4070,11 @@
           .foregroundStyle(.secondary)
         VStack(alignment: .leading, spacing: 1) {
           Text(presentation.statusCopy)
-            .font(.caption)
+            .fleckUIFont(.caption)
             .foregroundStyle(theme.color(.caption))
           if let detail = presentation.detailCopy {
             Text(detail)
-              .font(.caption2)
+              .fleckUIFont(.caption2)
               .foregroundStyle(theme.color(.caption))
           }
           if mode != .recovery {
@@ -3970,17 +4090,17 @@
               .popover(isPresented: $showsSmartCaptureHelp, arrowEdge: .bottom) {
                 VStack(alignment: .leading, spacing: 6) {
                   Text("Smart Capture")
-                    .font(.headline)
+                    .fleckUIFont(.headline)
                   Text(Self.smartCaptureHelp)
                   Text("Example: “Travel plans.”")
                     .foregroundStyle(theme.color(.textSecondary))
                 }
-                .font(.callout)
+                .fleckUIFont(.callout)
                 .frame(width: 280, alignment: .leading)
                 .padding(12)
               }
             }
-            .font(.caption2)
+            .fleckUIFont(.caption2)
             .foregroundStyle(theme.color(.caption))
           }
         }
@@ -4031,6 +4151,7 @@
     }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.fleckThemeSnapshot) private var theme
     @ObservedObject var appState: AppState
     @ObservedObject var commands: EditorCommands
     @ObservedObject var dictationRuntime: DictationRuntime
@@ -4040,6 +4161,8 @@
     let onDelete: () -> Void
     @State private var fontPickerTarget: FontPickerTarget?
     @State private var fontSizeText = ""
+    @State private var hasUncommittedFontSizeEdit = false
+    @State private var isFontSizeHovered = false
     @FocusState private var isFontSizeFocused: Bool
     @State private var fontSizePickerNoteID: UUID?
     @State private var webLinkTarget: EditorWebLinkTarget?
@@ -4077,6 +4200,7 @@
       .accessibilityHidden(!isEditorVisible)
       .popover(item: $presentedPopover, arrowEdge: .bottom) { popover in
         popoverContent(popover)
+          .fleckPopoverTheme(theme)
       }
       .onAppear(perform: syncFontSizeText)
       .onChange(of: commands.currentFontSize) { _, _ in syncFontSizeText() }
@@ -4935,20 +5059,42 @@
     }
 
     private func fontSizeField(targetNoteID: UUID? = nil) -> some View {
-      TextField("Font size", text: $fontSizeText)
+      TextField(
+        "Size",
+        text: Binding(
+          get: { fontSizeText },
+          set: { value in
+            guard value != fontSizeText else { return }
+            fontSizeText = value
+            hasUncommittedFontSizeEdit = true
+          }
+        ),
+        prompt: Text(commands.isFontSizeMixed ? "Mixed" : "Size")
+      )
         .textFieldStyle(.plain)
         .focusEffectDisabled()
+        .multilineTextAlignment(.center)
+        .monospacedDigit()
         .frame(width: 48)
         .focused($isFontSizeFocused)
-        .fleckNeutralControlOutline(
-          isFocused: isFontSizeFocused,
-          cornerRadius: 6,
-          idleOpacity: 0.22
-        )
+        .overlay(alignment: .bottom) {
+          Rectangle()
+            .fill(
+              isFontSizeFocused
+                ? theme.color(.accent)
+                : isFontSizeHovered ? Color.primary.opacity(0.22) : .clear
+            )
+            .frame(height: isFontSizeFocused ? 1.5 : 1)
+            .padding(.horizontal, 4)
+        }
+        .onHover { isFontSizeHovered = $0 }
         .onChange(of: isFontSizeFocused) { wasFocused, isFocused in
           if wasFocused && !isFocused { applyFontSizeText(targetNoteID: targetNoteID) }
         }
         .onSubmit { applyFontSizeText(targetNoteID: targetNoteID) }
+        .onDisappear {
+          if targetNoteID != nil { applyFontSizeText(targetNoteID: targetNoteID) }
+        }
         .accessibilityLabel("Font size")
         .accessibilityValue(commands.isFontSizeMixed ? "Mixed" : fontSizeDisplay)
         .accessibilityHint("Enter a size from 1 through 512 points.")
@@ -5004,12 +5150,15 @@
       guard isEditorVisible,
         targetNoteID == nil || targetNoteID == appState.selectedNote?.id
       else { return }
-      if let size = FontSizeSubmission.requestedSize(
-        for: fontSizeText,
-        currentSize: commands.currentFontSize,
-        isMixed: commands.isFontSizeMixed
-      ) {
-        _ = commands.applyFontSize(size)
+      if hasUncommittedFontSizeEdit {
+        hasUncommittedFontSizeEdit = false
+        if let size = FontSizeSubmission.requestedSize(
+          for: fontSizeText,
+          currentSize: commands.currentFontSize,
+          isMixed: commands.isFontSizeMixed
+        ) {
+          _ = commands.applyFontSize(size)
+        }
       }
       fontSizeText = fontSizeDisplay
     }
@@ -5271,7 +5420,7 @@
             .transition(.opacity)
         }
       }
-      .font(.caption)
+      .fleckUIFont(.caption)
       .frame(width: 62, height: 22, alignment: .trailing)
       .animation(motion.quick, value: status)
       .accessibilityElement(children: .combine)
@@ -5815,9 +5964,14 @@
     var animatesDisplacement = false
 
     func body(content: Content) -> some View {
-      ReorderDragHost(content: content, begin: begin, began: began, moved: moved,
+      let host = ReorderDragHost(content: content, begin: begin, began: began, moved: moved,
         activate: activate, noteID: noteID, displacement: displacement,
         animatesDisplacement: animatesDisplacement)
+      if noteID != nil {
+        host.accessibilityRepresentation { content }
+      } else {
+        host
+      }
     }
   }
 

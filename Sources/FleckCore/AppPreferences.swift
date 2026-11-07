@@ -15,6 +15,9 @@ public struct AppPreferences: Codable, Equatable, Sendable {
 
   public var fontFamily: String
   public var fontSize: Double
+  public var uiFontFamily: String? {
+    didSet { uiFontFamily = Self.normalizedUIFontFamily(uiFontFamily) }
+  }
   public var editorTypographyVersion: Int
   public var accentHex: String
   public var editorTextHex: String?
@@ -43,16 +46,21 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     set { legacyDictationShortcut = newValue }
   }
   public var dictationModifierKey: DictationModifierKey
-  public var dictationCapsuleDock: DictationCapsuleDock
+  public var dictationCapsuleDock: DictationCapsuleDock {
+    didSet { dictationCapsuleDock = dictationCapsuleDock.supportedPlacement }
+  }
   public var dictationHistoryEnabled: Bool
   public var dictationCapsuleEnabled: Bool
   public var showDictationShortcutGuide: Bool
   public var dictationMicrophoneUID: String?
+  public var pendingDictationModelID: String?
+  public var pendingCleanupModelID: String?
   public var pinnedLocalModelKeys: [String]
   public var onboardingProgress: OnboardingProgress?
 
   public init(
     fontFamily: String = "Avenir Next", fontSize: Double = 17,
+    uiFontFamily: String? = nil,
     editorTypographyVersion: Int = AppPreferences.currentEditorTypographyVersion,
     accentHex: String = AppPreferences.defaultAccentHex, editorTextHex: String? = nil,
     editorBackgroundHex: String? = nil, panelOpacity: Double = 0.82,
@@ -75,11 +83,14 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     dictationCapsuleEnabled: Bool = true,
     showDictationShortcutGuide: Bool = true,
     dictationMicrophoneUID: String? = nil,
+    pendingDictationModelID: String? = nil,
+    pendingCleanupModelID: String? = nil,
     pinnedLocalModelKeys: [String] = [],
     onboardingProgress: OnboardingProgress? = nil
   ) {
     self.fontFamily = fontFamily
     self.fontSize = fontSize
+    self.uiFontFamily = Self.normalizedUIFontFamily(uiFontFamily)
     self.editorTypographyVersion = editorTypographyVersion
     self.accentHex = accentHex
     self.editorTextHex = editorTextHex
@@ -106,24 +117,27 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       : .standard
     self.legacyDictationShortcut = dictationShortcut
     self.dictationModifierKey = dictationModifierKey
-    self.dictationCapsuleDock = dictationCapsuleDock
+    self.dictationCapsuleDock = dictationCapsuleDock.supportedPlacement
     self.dictationHistoryEnabled = dictationHistoryEnabled
     self.dictationCapsuleEnabled = dictationCapsuleEnabled
     self.showDictationShortcutGuide = showDictationShortcutGuide
     self.dictationMicrophoneUID = dictationMicrophoneUID
+    self.pendingDictationModelID = pendingDictationModelID
+    self.pendingCleanupModelID = pendingCleanupModelID
     self.pinnedLocalModelKeys = Array(Set(pinnedLocalModelKeys)).sorted()
     self.onboardingProgress = onboardingProgress
   }
 
   private enum CodingKeys: String, CodingKey {
-    case fontFamily, fontSize, editorTypographyVersion, accentHex, editorTextHex,
+    case fontFamily, fontSize, uiFontFamily, editorTypographyVersion, accentHex, editorTextHex,
       editorBackgroundHex, panelOpacity, theme, colorTheme, chromeAppearance, panelWidth, panelHeight, panelSizingVersion,
       pinnedPanelWidth, pinnedPanelHeight, showFormattingBar, showAgentUpdateBanners,
       isUnfiledCompact, confirmBeforeMovingNotesToTrash, automaticLists,
       launchAtLogin, shortcuts, dictationSpeechEngine,
       legacyDictationShortcut = "dictationShortcut", dictationModifierKey,
       dictationCapsuleDock, dictationHistoryEnabled, dictationCapsuleEnabled,
-      showDictationShortcutGuide, dictationMicrophoneUID, pinnedLocalModelKeys,
+      showDictationShortcutGuide, dictationMicrophoneUID,
+      pendingDictationModelID, pendingCleanupModelID, pinnedLocalModelKeys,
       onboardingProgress
   }
   public init(from decoder: Decoder) throws {
@@ -203,6 +217,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     self.init(
       fontFamily: migratesUntouchedTypography ? "Avenir Next" : decodedFamily,
       fontSize: migratesUntouchedTypography ? 17 : decodedSize,
+      uiFontFamily: try? c.decodeIfPresent(String.self, forKey: .uiFontFamily),
       editorTypographyVersion:
         decodedTypographyVersion ?? Self.currentEditorTypographyVersion,
       accentHex: decodedAccentHex ?? Self.defaultAccentHex,
@@ -253,6 +268,14 @@ public struct AppPreferences: Codable, Equatable, Sendable {
         forKey: .showDictationShortcutGuide
       ) ?? true,
       dictationMicrophoneUID: try c.decodeIfPresent(String.self, forKey: .dictationMicrophoneUID),
+      pendingDictationModelID: try c.decodeIfPresent(
+        String.self,
+        forKey: .pendingDictationModelID
+      ),
+      pendingCleanupModelID: try c.decodeIfPresent(
+        String.self,
+        forKey: .pendingCleanupModelID
+      ),
       pinnedLocalModelKeys: try c.decodeIfPresent(
         [String].self,
         forKey: .pinnedLocalModelKeys
@@ -261,6 +284,15 @@ public struct AppPreferences: Codable, Equatable, Sendable {
         OnboardingProgress.self,
         forKey: .onboardingProgress
       ))
+  }
+
+  private static func normalizedUIFontFamily(_ value: String?) -> String? {
+    guard let family = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !family.isEmpty, !family.hasPrefix("."),
+      !family.contains("/"), !family.contains("\\"),
+      family.rangeOfCharacter(from: .controlCharacters) == nil
+    else { return nil }
+    return family
   }
 
   private static func clampedPanelDimension(

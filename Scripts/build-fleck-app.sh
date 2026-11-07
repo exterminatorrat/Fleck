@@ -124,6 +124,22 @@ readonly staged_app="$staging_root/Fleck.app"
 /bin/chmod 755 \
   "$staged_app/Contents/MacOS/Fleck" \
   "$staged_app/Contents/SharedSupport/fleck-agent"
+linked_libraries="$(xcrun otool -L "$app_executable")"
+staged_sparkle=''
+if /usr/bin/grep -Fq '@rpath/Sparkle.framework/Versions/B/Sparkle ' <<<"$linked_libraries"; then
+  sparkle_framework="$build_root/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+  [[ -f "$sparkle_framework/Versions/B/Sparkle" ]] || {
+    printf '%s\n' 'error: linked Sparkle framework is missing from the resolved build artifacts' >&2
+    exit 1
+  }
+  /bin/mkdir -p "$staged_app/Contents/Frameworks"
+  staged_sparkle="$staged_app/Contents/Frameworks/Sparkle.framework"
+  /usr/bin/ditto "$sparkle_framework" "$staged_sparkle"
+  xcrun install_name_tool -change \
+    '@rpath/Sparkle.framework/Versions/B/Sparkle' \
+    '@executable_path/../Frameworks/Sparkle.framework/Versions/B/Sparkle' \
+    "$staged_app/Contents/MacOS/Fleck"
+fi
 xcrun strip -S "$staged_app/Contents/MacOS/Fleck"
 
 readonly bundle_identifier="$(
@@ -131,6 +147,17 @@ readonly bundle_identifier="$(
     "$staged_app/Contents/Info.plist"
 )"
 readonly designated_requirement="=designated => identifier \"$bundle_identifier\""
+if [[ -n "$staged_sparkle" ]]; then
+  for nested_code in \
+    "$staged_sparkle/Versions/B/XPCServices/Downloader.xpc" \
+    "$staged_sparkle/Versions/B/XPCServices/Installer.xpc" \
+    "$staged_sparkle/Versions/B/Autoupdate" \
+    "$staged_sparkle/Versions/B/Updater.app"; do
+    [[ -e "$nested_code" ]] || continue
+    /usr/bin/codesign --force --sign - --preserve-metadata=entitlements "$nested_code"
+  done
+  /usr/bin/codesign --force --sign - "$staged_sparkle"
+fi
 /usr/bin/codesign --force --sign - \
   --identifier "$bundle_identifier.agent" \
   "$staged_app/Contents/SharedSupport/fleck-agent"

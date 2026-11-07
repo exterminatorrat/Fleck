@@ -21,10 +21,53 @@ struct DynamicDestinationRouter: DestinationRouting {
     inboxID: UUID?
   ) async -> DictationRoutingDecision {
     guard !Task.isCancelled else { return .inbox }
+    guard let chunks = DictationFilingPlan.hostChunks(in: transcript) else {
+      return await routeSingle(transcript: transcript, candidates: candidates, inboxID: inboxID)
+    }
+
+    var fragments: [DictationFilingPlan.Fragment] = []
+    var wholeCaptureDecision: DictationRoutingDecision?
+    for chunk in chunks {
+      let decision = await routeSingle(
+        transcript: chunk,
+        candidates: candidates,
+        inboxID: inboxID
+      )
+      guard !Task.isCancelled else { return .inbox }
+      guard case .resolved(let destinationID) = decision else {
+        if chunks.count == 1 { return decision }
+        return await routeSingle(transcript: transcript, candidates: candidates, inboxID: inboxID)
+      }
+      if chunks.count == 1 { wholeCaptureDecision = decision }
+      fragments.append(.init(text: chunk, destinationID: destinationID))
+    }
+
+    guard !Task.isCancelled else { return .inbox }
+    if let plan = DictationFilingPlan.make(
+      text: transcript,
+      fragments: fragments,
+      candidates: candidates,
+      inboxID: inboxID
+    ), plan.isValid(against: candidates) {
+      return .filing(plan)
+    }
+    if let wholeCaptureDecision { return wholeCaptureDecision }
+    return await routeSingle(transcript: transcript, candidates: candidates, inboxID: inboxID)
+  }
+
+  private func routeSingle(
+    transcript: String,
+    candidates: [DictationRoutingCandidate],
+    inboxID: UUID?
+  ) async -> DictationRoutingDecision {
+    guard !Task.isCancelled else { return .inbox }
     if let destinationID = FoundationModelDictation.exactTitleDestinationID(
       transcript: transcript,
       candidates: candidates
     ) {
+      guard destinationID != inboxID,
+        candidates.contains(where: { $0.destination.noteID == destinationID })
+      else { return .inbox }
       return .resolved(destinationID)
     }
     let cueChoices = Self.leadingDestinationCueChoices(
@@ -69,6 +112,8 @@ struct DynamicDestinationRouter: DestinationRouting {
       else { return .inbox }
       return decision
     case .inbox:
+      return .inbox
+    case .filing:
       return .inbox
     }
   }
