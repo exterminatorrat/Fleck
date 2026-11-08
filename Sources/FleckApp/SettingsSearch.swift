@@ -1122,6 +1122,34 @@
           inputModality.record(isKeyboardInput: true, windowNumber: window.windowNumber)
           isKeyboardFocused = true
           isFocused = true
+          #if DEBUG
+          if target == .dictationStatus {
+            inputModality.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[F93-readiness-return:assigned] keyboard=\(isKeyboardFocused) accessibility=\(isFocused) cue=\(isKeyboardFocusCueVisible) modalityCue=\(inputModality.showsKeyboardFocusCue) firstResponder=\(window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil")"
+            )
+          }
+          #endif
+        }
+        .onChange(of: isKeyboardFocused) { _, focused in
+          #if DEBUG
+          if target == .dictationStatus {
+            inputModality.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[F93-readiness-return:keyboard-focus-change] focused=\(focused) cue=\(isKeyboardFocusCueVisible) modalityCue=\(inputModality.showsKeyboardFocusCue)"
+            )
+          }
+          #endif
+        }
+        .onChange(of: isFocused) { _, focused in
+          #if DEBUG
+          if target == .dictationStatus {
+            inputModality.readinessReturnObservation?(
+              readinessReturnObservationSource,
+              "[F93-readiness-return:accessibility-focus-change] focused=\(focused) keyboard=\(isKeyboardFocused) cue=\(isKeyboardFocusCueVisible)"
+            )
+          }
+          #endif
         }
         .onDisappear {
           returnAttachment.invalidate()

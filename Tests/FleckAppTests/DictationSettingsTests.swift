@@ -1326,7 +1326,7 @@ func DictationSettingsReadinessPopoverIsAccessibleAtMinimumWindowSize() async th
         guard source === fixture.runtime else { return }
         let scopedRecord = record + " sourceOwned=true hostOwned=\(host.window === window)"
         let bytes = scopedRecord.utf8.count + 1
-        guard readinessReturnObservationCount < 7,
+        guard readinessReturnObservationCount < 12,
           readinessReturnObservationBytes + bytes <= 1920
         else {
           readinessReturnObservationLimited = true
