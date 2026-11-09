@@ -165,6 +165,12 @@ jobs:
         run: Scripts/audit-agent-boundary.sh
       - name: Test packaged app symbol stripping
         run: Tests/Scripts/build-fleck-app-symbols.test.sh
+      - name: Test performance measurement tooling
+        run: |
+          unset FLECK_ENHANCED_CANDIDATE FLECK_PERF_RUN FLECK_PERF_PREBUILT_RECEIPT
+          python3 -B -m unittest discover -s Tests/Scripts -p test_validate_perf_prebuilt.py
+          Tests/Scripts/prebuilt-perf-wrapper.test.sh
+          Scripts/test-nonempty-swift-test-runners.sh
       - name: Package Fleck app
         run: |
           mkdir -p .build/ci-development-result

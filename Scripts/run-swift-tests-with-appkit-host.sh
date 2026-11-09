@@ -6,6 +6,7 @@ if (( $# != 3 )); then
     "${0##*/}" >&2
   exit 2
 fi
+readonly script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
 if [[ ${FLECK_NATIVE_CAPTURE_QA+x} ]]; then
   case "$FLECK_NATIVE_CAPTURE_QA" in
@@ -17,9 +18,51 @@ if [[ ${FLECK_NATIVE_CAPTURE_QA+x} ]]; then
   esac
 fi
 
+target_selected=0
+test_target=''
+if [[ ${FLECK_TEST_SWIFT_TARGET+x} ]]; then
+  test_target="$FLECK_TEST_SWIFT_TARGET"
+  if [[ ! "$test_target" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]]; then
+    printf '%s\n' 'error: FLECK_TEST_SWIFT_TARGET must be a non-empty safe Swift target name' >&2
+    exit 2
+  fi
+  if [[ "${FLECK_TEST_SWIFT_BUILD_SYSTEM:-}" != swiftbuild ]]; then
+    printf '%s\n' 'error: FLECK_TEST_SWIFT_TARGET requires FLECK_TEST_SWIFT_BUILD_SYSTEM=swiftbuild' >&2
+    exit 2
+  fi
+  target_selected=1
+fi
+readonly target_selected test_target
+
 readonly package_root="$1"
 readonly scratch_path="$2"
 readonly identifier_regex="$3"
+prebuilt_mode=0
+prebuilt_receipt=''
+prebuilt_configuration_set=0
+if [[ ${FLECK_TEST_SWIFT_CONFIGURATION+x} ]]; then
+  prebuilt_configuration_set=1
+fi
+if [[ ${FLECK_PERF_PREBUILT_RECEIPT+x} ]]; then
+  prebuilt_mode=1
+  prebuilt_receipt="$FLECK_PERF_PREBUILT_RECEIPT"
+  if [[ -z "$prebuilt_receipt" || "$prebuilt_receipt" != /*.json ||
+    "$prebuilt_receipt" == *$'\n'* || "$prebuilt_receipt" == *$'\r'* ]]; then
+    printf '%s\n' 'error: FLECK_PERF_PREBUILT_RECEIPT must be an absolute JSON path' >&2
+    exit 2
+  fi
+  if (( ! prebuilt_configuration_set )) ||
+    [[ "${FLECK_PERF_RUN:-}" != 1 || "$test_target" != FleckPerformanceTests ||
+      "${FLECK_TEST_SWIFT_BUILD_SYSTEM:-}" != swiftbuild ||
+      ( "${FLECK_TEST_SWIFT_CONFIGURATION:-}" != debug &&
+        "${FLECK_TEST_SWIFT_CONFIGURATION:-}" != release ) ||
+      "$scratch_path" != '' || "${FLECK_ENHANCED_CANDIDATE:-}" = 1 ||
+      "${FLECK_BUILD_WITHOUT_SPARKLE:-}" = 1 ]]; then
+    printf '%s\n' 'error: prebuilt performance receipt requires the ordinary explicit FleckPerformanceTests configuration' >&2
+    exit 2
+  fi
+fi
+readonly prebuilt_mode prebuilt_receipt
 readonly host_source="$package_root/Tests/Support/AppKitTestMain.swift"
 
 [[ "$(/usr/bin/uname -s)" = Darwin ]] || {
@@ -121,6 +164,8 @@ readonly host_environment_names=(
   FLECK_AGENT_ACTIVITY_CAPTURE_PREFIX FLECK_CONTROL_FOCUS_CAPTURE_DIR
   FLECK_DICTATION_BANNER_CAPTURE_DIR FLECK_DICTIONARY_SETTINGS_CAPTURE_DIR
   FLECK_EDITOR_EVIDENCE_DIR FLECK_ENHANCED_CANDIDATE
+  FLECK_PERF_BASELINE_RECEIPT FLECK_PERF_BUILD_SYSTEM FLECK_PERF_CONFIGURATION FLECK_PERF_RUN
+  FLECK_PERF_SWIFT_VERSION
   FLECK_FILE_REFERENCE_EVIDENCE_DIR FLECK_FOLDER_CAPTURE_DIR
   FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC
   FLECK_FONT_PICKER_ALIGNMENT_EVIDENCE_DIRECTORY
@@ -453,30 +498,90 @@ launch_host() {
   active_host_nonce=''
 }
 
-build_arguments=(build --build-tests --disable-automatic-resolution)
-bin_arguments=(build --show-bin-path --disable-automatic-resolution)
+if (( target_selected )); then
+  build_arguments=(build --target "$test_target" --disable-automatic-resolution)
+  bin_arguments=(build --show-bin-path --target "$test_target" --disable-automatic-resolution)
+else
+  build_arguments=(build --build-tests --disable-automatic-resolution)
+  bin_arguments=(build --show-bin-path --disable-automatic-resolution)
+fi
+if [[ -n "${FLECK_TEST_SWIFT_BUILD_SYSTEM:-}" ]]; then
+  case "$FLECK_TEST_SWIFT_BUILD_SYSTEM" in
+    native|swiftbuild|xcode) ;;
+    *)
+      printf '%s\n' 'error: unsupported FLECK_TEST_SWIFT_BUILD_SYSTEM' >&2
+      exit 2
+      ;;
+  esac
+  build_arguments+=(--build-system "$FLECK_TEST_SWIFT_BUILD_SYSTEM")
+  bin_arguments+=(--build-system "$FLECK_TEST_SWIFT_BUILD_SYSTEM")
+fi
+if [[ ${FLECK_TEST_SWIFT_CONFIGURATION+x} ]]; then
+  case "$FLECK_TEST_SWIFT_CONFIGURATION" in
+    debug|release) test_configuration="$FLECK_TEST_SWIFT_CONFIGURATION" ;;
+    *)
+      printf '%s\n' 'error: FLECK_TEST_SWIFT_CONFIGURATION must be debug or release' >&2
+      exit 2
+      ;;
+  esac
+  build_arguments+=(--configuration "$test_configuration")
+  bin_arguments+=(--configuration "$test_configuration")
+else
+  test_configuration=debug
+fi
+readonly test_configuration
+if [[ ${FLECK_PERF_RUN+x} ]]; then
+  export FLECK_PERF_CONFIGURATION="$test_configuration"
+  export FLECK_PERF_BUILD_SYSTEM="${FLECK_TEST_SWIFT_BUILD_SYSTEM:-default}"
+fi
 if [[ -n "$scratch_path" ]]; then
   build_arguments+=(--scratch-path "$scratch_path")
   bin_arguments+=(--scratch-path "$scratch_path")
 fi
+if (( target_selected )); then
+  build_arguments+=(-Xswiftc -enable-testing)
+  bin_arguments+=(-Xswiftc -enable-testing)
+fi
 
-set +e
-(
-  cd "$package_root"
-  swift "${build_arguments[@]}"
-)
-build_status=$?
-set -e
-(( build_status == 0 )) || exit "$build_status"
+if (( prebuilt_mode )); then
+  if ! swift_version_output="$(swift --version)"; then
+    printf '%s\n' 'error: failed to resolve the current Swift version for the prebuilt performance receipt' >&2
+    exit 1
+  fi
+  swift_version="${swift_version_output%%$'\n'*}"
+  if [[ -z "$swift_version" ]]; then
+    printf '%s\n' 'error: failed to resolve the current Swift version for the prebuilt performance receipt' >&2
+    exit 1
+  fi
+  if ! bin_path="$(python3 -B "$script_dir/validate-perf-prebuilt.py" \
+    --receipt "$prebuilt_receipt" \
+    --package-root "$package_root" \
+    --configuration "$test_configuration" \
+    --swift-version "$swift_version" \
+    --sdk-version "$sdk_version" \
+    --scratch-path "$scratch_path")"; then
+    printf '%s\n' 'error: prebuilt performance receipt validation failed' >&2
+    exit 1
+  fi
+else
+  set +e
+  (
+    cd "$package_root"
+    swift "${build_arguments[@]}"
+  )
+  build_status=$?
+  set -e
+  (( build_status == 0 )) || exit "$build_status"
 
-set +e
-bin_path="$({
-  cd "$package_root"
-  swift "${bin_arguments[@]}"
-})"
-bin_status=$?
-set -e
-(( bin_status == 0 )) || exit "$bin_status"
+  set +e
+  bin_path="$({
+    cd "$package_root"
+    swift "${bin_arguments[@]}"
+  })"
+  bin_status=$?
+  set -e
+  (( bin_status == 0 )) || exit "$bin_status"
+fi
 if [[ "$bin_path" != /* || ! -d "$bin_path" || -L "$bin_path" || "$bin_path" == *$'\n'* ]]; then
   printf 'error: SwiftPM returned an invalid test binary path: %s\n' "$bin_path" >&2
   exit 1
@@ -504,17 +609,29 @@ if (( candidate_graph_selected )); then
   done
 fi
 
-readonly bundle_candidates="$state_dir/test-bundles"
-/usr/bin/find "$bin_path" -maxdepth 1 -type d -name '*.xctest' -print \
-  > "$bundle_candidates"
-bundle_count="$(/usr/bin/wc -l < "$bundle_candidates" | /usr/bin/tr -d ' ')"
-if [[ "$bundle_count" != 1 ]]; then
-  printf 'error: expected exactly one freshly built Swift test bundle, found %s in %s\n' \
-    "$bundle_count" "$bin_path" >&2
-  exit 1
+if (( target_selected )); then
+  bundle_path="$bin_path/$test_target.xctest"
+  if [[ ! -d "$bundle_path" || -L "$bundle_path" ||
+    ! -d "$bundle_path/Contents" || -L "$bundle_path/Contents" ||
+    ! -d "$bundle_path/Contents/MacOS" || -L "$bundle_path/Contents/MacOS" ]]; then
+    printf 'error: freshly built Swift test bundle for target %s is missing or unsafe: %s\n' \
+      "$test_target" "$bundle_path" >&2
+    exit 1
+  fi
+  bundle_name="$test_target"
+else
+  readonly bundle_candidates="$state_dir/test-bundles"
+  /usr/bin/find "$bin_path" -maxdepth 1 -type d -name '*.xctest' -print \
+    > "$bundle_candidates"
+  bundle_count="$(/usr/bin/wc -l < "$bundle_candidates" | /usr/bin/tr -d ' ')"
+  if [[ "$bundle_count" != 1 ]]; then
+    printf 'error: expected exactly one freshly built Swift test bundle, found %s in %s\n' \
+      "$bundle_count" "$bin_path" >&2
+    exit 1
+  fi
+  bundle_path="$(/bin/cat "$bundle_candidates")"
+  bundle_name="$(/usr/bin/basename "$bundle_path" .xctest)"
 fi
-bundle_path="$(/bin/cat "$bundle_candidates")"
-bundle_name="$(/usr/bin/basename "$bundle_path" .xctest)"
 readonly bundle_binary="$bundle_path/Contents/MacOS/$bundle_name"
 if [[ ! -f "$bundle_binary" || -L "$bundle_binary" || ! -x "$bundle_binary" ]]; then
   printf 'error: freshly built Swift test bundle has no safe executable: %s\n' \
@@ -572,6 +689,7 @@ set +e
   -Xlinker -platform_version -Xlinker macos -Xlinker "$deployment_target" \
   -Xlinker "$sdk_version" \
   -Xlinker -rpath -Xlinker "$framework_path" \
+  -Xlinker -rpath -Xlinker "$platform_path/Developer/usr/lib" \
   "$host_source" -o "$expected_host_binary"
 host_build_status=$?
 set -e
@@ -649,11 +767,15 @@ readonly list_output="$state_dir/test-list"
 readonly canonical_output="$state_dir/canonical-test-list"
 readonly matches="$state_dir/matches"
 readonly test_output="$state_dir/test-output"
-set +e
-launch_host list --list-tests > "$list_output"
-list_status=$?
-set -e
-(( list_status == 0 )) || exit "$list_status"
+if launch_host list --list-tests > "$list_output"; then
+  list_status=0
+else
+  list_status=$?
+fi
+if (( list_status != 0 )); then
+  /bin/cat "$list_output" >&2 || true
+  exit "$list_status"
+fi
 
 LC_ALL=C /usr/bin/grep -E \
   '^[[:alnum:]_][[:alnum:]_-]*\.[[:alnum:]_][[:alnum:]_.-]*(/[[:alnum:]_][[:alnum:]_.-]*)*\((([[:alpha:]_][[:alnum:]_]*):)*\)$' \

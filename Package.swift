@@ -186,6 +186,11 @@ let package = Package(
             ],
             swiftSettings: appTestSwiftSettings
         ),
+        .testTarget(
+            name: "FleckPerformanceTests",
+            dependencies: ["FleckApp", "FleckCore"],
+            swiftSettings: appTestSwiftSettings
+        ),
         .target(
             name: "CFleckEventHTTPTestSupport",
             path: "Tests/CFleckEventHTTPTestSupport",
