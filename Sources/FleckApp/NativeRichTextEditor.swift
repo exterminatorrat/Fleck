@@ -3340,9 +3340,36 @@
       to pasteboard: NSPasteboard,
       types: [NSPasteboard.PasteboardType]
     ) -> Bool {
-      let ns = string as NSString
       let selections = selectedRanges.map(\.rangeValue)
-      let expandedSelections = selections.map { selection -> NSRange in
+      let expandedSelections = expandedCopySelections(selections)
+      let containsImages = selections.contains { containsInlineImage(in: $0) }
+      let exportsText = !types.isEmpty
+        && types.allSatisfy { $0 == .rtf || $0 == .string }
+        && selections.contains { $0.length > 0 }
+      guard expandedSelections != selections || containsImages || exportsText,
+        let projection = projectedCopy(selections: expandedSelections)
+      else {
+        return super.writeSelection(to: pasteboard, types: types)
+      }
+
+      let exportTypes = projection.containsImages
+        ? types.filter { Self.copyFormat(for: $0) != nil }
+        : types
+      guard !exportTypes.isEmpty else { return false }
+      if !projection.containsImages && !exportsText {
+        return writeExportedSelection(projection, to: pasteboard, types: exportTypes)
+      }
+      return writeProjectedSelection(
+        projection.selections,
+        from: projection.source,
+        to: pasteboard,
+        types: exportTypes
+      )
+    }
+
+    private func expandedCopySelections(_ selections: [NSRange]) -> [NSRange] {
+      let ns = string as NSString
+      return selections.map { selection -> NSRange in
         guard selection.length > 0,
           selection.location != NSNotFound,
           selection.location >= 0,
@@ -3359,43 +3386,48 @@
           length: NSMaxRange(selection) - item.paragraphRange.location
         )
       }
-      let containsImages = selections.contains { containsInlineImage(in: $0) }
-      let exportsText = !types.isEmpty
-        && types.allSatisfy { $0 == .rtf || $0 == .string }
-        && selections.contains { $0.length > 0 }
-      guard expandedSelections != selections || containsImages || exportsText,
-        let storage = textStorage
-      else {
-        return super.writeSelection(to: pasteboard, types: types)
-      }
+    }
 
+    private func projectedCopy(
+      selections: [NSRange]
+    ) -> (source: NSAttributedString, selections: [NSRange], containsImages: Bool)? {
+      guard let storage = textStorage else { return nil }
       let display = NSAttributedString(attributedString: storage)
-      let source = InlineNoteImageProjection.expanded(display)
-      let sourceSelections = expandedSelections.map {
-        InlineNoteImageProjection.sourceRange(forDisplayRange: $0, in: display)
-      }
-      let hasManagedImages = Self.containsInlineImage(in: display)
-      let exportTypes = hasManagedImages
-        ? types.filter { $0 == .rtf || $0 == .string }
-        : types
-      guard !exportTypes.isEmpty else { return false }
-      if !hasManagedImages && !exportsText {
-        let exporter = NSTextView(frame: bounds)
-        exporter.isRichText = isRichText
-        exporter.textStorage?.setAttributedString(source)
-        exporter.setSelectedRanges(
-          sourceSelections.map { NSValue(range: $0) },
-          affinity: selectionAffinity,
-          stillSelecting: false
-        )
-        return exporter.writeSelection(to: pasteboard, types: exportTypes)
-      }
-      return writeProjectedSelection(
-        sourceSelections,
-        from: source,
-        to: pasteboard,
-        types: exportTypes
+      return (
+        InlineNoteImageProjection.expanded(display),
+        selections.map {
+          InlineNoteImageProjection.sourceRange(forDisplayRange: $0, in: display)
+        },
+        Self.containsInlineImage(in: display)
       )
+    }
+
+    private static func copyFormat(
+      for type: NSPasteboard.PasteboardType
+    ) -> NSPasteboard.PasteboardType? {
+      if type == .rtf || type.rawValue == "NeXT Rich Text Format v1.0 pasteboard type" {
+        return .rtf
+      }
+      if type == .string || type.rawValue == "NSStringPboardType" {
+        return .string
+      }
+      return nil
+    }
+
+    private func writeExportedSelection(
+      _ projection: (source: NSAttributedString, selections: [NSRange], containsImages: Bool),
+      to pasteboard: NSPasteboard,
+      types: [NSPasteboard.PasteboardType]
+    ) -> Bool {
+      let exporter = NSTextView(frame: bounds)
+      exporter.isRichText = isRichText
+      exporter.textStorage?.setAttributedString(projection.source)
+      exporter.setSelectedRanges(
+        projection.selections.map { NSValue(range: $0) },
+        affinity: selectionAffinity,
+        stillSelecting: false
+      )
+      return exporter.writeSelection(to: pasteboard, types: types)
     }
 
     private func writeProjectedSelection(
@@ -3404,6 +3436,45 @@
       to pasteboard: NSPasteboard,
       types: [NSPasteboard.PasteboardType]
     ) -> Bool {
+      guard let exportText = projectedExportText(selections, from: source) else { return false }
+      let formats = Set(types.compactMap(Self.copyFormat(for:)))
+      guard !formats.isEmpty else { return false }
+      let item = NSPasteboardItem()
+      if formats.contains(.rtf) {
+        guard let data = try? exportText.data(
+          from: NSRange(location: 0, length: exportText.length),
+          documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+        ), item.setData(data, forType: .rtf) else { return false }
+      }
+      if formats.contains(.string), !item.setString(exportText.string, forType: .string) {
+        return false
+      }
+      guard !item.types.isEmpty else { return false }
+      pasteboard.clearContents()
+      return pasteboard.writeObjects([item])
+    }
+
+    private func writeProjectedSelection(
+      _ selections: [NSRange],
+      from source: NSAttributedString,
+      to pasteboard: NSPasteboard,
+      format: NSPasteboard.PasteboardType
+    ) -> Bool {
+      guard let exportText = projectedExportText(selections, from: source) else { return false }
+      if format == .rtf {
+        guard let data = try? exportText.data(
+          from: NSRange(location: 0, length: exportText.length),
+          documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+        ) else { return false }
+        return pasteboard.setData(data, forType: .rtf)
+      }
+      return pasteboard.setString(exportText.string, forType: .string)
+    }
+
+    private func projectedExportText(
+      _ selections: [NSRange],
+      from source: NSAttributedString
+    ) -> NSAttributedString? {
       guard !selections.isEmpty,
         selections.allSatisfy({
           $0.location != NSNotFound
@@ -3412,7 +3483,7 @@
             && $0.location <= source.length
             && $0.length <= source.length - $0.location
         })
-      else { return false }
+      else { return nil }
 
       let copiedText = NSMutableAttributedString(string: "")
       for (index, selection) in selections.enumerated() {
@@ -3421,19 +3492,7 @@
         }
         copiedText.append(source.attributedSubstring(from: selection))
       }
-      let exportText = Self.clipboardSafeAttributedString(copiedText)
-      let item = NSPasteboardItem()
-      if types.contains(.rtf) {
-        let range = NSRange(location: 0, length: exportText.length)
-        guard let data = try? exportText.data(
-          from: range,
-          documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
-        ), item.setData(data, forType: .rtf) else { return false }
-      }
-      if types.contains(.string), !item.setString(exportText.string, forType: .string) {
-        return false
-      }
-      return !item.types.isEmpty && pasteboard.writeObjects([item])
+      return Self.clipboardSafeAttributedString(copiedText)
     }
 
     private static func clipboardSafeAttributedString(
@@ -3463,27 +3522,27 @@
       type: NSPasteboard.PasteboardType
     ) -> Bool {
       let selections = selectedRanges.map(\.rangeValue)
-      let ns = string as NSString
-      let expandsBullet = selections.contains { selection in
-        guard selection.length > 0,
-          selection.location != NSNotFound,
-          selection.location >= 0,
-          selection.location <= ns.length,
-          selection.length <= ns.length - selection.location,
-          let item = bulletListItem(at: selection.location, string: ns)
-        else { return false }
-        return selection.location == item.contentRange.location
-          && NSMaxRange(selection) >= NSMaxRange(item.contentRange)
-      }
+      let expandedSelections = expandedCopySelections(selections)
       let containsImages = selections.contains { containsInlineImage(in: $0) }
       let exportsText = (type == .rtf || type == .string)
         && textStorage != nil
         && selections.contains { $0.length > 0 }
-      guard expandsBullet || containsImages || exportsText else {
+      guard expandedSelections != selections || containsImages || exportsText,
+        let projection = projectedCopy(selections: expandedSelections)
+      else {
         return super.writeSelection(to: pasteboard, type: type)
       }
-      if containsImages, type != .rtf && type != .string { return false }
-      return writeSelection(to: pasteboard, types: [type])
+      if containsImages, Self.copyFormat(for: type) == nil { return false }
+      guard let format = Self.copyFormat(for: type) else {
+        guard !projection.containsImages else { return false }
+        return writeExportedSelection(projection, to: pasteboard, types: [type])
+      }
+      return writeProjectedSelection(
+        projection.selections,
+        from: projection.source,
+        to: pasteboard,
+        format: format
+      )
     }
 
     private func containsInlineImage(in range: NSRange) -> Bool {

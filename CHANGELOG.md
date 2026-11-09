@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.28-beta.1] - 2026-11-09
+
+### Fixed
+
+- Accept AppKit's declared clipboard text formats when copying whole bullet items from notes containing images.
+- Replace previous clipboard contents during projected copy while preserving rich and plain text during per-format writes.
+
 ## [1.7.26-beta.1] - 2026-11-09
 
 ### Changed
