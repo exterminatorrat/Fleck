@@ -569,6 +569,184 @@ private func authorizationSnapshot(
   #expect(fixture.state.commitCount == 0)
 }
 
+@Test @MainActor
+func activityPreparationDoesNotBlockMainActorOrOverwriteHumanEdit() async throws {
+  let fixture = AgentServiceFixture()
+  let activityStore = PausingPrepareAgentActivityPersisting(
+    base: fixture.activityStore
+  )
+  let service = AgentCommandService(
+    state: fixture.state,
+    profileStore: FixedAgentAuthorizer(profile: fixture.profile),
+    activityStore: activityStore,
+    capabilityAuthority: LegacyTestCapabilityAuthorizer(),
+    taskHandleCodec: AgentTaskHandleCodec(
+      signingKeyProvider: FixedAgentSigningKeyProvider()
+    ),
+    now: { Date(timeIntervalSince1970: 500) }
+  )
+  let operationID = UUID()
+  let command = AgentWorkspaceCommand.appendText(
+    request: .init(
+      context: .init(
+        noteID: fixture.note.id,
+        expectedRevision: fixture.note.revision,
+        operationID: operationID
+      ),
+      text: "Agent"
+    )
+  )
+  defer { activityStore.releasePreparation() }
+
+  let mainActorProgressTask = Task { @MainActor in
+    activityStore.markMainActorObserverReady()
+    let preparationStarted = await Task.detached {
+      activityStore.waitUntilPreparationStarts(timeout: 5)
+    }.value
+    if preparationStarted {
+      activityStore.markMainActorProgress()
+    }
+  }
+  let observerReady = await Task.detached {
+    activityStore.waitUntilMainActorObserverReady(timeout: 2)
+  }.value
+  #expect(observerReady)
+  let mainActorProgress = Task.detached {
+    activityStore.waitUntilMainActorProgress(timeout: 4)
+  }
+
+  let task = Task { @MainActor in
+    try await service.execute(
+      profileID: fixture.profile.id,
+      credential: Data("credential".utf8),
+      command: command
+    )
+  }
+  let preparationStarted = await Task.detached {
+    activityStore.waitUntilPreparationStarts(timeout: 2)
+  }.value
+  #expect(preparationStarted)
+  let mainActorProgressedDuringPreparation = await mainActorProgress.value
+  #expect(mainActorProgressedDuringPreparation)
+
+  fixture.state.humanEdit(body: "Human")
+  #expect(fixture.state.commitCount == 0)
+  activityStore.releasePreparation()
+  await mainActorProgressTask.value
+
+  await #expect(throws: AgentWorkspaceError(code: .capabilityDenied)) {
+    try await task.value
+  }
+  #expect(fixture.state.workspace.notes[0].body == "Human")
+  #expect(fixture.state.commitCount == 0)
+  #expect(fixture.state.latestFeedback == nil)
+  #expect(
+    fixture.activityStore.list(
+      profileID: fixture.profile.id,
+      visibleNoteIDs: [fixture.note.id]
+    ).isEmpty
+  )
+  #expect(
+    fixture.activityStore.priorReceipt(
+      actor: .integration(
+        profileID: fixture.profile.id,
+        displayName: fixture.profile.displayName
+      ),
+      operationID: operationID
+    ) == nil
+  )
+}
+
+@Test @MainActor
+func grantRevocationDuringActivityPreparationPreventsWorkspaceCommit() async throws {
+  let fixture = AgentServiceFixture()
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "AgentCommandServiceTests-\(UUID().uuidString)",
+    isDirectory: true
+  )
+  defer { try? FileManager.default.removeItem(at: root) }
+  let integrationsURL = root.appendingPathComponent(
+    "AgentIntegrations",
+    isDirectory: true
+  )
+  let capabilityStore = AgentCapabilityStore(
+    capabilitiesURL: integrationsURL.appendingPathComponent("capabilities.json"),
+    previousCapabilitiesURL: integrationsURL.appendingPathComponent(
+      "capabilities.previous.json"
+    )
+  )
+  let initial = try await capabilityStore.loadOrMigrate(
+    activeProfileIDs: [fixture.profile.id],
+    workspace: fixture.state.workspace
+  )
+  let current = try #require(initial.profiles[fixture.profile.id])
+  let originalWorkspace = fixture.state.workspace
+  let activityStore = PausingPrepareAgentActivityPersisting(
+    base: fixture.activityStore
+  )
+  let service = AgentCommandService(
+    state: fixture.state,
+    profileStore: FixedAgentAuthorizer(profile: fixture.profile),
+    activityStore: activityStore,
+    capabilityAuthority: AgentCapabilityAuthority(store: capabilityStore),
+    taskHandleCodec: AgentTaskHandleCodec(
+      signingKeyProvider: FixedAgentSigningKeyProvider()
+    ),
+    now: { Date(timeIntervalSince1970: 500) }
+  )
+  let task = Task { @MainActor in
+    try await service.execute(
+      profileID: fixture.profile.id,
+      credential: Data("credential".utf8),
+      command: .appendText(
+        request: .init(
+          context: .init(
+            noteID: fixture.note.id,
+            expectedRevision: fixture.note.revision,
+            operationID: UUID()
+          ),
+          text: "Must not commit"
+        )
+      )
+    )
+  }
+  defer { activityStore.releasePreparation() }
+
+  let preparationStarted = await Task.detached {
+    activityStore.waitUntilPreparationStarts(timeout: 2)
+  }.value
+  #expect(preparationStarted)
+  do {
+    _ = try await capabilityStore.replaceProfile(
+      AgentProfileCapabilities(
+        profileID: fixture.profile.id,
+        grantRevision: current.grantRevision + 1,
+        allowedCapabilities: [],
+        grants: []
+      ),
+      expectedGrantRevision: current.grantRevision
+    )
+  } catch {
+    activityStore.releasePreparation()
+    _ = try? await task.value
+    throw error
+  }
+  activityStore.releasePreparation()
+
+  await #expect(throws: AgentWorkspaceError(code: .capabilityDenied)) {
+    try await task.value
+  }
+  #expect(fixture.state.workspace == originalWorkspace)
+  #expect(fixture.state.commitCount == 0)
+  #expect(fixture.state.latestFeedback == nil)
+  #expect(
+    fixture.activityStore.list(
+      profileID: fixture.profile.id,
+      visibleNoteIDs: [fixture.note.id]
+    ).isEmpty
+  )
+}
+
 @Test @MainActor func concurrentCommandsAuthorizeAndCommitInFIFOOrder() async throws {
   let gate = OrderedAgentAuthorizer()
   let fixture = AgentServiceFixture(authorizer: gate)
@@ -3466,6 +3644,123 @@ private struct ThrowingAgentSigningKeyProvider: AgentSigningKeyProviding {
 }
 
 private struct UnexpectedAgentServiceTestError: Error {}
+
+private final class PausingPrepareAgentActivityPersisting:
+  AgentActivityPersisting, @unchecked Sendable
+{
+  private let base: any AgentActivityPersisting
+  private let condition = NSCondition()
+  private var preparationStarted = false
+  private var preparationReleased = false
+  private var mainActorObserverReady = false
+  private var mainActorProgressed = false
+
+  init(base: any AgentActivityPersisting) {
+    self.base = base
+  }
+
+  func prepare(_ transaction: PreparedAgentTransaction) throws {
+    condition.lock()
+    preparationStarted = true
+    condition.broadcast()
+    let deadline = Date().addingTimeInterval(5)
+    while !preparationReleased {
+      if !condition.wait(until: deadline) { break }
+    }
+    condition.unlock()
+    try base.prepare(transaction)
+  }
+
+  func waitUntilPreparationStarts(timeout: TimeInterval) -> Bool {
+    condition.lock()
+    defer { condition.unlock() }
+    let deadline = Date().addingTimeInterval(timeout)
+    while !preparationStarted {
+      guard condition.wait(until: deadline) else {
+        return preparationStarted
+      }
+    }
+    return true
+  }
+
+  func releasePreparation() {
+    condition.lock()
+    preparationReleased = true
+    condition.broadcast()
+    condition.unlock()
+  }
+
+  func markMainActorObserverReady() {
+    condition.lock()
+    mainActorObserverReady = true
+    condition.broadcast()
+    condition.unlock()
+  }
+
+  func waitUntilMainActorObserverReady(timeout: TimeInterval) -> Bool {
+    condition.lock()
+    defer { condition.unlock() }
+    let deadline = Date().addingTimeInterval(timeout)
+    while !mainActorObserverReady {
+      guard condition.wait(until: deadline) else {
+        return mainActorObserverReady
+      }
+    }
+    return true
+  }
+
+  func markMainActorProgress() {
+    condition.lock()
+    mainActorProgressed = true
+    condition.broadcast()
+    condition.unlock()
+  }
+
+  func waitUntilMainActorProgress(timeout: TimeInterval) -> Bool {
+    condition.lock()
+    defer { condition.unlock() }
+    let deadline = Date().addingTimeInterval(timeout)
+    while !mainActorProgressed {
+      guard condition.wait(until: deadline) else {
+        return mainActorProgressed
+      }
+    }
+    return true
+  }
+
+  func commit(changeID: UUID, receipt: AgentWriteReceipt) throws {
+    try base.commit(changeID: changeID, receipt: receipt)
+  }
+
+  func abort(changeID: UUID) throws {
+    try base.abort(changeID: changeID)
+  }
+
+  func priorReceipt(
+    actor: AgentActivityActor,
+    operationID: UUID
+  ) -> AgentWriteReceipt? {
+    base.priorReceipt(actor: actor, operationID: operationID)
+  }
+
+  func list(
+    profileID: UUID?,
+    visibleNoteIDs: Set<UUID>
+  ) -> [AgentActivityRecord] {
+    base.list(profileID: profileID, visibleNoteIDs: visibleNoteIDs)
+  }
+
+  func record(id: UUID) -> AgentActivityRecord? {
+    base.record(id: id)
+  }
+
+  func reconcile(
+    workspace: Workspace,
+    commitProofs: [AgentWorkspaceCommitProof]
+  ) throws {
+    try base.reconcile(workspace: workspace, commitProofs: commitProofs)
+  }
+}
 
 private final class RecordingAgentActivityPersisting:
   AgentActivityPersisting, @unchecked Sendable

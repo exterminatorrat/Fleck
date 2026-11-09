@@ -125,6 +125,7 @@
     private(set) var hasFinishedInitialLoad = false
     private(set) var isAgentWorkspaceAvailable = false
     private(set) var agentCommitProofs: [AgentWorkspaceCommitProof] = []
+    private var lastCommittedPersistenceGeneration: UInt64?
     var isPersistenceBlocked: Bool { startupMigrationError != nil }
 
     private let store: LocalStore
@@ -184,8 +185,12 @@
     private var pendingRestoreNoteIDs: Set<UUID> = []
     private var privacyPolicyMutationInProgress = false
     private var debouncedSaveTask: Task<Void, Error>?
+    private var scheduledSaveOperationCount = 0
+    private var scheduledPersistenceTaskCount = 0
+    private var scheduledPersistenceTaskWaiters: [CheckedContinuation<Void, Never>] = []
     private var awaitedSaveCount = 0
     private var transactionOwnedSaveCount = 0
+    private var activePersistCount = 0
     private var persistenceTransactionWaiters: [CheckedContinuation<Void, Never>] = []
     private var initialLoadWaiters: [CheckedContinuation<Void, Never>] = []
     private var saveStatusResetTask: Task<Void, Never>?
@@ -1707,6 +1712,16 @@
     }
 
     func select(_ id: UUID) {
+      let signpostState = FleckPerformanceSignposts.signposter.beginInterval(
+        FleckPerformanceSignposts.noteSwitchState
+      )
+      defer {
+        FleckPerformanceSignposts.signposter.endInterval(
+          FleckPerformanceSignposts.noteSwitchState,
+          signpostState
+        )
+      }
+
       workspace.selectedNoteID = id
       scheduleSave()
     }
@@ -1934,11 +1949,31 @@
     }
 
     func selectAdjacentNote(forward: Bool) {
+      let signpostState = FleckPerformanceSignposts.signposter.beginInterval(
+        FleckPerformanceSignposts.noteSwitchState
+      )
+      defer {
+        FleckPerformanceSignposts.signposter.endInterval(
+          FleckPerformanceSignposts.noteSwitchState,
+          signpostState
+        )
+      }
+
       workspace.selectAdjacent(forward: forward)
       scheduleSave()
     }
 
     func selectAdjacentNote(forward: Bool, inFolderID folderID: UUID?) {
+      let signpostState = FleckPerformanceSignposts.signposter.beginInterval(
+        FleckPerformanceSignposts.noteSwitchState
+      )
+      defer {
+        FleckPerformanceSignposts.signposter.endInterval(
+          FleckPerformanceSignposts.noteSwitchState,
+          signpostState
+        )
+      }
+
       let visible = workspace.notes(inFolderID: folderID)
       guard !visible.isEmpty else { return }
       let currentIndex = visible.firstIndex(where: { $0.id == workspace.selectedNoteID })
@@ -1968,25 +2003,40 @@
     func updateSelected(title: String? = nil, body: String? = nil) {
       guard let id = workspace.selectedNoteID else { return }
       guard !smartCaptureTransferNoteIDs.contains(id) else { return }
-      let originalWorkspace = workspace
+      var changed = false
       if let title {
-        workspace.updateNote(id: id, title: title)
+        var updatedWorkspace = workspace
+        changed = updatedWorkspace.updateNote(id: id, title: title) == .changed
+        if changed {
+          workspace = updatedWorkspace
+        }
       }
       if let body,
         let note = workspace.notes.first(where: { $0.id == id })
       {
-        workspace.updateContent(id: id, body: body, rtf: note.richTextRTF)
+        var updatedWorkspace = workspace
+        if updatedWorkspace.updateContent(
+          id: id,
+          body: body,
+          rtf: note.richTextRTF
+        ) == .changed {
+          workspace = updatedWorkspace
+          changed = true
+        }
       }
-      guard workspace != originalWorkspace else { return }
+      guard changed else { return }
       scheduleSave()
     }
 
     func updateSelected(body: String, richTextRTF: Data?) {
       guard let id = workspace.selectedNoteID else { return }
       guard !smartCaptureTransferNoteIDs.contains(id) else { return }
-      let originalWorkspace = workspace
-      workspace.updateContent(id: id, body: body, rtf: richTextRTF)
-      guard workspace != originalWorkspace else { return }
+      var updatedWorkspace = workspace
+      guard
+        updatedWorkspace.updateContent(id: id, body: body, rtf: richTextRTF)
+          == .changed
+      else { return }
+      workspace = updatedWorkspace
       scheduleSave()
     }
 
@@ -2236,13 +2286,50 @@
       guard startupMigrationError == nil else { return }
       debouncedSaveTask?.cancel()
       markSaveStarted()
+      scheduledPersistenceTaskCount += 1
       let task = Task {
+        defer { finishScheduledPersistenceTask() }
         try await Task.sleep(for: .milliseconds(350))
         await waitForPersistenceTransactions()
         try Task.checkCancellation()
+        scheduledSaveOperationCount += 1
+        defer { scheduledSaveOperationCount -= 1 }
         try await persist(saveSnapshot())
       }
       debouncedSaveTask = task
+    }
+
+    func quiescePersistenceForTesting() async {
+      let saveTask = debouncedSaveTask
+      if scheduledSaveOperationCount == 0 {
+        saveTask?.cancel()
+      }
+      _ = await saveTask?.result
+      debouncedSaveTask = nil
+
+      let statusTask = saveStatusResetTask
+      statusTask?.cancel()
+      await statusTask?.value
+      saveStatusResetTask = nil
+      await waitForScheduledPersistenceTasks()
+      saveStatus = .idle
+    }
+
+    private func finishScheduledPersistenceTask() {
+      scheduledPersistenceTaskCount -= 1
+      guard scheduledPersistenceTaskCount == 0 else { return }
+      let waiters = scheduledPersistenceTaskWaiters
+      scheduledPersistenceTaskWaiters.removeAll()
+      for waiter in waiters {
+        waiter.resume()
+      }
+    }
+
+    private func waitForScheduledPersistenceTasks() async {
+      guard scheduledPersistenceTaskCount > 0 else { return }
+      await withCheckedContinuation { continuation in
+        scheduledPersistenceTaskWaiters.append(continuation)
+      }
     }
 
     private static func migrationFailureMessage(
@@ -2284,7 +2371,17 @@
     )
 
     private func saveSnapshot() -> SaveSnapshot {
-      (
+      let signpostState = FleckPerformanceSignposts.signposter.beginInterval(
+        FleckPerformanceSignposts.snapshotPreparation
+      )
+      defer {
+        FleckPerformanceSignposts.signposter.endInterval(
+          FleckPerformanceSignposts.snapshotPreparation,
+          signpostState
+        )
+      }
+
+      return (
         workspace,
         preferences,
         Array(pendingTrashNotes.values),
@@ -2293,20 +2390,37 @@
     }
 
     private func persist(_ snapshot: SaveSnapshot, requiresCommit: Bool = false) async throws {
+      activePersistCount += 1
+      defer { activePersistCount -= 1 }
       let saveErrorGenerationAtStart = saveErrorGeneration
       do {
         if let beforeSaveOperation {
           await beforeSaveOperation()
         }
         try Task.checkCancellation()
-        let result = try await saveOperation(
-          snapshot.workspace,
-          snapshot.preferences,
-          snapshot.trashedNotes,
-          snapshot.generation
-        )
+        let result: LocalStoreSnapshotWriteResult
+        do {
+          let signpostState = FleckPerformanceSignposts.signposter.beginInterval(
+            FleckPerformanceSignposts.snapshotSave
+          )
+          defer {
+            FleckPerformanceSignposts.signposter.endInterval(
+              FleckPerformanceSignposts.snapshotSave,
+              signpostState
+            )
+          }
+          result = try await saveOperation(
+            snapshot.workspace,
+            snapshot.preferences,
+            snapshot.trashedNotes,
+            snapshot.generation
+          )
+        }
         if requiresCommit, result != .committed {
           throw DictationFilingSaveError.superseded
+        }
+        if result == .committed {
+          recordCommittedPersistenceGeneration(snapshot.generation)
         }
       } catch {
         if Task.isCancelled || error is CancellationError {
@@ -2338,7 +2452,24 @@
       markSaveSucceeded()
     }
 
+    private func recordCommittedPersistenceGeneration(_ generation: UInt64) {
+      if let lastCommittedGeneration = lastCommittedPersistenceGeneration,
+        generation < lastCommittedGeneration
+      {
+        return
+      }
+      lastCommittedPersistenceGeneration = generation
+    }
+
     func flushPendingPersistenceForAgent() async throws {
+      try await resolvePendingPersistenceForAgent(allowKnownDurable: false)
+    }
+
+    func flushPendingPersistenceForAgentWrite() async throws {
+      try await resolvePendingPersistenceForAgent(allowKnownDurable: true)
+    }
+
+    private func resolvePendingPersistenceForAgent(allowKnownDurable: Bool) async throws {
       try await withCheckedThrowingContinuation { continuation in
         let resolution = AgentPersistenceDrainResolution(continuation)
         Task { @MainActor [weak self] in
@@ -2346,7 +2477,9 @@
             guard let self else {
               throw AgentWorkspaceError(code: .fleckUnavailable)
             }
-            try await self.drainPersistenceForAgent()
+            try await self.drainPersistenceForAgent(
+              allowKnownDurable: allowKnownDurable
+            )
             resolution.resolve(.success(()))
           } catch {
             resolution.resolve(.failure(error))
@@ -2371,6 +2504,16 @@
       expectedGeneration: UInt64,
       commitProof: AgentWorkspaceCommitProof
     ) throws {
+      let signpostState = FleckPerformanceSignposts.signposter.beginInterval(
+        FleckPerformanceSignposts.agentCommit
+      )
+      defer {
+        FleckPerformanceSignposts.signposter.endInterval(
+          FleckPerformanceSignposts.agentCommit,
+          signpostState
+        )
+      }
+
       guard
         isAgentWorkspaceAvailable,
         persistenceGeneration == expectedGeneration
@@ -2412,6 +2555,7 @@
       committedSmartCaptures.removeAll()
       self.workspace = workspace
       persistenceGeneration = committedGeneration
+      recordCommittedPersistenceGeneration(committedGeneration)
       agentCommitProofs.removeAll {
         $0.changeID == commitProof.changeID
       }
@@ -2672,10 +2816,23 @@
       try? AgentBridgeInstaller.live().setupSnippet(profileID: profileID)
     }
 
-    private func drainPersistenceForAgent() async throws {
+    private func drainPersistenceForAgent(allowKnownDurable: Bool) async throws {
       while true {
         await waitForPersistenceTransactions()
         debouncedSaveTask?.cancel()
+        if allowKnownDurable,
+          let lastCommittedGeneration = lastCommittedPersistenceGeneration,
+          lastCommittedGeneration == persistenceGeneration,
+          pendingTrashNotes.isEmpty,
+          startupMigrationError == nil,
+          saveError == nil,
+          activePersistCount == 0
+        {
+          if saveStatus == .saving {
+            markSaveSucceeded()
+          }
+          return
+        }
         let generation = persistenceGeneration
         do {
           try await saveNow(transactionOwned: true).value
@@ -2802,7 +2959,9 @@
     private func markSaveSucceeded() {
       saveStatus = .saved
       saveStatusResetTask?.cancel()
+      scheduledPersistenceTaskCount += 1
       saveStatusResetTask = Task {
+        defer { finishScheduledPersistenceTask() }
         try? await Task.sleep(for: .seconds(1.2))
         guard !Task.isCancelled else { return }
         saveStatus = .idle
