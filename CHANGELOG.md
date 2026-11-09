@@ -3,6 +3,18 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.27-beta.1] - 2026-11-09
+
+### Fixed
+
+- Remove the native blue focus ring and halo border from controls across the app. Focus effects
+  are disabled at every product hosting root, including the menu-bar panel, the pinned notes
+  window, Settings, Dictation History, and the dictation capsule, and the font search field,
+  font list, font scroll view, clear button, editor scroll view, editor body, paste-options
+  button, and the editor's lazily created find and replace bar now draw no AppKit focus ring.
+  Keyboard navigation, actions, text insertion, selection, and the custom thin folder focus cue
+  are preserved.
+
 ## [1.7.26-beta.1] - 2026-11-09
 
 ### Changed
