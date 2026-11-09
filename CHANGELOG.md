@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.29-beta.1] - 2026-11-09
+
+### Changed
+
+- Give Notes header actions consistent 28-point hit targets and 6-point rounded
+  hover highlights, with no background at rest. Keep the pinned status unboxed.
+- Use the same button-backed presentation for Options so its full hit target and
+  hover feedback match the other header actions.
+
 ## [1.7.26-beta.1] - 2026-11-09
 
 ### Changed

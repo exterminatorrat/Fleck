@@ -1467,7 +1467,7 @@
 
     private var header: some View {
       let backlinkEntries = backlinkController.incoming(to: appState.workspace.selectedNoteID)
-      return HStack(spacing: 10) {
+      return HStack(spacing: 4) {
         AgentActivityIndicator(
           presentation: appState.agentActivityIndicator
         ) {
@@ -1479,7 +1479,7 @@
           backlinkController.toggleDisclosure()
         } label: {
           Image(systemName: "link")
-            .frame(width: 22, height: 22)
+            .frame(width: 28, height: 28)
         }
         .accessibilityIdentifier("backlinks-toolbar-button")
         .accessibilityLabel("Backlinks")
@@ -1515,6 +1515,7 @@
           }
         } label: {
           Image(systemName: "magnifyingglass")
+            .frame(width: 28, height: 28)
             .opacity(searchController.isPresented ? 0 : 1)
             .accessibilityHidden(true)
         }
@@ -1533,13 +1534,14 @@
           appState.addNote(inFolderID: activeFolderID)
         } label: {
           Image(systemName: "plus")
+            .frame(width: 28, height: 28)
         }
         .keyboardShortcut("t", modifiers: .command)
         .help("New note")
 
         if isPinned {
           Image(systemName: "pin.fill")
-            .frame(width: 22, height: 22)
+            .frame(width: 28, height: 28)
             .foregroundStyle(.tint)
             .accessibilityLabel("Pinned")
             .help("This window stays open until you close it")
@@ -1550,6 +1552,7 @@
             }
           } label: {
             Image(systemName: "pin")
+              .frame(width: 28, height: 28)
           }
           .help("Pin notes on screen")
         }
@@ -1564,6 +1567,7 @@
           }
         } label: {
           Image(systemName: "chevron.up")
+            .frame(width: 28, height: 28)
             .rotationEffect(
               .degrees(appState.preferences.showFormattingBar ? 0 : 180)
             )
@@ -1615,7 +1619,10 @@
           }
         } label: {
           Image(systemName: "ellipsis.circle")
+            .frame(width: 28, height: 28)
         }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
         .accessibilityLabel("Options")
         .help("Options")
 
@@ -1625,11 +1632,12 @@
           }
         } label: {
           Image(systemName: "slider.horizontal.3")
+            .frame(width: 28, height: 28)
         }
         .accessibilityLabel("Customize")
         .help("Customize")
       }
-      .buttonStyle(FleckQuietButtonStyle())
+      .buttonStyle(FleckQuietButtonStyle(cornerRadius: 6))
       .padding(.horizontal, 14)
       .padding(.vertical, 11)
     }
