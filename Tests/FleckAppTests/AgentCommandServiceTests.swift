@@ -600,19 +600,21 @@ func activityPreparationDoesNotBlockMainActorOrOverwriteHumanEdit() async throws
 
   let mainActorProgressTask = Task { @MainActor in
     activityStore.markMainActorObserverReady()
-    let preparationStarted = await Task.detached {
+    let preparationStarted = await readinessWaitOffCooperativePool {
       activityStore.waitUntilPreparationStarts(timeout: 5)
-    }.value
+    }
     if preparationStarted {
       activityStore.markMainActorProgress()
     }
   }
-  let observerReady = await Task.detached {
+  let observerReady = await readinessWaitOffCooperativePool {
     activityStore.waitUntilMainActorObserverReady(timeout: 2)
-  }.value
+  }
   #expect(observerReady)
-  let mainActorProgress = Task.detached {
-    activityStore.waitUntilMainActorProgress(timeout: 4)
+  let mainActorProgress = Task { @MainActor in
+    await readinessWaitOffCooperativePool {
+      activityStore.waitUntilMainActorProgress(timeout: 4)
+    }
   }
 
   let task = Task { @MainActor in
@@ -622,9 +624,9 @@ func activityPreparationDoesNotBlockMainActorOrOverwriteHumanEdit() async throws
       command: command
     )
   }
-  let preparationStarted = await Task.detached {
+  let preparationStarted = await readinessWaitOffCooperativePool {
     activityStore.waitUntilPreparationStarts(timeout: 2)
-  }.value
+  }
   #expect(preparationStarted)
   let mainActorProgressedDuringPreparation = await mainActorProgress.value
   #expect(mainActorProgressedDuringPreparation)
@@ -3644,6 +3646,17 @@ private struct ThrowingAgentSigningKeyProvider: AgentSigningKeyProviding {
 }
 
 private struct UnexpectedAgentServiceTestError: Error {}
+
+@MainActor
+private func readinessWaitOffCooperativePool(
+  _ wait: @escaping @Sendable () -> Bool
+) async -> Bool {
+  await withCheckedContinuation { continuation in
+    DispatchQueue.global().async {
+      continuation.resume(returning: wait())
+    }
+  }
+}
 
 private final class PausingPrepareAgentActivityPersisting:
   AgentActivityPersisting, @unchecked Sendable
