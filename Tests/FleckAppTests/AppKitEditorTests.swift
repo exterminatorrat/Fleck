@@ -5394,7 +5394,12 @@ private func withHostedTitleEditors(
     workspace: namedWorkspace
   )
 
-  let navigatorBand = CGRect(x: 0, y: 42, width: 640, height: 40)
+  let navigatorBand = CGRect(
+    x: 0,
+    y: unfiledPill.navigatorBand.lowerBound,
+    width: 640,
+    height: unfiledPill.navigatorBand.upperBound - unfiledPill.navigatorBand.lowerBound
+  )
   let windowBounds = CGRect(x: 0, y: 0, width: 640, height: 430)
   for pill in [unfiledPill, namedPill] {
     #expect(navigatorBand.contains(pill.rowFrame))
@@ -5503,11 +5508,19 @@ private func withHostedTitleEditors(
   #expect(window.makeFirstResponder(editor))
   await settleHostedView(host)
 
-  let before = hostedNavigatorKeyViewFrames(in: host)
+  let before = hostedNavigatorKeyViewFrames(
+    in: host,
+    identifiers: ["folder-unfiled", "folder-\(folder.id.uuidString)"]
+  )
   let beforeFolderFrame = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
   let beforeHostSize = host.bounds.size
   let beforeEditorFrame = host.convert(editor.bounds, from: editor)
-  let unfiledControl = try #require(hostedNavigatorKeyViews(in: host).first)
+  let unfiledControl = try #require(
+    hostedNavigatorKeyViews(
+      in: host,
+      identifiers: ["folder-unfiled", "folder-\(folder.id.uuidString)"]
+    ).first
+  )
   let unfiledFrame = unfiledControl.convert(unfiledControl.bounds, to: host)
   #expect(
     !before.contains { frame in
@@ -5516,7 +5529,10 @@ private func withHostedTitleEditors(
   )
   #expect(window.makeFirstResponder(unfiledControl))
   await settleHostedView(host)
-  let focused = hostedNavigatorKeyViewFrames(in: host)
+  let focused = hostedNavigatorKeyViewFrames(
+    in: host,
+    identifiers: ["folder-unfiled", "folder-\(folder.id.uuidString)"]
+  )
   let focusedFolderFrame = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
 
   #expect(state.preferences.isUnfiledCompact)
@@ -5608,7 +5624,16 @@ private func withHostedTitleEditors(
     await settleHostedView(host)
 
     let folderRowFrame = folderControl.convert(folderControl.bounds, to: host)
-    let navigatorBand = CGRect(x: 0, y: 42, width: host.bounds.width, height: 40)
+    let navigatorBand = try #require(
+      hostedNavigatorVerticalBand(in: host, identifiers: folderRowIdentifiers).map {
+        CGRect(
+          x: 0,
+          y: $0.lowerBound,
+          width: host.bounds.width,
+          height: $0.upperBound - $0.lowerBound
+        )
+      }
+    )
     #expect(navigatorBand.contains(folderRowFrame))
     #expect(folderRowFrame.width >= 24)
     #expect(folderRowFrame.height >= 24)
@@ -5670,7 +5695,10 @@ private func withHostedTitleEditors(
   let screenFrame = try #require(elements[0].value(forKey: "accessibilityFrame") as? NSValue)
     .rectValue
   let ownerFrame = host.convert(window.convertFromScreen(screenFrame), from: nil)
-  let candidates = hostedNavigatorKeyViews(in: host)
+  let candidates = hostedNavigatorKeyViews(
+    in: host,
+    identifiers: ["folder-unfiled", "folder-\(folder.id.uuidString)"]
+  )
   let visualRows = try #require(
     hostedNavigatorVisualKeyViews(
       ownerFrame: ownerFrame, candidates: candidates, in: host, isUnfiled: false
@@ -5727,6 +5755,7 @@ private struct HostedSelectionPillGeometry {
   let rowFrame: CGRect
   let fillBounds: CGRect
   let pixelCount: Int
+  let navigatorBand: ClosedRange<CGFloat>
 }
 
 private struct HostedSelectionPixelBounds {
@@ -5739,6 +5768,7 @@ private struct HostedSelectionCapture {
   let hostSize: CGSize
   let image: NSBitmapImageRep
   let theme: FleckThemeSnapshot
+  let navigatorBand: ClosedRange<CGFloat>
 }
 
 @MainActor
@@ -5794,7 +5824,10 @@ private func hostedFolderSelectionGeometry(
       rowFrame: rowFrame,
       hostSize: host.bounds.size,
       image: try hostedThemeCapture(in: host),
-      theme: state.themeSnapshot
+      theme: state.themeSnapshot,
+      navigatorBand: try #require(
+        hostedNavigatorVerticalBand(in: host, identifiers: expectedFolderRowIdentifiers)
+      )
     )
   }
 
@@ -5823,7 +5856,8 @@ private func hostedFolderSelectionGeometry(
   return HostedSelectionPillGeometry(
     rowFrame: selected.rowFrame,
     fillBounds: pixels.bounds,
-    pixelCount: pixels.pixelCount
+    pixelCount: pixels.pixelCount,
+    navigatorBand: selected.navigatorBand
   )
 }
 
@@ -6523,8 +6557,10 @@ private func hostedDescendants<T: NSView>(in view: NSView, as type: T.Type) -> [
 }
 
 @MainActor
-private func hostedNavigatorKeyViewFrames(in view: NSView) -> [CGRect] {
-  hostedNavigatorKeyViews(in: view).map { $0.convert($0.bounds, to: view) }
+private func hostedNavigatorKeyViewFrames(in view: NSView, identifiers: [String]) -> [CGRect] {
+  hostedNavigatorKeyViews(in: view, identifiers: identifiers).map {
+    $0.convert($0.bounds, to: view)
+  }
 }
 
 @MainActor
@@ -6537,12 +6573,50 @@ private func hostedSchoolFolderFrame(folderID: UUID, in view: NSView) -> CGRect?
 }
 
 @MainActor
-private func hostedNavigatorKeyViews(in view: NSView) -> [NSView] {
+private func hostedNavigatorVerticalBand(
+  in view: NSView,
+  identifiers: [String]
+) -> ClosedRange<CGFloat>? {
+  guard let window = view.window, !identifiers.isEmpty else { return nil }
+  var frames: [CGRect] = []
+  for identifier in identifiers {
+    let elements = hostedAccessibilityElements(in: view, identifier: identifier)
+    guard elements.count == 1,
+      let accessibilityFrame = elements[0].value(forKey: "accessibilityFrame") as? NSValue
+    else { return nil }
+    let screenFrame = accessibilityFrame.rectValue
+    guard !screenFrame.isNull, !screenFrame.isInfinite,
+      screenFrame.minX.isFinite, screenFrame.minY.isFinite,
+      screenFrame.maxX.isFinite, screenFrame.maxY.isFinite,
+      screenFrame.width > 0, screenFrame.height > 0
+    else { return nil }
+    let hostFrame = view.convert(window.convertFromScreen(screenFrame), from: nil)
+    guard !hostFrame.isNull, !hostFrame.isInfinite,
+      hostFrame.minX.isFinite, hostFrame.minY.isFinite,
+      hostFrame.maxX.isFinite, hostFrame.maxY.isFinite,
+      hostFrame.width > 0, hostFrame.height > 0
+    else { return nil }
+    frames.append(hostFrame)
+  }
+  let union = frames.dropFirst().reduce(frames[0]) { $0.union($1) }
+  let lowerBound = union.minY - 5
+  let upperBound = union.maxY + 5
+  guard union.minX.isFinite, union.maxX.isFinite, lowerBound.isFinite, upperBound.isFinite,
+    lowerBound < upperBound
+  else { return nil }
+  return lowerBound...upperBound
+}
+
+@MainActor
+private func hostedNavigatorKeyViews(in view: NSView, identifiers: [String]) -> [NSView] {
+  guard let band = hostedNavigatorVerticalBand(in: view, identifiers: identifiers) else {
+    return []
+  }
   var views: [NSView] = []
   func collect(_ candidate: NSView) {
     if String(describing: type(of: candidate)) == "KeyViewProxy" {
       let frame = candidate.convert(candidate.bounds, to: view)
-      if frame.minY >= 42, frame.maxY <= 82 {
+      if frame.minY >= band.lowerBound, frame.maxY <= band.upperBound {
         views.append(candidate)
       }
     }
@@ -6587,7 +6661,7 @@ private func hostedNavigatorKeyView(
   else { return nil }
 
   let screenFrame = accessibilityFrame.rectValue
-  let keyViews = hostedNavigatorKeyViews(in: view)
+  let keyViews = hostedNavigatorKeyViews(in: view, identifiers: [identifier])
   let candidateScreenFrames = keyViews.map { candidate in
     let hostFrame = candidate.convert(candidate.bounds, to: view)
     let windowFrame = view.convert(hostFrame, to: nil)
