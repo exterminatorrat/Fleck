@@ -213,6 +213,92 @@
     }
   }
 
+  struct AgentActivityDiffLine: Equatable {
+    enum Kind: Equatable {
+      case unchanged
+      case removed
+      case added
+    }
+
+    let kind: Kind
+    let text: String
+
+    var marker: String {
+      switch kind {
+      case .unchanged: " "
+      case .removed: "-"
+      case .added: "+"
+      }
+    }
+
+    var accessibilityLabel: String {
+      let description =
+        switch kind {
+        case .unchanged: "Unchanged"
+        case .removed: "Removed"
+        case .added: "Added"
+        }
+      return text.isEmpty ? "\(description) empty line" : "\(description): \(text)"
+    }
+  }
+
+  enum AgentActivityLineDiff {
+    private static let maximumLineCount = 400
+    private static let maximumUTF8ByteCount = 1024 * 1024
+
+    static func lines(before: String, after: String) -> [AgentActivityDiffLine]? {
+      guard before.utf8.count + after.utf8.count <= maximumUTF8ByteCount else {
+        return nil
+      }
+      let beforeLines = splitLines(before)
+      let afterLines = splitLines(after)
+      guard beforeLines.count + afterLines.count <= maximumLineCount else {
+        return nil
+      }
+
+      var removals = Set<Int>()
+      var insertions = Set<Int>()
+      for change in afterLines.difference(from: beforeLines) {
+        switch change {
+        case .remove(let offset, _, _): removals.insert(offset)
+        case .insert(let offset, _, _): insertions.insert(offset)
+        }
+      }
+
+      var lines: [AgentActivityDiffLine] = []
+      var beforeIndex = 0
+      var afterIndex = 0
+      while beforeIndex < beforeLines.count || afterIndex < afterLines.count {
+        if beforeIndex < beforeLines.count, removals.contains(beforeIndex) {
+          lines.append(.init(kind: .removed, text: beforeLines[beforeIndex]))
+          beforeIndex += 1
+        } else if afterIndex < afterLines.count, insertions.contains(afterIndex) {
+          lines.append(.init(kind: .added, text: afterLines[afterIndex]))
+          afterIndex += 1
+        } else if beforeIndex < beforeLines.count, afterIndex < afterLines.count {
+          lines.append(.init(kind: .unchanged, text: beforeLines[beforeIndex]))
+          beforeIndex += 1
+          afterIndex += 1
+        } else if beforeIndex < beforeLines.count {
+          lines.append(.init(kind: .removed, text: beforeLines[beforeIndex]))
+          beforeIndex += 1
+        } else {
+          lines.append(.init(kind: .added, text: afterLines[afterIndex]))
+          afterIndex += 1
+        }
+      }
+      return lines
+    }
+
+    private static func splitLines(_ text: String) -> [String] {
+      guard !text.isEmpty else { return [] }
+      let normalized = text
+        .replacingOccurrences(of: "\r\n", with: "\n")
+        .replacingOccurrences(of: "\r", with: "\n")
+      return normalized.components(separatedBy: "\n")
+    }
+  }
+
   struct AgentActivityRowPresentation: Identifiable {
     let record: AgentActivityRecord
     let integrationName: String
@@ -221,6 +307,7 @@
     let timestamp: Date
     let beforeText: String
     let afterText: String
+    let diffLines: [AgentActivityDiffLine]?
     let canUndo: Bool
 
     var id: UUID { record.changeID }
@@ -237,6 +324,10 @@
       timestamp = record.createdAt
       beforeText = record.patch.beforeText
       afterText = record.patch.afterText
+      diffLines = AgentActivityLineDiff.lines(
+        before: record.patch.beforeText,
+        after: record.patch.afterText
+      )
       canUndo =
         activeNote.map { (try? AgentUndoEngine.draft(inverting: record.patch, in: $0.body)) != nil }
         ?? false
@@ -355,8 +446,15 @@
             .foregroundStyle(theme.color(.caption))
         }
         Text(row.operationDescription).font(.callout)
-        patch("Before", row.beforeText)
-        patch("After", row.afterText)
+        if let lines = row.diffLines {
+          diff(lines)
+        } else {
+          patch("Before", row.beforeText)
+          patch("After", row.afterText)
+          Text("This change is too large to display as a line diff.")
+            .font(.caption2)
+            .foregroundStyle(theme.color(.caption))
+        }
         HStack {
           Button("Open Note") {
             onOpenNote(row.record.noteID)
@@ -374,6 +472,61 @@
       }
       .padding(12)
       .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func diff(_ lines: [AgentActivityDiffLine]) -> some View {
+      VStack(alignment: .leading, spacing: 3) {
+        Text("Changes")
+          .font(.caption.weight(.medium))
+          .foregroundStyle(theme.color(.caption))
+        if lines.isEmpty {
+          Text("—")
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(theme.color(.caption))
+        } else {
+          VStack(alignment: .leading, spacing: 0) {
+            ForEach(lines.indices, id: \.self) { index in
+              diffLine(lines[index])
+            }
+          }
+          .clipShape(RoundedRectangle(cornerRadius: 6))
+          .textSelection(.enabled)
+        }
+      }
+    }
+
+    private func diffLine(_ line: AgentActivityDiffLine) -> some View {
+      HStack(alignment: .top, spacing: 6) {
+        Text(line.marker)
+          .font(.system(.caption, design: .monospaced).weight(.semibold))
+          .frame(width: 10, alignment: .center)
+        Text(line.text.isEmpty ? " " : line.text)
+          .font(.system(.caption, design: .monospaced))
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .foregroundStyle(diffColor(line.kind))
+      .padding(.horizontal, 6)
+      .padding(.vertical, 1)
+      .background(diffBackground(line.kind))
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(line.accessibilityLabel)
+    }
+
+    private func diffColor(_ kind: AgentActivityDiffLine.Kind) -> Color {
+      switch kind {
+      case .unchanged: theme.color(.textSecondary)
+      case .removed: theme.color(.error)
+      case .added: theme.color(.success)
+      }
+    }
+
+    private func diffBackground(_ kind: AgentActivityDiffLine.Kind) -> Color {
+      let opacity = theme.increasedContrast ? 0.20 : 0.10
+      return switch kind {
+      case .unchanged: .clear
+      case .removed: theme.color(.error).opacity(opacity)
+      case .added: theme.color(.success).opacity(opacity)
+      }
     }
 
     private func patch(_ label: String, _ text: String) -> some View {
