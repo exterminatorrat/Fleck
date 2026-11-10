@@ -20,6 +20,25 @@ ORIGINAL_JOBS = (
 )
 QUALIFICATION_JOB = "namespace-qualification"
 
+NATIVE_PROVIDER_RUNS_ON = (
+    "${{ github.event_name == 'workflow_dispatch' && "
+    "inputs.native_runner_provider == 'namespace' && "
+    "'namespace-profile-exterminatorrat' || 'macos-26' }}"
+)
+EXPECTED_RUNS_ON = {
+    "detect-changes": "namespace-profile-fleck",
+    "macos-build": NATIVE_PROVIDER_RUNS_ON,
+    "macos-validation": NATIVE_PROVIDER_RUNS_ON,
+    "docs-validation": "namespace-profile-fleck",
+    "macos": "namespace-profile-fleck",
+    "macos-enhanced": NATIVE_PROVIDER_RUNS_ON,
+    "own-window-capture-probe": "macos-26",
+    "folder-navigator-diagnostic": "macos-26",
+    "folder-navigator-diagnostic-enhanced": "macos-26",
+    "ordinary-test-diagnostic": "macos-26",
+    QUALIFICATION_JOB: "namespace-profile-exterminatorrat",
+}
+
 ORIGINAL_CONDITIONS = {
     "detect-changes": (
         "${{ github.event_name != 'workflow_dispatch' || "
@@ -78,6 +97,14 @@ def job_if(contents, job_id):
     return match.group(1)
 
 
+def job_runs_on(contents, job_id):
+    block = job_block(contents, job_id)
+    match = re.search(r"^    runs-on: (.+)$", block, re.M)
+    if match is None:
+        raise AssertionError(f"missing runs-on for CI job: {job_id}")
+    return match.group(1)
+
+
 def reduce_qualification_guard(condition):
     for guard in (
         "!inputs.namespace_qualification_only && ",
@@ -125,6 +152,43 @@ class NamespaceQualificationWorkflowTest(unittest.TestCase):
         self.assertIn("required: false", block)
         self.assertIn("type: boolean", block)
         self.assertIn("default: false", block)
+
+    def test_native_runner_provider_input_is_choice_with_exact_options(self):
+        block = input_block(self.contents, "native_runner_provider")
+        self.assertIn("required: false", block)
+        self.assertIn("type: choice", block)
+        self.assertIn("default: github-hosted", block)
+        options = re.findall(r"^          - (\S+)$", block, re.M)
+        self.assertEqual(options, ["github-hosted", "namespace"])
+
+    def test_native_runner_provider_maps_only_three_existing_jobs(self):
+        for job_id in ("macos-build", "macos-validation", "macos-enhanced"):
+            with self.subTest(job=job_id):
+                runs_on = job_runs_on(self.contents, job_id)
+                self.assertEqual(runs_on, NATIVE_PROVIDER_RUNS_ON)
+                self.assertIn(
+                    "github.event_name == 'workflow_dispatch'", runs_on
+                )
+                self.assertIn(
+                    "inputs.native_runner_provider == 'namespace'", runs_on
+                )
+                self.assertIn("'namespace-profile-exterminatorrat'", runs_on)
+                self.assertIn("|| 'macos-26'", runs_on)
+        namespace_jobs = [
+            job_id
+            for job_id in ORIGINAL_JOBS
+            if "namespace-profile-exterminatorrat"
+            in job_runs_on(self.contents, job_id)
+        ]
+        self.assertEqual(
+            namespace_jobs,
+            ["macos-build", "macos-validation", "macos-enhanced"],
+        )
+
+    def test_all_other_runs_on_values_are_unchanged(self):
+        for job_id, expected in EXPECTED_RUNS_ON.items():
+            with self.subTest(job=job_id):
+                self.assertEqual(job_runs_on(self.contents, job_id), expected)
 
     def test_job_inventory_preserves_existing_jobs(self):
         self.assertEqual(
@@ -207,6 +271,11 @@ class NamespaceQualificationWorkflowTest(unittest.TestCase):
             with self.subTest(expected=expected):
                 self.assertIn(expected, self.qualification)
 
+    def test_brew_version_captures_output_without_head_pipeline(self):
+        self.assertIn('brew_version="$(brew --version)"', self.qualification)
+        self.assertIn(r"${brew_version%%$'\n'*}", self.qualification)
+        self.assertNotIn("brew --version | head", self.qualification)
+
     def test_qualification_job_fails_clearly_off_macos_arm64(self):
         for expected in (
             '"$RUNNER_OS" != "macOS"',
@@ -278,6 +347,20 @@ class NamespaceQualificationWorkflowTest(unittest.TestCase):
         self.assertIn(
             "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
             self.contents,
+        )
+
+    def test_native_provider_concurrency_is_separate_from_queued_github_runs(self):
+        match = re.search(r"^  group: (.+)$", self.contents, re.M)
+        self.assertIsNotNone(match)
+        self.assertEqual(
+            match.group(1),
+            "ci-${{ github.event_name == 'workflow_dispatch' && "
+            "inputs.namespace_qualification_only && 'namespace-qualification-' || "
+            "github.event_name == 'workflow_dispatch' && "
+            "inputs.ordinary_test_diagnostic_selector != '' && 'focused-' || "
+            "github.event_name == 'workflow_dispatch' && "
+            "inputs.native_runner_provider == 'namespace' && 'namespace-native-' || '' }}"
+            "${{ github.event.pull_request.number || github.ref }}",
         )
 
     def test_normal_run_conditions_retain_previous_behavior(self):

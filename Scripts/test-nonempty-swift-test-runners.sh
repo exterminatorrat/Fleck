@@ -2695,10 +2695,43 @@ root = pathlib.Path(sys.argv[1]).resolve()
 workflow_path = root / ".github/workflows/ci.yml"
 current_workflow = workflow_path.read_text()
 
+qualification_guard = "!inputs.namespace_qualification_only"
+qualification_job = "namespace-qualification"
+native_jobs = ("macos-build", "macos-validation", "macos-enhanced")
+native_routing = (
+    "runs-on: ${{ github.event_name == 'workflow_dispatch' && "
+    "inputs.native_runner_provider == 'namespace' && "
+    "'namespace-profile-exterminatorrat' || 'macos-26' }}"
+)
+full_graph_condition = (
+    "if: ${{ "
+    f"{qualification_guard} && needs.detect-changes.result == 'success' && "
+    "needs.detect-changes.outputs.route == 'full' }}"
+)
+aggregate_condition = (
+    "if: ${{ "
+    f"{qualification_guard} && always() && (github.event_name != 'workflow_dispatch' "
+    "|| inputs.ordinary_test_diagnostic_selector == '') }}"
+)
+qualified_concurrency = (
+    "  group: ci-${{ github.event_name == 'workflow_dispatch' && "
+    "inputs.namespace_qualification_only && 'namespace-qualification-' || "
+    "github.event_name == 'workflow_dispatch' && "
+    "inputs.ordinary_test_diagnostic_selector != '' && 'focused-' || "
+    "github.event_name == 'workflow_dispatch' && "
+    "inputs.native_runner_provider == 'namespace' && 'namespace-native-' || '' }}"
+    "${{ github.event.pull_request.number || github.ref }}"
+)
+prior_concurrency = (
+    "  group: ci-${{ github.event_name == 'workflow_dispatch' && "
+    "inputs.ordinary_test_diagnostic_selector != '' && 'focused-' || '' }}"
+    "${{ github.event.pull_request.number || github.ref }}"
+)
+
 def job_block(contents, job_id):
     match = re.search(rf"^  {re.escape(job_id)}:\n", contents, re.M)
     if match is None:
-        raise SystemExit(f"missing supplemental CI job: {job_id}")
+        raise SystemExit(f"missing CI job: {job_id}")
     following = re.search(r"^  [A-Za-z0-9_-]+:\n", contents[match.end():], re.M)
     end = match.end() + following.start() if following else len(contents)
     return match.start(), end, contents[match.start():end]
@@ -2727,6 +2760,25 @@ for input_name in ("folder_navigator_probe", "folder_navigator_recording"):
             raise SystemExit(f"{input_name} input omitted: {required}")
     input_blocks[input_name] = input_block
 
+provider_match = re.search(
+    r"^      native_runner_provider:\n(?:^ {8}.*\n)+", current_workflow, re.M
+)
+if provider_match is None:
+    raise SystemExit("native_runner_provider input is missing")
+provider_block = provider_match.group(0)
+if current_workflow.count(provider_block) != 1:
+    raise SystemExit("native_runner_provider input must occur exactly once")
+for required in ("required: false", "type: choice", "default: github-hosted"):
+    if required not in provider_block:
+        raise SystemExit(f"native_runner_provider input omitted: {required}")
+if re.findall(r"^          - (\S+)$", provider_block, re.M) != [
+    "github-hosted",
+    "namespace",
+]:
+    raise SystemExit(
+        "native_runner_provider must offer exactly GitHub-hosted and manual namespace"
+    )
+
 supplemental_jobs = (
     (
         "folder-navigator-diagnostic",
@@ -2749,7 +2801,9 @@ for job_id, job_name, selector, enhanced in supplemental_jobs:
     _, _, block = job_block(current_workflow, job_id)
     for required in (
         f"name: {job_name}",
-        "if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe }}",
+        "if: ${{ github.event_name == 'workflow_dispatch' && "
+        f"inputs.folder_navigator_probe && {qualification_guard} }}",
+        "runs-on: macos-26",
         recording_environment,
         'test "$source_commit" = "$GITHUB_SHA"',
         selector,
@@ -2760,6 +2814,8 @@ for job_id, job_name, selector, enhanced in supplemental_jobs:
         raise SystemExit(f"supplemental CI job {job_id} has unexpected diagnostic recording")
     if enhanced != ("Scripts/test-enhanced-candidate-pin.sh" in block):
         raise SystemExit(f"supplemental CI job {job_id} has unexpected candidate pin validation")
+    if "namespace-profile" in block:
+        raise SystemExit(f"supplemental CI job {job_id} must stay GitHub-hosted")
 
 def step_block(contents, name):
     match = re.search(rf"^      - name: {re.escape(name)}\n", contents, re.M)
@@ -2788,15 +2844,15 @@ for job_id, block, required_values in (
         "macos-build", build,
         (
             "name: macOS ordinary graph and package", "needs: detect-changes",
-            "outputs.route == 'full'", "runs-on: macos-26", "timeout-minutes: 90",
+            full_graph_condition, native_routing, "timeout-minutes: 90",
             "python3 -B -m unittest discover -s Tests/Scripts -p test_ci_docs_path.py",
         ),
     ),
     (
         "macos-validation", validation,
         (
-            "needs: detect-changes", "outputs.route == 'full'",
-            "runs-on: macos-26", "timeout-minutes: 90",
+            "needs: detect-changes", full_graph_condition, native_routing,
+            "timeout-minutes: 90",
             'FLECK_NATIVE_CAPTURE_QA: "0"', "unset FLECK_ENHANCED_CANDIDATE FLECK_APP",
             "bash Tests/Scripts/validate-macos-no-launch.test.sh", "Scripts/validate-macos.sh",
             "Strict native screenshot/pixel capture: NOT RUN",
@@ -2806,9 +2862,9 @@ for job_id, block, required_values in (
         "macos", aggregate,
         (
             "name: macOS build and tests",
-            "if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.ordinary_test_diagnostic_selector == '') }}",
+            aggregate_condition,
             "needs: [detect-changes, docs-validation, macos-build, macos-validation, macos-enhanced]",
-            "runs-on: ubuntu-latest",
+            "runs-on: namespace-profile-fleck",
         ),
     ),
 ):
@@ -2826,11 +2882,61 @@ for block in (build, validation):
     ):
         if required not in block:
             raise SystemExit(f"CI split source identity omitted: {required}")
+
+tooling = step_block(build, "Test performance measurement tooling")[2]
+for required in (
+    "unset FLECK_ENHANCED_CANDIDATE FLECK_PERF_RUN FLECK_PERF_PREBUILT_RECEIPT",
+    "python3 -B -m unittest discover -s Tests/Scripts -p test_validate_perf_prebuilt.py",
+    "Tests/Scripts/prebuilt-perf-wrapper.test.sh",
+    "Scripts/test-nonempty-swift-test-runners.sh",
+):
+    if required not in tooling:
+        raise SystemExit(f"CI performance tooling step omitted: {required}")
+
 if current_workflow.count("name: macOS build and tests\n") != 1:
     raise SystemExit("CI required aggregate name must occur exactly once")
 for block in (build, validation, aggregate):
     if re.search(r"uses: .*actions/(?:cache|upload-artifact|download-artifact)", block):
         raise SystemExit("CI ordinary/validation split must not transfer caches or artifacts")
+
+jobs_section = re.search(r"^jobs:\n", current_workflow, re.M)
+if jobs_section is None:
+    raise SystemExit("CI jobs section is missing")
+job_ids = re.findall(
+    r"^  ([a-z0-9-]+):\n", current_workflow[jobs_section.end():], re.M
+)
+existing_jobs = tuple(job_id for job_id in job_ids if job_id != qualification_job)
+native_expression = native_routing.removeprefix("runs-on: ")
+for job_id in job_ids:
+    _, _, block = job_block(current_workflow, job_id)
+    condition = re.search(r"^    if: (.+)$", block, re.M)
+    if condition is None:
+        raise SystemExit(f"CI job {job_id} has no dispatch condition")
+    runner = re.search(r"^    runs-on: (.+)$", block, re.M)
+    if runner is None:
+        raise SystemExit(f"CI job {job_id} has no runner selection")
+    if (runner.group(1) == native_expression) != (job_id in native_jobs):
+        raise SystemExit(
+            f"CI job {job_id} must be one of the three manual Namespace native jobs"
+        )
+    if job_id == qualification_job:
+        if condition.group(1) != (
+            "${{ github.event_name == 'workflow_dispatch' && "
+            "inputs.namespace_qualification_only }}"
+        ):
+            raise SystemExit("CI qualification job must be the only qualification-only route")
+    elif condition.group(1).count(qualification_guard) != 1:
+        raise SystemExit(f"CI job {job_id} must skip namespace qualification-only runs")
+
+qualification = job_block(current_workflow, qualification_job)[2]
+for required in (
+    "name: Namespace runner metadata qualification",
+    "runs-on: namespace-profile-exterminatorrat",
+    "timeout-minutes: 5",
+):
+    if required not in qualification:
+        raise SystemExit(f"CI qualification job omitted: {required}")
+
 gate = step_block(aggregate, "Require docs-only or full current-source coverage")[2]
 run_body = re.search(r"^        run: \|\n(.*)", gate, re.M | re.S)
 if run_body is None:
@@ -2873,8 +2979,47 @@ boundary_names = (
     "Declare native capture boundary (candidate graph)",
 )
 normalized_workflow = current_workflow
-for input_block in input_blocks.values():
+normalized_inputs = dict(input_blocks)
+for input_name in ("native_runner_provider", "namespace_qualification_only"):
+    if dispatch.group("body").count(f"{input_name}:") != 1:
+        raise SystemExit(f"workflow_dispatch must declare one {input_name} input")
+    input_match = re.search(
+        rf"^      {re.escape(input_name)}:\n(?:^ {{8}}.*\n)+",
+        current_workflow,
+        re.M,
+    )
+    if input_match is None:
+        raise SystemExit(f"{input_name} input block is missing")
+    if input_name == "namespace_qualification_only":
+        for required in ("required: false", "type: boolean", "default: false"):
+            if required not in input_match.group(0):
+                raise SystemExit(f"{input_name} input omitted: {required}")
+    normalized_inputs[input_name] = input_match.group(0)
+for input_name, input_block in normalized_inputs.items():
+    if normalized_workflow.count(input_block) != 1:
+        raise SystemExit(f"{input_name} input block must occur exactly once")
     normalized_workflow = normalized_workflow.replace(input_block, "", 1)
+if normalized_workflow.count(qualified_concurrency) != 1:
+    raise SystemExit("namespace qualification concurrency isolation changed")
+normalized_workflow = normalized_workflow.replace(qualified_concurrency, prior_concurrency, 1)
+start, end, _ = job_block(normalized_workflow, qualification_job)
+if start >= 2 and normalized_workflow[start - 2:start] == "\n\n":
+    start -= 1
+normalized_workflow = normalized_workflow[:start] + normalized_workflow[end:]
+normalized_workflow, guarded_prefixes = re.subn(
+    r"^(    if: \$\{\{ )" + re.escape(qualification_guard) + r" && ",
+    r"\1",
+    normalized_workflow,
+    flags=re.M,
+)
+normalized_workflow, guarded_suffixes = re.subn(
+    r" && " + re.escape(qualification_guard) + r" \}\}$",
+    " }}",
+    normalized_workflow,
+    flags=re.M,
+)
+if guarded_prefixes + guarded_suffixes != len(existing_jobs):
+    raise SystemExit("declared qualification guard normalization lost a job condition")
 for job_id, _, _, _ in supplemental_jobs:
     start, end, _ = job_block(normalized_workflow, job_id)
     if start >= 2 and normalized_workflow[start - 2:start] == "\n\n":
@@ -2903,10 +3048,16 @@ for name in (ordinary_name, candidate_name):
         + block.replace(environment, "", 1)
         + normalized_workflow[end:]
     )
+if normalized_workflow.count(native_routing) != len(native_jobs):
+    raise SystemExit("declared native runner routing must select exactly three jobs")
+normalized_workflow = normalized_workflow.replace(native_routing, "runs-on: macos-26")
 if hashlib.sha256(normalized_workflow.encode()).hexdigest() != (
-    "e8cdd4f9811be83caa83b40b1b8f0caa55f278d9de0b3abe5e65855288f64934"
+    "5b46bfd97b09c8cd12cc03541a127a095a73936abaf3a84fab8a6e278e34eb85"
 ):
-    raise SystemExit("CI changed outside the declared split and native-capture boundary fixture")
+    raise SystemExit(
+        "CI changed outside the declared qualification, native routing, split, "
+        "and native-capture boundary fixture"
+    )
 
 test_name = "hostedGlassAndSolidMenuPanelsCaptureSyntheticChromeAndOpaqueEditor"
 test_path = root / "Tests/FleckAppTests/AppKitEditorTests.swift"
