@@ -320,6 +320,37 @@ func WorkspaceSearchHostingKeepsCompactSurfaceInsideMinimumWidth() async throws 
   await runtime.shutdown()
 }
 
+@Test @MainActor func workspaceSearchActivationRestoreRunsAfterDismissal() async throws {
+  let controller = WorkspaceSearchController()
+  var restores = 0
+  controller.present()
+  controller.setActivationFocusRestore {
+    restores += 1
+    return true
+  }
+
+  controller.dismiss()
+  for _ in 0..<12 { await Task.yield() }
+
+  #expect(restores == 1)
+}
+
+@Test @MainActor func workspaceSearchActivationRestoreIsCancelledByReopening() async throws {
+  let controller = WorkspaceSearchController()
+  var restores = 0
+  controller.present()
+  controller.setActivationFocusRestore {
+    restores += 1
+    return true
+  }
+
+  controller.dismiss()
+  controller.present()
+  for _ in 0..<12 { await Task.yield() }
+
+  #expect(restores == 0)
+}
+
 @Test
 func WorkspaceSearchDismissalsUseNotesPanelAnimationContract() throws {
   let root = URL(fileURLWithPath: #filePath)

@@ -1334,6 +1334,17 @@
               },
               onActivate: { noteID in
                 guard activateNoteAndScope(noteID) else { return }
+                searchController.setActivationFocusRestore {
+                  guard self.visibleSelectedNote?.id == noteID,
+                    let textView = self.editorCommands.textView,
+                    let window = textView.window,
+                    let contentView = window.contentView,
+                    textView.isDescendant(of: contentView)
+                  else { return false }
+                  if window.firstResponder === textView { return true }
+                  _ = window.makeFirstResponder(textView)
+                  return window.firstResponder === textView
+                }
               },
               onDismiss: dismissWorkspaceSearch
             )
@@ -1677,11 +1688,15 @@
       }
       do {
         try appState.deleteFolder(id: folderID, activeFolderID: currentFolderID)
+        appState.folderActionSucceeded(folderID: folderID)
       } catch {
         if currentFolderID == folderID {
           activeFolderID = folderID
         }
-        appState.saveError = "Could not update folder: \(String(describing: error))"
+        appState.folderActionFailed(
+          "Could not update folder: \(String(describing: error))",
+          folderID: folderID
+        )
       }
     }
 
@@ -3731,11 +3746,14 @@
         return
       }
       do {
+        var actionFolderID: UUID?
         if isCreatingFolder {
           _ = try appState.createFolder(named: folderNameDraft)
         } else if let editingFolderID {
           try appState.renameFolder(id: editingFolderID, name: folderNameDraft)
+          actionFolderID = editingFolderID
         }
+        appState.folderActionSucceeded(folderID: actionFolderID)
         if preservingFocus {
           editingFolderID = nil
           isRenamingFolderTextEditing = false
@@ -3744,7 +3762,10 @@
           cancelFolderEditing(source: source)
         }
       } catch {
-        appState.saveError = "Could not update folder: \(String(describing: error))"
+        appState.folderActionFailed(
+          "Could not update folder: \(String(describing: error))",
+          folderID: isCreatingFolder ? nil : editingFolderID
+        )
         if preservingFocus, editingFolderID != nil {
           focusedRow = nil
           renameFocusRequest &+= 1
