@@ -2080,9 +2080,13 @@
     private static let noteLinkRequestMenuTag = 0xF1ED
     private static let noteLinkOpenMenuTag = 0xF1EE
     private static let copyImageMenuTag = 0xF1EF
-    private static let inlineImagePasteboardTypes: [NSPasteboard.PasteboardType] = [
-      .tiff, .png, .rtf, .string,
-    ]
+    private static let managedImageReferenceType = NSPasteboard.PasteboardType(
+      "com.harryjin.fleck.managed-image-reference"
+    )
+    private static let publicImagePasteboardTypes: [NSPasteboard.PasteboardType] = [.tiff, .png]
+    private static let managedImagePasteboardTypes: [NSPasteboard.PasteboardType] =
+      publicImagePasteboardTypes + [managedImageReferenceType]
+      + [.rtf, .string]
     private static let referencePasteboardTypes: [NSPasteboard.PasteboardType] = [.rtf, .string]
     private static let legacyFilenamesPasteboardType = NSPasteboard.PasteboardType(
       "NSFilenamesPboardType"
@@ -3165,7 +3169,10 @@
     }
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
-      [.fileURL] + super.readablePasteboardTypes.filter { $0 != .fileURL }
+      let inherited = [.fileURL] + super.readablePasteboardTypes.filter { $0 != .fileURL }
+      guard inlineImageStore != nil else { return inherited }
+      return [Self.managedImageReferenceType]
+        + inherited.filter { $0 != Self.managedImageReferenceType }
     }
 
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
@@ -3182,6 +3189,13 @@
     override func readSelection(from pasteboard: NSPasteboard) -> Bool {
       guard pasteboard.name != .drag else {
         return super.readSelection(from: pasteboard)
+      }
+      if let inlineImageStore,
+        let reference = pasteboard.string(forType: Self.managedImageReferenceType),
+        let projected = projectedManagedImageReference(reference, store: inlineImageStore)
+      {
+        return insertProjectedPaste(projected)
+          || super.readSelection(from: pasteboard)
       }
       if let inlineImageStore,
         (pasteboard.types ?? []).contains(where: { Self.isInlineImagePasteboardType($0) })
@@ -3218,6 +3232,14 @@
       from pasteboard: NSPasteboard,
       type: NSPasteboard.PasteboardType
     ) -> Bool {
+      if type == Self.managedImageReferenceType,
+        let inlineImageStore,
+        let reference = pasteboard.string(forType: type),
+        let projected = projectedManagedImageReference(reference, store: inlineImageStore)
+      {
+        return insertProjectedPaste(projected)
+          || super.readSelection(from: pasteboard, type: type)
+      }
       if let inlineImageStore,
         let projected = projectedManagedReferencePaste(
           from: pasteboard,
@@ -3353,10 +3375,18 @@
     }
 
     override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
-      if selectedInlineImage() != nil { return Self.inlineImagePasteboardTypes }
+      if selectedImageCopy() != nil { return Self.managedImagePasteboardTypes }
       return selectedRanges.map(\.rangeValue).contains { containsInlineImage(in: $0) }
         ? [.rtf, .string]
         : super.writablePasteboardTypes
+    }
+
+    override func copy(_ sender: Any?) {
+      if let image = selectedImageCopy() {
+        _ = writeManagedImageCopy(image.attachment, to: NSPasteboard.general)
+        return
+      }
+      super.copy(sender)
     }
 
     override func writeSelection(
@@ -3383,17 +3413,10 @@
         }
       }
       let expandedSelections = expandedCopySelections(selections)
-      if let image = selectedInlineImage(),
-        types.contains(where: { Self.isInlineImagePasteboardType($0) }),
-        let projection = projectedCopy(selections: expandedSelections)
+      if let image = selectedImageCopy(),
+        types.contains(where: { Self.isInlineImagePasteboardType($0) })
       {
-        return writeProjectedSelection(
-          projection.selections,
-          from: projection.source,
-          to: pasteboard,
-          types: types,
-          image: image.attachment
-        )
+        return writeManagedImageCopy(image.attachment, to: pasteboard)
       }
       let containsImages = selections.contains { containsInlineImage(in: $0) }
       let exportsText = !types.isEmpty
@@ -3487,31 +3510,20 @@
       _ selections: [NSRange],
       from source: NSAttributedString,
       to pasteboard: NSPasteboard,
-      types: [NSPasteboard.PasteboardType],
-      image: InlineNoteImageAttachment? = nil
+      types: [NSPasteboard.PasteboardType]
     ) -> Bool {
       let formats = Set(types.compactMap(Self.copyFormat(for:)))
-      let imageTypes =
-        image == nil ? [] : types.filter { Self.isInlineImagePasteboardType($0) }
-      guard !formats.isEmpty || !imageTypes.isEmpty else { return false }
+      guard !formats.isEmpty else { return false }
       let item = NSPasteboardItem()
-      if !formats.isEmpty {
-        guard let exportText = projectedExportText(selections, from: source) else { return false }
-        if formats.contains(.rtf) {
-          guard let data = try? exportText.data(
-            from: NSRange(location: 0, length: exportText.length),
-            documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
-          ), item.setData(data, forType: .rtf) else { return false }
-        }
-        if formats.contains(.string), !item.setString(exportText.string, forType: .string) {
-          return false
-        }
+      guard let exportText = projectedExportText(selections, from: source) else { return false }
+      if formats.contains(.rtf) {
+        guard let data = try? exportText.data(
+          from: NSRange(location: 0, length: exportText.length),
+          documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+        ), item.setData(data, forType: .rtf) else { return false }
       }
-      if let image {
-        for type in imageTypes {
-          guard let data = Self.inlineImageData(image, type: type) else { continue }
-          guard item.setData(data, forType: type) else { return false }
-        }
+      if formats.contains(.string), !item.setString(exportText.string, forType: .string) {
+        return false
       }
       guard !item.types.isEmpty else { return false }
       pasteboard.clearContents()
@@ -3602,7 +3614,7 @@
         )
       }
       let expandedSelections = expandedCopySelections(selections)
-      if let image = selectedInlineImage(),
+      if let image = selectedImageCopy(),
         Self.isInlineImagePasteboardType(type),
         let data = Self.inlineImageData(image.attachment, type: type)
       {
@@ -3654,6 +3666,76 @@
       return (attachment, range)
     }
 
+    private func selectedImageCopy() -> (attachment: InlineNoteImageAttachment, range: NSRange)? {
+      let ranges = selectedRanges.map(\.rangeValue)
+      guard ranges.count == 1, let range = ranges.first, range.length > 0,
+        let storage = textStorage,
+        range.location != NSNotFound,
+        range.location >= 0,
+        NSMaxRange(range) <= storage.length
+      else { return nil }
+      var attachment: InlineNoteImageAttachment?
+      var rejects = false
+      storage.enumerateAttribute(.attachment, in: range) { value, _, _ in
+        guard let image = value as? InlineNoteImageAttachment else {
+          if value != nil { rejects = true }
+          return
+        }
+        if attachment != nil { rejects = true }
+        attachment = image
+      }
+      guard !rejects, let image = attachment else { return nil }
+      let ns = storage.string as NSString
+      for index in range.location..<NSMaxRange(range) {
+        if storage.attribute(.attachment, at: index, effectiveRange: nil)
+          is InlineNoteImageAttachment
+        {
+          continue
+        }
+        let character = ns.substring(with: NSRange(location: index, length: 1))
+        guard character.unicodeScalars.allSatisfy({
+          CharacterSet.whitespacesAndNewlines.contains($0)
+        }) else { return nil }
+      }
+      return (image, range)
+    }
+
+    private func projectedManagedImageReference(
+      _ reference: String,
+      store: InlineNoteImageStore
+    ) -> NSAttributedString? {
+      guard let attachment = store.projectedAttachment(for: NSAttributedString(string: reference))
+      else { return nil }
+      let projected = NSMutableAttributedString(attributedString: attachment)
+      var attributes = pasteDestinationAttributes(for: selectedRange())
+      attributes.removeValue(forKey: .attachment)
+      attributes.removeValue(forKey: .link)
+      projected.addAttributes(
+        attributes,
+        range: NSRange(location: 0, length: projected.length)
+      )
+      return projected
+    }
+
+    @discardableResult
+    func writeManagedImageCopy(
+      _ image: InlineNoteImageAttachment,
+      to pasteboard: NSPasteboard
+    ) -> Bool {
+      let item = NSPasteboardItem()
+      var wrotePublicImage = false
+      for type in Self.publicImagePasteboardTypes {
+        guard let data = Self.inlineImageData(image, type: type) else { continue }
+        guard item.setData(data, forType: type) else { return false }
+        wrotePublicImage = true
+      }
+      guard wrotePublicImage,
+        item.setString(image.sourceReference, forType: Self.managedImageReferenceType)
+      else { return false }
+      pasteboard.clearContents()
+      return pasteboard.writeObjects([item])
+    }
+
     private func inlineImageAttachment(in range: NSRange) -> InlineNoteImageAttachment? {
       guard let storage = textStorage,
         range.location != NSNotFound,
@@ -3687,8 +3769,10 @@
       return inlineImageAttachment(in: NSRange(location: characterIndex, length: 1))
     }
 
-    private func inlineImageRange(_ attachment: InlineNoteImageAttachment) -> NSRange? {
-      guard let storage = textStorage else { return nil }
+    private func inlineImageRange(
+      _ attachment: InlineNoteImageAttachment,
+      in storage: NSTextStorage
+    ) -> NSRange? {
       var result: NSRange?
       storage.enumerateAttribute(
         .attachment,
@@ -4328,16 +4412,10 @@
 
     @discardableResult
     func copyInlineImage(_ image: InlineNoteImageAttachment, to pasteboard: NSPasteboard) -> Bool {
-      guard let range = inlineImageRange(image),
-        let projection = projectedCopy(selections: expandedCopySelections([range]))
-      else { return false }
-      return writeProjectedSelection(
-        projection.selections,
-        from: projection.source,
-        to: pasteboard,
-        types: Self.inlineImagePasteboardTypes,
-        image: image
-      )
+      guard let storage = textStorage, inlineImageRange(image, in: storage) != nil else {
+        return false
+      }
+      return writeManagedImageCopy(image, to: pasteboard)
     }
 
     override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {

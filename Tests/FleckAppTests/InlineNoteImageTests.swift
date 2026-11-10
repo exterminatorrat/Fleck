@@ -222,7 +222,10 @@ import Testing
     editor.isRichText = true
     editor.importsGraphics = false
     editor.inlineImageStore = fixture.store
-    #expect(editor.readablePasteboardTypes.first == .fileURL)
+    #expect(
+      Array(editor.readablePasteboardTypes.prefix(2))
+        == [managedImageReferencePasteboardType(), .fileURL]
+    )
     editor.string = "Before after"
     editor.setSelectedRange(NSRange(location: 7, length: 0))
     let pasteboard = NSPasteboard.withUniqueName()
@@ -1018,15 +1021,16 @@ import Testing
   let pasteboard = NSPasteboard.withUniqueName()
   defer { pasteboard.releaseGlobally() }
 
-  #expect(editor.writablePasteboardTypes == [.tiff, .png, .rtf, .string])
-  #expect(editor.writeSelection(to: pasteboard, types: editor.writablePasteboardTypes))
-  #expect(pasteboard.string(forType: .string) == reference)
-  let decoded = try NSAttributedString(
-    data: #require(pasteboard.data(forType: .rtf)),
-    options: [.documentType: NSAttributedString.DocumentType.rtf],
-    documentAttributes: nil
+  #expect(
+    editor.writablePasteboardTypes
+      == [.tiff, .png, managedImageReferencePasteboardType(), .rtf, .string]
   )
-  #expect(decoded.string == reference)
+  #expect(editor.writeSelection(to: pasteboard, types: editor.writablePasteboardTypes))
+  #expect(pasteboard.string(forType: .string) == nil)
+  #expect(pasteboard.data(forType: .rtf) == nil)
+  #expect(
+    pasteboard.string(forType: managedImageReferencePasteboardType()) == reference
+  )
   let tiffData = try #require(pasteboard.data(forType: .tiff))
   let tiff = try #require(NSBitmapImageRep(data: tiffData))
   #expect(tiff.pixelsWide == 20)
@@ -1157,11 +1161,537 @@ import Testing
   let pasteboard = NSPasteboard.withUniqueName()
   defer { pasteboard.releaseGlobally() }
   #expect(editor.copyInlineImage(clickedImage, to: pasteboard))
-  #expect(pasteboard.string(forType: .string) == reference)
+  #expect(pasteboard.string(forType: .string) == nil)
+  #expect(pasteboard.data(forType: .rtf) == nil)
   #expect(pasteboard.data(forType: .tiff) != nil)
   #expect(pasteboard.data(forType: .png) != nil)
+  #expect(
+    pasteboard.string(forType: managedImageReferencePasteboardType()) == reference
+  )
   #expect(editor.selectedRanges.map(\.rangeValue) == menuSelection)
   #expect(editor.selectedRanges.map(\.rangeValue) != [preMenuSelection])
+}
+
+@Test @MainActor func copyCommandOfBareInlineImageWritesImageOnlyPayload() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let image = try fixture.makeImage(name: "copy-command.png", width: 20, height: 10)
+  let reference = try fixture.store.importImage(at: image).reference
+  let editor = fixture.editor()
+  editor.textStorage?.setAttributedString(
+    fixture.store.projectedContent(from: NSAttributedString(string: reference))
+  )
+  editor.setSelectedRange(NSRange(location: 0, length: 1))
+
+  try withGeneralPasteboard {
+    editor.copy(nil)
+    let pasteboard = NSPasteboard.general
+    let types = pasteboard.types ?? []
+    #expect(types.contains(.tiff))
+    #expect(types.contains(.png))
+    #expect(types.contains(managedImageReferencePasteboardType()))
+    #expect(!types.contains(.string))
+    #expect(!types.contains(.rtf))
+    #expect(!types.contains(.fileURL))
+    let decoded = try #require(NSImage(pasteboard: pasteboard))
+    let decodedData = try #require(decoded.tiffRepresentation)
+    let bitmap = try #require(NSBitmapImageRep(data: decodedData))
+    #expect(bitmap.pixelsWide == 20)
+    #expect(bitmap.pixelsHigh == 10)
+    #expect(
+      pasteboard.string(forType: managedImageReferencePasteboardType()) == reference
+    )
+  }
+}
+
+@Test @MainActor func copyCommandOfImageWithLineBreakWritesImageOnlyPayload() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let image = try fixture.makeImage(name: "line-break.png", width: 20, height: 10)
+  let reference = try fixture.store.importImage(at: image).reference
+  let editor = fixture.editor()
+  editor.textStorage?.setAttributedString(
+    fixture.store.projectedContent(
+      from: NSAttributedString(string: "\(reference)\nFollowing text")
+    )
+  )
+  try #require((editor.string as NSString).hasPrefix("\u{fffc}\n"))
+  let window = offscreenWindow(containing: editor)
+  defer { window.orderOut(nil) }
+  editor.setSelectedRange(NSRange(location: 0, length: 2))
+
+  try withGeneralPasteboard {
+    editor.copy(nil)
+    let pasteboard = NSPasteboard.general
+    let types = pasteboard.types ?? []
+    #expect(types.contains(.tiff))
+    #expect(types.contains(.png))
+    #expect(types.contains(managedImageReferencePasteboardType()))
+    #expect(!types.contains(.string))
+    #expect(!types.contains(.rtf))
+    #expect(NSImage(pasteboard: pasteboard) != nil)
+  }
+}
+
+@Test @MainActor func copyCommandOfWhitespaceWrappedImageWritesImageOnlyPayload() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let image = try fixture.makeImage(name: "wrapped.png", width: 20, height: 10)
+  let reference = try fixture.store.importImage(at: image).reference
+  let editor = fixture.editor()
+  editor.textStorage?.setAttributedString(
+    fixture.store.projectedContent(from: NSAttributedString(string: "  \(reference)  "))
+  )
+  editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+
+  try withGeneralPasteboard {
+    editor.copy(nil)
+    let pasteboard = NSPasteboard.general
+    let types = pasteboard.types ?? []
+    #expect(types.contains(.tiff))
+    #expect(types.contains(.png))
+    #expect(!types.contains(.string))
+    #expect(!types.contains(.rtf))
+  }
+}
+
+@Test @MainActor func copyCommandOfMixedTextAndImageKeepsReferenceExport() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let image = try fixture.makeImage(name: "mixed.png", width: 20, height: 10)
+  let reference = try fixture.store.importImage(at: image).reference
+  let editor = fixture.editor()
+  editor.textStorage?.setAttributedString(
+    fixture.store.projectedContent(from: NSAttributedString(string: "before \(reference) after"))
+  )
+  let window = offscreenWindow(containing: editor)
+  defer { window.orderOut(nil) }
+  editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+
+  try withGeneralPasteboard {
+    editor.copy(nil)
+    let pasteboard = NSPasteboard.general
+    let types = pasteboard.types ?? []
+    #expect(!types.contains(.tiff))
+    #expect(!types.contains(.png))
+    #expect(!types.contains(managedImageReferencePasteboardType()))
+    let copied = try #require(pasteboard.string(forType: .string))
+    #expect(copied.contains(reference))
+    #expect(copied.contains("before"))
+  }
+}
+
+@Test @MainActor func copyCommandOfMultipleImagesKeepsReferenceExport() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let first = try fixture.store.importImage(
+    at: fixture.makeImage(name: "first.png", width: 20, height: 10)
+  ).reference
+  let second = try fixture.store.importImage(
+    at: fixture.makeImage(name: "second.png", width: 30, height: 15)
+  ).reference
+  let editor = fixture.editor()
+  editor.textStorage?.setAttributedString(
+    fixture.store.projectedContent(from: NSAttributedString(string: "\(first)\n\(second)"))
+  )
+  let window = offscreenWindow(containing: editor)
+  defer { window.orderOut(nil) }
+  editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+
+  try withGeneralPasteboard {
+    editor.copy(nil)
+    let pasteboard = NSPasteboard.general
+    let types = pasteboard.types ?? []
+    #expect(!types.contains(.tiff))
+    #expect(!types.contains(managedImageReferencePasteboardType()))
+    let copied = try #require(pasteboard.string(forType: .string))
+    #expect(copied.contains(first))
+    #expect(copied.contains(second))
+  }
+}
+
+@Test @MainActor func externalRichTextConsumerReadsCopiedImageInsteadOfReference() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let image = try fixture.makeImage(name: "consumer.png", width: 20, height: 10)
+  let reference = try fixture.store.importImage(at: image).reference
+  let editor = fixture.editor()
+  editor.textStorage?.setAttributedString(
+    fixture.store.projectedContent(from: NSAttributedString(string: reference))
+  )
+  editor.setSelectedRange(NSRange(location: 0, length: 1))
+
+  let consumer = NSTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 180))
+  consumer.isRichText = true
+  consumer.importsGraphics = true
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 500, height: 300),
+    styleMask: [.borderless],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = consumer
+  defer { window.orderOut(nil) }
+
+  try withGeneralPasteboard {
+    editor.copy(nil)
+    #expect(consumer.readSelection(from: NSPasteboard.general))
+    let storage = try #require(consumer.textStorage)
+    var attachments = 0
+    var firstAttachment: NSTextAttachment?
+    storage.enumerateAttribute(
+      .attachment,
+      in: NSRange(location: 0, length: storage.length)
+    ) { value, _, _ in
+      guard let candidate = value as? NSTextAttachment else { return }
+      attachments += 1
+      if firstAttachment == nil { firstAttachment = candidate }
+    }
+    #expect(attachments == 1)
+    let pastedAttachment = try #require(firstAttachment)
+    let pastedImage = try #require(decodedAttachmentImage(pastedAttachment))
+    let pastedData = try #require(pastedImage.tiffRepresentation)
+    let pastedBitmap = try #require(NSBitmapImageRep(data: pastedData))
+    #expect(pastedBitmap.pixelsWide == 20)
+    #expect(pastedBitmap.pixelsHigh == 10)
+    #expect(!consumer.string.contains("file://"))
+    #expect(!consumer.string.contains("![Image]"))
+    if let rendered = try exportImageCopyConsumerEvidence(
+      consumer,
+      name: "image-copy-consumer"
+    ) {
+      #expect(visiblePixelCount(in: rendered) > 500)
+    }
+  }
+}
+
+@Test @MainActor func copyCommandImagePastesBackAsManagedReference() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let image = try fixture.makeImage(name: "round-trip.png", width: 20, height: 10)
+  let reference = try fixture.store.importImage(at: image).reference
+  let editor = fixture.editor()
+  editor.textStorage?.setAttributedString(
+    fixture.store.projectedContent(from: NSAttributedString(string: reference))
+  )
+  editor.setSelectedRange(NSRange(location: 0, length: 1))
+  let paste = fixture.editor(text: "Replace")
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 360, height: 220),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = paste
+  defer { window.orderOut(nil) }
+  paste.selectAll(nil)
+
+  try withGeneralPasteboard {
+    editor.copy(nil)
+    #expect(paste.readSelection(from: NSPasteboard.general))
+    let attachment = try #require(
+      paste.textStorage?.attribute(.attachment, at: 0, effectiveRange: nil)
+        as? InlineNoteImageAttachment
+    )
+    #expect(attachment.sourceReference == reference)
+    #expect(!paste.string.contains("file://"))
+    #expect(!paste.string.contains("Replace"))
+  }
+}
+
+@Test @MainActor func singleImageSelectionWritesRequestedPixelFormatIndividually() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let image = try fixture.makeImage(name: "per-type.png", width: 6, height: 3)
+  let reference = try fixture.store.importImage(at: image).reference
+  let editor = fixture.editor()
+  editor.textStorage?.setAttributedString(
+    fixture.store.projectedContent(from: NSAttributedString(string: reference))
+  )
+  editor.setSelectedRange(NSRange(location: 0, length: 1))
+
+  let pasteboard = NSPasteboard.withUniqueName()
+  defer { pasteboard.releaseGlobally() }
+  _ = pasteboard.clearContents()
+  #expect(editor.writeSelection(to: pasteboard, type: .png))
+  let pngData = try #require(pasteboard.data(forType: .png))
+  let png = try #require(NSBitmapImageRep(data: pngData))
+  #expect(png.pixelsWide == 6)
+  #expect(png.pixelsHigh == 3)
+  #expect(editor.writeSelection(to: pasteboard, type: .tiff))
+  let tiffData = try #require(pasteboard.data(forType: .tiff))
+  let tiff = try #require(NSBitmapImageRep(data: tiffData))
+  #expect(tiff.pixelsWide == 6)
+  #expect(tiff.pixelsHigh == 3)
+  #expect(pasteboard.data(forType: .png) != nil)
+  #expect(pasteboard.string(forType: managedImageReferencePasteboardType()) == nil)
+}
+
+@Test @MainActor func copyOfUnencodableImageKeepsClipboardContents() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let editor = fixture.editor()
+  editor.textStorage?.setAttributedString(
+    NSAttributedString(
+      string: "\u{fffc}",
+      attributes: [.attachment: unencodableImageAttachment()]
+    )
+  )
+  editor.setSelectedRange(NSRange(location: 0, length: 1))
+
+  try withGeneralPasteboard {
+    let pasteboard = NSPasteboard.general
+    _ = pasteboard.clearContents()
+    #expect(pasteboard.setString("sentinel", forType: .string))
+    let attachment = try #require(
+      editor.textStorage?.attribute(.attachment, at: 0, effectiveRange: nil)
+        as? InlineNoteImageAttachment
+    )
+    #expect(!editor.copyInlineImage(attachment, to: pasteboard))
+    #expect(pasteboard.string(forType: .string) == "sentinel")
+    editor.copy(nil)
+    #expect(pasteboard.string(forType: .string) == "sentinel")
+    #expect(pasteboard.data(forType: .tiff) == nil)
+    #expect(pasteboard.data(forType: .png) == nil)
+    #expect(pasteboard.string(forType: managedImageReferencePasteboardType()) == nil)
+  }
+}
+
+@Test @MainActor func bulkImageCopyOfUnencodableImageKeepsClipboardContents() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let editor = fixture.editor()
+  editor.textStorage?.setAttributedString(
+    NSAttributedString(
+      string: "\u{fffc}",
+      attributes: [.attachment: unencodableImageAttachment()]
+    )
+  )
+  editor.setSelectedRange(NSRange(location: 0, length: 1))
+
+  try withGeneralPasteboard {
+    let pasteboard = NSPasteboard.general
+    _ = pasteboard.clearContents()
+    #expect(pasteboard.setString("sentinel", forType: .string))
+    #expect(!editor.writeSelection(to: pasteboard, types: editor.writablePasteboardTypes))
+    #expect(pasteboard.string(forType: .string) == "sentinel")
+    #expect(pasteboard.data(forType: .tiff) == nil)
+    #expect(pasteboard.data(forType: .png) == nil)
+    #expect(pasteboard.string(forType: managedImageReferencePasteboardType()) == nil)
+  }
+}
+
+@Test @MainActor func managedImagePasteBackDropsDestinationLinkAndForeignAttachment() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let image = try fixture.makeImage(name: "sanitized.png", width: 4, height: 4)
+  let reference = try fixture.store.importImage(at: image).reference
+  let foreign = NSTextAttachment()
+  foreign.contents = Data([0x00])
+  let editor = fixture.editor()
+  editor.setSelectedRange(NSRange(location: 0, length: 0))
+  editor.typingAttributes = [
+    .link: try #require(URL(string: "https://example.com/linked")),
+    .attachment: foreign,
+  ]
+
+  let pasteboard = NSPasteboard.withUniqueName()
+  defer { pasteboard.releaseGlobally() }
+  let item = NSPasteboardItem()
+  _ = item.setString(reference, forType: managedImageReferencePasteboardType())
+  _ = pasteboard.clearContents()
+  #expect(pasteboard.writeObjects([item]))
+
+  #expect(editor.readSelection(from: pasteboard))
+  let storage = try #require(editor.textStorage)
+  let wholeNote = NSRange(location: 0, length: storage.length)
+  var managedAttachment: InlineNoteImageAttachment?
+  var foreignAttachments = 0
+  storage.enumerateAttribute(.attachment, in: wholeNote) { value, _, _ in
+    guard let candidate = value as? NSTextAttachment else { return }
+    if let managed = candidate as? InlineNoteImageAttachment {
+      managedAttachment = managed
+    } else {
+      foreignAttachments += 1
+    }
+  }
+  let pastedImage = try #require(managedAttachment)
+  #expect(pastedImage.sourceReference == reference)
+  #expect(foreignAttachments == 0)
+  storage.enumerateAttribute(.link, in: wholeNote) { value, _, _ in
+    #expect(value == nil)
+  }
+}
+
+@Test @MainActor func nativePasteOfCopiedImageInsertsManagedAttachmentAndUndoes() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let image = try fixture.makeImage(name: "native-paste.png", width: 20, height: 10)
+  let reference = try fixture.store.importImage(at: image).reference
+  let source = fixture.editor()
+  source.textStorage?.setAttributedString(
+    fixture.store.projectedContent(from: NSAttributedString(string: reference))
+  )
+  source.setSelectedRange(NSRange(location: 0, length: 1))
+
+  let destination = fixture.editor(text: "Replace")
+  let destinationWindow = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 400, height: 240),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  destinationWindow.isReleasedWhenClosed = false
+  destinationWindow.contentView = destination
+  defer { destinationWindow.orderOut(nil) }
+  #expect(destinationWindow.canBecomeKey)
+  NSApp.activate(ignoringOtherApps: true)
+  destinationWindow.makeKeyAndOrderFront(nil)
+  #expect(destinationWindow.makeFirstResponder(destination))
+  #expect(destinationWindow.isKeyWindow)
+  #expect(NSApp.keyWindow === destinationWindow)
+  #expect(destinationWindow.firstResponder === destination)
+  destination.selectAll(nil)
+
+  try withGeneralPasteboard {
+    source.copy(nil)
+    #expect(NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil))
+    let storage = try #require(destination.textStorage)
+    #expect(!destination.string.contains("Replace"))
+    #expect(!destination.string.contains("file://"))
+    var managedAttachment: InlineNoteImageAttachment?
+    storage.enumerateAttribute(
+      .attachment,
+      in: NSRange(location: 0, length: storage.length)
+    ) { value, _, _ in
+      if let candidate = value as? InlineNoteImageAttachment {
+        managedAttachment = candidate
+      }
+    }
+    let pasted = try #require(managedAttachment)
+    #expect(pasted.sourceReference == reference)
+    let pastedImage = try #require(decodedAttachmentImage(pasted))
+    let pastedData = try #require(pastedImage.tiffRepresentation)
+    let pastedBitmap = try #require(NSBitmapImageRep(data: pastedData))
+    #expect(pastedBitmap.pixelsWide == 20)
+    #expect(pastedBitmap.pixelsHigh == 10)
+    destination.undoManager?.undo()
+    #expect(destination.string == "Replace")
+  }
+}
+
+@Test @MainActor func pasteMenuItemValidatesCopiedManagedImageClipboard() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let image = try fixture.makeImage(name: "menu-validate.png", width: 20, height: 10)
+  let reference = try fixture.store.importImage(at: image).reference
+  let editor = fixture.editor()
+  editor.textStorage?.setAttributedString(
+    fixture.store.projectedContent(from: NSAttributedString(string: reference))
+  )
+  let window = offscreenWindow(containing: editor)
+  defer { window.orderOut(nil) }
+  window.makeKeyAndOrderFront(nil)
+  editor.setSelectedRange(NSRange(location: 0, length: 1))
+  let pasteItem = NSMenuItem(
+    title: "Paste",
+    action: #selector(NSText.paste(_:)),
+    keyEquivalent: "v"
+  )
+
+  try withGeneralPasteboard {
+    let pasteboard = NSPasteboard.general
+    _ = pasteboard.clearContents()
+    #expect(pasteboard.setString("text", forType: .string))
+    #expect(editor.validateMenuItem(pasteItem))
+    #expect(editor.validateUserInterfaceItem(pasteItem))
+
+    editor.copy(nil)
+    let types = pasteboard.types ?? []
+    #expect(types.contains(managedImageReferencePasteboardType()))
+    #expect(!types.contains(.string))
+    #expect(
+      editor.readablePasteboardTypes.first == managedImageReferencePasteboardType()
+    )
+    #expect(editor.validateMenuItem(pasteItem))
+    #expect(editor.validateUserInterfaceItem(pasteItem))
+  }
+}
+
+@Test @MainActor func unmanagedPrivateReferencePasteFallsBackWithoutReadingFiles() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  for reference in [
+    "![Image](file:///etc/hosts)",
+    "![Image](file:///private/var/tmp/unmanaged-image.png)",
+    "plain text",
+  ] {
+    let editor = fixture.editor(text: "Keep")
+    editor.selectAll(nil)
+    let pasteboard = NSPasteboard.withUniqueName()
+    defer { pasteboard.releaseGlobally() }
+    let item = NSPasteboardItem()
+    _ = item.setString(reference, forType: managedImageReferencePasteboardType())
+    pasteboard.clearContents()
+    #expect(pasteboard.writeObjects([item]))
+    #expect(!editor.readSelection(from: pasteboard))
+    var attachments = 0
+    editor.textStorage?.enumerateAttribute(
+      .attachment,
+      in: NSRange(location: 0, length: editor.textStorage?.length ?? 0)
+    ) { value, _, _ in
+      if value is InlineNoteImageAttachment { attachments += 1 }
+    }
+    #expect(attachments == 0)
+    #expect(editor.string == "Keep")
+  }
+}
+
+@Test @MainActor func copyImageMenuItemInvokedThroughResponderCopiesImageOnlyPayload() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let image = try fixture.makeImage(name: "menu-action.png", width: 40, height: 24)
+  let reference = try fixture.store.importImage(at: image).reference
+  let editor = fixture.editor()
+  editor.textStorage?.setAttributedString(
+    fixture.store.projectedContent(from: NSAttributedString(string: "before \(reference) after"))
+  )
+  let window = offscreenWindow(containing: editor)
+  defer { window.orderOut(nil) }
+  let preMenuSelection = (editor.string as NSString).range(of: "before")
+  editor.setSelectedRange(preMenuSelection)
+  let imageIndex = (editor.string as NSString).range(of: "\u{fffc}").location
+  try #require(imageIndex != NSNotFound)
+  let imageRect = try #require(
+    glyphRect(in: editor, forCharacters: NSRange(location: imageIndex, length: 1))
+  )
+  let menu = try #require(
+    contextMenu(
+      for: editor,
+      in: window,
+      at: NSPoint(x: imageRect.midX, y: imageRect.midY)
+    )
+  )
+  let menuSelection = editor.selectedRanges.map(\.rangeValue)
+  let item = try #require(menu.items.first { $0.title == "Copy Image" })
+  let action = try #require(item.action)
+
+  try withGeneralPasteboard {
+    #expect(NSApp.sendAction(action, to: item.target, from: item))
+    let pasteboard = NSPasteboard.general
+    let types = pasteboard.types ?? []
+    #expect(types.contains(.tiff))
+    #expect(types.contains(.png))
+    #expect(types.contains(managedImageReferencePasteboardType()))
+    #expect(!types.contains(.string))
+    #expect(!types.contains(.rtf))
+    #expect(NSImage(pasteboard: pasteboard) != nil)
+    #expect(
+      pasteboard.string(forType: managedImageReferencePasteboardType()) == reference
+    )
+    #expect(editor.selectedRanges.map(\.rangeValue) == menuSelection)
+    #expect(editor.selectedRanges.map(\.rangeValue) != [preMenuSelection])
+  }
 }
 
 @Test @MainActor func contextMenuCopyImageIsNoOpForRemovedImage() throws {
@@ -1673,6 +2203,97 @@ private func offscreenWindow(containing textView: NSTextView) -> NSWindow {
     textView.layoutManager?.ensureLayout(for: textContainer)
   }
   return window
+}
+
+private func managedImageReferencePasteboardType() -> NSPasteboard.PasteboardType {
+  NSPasteboard.PasteboardType("com.harryjin.fleck.managed-image-reference")
+}
+
+@MainActor
+private func withGeneralPasteboard<T>(_ body: () throws -> T) rethrows -> T {
+  let pasteboard = NSPasteboard.general
+  let savedItems = (pasteboard.pasteboardItems ?? []).map { item in
+    item.types.compactMap { type -> (NSPasteboard.PasteboardType, Data)? in
+      guard let data = item.data(forType: type) else { return nil }
+      return (type, data)
+    }
+  }
+  defer {
+    pasteboard.clearContents()
+    if !savedItems.isEmpty {
+      let items = savedItems.map { entry -> NSPasteboardItem in
+        let item = NSPasteboardItem()
+        for (type, data) in entry { _ = item.setData(data, forType: type) }
+        return item
+      }
+      _ = pasteboard.writeObjects(items)
+    }
+  }
+  return try body()
+}
+
+@MainActor
+private func unencodableImageAttachment() -> InlineNoteImageAttachment {
+  let attachment = InlineNoteImageAttachment(
+    sourceReference: "![Image](note-image://unencodable)",
+    image: NSImage(size: NSSize(width: 2, height: 2)),
+    originalPixelSize: NSSize(width: 2, height: 2),
+    accessibilityLabel: "Unencodable image"
+  )
+  attachment.image = nil
+  return attachment
+}
+
+@MainActor
+private func decodedAttachmentImage(_ attachment: NSTextAttachment) -> NSImage? {
+  if let image = attachment.image { return image }
+  if let contents = attachment.fileWrapper?.regularFileContents,
+    let image = NSImage(data: contents)
+  {
+    return image
+  }
+  return (attachment.attachmentCell as? NSTextAttachmentCell)?.image
+}
+
+@MainActor
+private func exportImageCopyConsumerEvidence(
+  _ consumer: NSTextView,
+  name: String
+) throws -> NSBitmapImageRep? {
+  guard let directory = ProcessInfo.processInfo.environment["FLECK_EDITOR_EVIDENCE_DIR"]
+  else { return nil }
+  let url = URL(fileURLWithPath: directory, isDirectory: true)
+  try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+  if let textContainer = consumer.textContainer {
+    consumer.layoutManager?.ensureLayout(for: textContainer)
+  }
+  consumer.needsDisplay = true
+  consumer.displayIfNeeded()
+  let bitmap = try #require(
+    consumer.bitmapImageRepForCachingDisplay(in: consumer.bounds)
+  )
+  consumer.cacheDisplay(in: consumer.bounds, to: bitmap)
+  try #require(bitmap.representation(using: .png, properties: [:])).write(
+    to: url.appendingPathComponent(name + ".png")
+  )
+  return bitmap
+}
+
+@MainActor
+private func visiblePixelCount(in bitmap: NSBitmapImageRep) -> Int {
+  var count = 0
+  for y in 0..<bitmap.pixelsHigh {
+    for x in 0..<bitmap.pixelsWide {
+      guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else {
+        continue
+      }
+      let isWhite = color.redComponent > 0.97
+        && color.greenComponent > 0.97
+        && color.blueComponent > 0.97
+      if color.alphaComponent > 0.05, !isWhite { count += 1 }
+    }
+  }
+  return count
 }
 
 @MainActor

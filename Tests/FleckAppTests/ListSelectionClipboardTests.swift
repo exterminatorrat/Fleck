@@ -736,18 +736,19 @@ private final class ManagedBulletImageFixture {
   source.textStorage?.setAttributedString(display)
   source.setSelectedRange(imageCharacter)
 
-  #expect(source.writablePasteboardTypes == [.tiff, .png, .rtf, .string])
+  let managedReferenceType = NSPasteboard.PasteboardType(
+    "com.harryjin.fleck.managed-image-reference"
+  )
+  #expect(
+    source.writablePasteboardTypes
+      == [.tiff, .png, managedReferenceType, .rtf, .string]
+  )
   let pasteboard = NSPasteboard.withUniqueName()
   defer { pasteboard.releaseGlobally() }
   #expect(source.writeSelection(to: pasteboard, types: source.writablePasteboardTypes))
-  #expect(pasteboard.string(forType: .string) == "• \(reference)")
-  let richText = try NSAttributedString(
-    data: #require(pasteboard.data(forType: .rtf)),
-    options: [.documentType: NSAttributedString.DocumentType.rtf],
-    documentAttributes: nil
-  )
-  #expect(richText.string == "• \(reference)")
-  #expect(!richText.string.contains("\u{fffc}"))
+  #expect(pasteboard.string(forType: .string) == nil)
+  #expect(pasteboard.data(forType: .rtf) == nil)
+  #expect(pasteboard.string(forType: managedReferenceType) == reference)
   let tiffData = try #require(pasteboard.data(forType: .tiff))
   let tiff = try #require(NSBitmapImageRep(data: tiffData))
   #expect(tiff.pixelsWide == 2)
