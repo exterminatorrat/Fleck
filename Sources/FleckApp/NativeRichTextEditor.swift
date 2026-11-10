@@ -2087,6 +2087,14 @@
     private static let managedImagePasteboardTypes: [NSPasteboard.PasteboardType] =
       publicImagePasteboardTypes + [managedImageReferenceType]
       + [.rtf, .string]
+    private static let projectedSelectionType = NSPasteboard.PasteboardType(
+      "com.harryjin.fleck.projected-selection"
+    )
+    private static let mixedSelectionPasteboardTypes: [NSPasteboard.PasteboardType] = [
+      .html, .rtfd, .rtf, .string,
+    ]
+    private static let clipboardImageMaximumDimension = 2048
+    private static let maximumProjectedSelectionBytes = 4 * 1024 * 1024
     private static let referencePasteboardTypes: [NSPasteboard.PasteboardType] = [.rtf, .string]
     private static let legacyFilenamesPasteboardType = NSPasteboard.PasteboardType(
       "NSFilenamesPboardType"
@@ -3171,8 +3179,8 @@
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
       let inherited = [.fileURL] + super.readablePasteboardTypes.filter { $0 != .fileURL }
       guard inlineImageStore != nil else { return inherited }
-      return [Self.managedImageReferenceType]
-        + inherited.filter { $0 != Self.managedImageReferenceType }
+      let privateTypes = [Self.managedImageReferenceType, Self.projectedSelectionType]
+      return privateTypes + inherited.filter { !privateTypes.contains($0) }
     }
 
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
@@ -3189,6 +3197,10 @@
     override func readSelection(from pasteboard: NSPasteboard) -> Bool {
       guard pasteboard.name != .drag else {
         return super.readSelection(from: pasteboard)
+      }
+      if let projected = projectedSelectionPaste(from: pasteboard) {
+        return insertProjectedPaste(projected)
+          || super.readSelection(from: pasteboard)
       }
       if let inlineImageStore,
         let reference = pasteboard.string(forType: Self.managedImageReferenceType),
@@ -3232,6 +3244,19 @@
       from pasteboard: NSPasteboard,
       type: NSPasteboard.PasteboardType
     ) -> Bool {
+      if type == Self.projectedSelectionType {
+        if let projected = projectedSelectionPaste(from: pasteboard) {
+          return insertProjectedPaste(projected)
+        }
+        let publicTypes = readablePasteboardTypes.filter {
+          $0 != Self.projectedSelectionType && $0 != Self.managedImageReferenceType
+        }
+        guard let fallback = preferredPasteboardType(
+          from: pasteboard.types ?? [],
+          restrictedToTypesFrom: publicTypes
+        ) else { return false }
+        return readSelection(from: pasteboard, type: fallback)
+      }
       if type == Self.managedImageReferenceType,
         let inlineImageStore,
         let reference = pasteboard.string(forType: type),
@@ -3377,13 +3402,18 @@
     override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
       if selectedImageCopy() != nil { return Self.managedImagePasteboardTypes }
       return selectedRanges.map(\.rangeValue).contains { containsInlineImage(in: $0) }
-        ? [.rtf, .string]
+        ? Self.mixedSelectionPasteboardTypes
         : super.writablePasteboardTypes
     }
 
     override func copy(_ sender: Any?) {
       if let image = selectedImageCopy() {
         _ = writeManagedImageCopy(image.attachment, to: NSPasteboard.general)
+        return
+      }
+      let selections = selectedRanges.map(\.rangeValue)
+      if selections.contains(where: { containsInlineImage(in: $0) }) {
+        _ = writeMixedSelectionCopy(selections, to: NSPasteboard.general)
         return
       }
       super.copy(sender)
@@ -3419,6 +3449,18 @@
         return writeManagedImageCopy(image.attachment, to: pasteboard)
       }
       let containsImages = selections.contains { containsInlineImage(in: $0) }
+      if containsImages, selectedImageCopy() == nil {
+        let textOnly = !types.isEmpty
+          && types.allSatisfy { Self.copyFormat(for: $0) != nil }
+        if textOnly {
+          return writeSanitizedTextSelection(
+            expandedSelections,
+            to: pasteboard,
+            types: types
+          )
+        }
+        return writeMixedSelectionCopy(selections, to: pasteboard)
+      }
       let exportsText = !types.isEmpty
         && types.allSatisfy { $0 == .rtf || $0 == .string }
         && selections.contains { $0.length > 0 }
@@ -3621,6 +3663,23 @@
         return pasteboard.setData(data, forType: type)
       }
       let containsImages = selections.contains { containsInlineImage(in: $0) }
+      if containsImages, selectedImageCopy() == nil,
+        let requestedFormat = Self.copyFormat(for: type)
+      {
+        return writeSanitizedTextFlavor(
+          requestedFormat,
+          requestedType: type,
+          selections: expandedSelections,
+          to: pasteboard
+        )
+      }
+      if containsImages, selectedImageCopy() == nil, type == .html || type == .rtfd {
+        return writeMixedSelectionFlavor(
+          type,
+          selections: selections,
+          to: pasteboard
+        )
+      }
       let exportsText = (type == .rtf || type == .string)
         && textStorage != nil
         && selections.contains { $0.length > 0 }
@@ -3734,6 +3793,381 @@
       else { return false }
       pasteboard.clearContents()
       return pasteboard.writeObjects([item])
+    }
+
+    private struct MixedClipboardPayload {
+      let html: Data
+      let rtfd: Data
+      let rtf: Data
+      let plain: String
+      let canonical: Data
+    }
+
+    private func mixedClipboardPayload(_ selections: [NSRange]) -> MixedClipboardPayload? {
+      let displaySelections = expandedCopySelections(selections)
+      guard let display = mixedClipboardDisplay(displaySelections),
+        let html = htmlClipboardData(for: display),
+        let rtfd = rtfdClipboardData(for: display),
+        let canonical = canonicalSelectionRTF(displaySelections)
+      else { return nil }
+      let sanitized = sanitizedSelectionText(display)
+      guard let rtf = try? sanitized.data(
+        from: NSRange(location: 0, length: sanitized.length),
+        documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+      ) else { return nil }
+      return MixedClipboardPayload(
+        html: html,
+        rtfd: rtfd,
+        rtf: rtf,
+        plain: sanitized.string,
+        canonical: canonical
+      )
+    }
+
+    private func writeMixedSelectionCopy(
+      _ selections: [NSRange],
+      to pasteboard: NSPasteboard
+    ) -> Bool {
+      guard let payload = mixedClipboardPayload(selections) else { return false }
+      let item = NSPasteboardItem()
+      guard item.setData(payload.html, forType: .html),
+        item.setData(payload.rtfd, forType: .rtfd),
+        item.setData(payload.rtf, forType: .rtf),
+        item.setString(payload.plain, forType: .string),
+        item.setData(payload.canonical, forType: Self.projectedSelectionType)
+      else { return false }
+      pasteboard.clearContents()
+      return pasteboard.writeObjects([item])
+    }
+
+    private func writeMixedSelectionFlavor(
+      _ type: NSPasteboard.PasteboardType,
+      selections: [NSRange],
+      to pasteboard: NSPasteboard
+    ) -> Bool {
+      guard let payload = mixedClipboardPayload(selections) else { return false }
+      if type == .html { return pasteboard.setData(payload.html, forType: .html) }
+      if type == .rtfd { return pasteboard.setData(payload.rtfd, forType: .rtfd) }
+      return false
+    }
+
+    private func sanitizedTextPayload(
+      _ selections: [NSRange]
+    ) -> (rtf: Data, plain: String)? {
+      guard let display = mixedClipboardDisplay(selections) else { return nil }
+      let sanitized = sanitizedSelectionText(display)
+      guard let rtf = try? sanitized.data(
+        from: NSRange(location: 0, length: sanitized.length),
+        documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+      ) else { return nil }
+      return (rtf: rtf, plain: sanitized.string)
+    }
+
+    private func writeSanitizedTextSelection(
+      _ selections: [NSRange],
+      to pasteboard: NSPasteboard,
+      types: [NSPasteboard.PasteboardType]
+    ) -> Bool {
+      guard let payload = sanitizedTextPayload(selections) else { return false }
+      let item = NSPasteboardItem()
+      for type in types {
+        guard let format = Self.copyFormat(for: type) else { return false }
+        if format == .rtf {
+          guard item.setData(payload.rtf, forType: .rtf) else { return false }
+        } else {
+          guard item.setString(payload.plain, forType: .string) else { return false }
+        }
+      }
+      pasteboard.clearContents()
+      return pasteboard.writeObjects([item])
+    }
+
+    private func writeSanitizedTextFlavor(
+      _ format: NSPasteboard.PasteboardType,
+      requestedType: NSPasteboard.PasteboardType,
+      selections: [NSRange],
+      to pasteboard: NSPasteboard
+    ) -> Bool {
+      guard let payload = sanitizedTextPayload(selections) else { return false }
+      let canonical: NSPasteboard.PasteboardType = format == .rtf ? .rtf : .string
+      for type in Set([requestedType, canonical]) {
+        if format == .rtf {
+          guard pasteboard.setData(payload.rtf, forType: type) else { return false }
+        } else {
+          guard pasteboard.setString(payload.plain, forType: type) else { return false }
+        }
+      }
+      return true
+    }
+
+    private func mixedClipboardDisplay(_ selections: [NSRange]) -> NSAttributedString? {
+      guard let storage = textStorage, !selections.isEmpty else { return nil }
+      let display = NSAttributedString(attributedString: storage)
+      let joined = NSMutableAttributedString(string: "")
+      for (index, range) in selections.enumerated() {
+        guard range.location != NSNotFound,
+          range.location >= 0,
+          NSMaxRange(range) <= display.length
+        else { return nil }
+        if index > 0 {
+          joined.append(NSAttributedString(string: "\n"))
+        }
+        joined.append(display.attributedSubstring(from: range))
+      }
+      guard Self.containsInlineImage(in: joined) else { return nil }
+      return Self.clipboardSafeAttributedString(Self.sanitizedImageRuns(joined))
+    }
+
+    private static func sanitizedImageRuns(_ display: NSAttributedString) -> NSAttributedString {
+      let result = NSMutableAttributedString(attributedString: display)
+      var imageRanges: [NSRange] = []
+      display.enumerateAttribute(
+        .attachment,
+        in: NSRange(location: 0, length: display.length)
+      ) { value, range, _ in
+        if value is InlineNoteImageAttachment { imageRanges.append(range) }
+      }
+      for range in imageRanges {
+        result.removeAttribute(.link, range: range)
+      }
+      return result
+    }
+
+    private static func managedImageCount(in text: NSAttributedString) -> Int {
+      var count = 0
+      text.enumerateAttribute(
+        .attachment,
+        in: NSRange(location: 0, length: text.length)
+      ) { value, _, _ in
+        if value is InlineNoteImageAttachment { count += 1 }
+      }
+      return count
+    }
+
+    private func canonicalSelectionRTF(_ displaySelections: [NSRange]) -> Data? {
+      guard let projection = projectedCopy(selections: displaySelections),
+        let text = projectedExportText(projection.selections, from: projection.source)
+      else { return nil }
+      guard let data = try? text.data(
+        from: NSRange(location: 0, length: text.length),
+        documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+      ), data.count <= Self.maximumProjectedSelectionBytes
+      else { return nil }
+      return data
+    }
+
+    private func sanitizedSelectionText(_ display: NSAttributedString) -> NSAttributedString {
+      let sanitized = NSMutableAttributedString(attributedString: display)
+      var replacements: [(NSRange, NSAttributedString)] = []
+      display.enumerateAttribute(
+        .attachment,
+        in: NSRange(location: 0, length: display.length)
+      ) { value, range, _ in
+        guard let attachment = value as? InlineNoteImageAttachment else { return }
+        var attributes = display.attributes(at: range.location, effectiveRange: nil)
+        attributes.removeValue(forKey: .attachment)
+        attributes.removeValue(forKey: .link)
+        replacements.append((
+          range,
+          NSAttributedString(
+            string: Self.clipboardAltText(for: attachment),
+            attributes: attributes
+          )
+        ))
+      }
+      for (range, text) in replacements.reversed() {
+        sanitized.replaceCharacters(in: range, with: text)
+      }
+      return sanitized
+    }
+
+    private func htmlClipboardData(for display: NSAttributedString) -> Data? {
+      let tokenized = NSMutableAttributedString(attributedString: display)
+      let nonce = UUID().uuidString
+      var images: [(token: String, attachment: InlineNoteImageAttachment)] = []
+      var replacements: [(NSRange, NSAttributedString)] = []
+      display.enumerateAttribute(
+        .attachment,
+        in: NSRange(location: 0, length: display.length)
+      ) { value, range, _ in
+        guard let attachment = value as? InlineNoteImageAttachment else { return }
+        var attributes = display.attributes(at: range.location, effectiveRange: nil)
+        attributes.removeValue(forKey: .attachment)
+        attributes.removeValue(forKey: .link)
+        let token = "FLECKIMAGETOKEN\(images.count)-" + nonce
+        images.append((token, attachment))
+        replacements.append((
+          range,
+          NSAttributedString(string: token, attributes: attributes)
+        ))
+      }
+      guard !images.isEmpty else { return nil }
+      for (range, replacement) in replacements.reversed() {
+        tokenized.replaceCharacters(in: range, with: replacement)
+      }
+      guard let data = try? tokenized.data(
+        from: NSRange(location: 0, length: tokenized.length),
+        documentAttributes: [.documentType: NSAttributedString.DocumentType.html]
+      ), var html = String(data: data, encoding: .utf8)
+      else { return nil }
+      for image in images {
+        guard let png = Self.clipboardPNG(for: image.attachment) else { return nil }
+        let tag = Self.clipboardImageTag(
+          png: png,
+          alt: Self.clipboardAltText(for: image.attachment),
+          size: clipboardImageDisplaySize(for: image.attachment)
+        )
+        guard html.contains(image.token) else { return nil }
+        html = html.replacingOccurrences(of: image.token, with: tag)
+      }
+      for image in images where html.contains(image.token) {
+        return nil
+      }
+      return html.data(using: .utf8)
+    }
+
+    private func rtfdClipboardData(for display: NSAttributedString) -> Data? {
+      let converted = NSMutableAttributedString(attributedString: display)
+      var replacements: [(NSRange, NSAttributedString)] = []
+      var failed = false
+      display.enumerateAttribute(
+        .attachment,
+        in: NSRange(location: 0, length: display.length)
+      ) { value, range, _ in
+        guard let image = value as? InlineNoteImageAttachment else { return }
+        guard let png = Self.clipboardPNG(for: image) else {
+          failed = true
+          return
+        }
+        let wrapper = FileWrapper(regularFileWithContents: png)
+        wrapper.preferredFilename = "image-\(replacements.count).png"
+        let attachment = NSTextAttachment()
+        attachment.fileWrapper = wrapper
+        attachment.bounds = NSRect(
+          origin: .zero,
+          size: clipboardImageDisplaySize(for: image)
+        )
+        var attributes = display.attributes(at: range.location, effectiveRange: nil)
+        attributes.removeValue(forKey: .attachment)
+        attributes.removeValue(forKey: .link)
+        let replacement = NSMutableAttributedString(attachment: attachment)
+        replacement.addAttributes(
+          attributes,
+          range: NSRange(location: 0, length: replacement.length)
+        )
+        replacements.append((range, replacement))
+      }
+      guard !failed, !replacements.isEmpty else { return nil }
+      for (range, replacement) in replacements.reversed() {
+        converted.replaceCharacters(in: range, with: replacement)
+      }
+      return try? converted.data(
+        from: NSRange(location: 0, length: converted.length),
+        documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd]
+      )
+    }
+
+    private func clipboardImageDisplaySize(
+      for attachment: InlineNoteImageAttachment
+    ) -> NSSize {
+      let rect = attachment.attachmentBounds(
+        for: textContainer,
+        proposedLineFragment: NSRect(origin: .zero, size: bounds.size),
+        glyphPosition: .zero,
+        characterIndex: 0
+      )
+      if rect.size.width > 0, rect.size.height > 0 { return rect.size }
+      if attachment.originalPixelSize.width > 0, attachment.originalPixelSize.height > 0 {
+        return attachment.originalPixelSize
+      }
+      return NSSize(width: 1, height: 1)
+    }
+
+    private static func clipboardPNG(for attachment: InlineNoteImageAttachment) -> Data? {
+      guard let image = attachment.image,
+        let tiff = image.tiffRepresentation,
+        let bitmap = NSBitmapImageRep(data: tiff)
+      else { return nil }
+      let longest = max(bitmap.pixelsWide, bitmap.pixelsHigh)
+      if longest <= clipboardImageMaximumDimension {
+        return bitmap.representation(using: .png, properties: [:])
+      }
+      let ratio = Double(clipboardImageMaximumDimension) / Double(longest)
+      let width = max(1, Int((Double(bitmap.pixelsWide) * ratio).rounded()))
+      let height = max(1, Int((Double(bitmap.pixelsHigh) * ratio).rounded()))
+      guard let target = NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: width,
+        pixelsHigh: height,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+      ) else { return nil }
+      target.size = NSSize(width: width, height: height)
+      guard let context = NSGraphicsContext(bitmapImageRep: target) else { return nil }
+      NSGraphicsContext.saveGraphicsState()
+      NSGraphicsContext.current = context
+      context.imageInterpolation = .high
+      image.draw(
+        in: NSRect(x: 0, y: 0, width: width, height: height),
+        from: .zero,
+        operation: .copy,
+        fraction: 1,
+        respectFlipped: true,
+        hints: nil
+      )
+      NSGraphicsContext.restoreGraphicsState()
+      return target.representation(using: .png, properties: [:])
+    }
+
+    private static func clipboardImageTag(png: Data, alt: String, size: NSSize) -> String {
+      let width = Int(size.width.rounded())
+      let height = Int(size.height.rounded())
+      let dimensions = width > 0 && height > 0 ? " width=\"\(width)\" height=\"\(height)\"" : ""
+      return "<img src=\"data:image/png;base64,\(png.base64EncodedString())\" alt=\"\(clipboardHTMLEscaped(alt))\"\(dimensions)>"
+    }
+
+    private static func clipboardHTMLEscaped(_ text: String) -> String {
+      return text
+        .replacingOccurrences(of: "&", with: "&amp;")
+        .replacingOccurrences(of: "<", with: "&lt;")
+        .replacingOccurrences(of: ">", with: "&gt;")
+        .replacingOccurrences(of: "\"", with: "&quot;")
+    }
+
+    private static func clipboardAltText(for attachment: InlineNoteImageAttachment) -> String {
+      let label = attachment.image?.accessibilityDescription ?? ""
+      let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty,
+        !trimmed.contains("/"),
+        !trimmed.lowercased().contains("file:")
+      else { return "Image" }
+      return trimmed
+    }
+
+    private func projectedSelectionPaste(
+      from pasteboard: NSPasteboard
+    ) -> NSAttributedString? {
+      guard let store = inlineImageStore,
+        let data = pasteboard.data(forType: Self.projectedSelectionType),
+        !data.isEmpty,
+        data.count <= Self.maximumProjectedSelectionBytes,
+        let decoded = try? NSAttributedString(
+          data: data,
+          options: [.documentType: NSAttributedString.DocumentType.rtf],
+          documentAttributes: nil
+        ),
+        !Self.containsAttachment(in: decoded)
+      else { return nil }
+      let expectedImages = InlineNoteImageStore.referenceRanges(in: decoded.string).count
+      guard expectedImages > 0 else { return nil }
+      let projected = store.projectedContent(from: decoded)
+      guard Self.managedImageCount(in: projected) == expectedImages else { return nil }
+      return projected
     }
 
     private func inlineImageAttachment(in range: NSRange) -> InlineNoteImageAttachment? {

@@ -112,6 +112,13 @@ editor width with a 320-point height cap. Notes, RTF state, exports, and agent
 text retain absolute local-file Markdown references, so image content is not a
 portable or self-contained export.
 
+Copying a selection that mixes text and images puts real image data on the
+clipboard: rich HTML with embedded PNG images, an RTFD flavor with in-memory
+attachments, and sanitized plain and RTF fallbacks that describe images instead
+of exposing local file paths. Pasting that content back into Fleck restores the
+managed images and formatting through a private pasteboard payload, while raw
+PNG or TIFF bitmap payloads from other apps are still not imported.
+
 On macOS 26, Fleck can use Apple's on-device Foundation Models when the system
 reports them available. Failure or ambiguity falls back to the original text or
 Inbox rather than inventing a destination.

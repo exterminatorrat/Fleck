@@ -223,8 +223,12 @@ import Testing
     editor.importsGraphics = false
     editor.inlineImageStore = fixture.store
     #expect(
-      Array(editor.readablePasteboardTypes.prefix(2))
-        == [managedImageReferencePasteboardType(), .fileURL]
+      Array(editor.readablePasteboardTypes.prefix(3))
+        == [
+          managedImageReferencePasteboardType(),
+          projectedSelectionPasteboardType(),
+          .fileURL,
+        ]
     )
     editor.string = "Before after"
     editor.setSelectedRange(NSRange(location: 7, length: 0))
@@ -1275,8 +1279,21 @@ import Testing
     #expect(!types.contains(.tiff))
     #expect(!types.contains(.png))
     #expect(!types.contains(managedImageReferencePasteboardType()))
+    #expect(types.contains(.html))
+    #expect(types.contains(.rtfd))
+    #expect(types.contains(projectedSelectionPasteboardType()))
+    let privateData = try #require(
+      pasteboard.data(forType: projectedSelectionPasteboardType())
+    )
+    let canonical = try NSAttributedString(
+      data: privateData,
+      options: [.documentType: NSAttributedString.DocumentType.rtf],
+      documentAttributes: nil
+    )
+    #expect(canonical.string.contains(reference))
     let copied = try #require(pasteboard.string(forType: .string))
-    #expect(copied.contains(reference))
+    #expect(!copied.contains(reference))
+    #expect(!copied.contains("file://"))
     #expect(copied.contains("before"))
   }
 }
@@ -1304,9 +1321,709 @@ import Testing
     let types = pasteboard.types ?? []
     #expect(!types.contains(.tiff))
     #expect(!types.contains(managedImageReferencePasteboardType()))
+    #expect(types.contains(.html))
+    #expect(types.contains(.rtfd))
+    let privateData = try #require(
+      pasteboard.data(forType: projectedSelectionPasteboardType())
+    )
+    let canonical = try NSAttributedString(
+      data: privateData,
+      options: [.documentType: NSAttributedString.DocumentType.rtf],
+      documentAttributes: nil
+    )
+    #expect(canonical.string.contains(first))
+    #expect(canonical.string.contains(second))
     let copied = try #require(pasteboard.string(forType: .string))
-    #expect(copied.contains(first))
-    #expect(copied.contains(second))
+    #expect(!copied.contains(first))
+    #expect(!copied.contains(second))
+    #expect(!copied.contains("file://"))
+  }
+}
+
+@Test @MainActor func mixedCopyWritesRTFDWithInlineImageWrappers() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let first = try fixture.store.importImage(
+    at: fixture.makeImage(name: "rtfd-a.png", width: 20, height: 10)
+  ).reference
+  let second = try fixture.store.importImage(
+    at: fixture.makeImage(name: "rtfd-b.png", width: 12, height: 8)
+  ).reference
+  let editor = mixedImageEditor(fixture, canonical: "• Intro \(first) middle \(second) tail")
+  editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+
+  try withGeneralPasteboard {
+    editor.copy(nil)
+    let data = try #require(NSPasteboard.general.data(forType: .rtfd))
+    let decoded = try NSAttributedString(
+      data: data,
+      options: [.documentType: NSAttributedString.DocumentType.rtfd],
+      documentAttributes: nil
+    )
+    #expect(decoded.string.contains("Intro"))
+    #expect(decoded.string.contains("tail"))
+    #expect(!decoded.string.contains("file://"))
+    #expect(!decoded.string.contains("/Users/"))
+    var sizes: [(Int, Int)] = []
+    decoded.enumerateAttribute(
+      .attachment,
+      in: NSRange(location: 0, length: decoded.length)
+    ) { value, _, _ in
+      guard let attachment = value as? NSTextAttachment,
+        let bytes = attachment.fileWrapper?.regularFileContents,
+        let bitmap = NSBitmapImageRep(data: bytes)
+      else { return }
+      sizes.append((bitmap.pixelsWide, bitmap.pixelsHigh))
+    }
+    #expect(sizes.count == 2)
+    #expect(sizes.contains { $0.0 == 20 && $0.1 == 10 })
+    #expect(sizes.contains { $0.0 == 12 && $0.1 == 8 })
+  }
+}
+
+@Test @MainActor func mixedCopyWritesHTMLWithInlinePNGInOrder() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let first = try fixture.store.importImage(
+    at: fixture.makeImage(name: "html-a.png", width: 20, height: 10)
+  ).reference
+  let second = try fixture.store.importImage(
+    at: fixture.makeImage(name: "html-b.png", width: 12, height: 8)
+  ).reference
+  let editor = mixedImageEditor(fixture, canonical: "• Intro \(first) middle \(second) tail")
+  editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+
+  try withGeneralPasteboard {
+    editor.copy(nil)
+    let data = try #require(NSPasteboard.general.data(forType: .html))
+    let html = try #require(String(data: data, encoding: .utf8))
+    #expect(!html.contains("file://"))
+    #expect(!html.contains("/Users/"))
+    #expect(html.components(separatedBy: "data:image/png;base64,").count - 1 == 2)
+    let intro = try #require(html.range(of: "Intro"))
+    let firstImage = try #require(html.range(of: "data:image/png;base64,"))
+    let middle = try #require(html.range(of: "middle"))
+    let secondImage = try #require(
+      html.range(
+        of: "data:image/png;base64,",
+        range: firstImage.upperBound..<html.endIndex
+      )
+    )
+    #expect(intro.lowerBound < firstImage.lowerBound)
+    #expect(firstImage.lowerBound < middle.lowerBound)
+    #expect(middle.lowerBound < secondImage.lowerBound)
+  }
+}
+
+@Test @MainActor func mixedCopyFallbackTextKeepsAltTextWithoutPaths() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let reference = try fixture.store.importImage(
+    at: fixture.makeImage(name: "fallback.png", width: 20, height: 10)
+  ).reference
+  let editor = mixedImageEditor(fixture, canonical: "• Intro \(reference) tail")
+  editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+
+  try withGeneralPasteboard {
+    editor.copy(nil)
+    let pasteboard = NSPasteboard.general
+    let plain = try #require(pasteboard.string(forType: .string))
+    let rtfData = try #require(pasteboard.data(forType: .rtf))
+    let rich = try NSAttributedString(
+      data: rtfData,
+      options: [.documentType: NSAttributedString.DocumentType.rtf],
+      documentAttributes: nil
+    )
+    for text in [plain, rich.string] {
+      #expect(!text.contains("file://"))
+      #expect(!text.contains("/Users/"))
+      #expect(!text.contains(reference))
+      #expect(text.contains("Intro"))
+      #expect(text.contains("tail"))
+    }
+  }
+}
+
+@Test @MainActor func nativePasteRestoresPrivateMixedSelectionAsManagedImages() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let first = try fixture.store.importImage(
+    at: fixture.makeImage(name: "paste-a.png", width: 20, height: 10)
+  ).reference
+  let second = try fixture.store.importImage(
+    at: fixture.makeImage(name: "paste-b.png", width: 12, height: 8)
+  ).reference
+  let editor = mixedImageEditor(fixture, canonical: "• Intro \(first) middle \(second) tail")
+  editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+
+  let destination = fixture.editor(text: "Replace")
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 420, height: 260),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.isReleasedWhenClosed = false
+  window.contentView = destination
+  defer { window.orderOut(nil) }
+  NSApp.activate(ignoringOtherApps: true)
+  window.makeKeyAndOrderFront(nil)
+  #expect(window.makeFirstResponder(destination))
+  #expect(NSApp.keyWindow === window)
+  destination.selectAll(nil)
+
+  try withGeneralPasteboard {
+    editor.copy(nil)
+    #expect(NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil))
+    let storage = try #require(destination.textStorage)
+    #expect(!destination.string.contains("file://"))
+    #expect(!destination.string.contains("Replace"))
+    var images: [InlineNoteImageAttachment] = []
+    storage.enumerateAttribute(
+      .attachment,
+      in: NSRange(location: 0, length: storage.length)
+    ) { value, _, _ in
+      guard let image = value as? InlineNoteImageAttachment else { return }
+      images.append(image)
+    }
+    #expect(images.count == 2)
+    #expect(Set(images.map(\.sourceReference)) == Set([first, second]))
+    destination.undoManager?.undo()
+    #expect(destination.string == "Replace")
+  }
+}
+
+@Test @MainActor func externalNativeMixedPastePreservesTextAndImages() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let first = try fixture.store.importImage(
+    at: fixture.makeImage(name: "external-first.png", width: 20, height: 10)
+  ).reference
+  let second = try fixture.store.importImage(
+    at: fixture.makeImage(name: "external-second.png", width: 12, height: 8)
+  ).reference
+  let source = mixedImageEditor(fixture, canonical: "• Intro \(first) middle \(second) tail")
+  source.selectAll(nil)
+  let consumer = NSTextView(frame: NSRect(x: 0, y: 0, width: 500, height: 180))
+  consumer.isRichText = true
+  consumer.importsGraphics = true
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 500, height: 180),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.isReleasedWhenClosed = false
+  window.contentView = consumer
+  defer { window.orderOut(nil) }
+  NSApp.activate(ignoringOtherApps: true)
+  window.makeKeyAndOrderFront(nil)
+  try #require(window.makeFirstResponder(consumer))
+  try #require(NSApp.keyWindow === window)
+  try #require(window.firstResponder === consumer)
+
+  try withGeneralPasteboard {
+    source.copy(nil)
+    try #require(NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil))
+    #expect(consumer.string == "• Intro \u{fffc} middle \u{fffc} tail")
+    #expect(!consumer.string.contains("file://"))
+    let storage = try #require(consumer.textStorage)
+    var attachments: [NSTextAttachment] = []
+    storage.enumerateAttribute(
+      .attachment,
+      in: NSRange(location: 0, length: storage.length)
+    ) { value, _, _ in
+      if let attachment = value as? NSTextAttachment { attachments.append(attachment) }
+    }
+    try #require(attachments.count == 2)
+    for attachment in attachments {
+      let image = try #require(decodedAttachmentImage(attachment))
+      let data = try #require(image.tiffRepresentation)
+      let pixels = try #require(NSBitmapImageRep(data: data))
+      #expect(pixels.pixelsWide > 0)
+      #expect(pixels.pixelsHigh > 0)
+    }
+    _ = try exportImageCopyConsumerEvidence(consumer, name: "native-mixed-consumer")
+  }
+}
+
+@Test @MainActor func invalidPrivateMixedPayloadPastesNothing() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let editor = fixture.editor(text: "Keep")
+  editor.selectAll(nil)
+  let outsideStore = "{\\rtf1\\ansi ![Image](file:///etc/hosts)}"
+  let payloads = [
+    Data([0x00, 0x01, 0x02]),
+    Data(outsideStore.utf8),
+  ]
+
+  for payload in payloads {
+    let pasteboard = NSPasteboard.withUniqueName()
+    defer { pasteboard.releaseGlobally() }
+    let item = NSPasteboardItem()
+    #expect(item.setData(payload, forType: projectedSelectionPasteboardType()))
+    #expect(pasteboard.writeObjects([item]))
+    #expect(!editor.readSelection(from: pasteboard))
+    #expect(editor.string == "Keep")
+    #expect(editor.textStorage?.length == 4)
+  }
+}
+
+@Test @MainActor func mixedCopyOfUnencodableImageKeepsClipboardContents() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let editor = fixture.editor()
+  let text = NSMutableAttributedString(string: "Intro ")
+  text.append(NSAttributedString(
+    string: "\u{fffc}",
+    attributes: [.attachment: unencodableImageAttachment()]
+  ))
+  text.append(NSAttributedString(string: " tail"))
+  editor.textStorage?.setAttributedString(text)
+  editor.setSelectedRange(NSRange(location: 0, length: text.length))
+
+  try withGeneralPasteboard {
+    let pasteboard = NSPasteboard.general
+    _ = pasteboard.clearContents()
+    #expect(pasteboard.setString("sentinel", forType: .string))
+    editor.copy(nil)
+    #expect(pasteboard.string(forType: .string) == "sentinel")
+    #expect(pasteboard.data(forType: .html) == nil)
+    #expect(pasteboard.data(forType: .rtfd) == nil)
+    #expect(pasteboard.data(forType: .rtf) == nil)
+  }
+}
+
+@Test @MainActor func explicitMixedTextRequestWritesSanitizedFallback() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let reference = try fixture.store.importImage(
+    at: fixture.makeImage(name: "explicit.png", width: 20, height: 10)
+  ).reference
+  let editor = mixedImageEditor(fixture, canonical: "• Intro \(reference) tail")
+  editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+
+  let pasteboard = NSPasteboard.withUniqueName()
+  defer { pasteboard.releaseGlobally() }
+  #expect(editor.writeSelection(to: pasteboard, types: [.rtf, .string]))
+  let plain = try #require(pasteboard.string(forType: .string))
+  #expect(!plain.contains("file://"))
+  #expect(!plain.contains("/Users/"))
+  #expect(plain.contains("Intro"))
+  #expect(pasteboard.data(forType: .html) == nil)
+  #expect(pasteboard.data(forType: .rtfd) == nil)
+  let rtfData = try #require(pasteboard.data(forType: .rtf))
+  let rich = try NSAttributedString(
+    data: rtfData,
+    options: [.documentType: NSAttributedString.DocumentType.rtf],
+    documentAttributes: nil
+  )
+  #expect(!rich.string.contains("file://"))
+  #expect(!rich.string.contains("/Users/"))
+}
+
+@Test @MainActor func mixedCopyKeepsLiteralPlaceholderTextInHTML() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let reference = try fixture.store.importImage(
+    at: fixture.makeImage(name: "literal.png", width: 20, height: 10)
+  ).reference
+  let editor = mixedImageEditor(
+    fixture,
+    canonical: "• \(reference) FLECKIMAGETOKEN0FLECKIMAGETOKEN literal tail"
+  )
+  editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+
+  try withGeneralPasteboard {
+    editor.copy(nil)
+    let data = try #require(NSPasteboard.general.data(forType: .html))
+    let html = try #require(String(data: data, encoding: .utf8))
+    #expect(html.components(separatedBy: "FLECKIMAGETOKEN0FLECKIMAGETOKEN").count - 1 == 1)
+    #expect(html.components(separatedBy: "data:image/png;base64,").count - 1 == 1)
+    #expect(!html.contains("file://"))
+  }
+}
+
+@Test @MainActor func sequentialMixedTypeWritesAccumulateFormats() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let reference = try fixture.store.importImage(
+    at: fixture.makeImage(name: "sequential.png", width: 20, height: 10)
+  ).reference
+  let editor = mixedImageEditor(fixture, canonical: "• Intro \(reference) tail")
+  editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+
+  let pasteboard = NSPasteboard.withUniqueName()
+  defer { pasteboard.releaseGlobally() }
+  #expect(editor.writeSelection(to: pasteboard, type: .string))
+  #expect(pasteboard.string(forType: .string) != nil)
+  #expect(editor.writeSelection(to: pasteboard, type: .rtf))
+  #expect(pasteboard.string(forType: .string) != nil)
+  #expect(pasteboard.data(forType: .rtf) != nil)
+  #expect(editor.writeSelection(to: pasteboard, type: .html))
+  #expect(pasteboard.string(forType: .string) != nil)
+  #expect(pasteboard.data(forType: .rtf) != nil)
+  let html = try #require(pasteboard.data(forType: .html))
+  #expect(html.range(of: "data:image/png;base64,".data(using: .utf8)!) != nil)
+}
+
+@Test @MainActor func mixedCopyPreservesImageParagraphFormattingInRTFD() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let reference = try fixture.store.importImage(
+    at: fixture.makeImage(name: "format.png", width: 20, height: 10)
+  ).reference
+  let editor = mixedImageEditor(fixture, canonical: "• Intro \(reference) tail")
+  let imageRange = (editor.string as NSString).range(of: "\u{fffc}")
+  try #require(imageRange.location != NSNotFound)
+  let paragraph = NSMutableParagraphStyle()
+  paragraph.alignment = .center
+  paragraph.firstLineHeadIndent = 12
+  let paragraphRange = (editor.string as NSString).paragraphRange(for: imageRange)
+  editor.textStorage?.addAttribute(.paragraphStyle, value: paragraph, range: paragraphRange)
+  editor.textStorage?.addAttributes(
+    [.font: NSFont.systemFont(ofSize: 17)],
+    range: imageRange
+  )
+  editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+
+  try withGeneralPasteboard {
+    editor.copy(nil)
+    let data = try #require(NSPasteboard.general.data(forType: .rtfd))
+    let decoded = try NSAttributedString(
+      data: data,
+      options: [.documentType: NSAttributedString.DocumentType.rtfd],
+      documentAttributes: nil
+    )
+    var attachmentRange = NSRange(location: NSNotFound, length: 0)
+    decoded.enumerateAttribute(
+      .attachment,
+      in: NSRange(location: 0, length: decoded.length)
+    ) { value, range, _ in
+      guard value is NSTextAttachment else { return }
+      attachmentRange = range
+    }
+    try #require(attachmentRange.location != NSNotFound)
+    let style = decoded.attribute(
+      .paragraphStyle,
+      at: attachmentRange.location,
+      effectiveRange: nil
+    ) as? NSParagraphStyle
+    #expect(style?.alignment == .center)
+    #expect(style?.firstLineHeadIndent == 12)
+    let font = decoded.attribute(
+      .font,
+      at: attachmentRange.location,
+      effectiveRange: nil
+    ) as? NSFont
+    #expect(font?.pointSize == 17)
+  }
+}
+
+@Test @MainActor func privateMixedPayloadWithUnresolvedReferencePastesNothing() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let managed = try fixture.store.importImage(
+    at: fixture.makeImage(name: "partial.png", width: 20, height: 10)
+  ).reference
+  let editor = fixture.editor(text: "Keep")
+  editor.selectAll(nil)
+  let payload = "{\\rtf1\\ansi \(managed) ![Image](file:///etc/hosts)}"
+  let pasteboard = NSPasteboard.withUniqueName()
+  defer { pasteboard.releaseGlobally() }
+  let item = NSPasteboardItem()
+  #expect(item.setData(Data(payload.utf8), forType: projectedSelectionPasteboardType()))
+  #expect(pasteboard.writeObjects([item]))
+
+  #expect(!editor.readSelection(from: pasteboard))
+  #expect(editor.string == "Keep")
+  var attachments = 0
+  editor.textStorage?.enumerateAttribute(
+    .attachment,
+    in: NSRange(location: 0, length: editor.textStorage?.length ?? 0)
+  ) { value, _, _ in
+    if value is InlineNoteImageAttachment { attachments += 1 }
+  }
+  #expect(attachments == 0)
+}
+
+@Test @MainActor func mixedCopyResolvesCustomAltLabelsAndPastesBack() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let plainReference = try fixture.store.importImage(
+    at: fixture.makeImage(name: "alt-a.png", width: 20, height: 10)
+  ).reference
+  let secondReference = try fixture.store.importImage(
+    at: fixture.makeImage(name: "alt-b.png", width: 12, height: 8)
+  ).reference
+  let customReference = secondReference.replacingOccurrences(
+    of: "![Image]",
+    with: "![Custom chart]"
+  )
+  let editor = mixedImageEditor(
+    fixture,
+    canonical: "• Intro \(plainReference) middle \(customReference) tail"
+  )
+  editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+  let destination = fixture.editor(text: "Replace")
+  destination.selectAll(nil)
+
+  try withGeneralPasteboard {
+    editor.copy(nil)
+    #expect(destination.readSelection(from: NSPasteboard.general))
+    let storage = try #require(destination.textStorage)
+    var references: [String] = []
+    storage.enumerateAttribute(
+      .attachment,
+      in: NSRange(location: 0, length: storage.length)
+    ) { value, _, _ in
+      guard let image = value as? InlineNoteImageAttachment else { return }
+      references.append(image.sourceReference)
+    }
+    #expect(references.count == 2)
+    #expect(references.contains(plainReference))
+    #expect(references.contains(customReference))
+  }
+}
+
+@Test @MainActor func mixedCopyLargeImageCapsClipboardPNGAt2048Pixels() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let reference = try fixture.store.importImage(
+    at: fixture.makeImage(name: "large.png", width: 2600, height: 1300)
+  ).reference
+  let editor = mixedImageEditor(fixture, canonical: "• Intro \(reference) tail")
+  editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+
+  try withGeneralPasteboard {
+    editor.copy(nil)
+    let data = try #require(NSPasteboard.general.data(forType: .rtfd))
+    let decoded = try NSAttributedString(
+      data: data,
+      options: [.documentType: NSAttributedString.DocumentType.rtfd],
+      documentAttributes: nil
+    )
+    var exported: NSBitmapImageRep?
+    decoded.enumerateAttribute(
+      .attachment,
+      in: NSRange(location: 0, length: decoded.length)
+    ) { value, _, _ in
+      guard let attachment = value as? NSTextAttachment,
+        let bytes = attachment.fileWrapper?.regularFileContents
+      else { return }
+      exported = NSBitmapImageRep(data: bytes)
+    }
+    let bitmap = try #require(exported)
+    #expect(max(bitmap.pixelsWide, bitmap.pixelsHigh) <= 2048)
+    #expect(bitmap.pixelsWide == 2048)
+    #expect(bitmap.pixelsHigh == 1024)
+  }
+}
+
+@Test @MainActor func legacyTypedMixedExportsStaySanitized() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let reference = try fixture.store.importImage(
+    at: fixture.makeImage(name: "legacy.png", width: 20, height: 10)
+  ).reference
+  let editor = mixedImageEditor(fixture, canonical: "• Intro \(reference) tail")
+  editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+  let legacyString = NSPasteboard.PasteboardType("NSStringPboardType")
+  let legacyRTF = NSPasteboard.PasteboardType("NeXT Rich Text Format v1.0 pasteboard type")
+  let fileMarker = try #require("file://".data(using: .utf8))
+
+  let perType = NSPasteboard.withUniqueName()
+  defer { perType.releaseGlobally() }
+  #expect(editor.writeSelection(to: perType, type: legacyString))
+  let legacyPlain = try #require(perType.string(forType: legacyString))
+  #expect(!legacyPlain.contains("file://"))
+  #expect(!legacyPlain.contains("/Users/"))
+  #expect(editor.writeSelection(to: perType, type: legacyRTF))
+  let legacyRTFData = try #require(perType.data(forType: legacyRTF))
+  #expect(legacyRTFData.range(of: fileMarker) == nil)
+  #expect(perType.string(forType: legacyString) == legacyPlain)
+
+  let bulk = NSPasteboard.withUniqueName()
+  defer { bulk.releaseGlobally() }
+  #expect(editor.writeSelection(to: bulk, types: [legacyString, legacyRTF]))
+  let bulkPlain = try #require(bulk.string(forType: legacyString))
+  #expect(!bulkPlain.contains("file://"))
+  let bulkRTF = try #require(bulk.data(forType: legacyRTF))
+  #expect(bulkRTF.range(of: fileMarker) == nil)
+  #expect(bulk.data(forType: .html) == nil)
+  #expect(bulk.data(forType: .rtfd) == nil)
+}
+
+@Test @MainActor func invalidPrivatePayloadFallsBackToPublicContent() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let reference = try fixture.store.importImage(
+    at: fixture.makeImage(name: "fallback-mixed.png", width: 20, height: 10)
+  ).reference
+  let editor = mixedImageEditor(fixture, canonical: "• Intro \(reference) tail")
+  editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+  let destination = fixture.editor(text: "Keep")
+  destination.selectAll(nil)
+
+  let mixed = try withGeneralPasteboard {
+    editor.copy(nil)
+    let pasteboard = NSPasteboard.general
+    return (
+      rtfd: try #require(pasteboard.data(forType: .rtfd)),
+      html: try #require(pasteboard.data(forType: .html)),
+      rtf: try #require(pasteboard.data(forType: .rtf)),
+      plain: try #require(pasteboard.string(forType: .string))
+    )
+  }
+
+  let payload = NSPasteboardItem()
+  #expect(payload.setData(mixed.rtfd, forType: .rtfd))
+  #expect(payload.setData(mixed.html, forType: .html))
+  #expect(payload.setData(mixed.rtf, forType: .rtf))
+  #expect(payload.setString(mixed.plain, forType: .string))
+  #expect(payload.setData(Data([0x00, 0x01]), forType: projectedSelectionPasteboardType()))
+  let pasteboard = NSPasteboard.withUniqueName()
+  defer { pasteboard.releaseGlobally() }
+  #expect(pasteboard.writeObjects([payload]))
+
+  #expect(
+    destination.readSelection(
+      from: pasteboard,
+      type: projectedSelectionPasteboardType()
+    )
+  )
+  #expect(!destination.string.contains("file://"))
+  #expect(!destination.string.contains("Keep"))
+  #expect(destination.string.contains("Intro"))
+  var attachments = 0
+  destination.textStorage?.enumerateAttribute(
+    .attachment,
+    in: NSRange(location: 0, length: destination.textStorage?.length ?? 0)
+  ) { value, _, _ in
+    if value is InlineNoteImageAttachment { attachments += 1 }
+  }
+  #expect(attachments <= 1)
+}
+
+@Test @MainActor func mixedCopyCarriesNoBitmapOrReferenceTypes() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let reference = try fixture.store.importImage(
+    at: fixture.makeImage(name: "no-bitmap.png", width: 20, height: 10)
+  ).reference
+  let editor = mixedImageEditor(fixture, canonical: "• Intro \(reference) tail")
+  editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+
+  try withGeneralPasteboard {
+    editor.copy(nil)
+    let types = NSPasteboard.general.types ?? []
+    #expect(types.contains(.html))
+    #expect(types.contains(.rtfd))
+    #expect(!types.contains(.png))
+    #expect(!types.contains(.tiff))
+    #expect(!types.contains(managedImageReferencePasteboardType()))
+    #expect(!types.contains(.fileURL))
+  }
+}
+
+
+@Test @MainActor func exportsPublicMixedPayloadForExternalProbes() throws {
+  guard let evidence = ProcessInfo.processInfo.environment["FLECK_EDITOR_EVIDENCE_DIR"]
+  else { return }
+  let directory = URL(fileURLWithPath: evidence, isDirectory: true)
+    .appendingPathComponent("mixed-payload", isDirectory: true)
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let first = try fixture.store.importImage(
+    at: fixture.makeImage(name: "probe-a.png", width: 40, height: 20)
+  ).reference
+  let second = try fixture.store.importImage(
+    at: fixture.makeImage(name: "probe-b.png", width: 24, height: 16)
+  ).reference
+  let editor = mixedImageEditor(
+    fixture,
+    canonical: "• Intro \(first) middle \(second) tail"
+  )
+  editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+  try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+  try withGeneralPasteboard {
+    editor.copy(nil)
+    let pasteboard = NSPasteboard.general
+    let html = try #require(pasteboard.data(forType: .html))
+    try html.write(to: directory.appendingPathComponent("payload.html"))
+    try #require(pasteboard.data(forType: .rtfd)).write(
+      to: directory.appendingPathComponent("payload.rtfd")
+    )
+    try #require(pasteboard.data(forType: .rtf)).write(
+      to: directory.appendingPathComponent("payload.rtf")
+    )
+    try #require(pasteboard.string(forType: .string)).write(
+      to: directory.appendingPathComponent("payload.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try #require(pasteboard.data(forType: projectedSelectionPasteboardType())).write(
+      to: directory.appendingPathComponent("private.bin")
+    )
+    let images = ProbePayloadSupport.inlinePNGData(in: try #require(String(data: html, encoding: .utf8)))
+    for (index, data) in images.enumerated() {
+      try data.write(to: directory.appendingPathComponent("image-\(index).png"))
+    }
+    let manifest: [String: Any] = [
+      "types": (pasteboard.types ?? []).map(\.rawValue),
+      "imageCount": images.count,
+      "htmlBytes": html.count,
+      "privateBytes": try #require(pasteboard.data(forType: projectedSelectionPasteboardType())).count,
+    ]
+    let json = try JSONSerialization.data(
+      withJSONObject: manifest,
+      options: [.prettyPrinted, .sortedKeys]
+    )
+    try json.write(to: directory.appendingPathComponent("manifest.json"))
+  }
+}
+
+@Test @MainActor func mixedCopyWithDynamicColorsSerializesAllPublicFlavors() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let reference = try fixture.store.importImage(
+    at: fixture.makeImage(name: "dynamic-color.png", width: 20, height: 10)
+  ).reference
+  let editor = mixedImageEditor(fixture, canonical: "• Intro \(reference) tail")
+  let storage = try #require(editor.textStorage)
+  storage.addAttributes(
+    [.foregroundColor: NSColor.labelColor, .backgroundColor: NSColor.textBackgroundColor],
+    range: NSRange(location: 0, length: storage.length)
+  )
+  editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
+
+  try withGeneralPasteboard {
+    editor.copy(nil)
+    let pasteboard = NSPasteboard.general
+    let html = try #require(pasteboard.data(forType: .html))
+    #expect(!html.isEmpty)
+    let rtfd = try #require(pasteboard.data(forType: .rtfd))
+    #expect(!rtfd.isEmpty)
+    let rtfData = try #require(pasteboard.data(forType: .rtf))
+    let decoded = try NSAttributedString(
+      data: rtfData,
+      options: [.documentType: NSAttributedString.DocumentType.rtf],
+      documentAttributes: nil
+    )
+    #expect(decoded.string.contains("Intro"))
+    var colors: [NSColor] = []
+    decoded.enumerateAttribute(
+      .foregroundColor,
+      in: NSRange(location: 0, length: decoded.length)
+    ) { value, _, _ in
+      if let color = value as? NSColor { colors.append(color) }
+    }
+    #expect(!colors.isEmpty)
+    for color in colors {
+      #expect(color.usingColorSpace(.deviceRGB) != nil)
+    }
   }
 }
 
@@ -2205,6 +2922,10 @@ private func offscreenWindow(containing textView: NSTextView) -> NSWindow {
   return window
 }
 
+private func projectedSelectionPasteboardType() -> NSPasteboard.PasteboardType {
+  NSPasteboard.PasteboardType("com.harryjin.fleck.projected-selection")
+}
+
 private func managedImageReferencePasteboardType() -> NSPasteboard.PasteboardType {
   NSPasteboard.PasteboardType("com.harryjin.fleck.managed-image-reference")
 }
@@ -2230,6 +2951,35 @@ private func withGeneralPasteboard<T>(_ body: () throws -> T) rethrows -> T {
     }
   }
   return try body()
+}
+
+private enum ProbePayloadSupport {
+  static func inlinePNGData(in html: String) -> [Data] {
+    let marker = "data:image/png;base64,"
+    var result: [Data] = []
+    var remainder = Substring(html)
+    while let markerRange = remainder.range(of: marker) {
+      let tail = remainder[markerRange.upperBound...]
+      guard let end = tail.firstIndex(of: "\"") else { break }
+      if let data = Data(base64Encoded: String(tail[..<end])) {
+        result.append(data)
+      }
+      remainder = tail[end...]
+    }
+    return result
+  }
+}
+
+@MainActor
+private func mixedImageEditor(
+  _ fixture: InlineImageFixture,
+  canonical: String
+) -> ListAwareTextView {
+  let editor = fixture.editor()
+  editor.textStorage?.setAttributedString(
+    fixture.store.projectedContent(from: NSAttributedString(string: canonical))
+  )
+  return editor
 }
 
 @MainActor
