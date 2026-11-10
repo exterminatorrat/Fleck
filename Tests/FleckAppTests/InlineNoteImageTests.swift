@@ -936,8 +936,7 @@ import Testing
   let pasteboard = NSPasteboard.withUniqueName()
   defer { pasteboard.releaseGlobally() }
 
-  #expect(editor.writablePasteboardTypes == [.rtf, .string])
-  #expect(editor.writeSelection(to: pasteboard, types: editor.writablePasteboardTypes))
+  #expect(editor.writeSelection(to: pasteboard, types: [.rtf, .string]))
   #expect(pasteboard.string(forType: .string) == reference)
   let decoded = try NSAttributedString(
     data: #require(pasteboard.data(forType: .rtf)),
@@ -1002,6 +1001,197 @@ import Testing
         is InlineNoteImageAttachment
     )
   }
+}
+
+@Test @MainActor func copyingSelectedImageWritesImagePayloadThatRoundTripsAsManagedReference()
+  throws
+{
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let image = try fixture.makeImage(name: "payload.png", width: 20, height: 10)
+  let reference = try fixture.store.importImage(at: image).reference
+  let editor = fixture.editor()
+  editor.textStorage?.setAttributedString(
+    fixture.store.projectedContent(from: NSAttributedString(string: reference))
+  )
+  editor.setSelectedRange(NSRange(location: 0, length: 1))
+  let pasteboard = NSPasteboard.withUniqueName()
+  defer { pasteboard.releaseGlobally() }
+
+  #expect(editor.writablePasteboardTypes == [.tiff, .png, .rtf, .string])
+  #expect(editor.writeSelection(to: pasteboard, types: editor.writablePasteboardTypes))
+  #expect(pasteboard.string(forType: .string) == reference)
+  let decoded = try NSAttributedString(
+    data: #require(pasteboard.data(forType: .rtf)),
+    options: [.documentType: NSAttributedString.DocumentType.rtf],
+    documentAttributes: nil
+  )
+  #expect(decoded.string == reference)
+  let tiffData = try #require(pasteboard.data(forType: .tiff))
+  let tiff = try #require(NSBitmapImageRep(data: tiffData))
+  #expect(tiff.pixelsWide == 20)
+  #expect(tiff.pixelsHigh == 10)
+  let pngData = try #require(pasteboard.data(forType: .png))
+  let png = try #require(NSBitmapImageRep(data: pngData))
+  #expect(png.pixelsWide == 20)
+  #expect(png.pixelsHigh == 10)
+  #expect(pasteboard.data(forType: .rtfd) == nil)
+
+  let pasted = fixture.editor(text: "Replace")
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 360, height: 220),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = pasted
+  defer { window.orderOut(nil) }
+  pasted.selectAll(nil)
+  #expect(pasted.readSelection(from: pasteboard))
+  #expect(
+    pasted.textStorage?.attribute(.attachment, at: 0, effectiveRange: nil)
+      is InlineNoteImageAttachment
+  )
+  #expect(InlineNoteImageProjection.expanded(try #require(pasted.textStorage)).string == reference)
+}
+
+@Test @MainActor func contextMenuOffersCopyImageOnTheInlineImageGlyph() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let image = try fixture.makeImage(name: "menu.png", width: 40, height: 24)
+  let reference = try fixture.store.importImage(at: image).reference
+  let editor = fixture.editor()
+  editor.textStorage?.setAttributedString(
+    fixture.store.projectedContent(from: NSAttributedString(string: "before \(reference) after"))
+  )
+  let window = offscreenWindow(containing: editor)
+  defer { window.orderOut(nil) }
+  let imageIndex = (editor.string as NSString).range(of: "\u{fffc}").location
+  try #require(imageIndex != NSNotFound)
+  let attachment = try #require(
+    editor.textStorage?.attribute(.attachment, at: imageIndex, effectiveRange: nil)
+      as? InlineNoteImageAttachment
+  )
+  let imageRect = try #require(
+    glyphRect(in: editor, forCharacters: NSRange(location: imageIndex, length: 1))
+  )
+  let menu = try #require(
+    contextMenu(
+      for: editor,
+      in: window,
+      at: NSPoint(x: imageRect.midX, y: imageRect.midY)
+    )
+  )
+
+  let copyItem = menu.items.first { $0.title == "Copy Image" }
+  #expect(copyItem != nil)
+  #expect(copyItem?.representedObject as? InlineNoteImageAttachment === attachment)
+  #expect(copyItem?.target === editor)
+}
+
+@Test @MainActor func contextMenuOmitsCopyImageForNearbyTextAndBlankSpace() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let image = try fixture.makeImage(name: "miss.png", width: 40, height: 24)
+  let reference = try fixture.store.importImage(at: image).reference
+  let editor = fixture.editor()
+  editor.textStorage?.setAttributedString(
+    fixture.store.projectedContent(from: NSAttributedString(string: "before \(reference) after"))
+  )
+  let window = offscreenWindow(containing: editor)
+  defer { window.orderOut(nil) }
+  let textRange = (editor.string as NSString).range(of: "before")
+  let textRect = try #require(glyphRect(in: editor, forCharacters: textRange))
+  let textMenu = try #require(
+    contextMenu(for: editor, in: window, at: NSPoint(x: textRect.midX, y: textRect.midY))
+  )
+  #expect(!textMenu.items.contains { $0.title == "Copy Image" })
+
+  let blankMenu = try #require(
+    contextMenu(
+      for: editor,
+      in: window,
+      at: NSPoint(x: editor.bounds.maxX - 12, y: editor.bounds.maxY - 12)
+    )
+  )
+  #expect(!blankMenu.items.contains { $0.title == "Copy Image" })
+}
+
+@Test @MainActor func contextMenuCopyImageTargetsClickedImageWithoutChangingSelection() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let image = try fixture.makeImage(name: "target.png", width: 40, height: 24)
+  let reference = try fixture.store.importImage(at: image).reference
+  let editor = fixture.editor()
+  editor.textStorage?.setAttributedString(
+    fixture.store.projectedContent(from: NSAttributedString(string: "before \(reference) after"))
+  )
+  let window = offscreenWindow(containing: editor)
+  defer { window.orderOut(nil) }
+  let preMenuSelection = (editor.string as NSString).range(of: "before")
+  editor.setSelectedRange(preMenuSelection)
+  let imageIndex = (editor.string as NSString).range(of: "\u{fffc}").location
+  try #require(imageIndex != NSNotFound)
+  let imageAttachment = try #require(
+    editor.textStorage?.attribute(.attachment, at: imageIndex, effectiveRange: nil)
+      as? InlineNoteImageAttachment
+  )
+  let imageRect = try #require(
+    glyphRect(in: editor, forCharacters: NSRange(location: imageIndex, length: 1))
+  )
+  let menu = try #require(
+    contextMenu(
+      for: editor,
+      in: window,
+      at: NSPoint(x: imageRect.midX, y: imageRect.midY)
+    )
+  )
+  let menuSelection = editor.selectedRanges.map(\.rangeValue)
+  #expect(menuSelection == [NSRange(location: imageIndex, length: 1)])
+  let clickedImage = try #require(
+    menu.items.first { $0.title == "Copy Image" }?.representedObject
+      as? InlineNoteImageAttachment
+  )
+  #expect(clickedImage === imageAttachment)
+
+  let pasteboard = NSPasteboard.withUniqueName()
+  defer { pasteboard.releaseGlobally() }
+  #expect(editor.copyInlineImage(clickedImage, to: pasteboard))
+  #expect(pasteboard.string(forType: .string) == reference)
+  #expect(pasteboard.data(forType: .tiff) != nil)
+  #expect(pasteboard.data(forType: .png) != nil)
+  #expect(editor.selectedRanges.map(\.rangeValue) == menuSelection)
+  #expect(editor.selectedRanges.map(\.rangeValue) != [preMenuSelection])
+}
+
+@Test @MainActor func contextMenuCopyImageIsNoOpForRemovedImage() throws {
+  let fixture = try InlineImageFixture()
+  defer { fixture.remove() }
+  let image = try fixture.makeImage(name: "removed.png", width: 40, height: 24)
+  let reference = try fixture.store.importImage(at: image).reference
+  let editor = fixture.editor()
+  editor.textStorage?.setAttributedString(
+    fixture.store.projectedContent(from: NSAttributedString(string: reference))
+  )
+  let window = offscreenWindow(containing: editor)
+  defer { window.orderOut(nil) }
+  let attachment = try #require(
+    editor.textStorage?.attribute(.attachment, at: 0, effectiveRange: nil)
+      as? InlineNoteImageAttachment
+  )
+  editor.setSelectedRange(NSRange(location: 0, length: 1))
+  editor.deleteBackward(nil)
+  try #require(editor.string.isEmpty)
+
+  let pasteboard = NSPasteboard.withUniqueName()
+  defer { pasteboard.releaseGlobally() }
+  #expect(!editor.copyInlineImage(attachment, to: pasteboard))
+  #expect(pasteboard.data(forType: .tiff) == nil)
+
+  let menu = try #require(
+    contextMenu(for: editor, in: window, at: NSPoint(x: 20, y: 12))
+  )
+  #expect(!menu.items.contains { $0.title == "Copy Image" })
 }
 
 @Test @MainActor func droppedAndReloadedAttachmentsCarrySanitizedSourceFormatting() throws {
@@ -1483,6 +1673,43 @@ private func offscreenWindow(containing textView: NSTextView) -> NSWindow {
     textView.layoutManager?.ensureLayout(for: textContainer)
   }
   return window
+}
+
+@MainActor
+private func glyphRect(in textView: NSTextView, forCharacters range: NSRange) -> NSRect? {
+  guard let layoutManager = textView.layoutManager, let textContainer = textView.textContainer
+  else { return nil }
+  layoutManager.ensureLayout(for: textContainer)
+  let glyphRange = layoutManager.glyphRange(
+    forCharacterRange: range,
+    actualCharacterRange: nil
+  )
+  guard glyphRange.length > 0 else { return nil }
+  return layoutManager
+    .boundingRect(forGlyphRange: glyphRange, in: textContainer)
+    .offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
+}
+
+@MainActor
+private func contextMenu(
+  for textView: NSTextView,
+  in window: NSWindow,
+  at point: NSPoint
+) -> NSMenu? {
+  guard
+    let event = NSEvent.mouseEvent(
+      with: .rightMouseDown,
+      location: textView.convert(point, to: nil),
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 0,
+      clickCount: 1,
+      pressure: 0
+    )
+  else { return nil }
+  return textView.menu(for: event)
 }
 
 @MainActor

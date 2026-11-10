@@ -716,3 +716,46 @@ private final class ManagedBulletImageFixture {
   #expect(pasteboard.string(forType: .string) == "• \(reference)")
   #expect(pasteboard.data(forType: .rtf) != nil)
 }
+
+@Test @MainActor func singleImageSelectionCopiesImagePayloadWithBulletReference() throws {
+  let fixture = try ManagedBulletImageFixture()
+  defer { fixture.remove() }
+  let reference = try fixture.makeReference()
+  let canonical = "• \(reference)"
+  let display = fixture.store.projectedContent(from: NSAttributedString(string: canonical))
+  let imageCharacter = (display.string as NSString).range(of: "\u{fffc}")
+  try #require(imageCharacter.location != NSNotFound)
+  #expect(
+    display.attribute(.attachment, at: imageCharacter.location, effectiveRange: nil)
+      is InlineNoteImageAttachment
+  )
+
+  let source = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 360, height: 180))
+  source.isRichText = true
+  source.inlineImageStore = fixture.store
+  source.textStorage?.setAttributedString(display)
+  source.setSelectedRange(imageCharacter)
+
+  #expect(source.writablePasteboardTypes == [.tiff, .png, .rtf, .string])
+  let pasteboard = NSPasteboard.withUniqueName()
+  defer { pasteboard.releaseGlobally() }
+  #expect(source.writeSelection(to: pasteboard, types: source.writablePasteboardTypes))
+  #expect(pasteboard.string(forType: .string) == "• \(reference)")
+  let richText = try NSAttributedString(
+    data: #require(pasteboard.data(forType: .rtf)),
+    options: [.documentType: NSAttributedString.DocumentType.rtf],
+    documentAttributes: nil
+  )
+  #expect(richText.string == "• \(reference)")
+  #expect(!richText.string.contains("\u{fffc}"))
+  let tiffData = try #require(pasteboard.data(forType: .tiff))
+  let tiff = try #require(NSBitmapImageRep(data: tiffData))
+  #expect(tiff.pixelsWide == 2)
+  #expect(tiff.pixelsHigh == 2)
+  let pngData = try #require(pasteboard.data(forType: .png))
+  let png = try #require(NSBitmapImageRep(data: pngData))
+  #expect(png.pixelsWide == 2)
+  #expect(png.pixelsHigh == 2)
+  #expect(source.string == display.string)
+  #expect(source.selectedRanges.map(\.rangeValue) == [imageCharacter])
+}
