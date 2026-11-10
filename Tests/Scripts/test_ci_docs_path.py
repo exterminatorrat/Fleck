@@ -619,7 +619,8 @@ class CIDocsPathTests(unittest.TestCase):
             self.assertNotIn(forbidden, docs.casefold())
         self.assertIn("name: macOS build and tests", aggregate)
         self.assertIn(
-            "if: ${{ always() && (github.event_name != 'workflow_dispatch' || "
+            "if: ${{ !inputs.namespace_qualification_only && always() && "
+            "(github.event_name != 'workflow_dispatch' || "
             "inputs.ordinary_test_diagnostic_selector == '') }}",
             aggregate,
         )
@@ -642,16 +643,23 @@ class CIDocsPathTests(unittest.TestCase):
         aggregate = job_block(workflow, "macos")
         detector = job_block(workflow, "detect-changes")
         self.assertIn(
-            "if: ${{ github.event_name != 'workflow_dispatch' || "
-            "inputs.ordinary_test_diagnostic_selector == '' }}",
+            "if: ${{ !inputs.namespace_qualification_only && "
+            "(github.event_name != 'workflow_dispatch' || "
+            "inputs.ordinary_test_diagnostic_selector == '') }}",
             detector,
         )
         self.assertIn(
             "if: ${{ github.event_name == 'workflow_dispatch' && "
-            "inputs.ordinary_test_diagnostic_selector != '' }}",
+            "inputs.ordinary_test_diagnostic_selector != '' && "
+            "!inputs.namespace_qualification_only }}",
             diagnostic,
         )
-        self.assertIn("runs-on: macos-26", diagnostic)
+        self.assertIn(
+            "runs-on: ${{ github.event_name == 'workflow_dispatch' && "
+            "inputs.native_runner_provider == 'namespace' && "
+            "'namespace-profile-fleck' || 'macos-26' }}",
+            diagnostic,
+        )
         self.assertIn("timeout-minutes: 45", diagnostic)
         self.assertIn('FLECK_NATIVE_CAPTURE_QA: "0"', diagnostic)
         self.assertIn(
@@ -692,7 +700,11 @@ class CIDocsPathTests(unittest.TestCase):
         self.assertIn(
             "concurrency:\n"
             "  group: ci-${{ github.event_name == 'workflow_dispatch' && "
-            "inputs.ordinary_test_diagnostic_selector != '' && 'focused-' || '' }}"
+            "inputs.namespace_qualification_only && 'namespace-qualification-' || "
+            "github.event_name == 'workflow_dispatch' && "
+            "inputs.ordinary_test_diagnostic_selector != '' && 'focused-' || "
+            "github.event_name == 'workflow_dispatch' && "
+            "inputs.native_runner_provider == 'namespace' && 'namespace-native-' || '' }}"
             "${{ github.event.pull_request.number || github.ref }}\n"
             "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n",
             workflow,
