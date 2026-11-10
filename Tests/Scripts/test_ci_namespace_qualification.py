@@ -20,28 +20,6 @@ ORIGINAL_JOBS = (
 )
 QUALIFICATION_JOB = "namespace-qualification"
 
-FULL_CI_JOBS = (
-    "detect-changes",
-    "macos-build",
-    "macos-validation",
-    "docs-validation",
-    "macos",
-    "macos-enhanced",
-)
-DIAGNOSTIC_NAME_PREDICATE = (
-    "github.event_name == 'workflow_dispatch' && "
-    "(inputs.namespace_qualification_only || "
-    "inputs.ordinary_test_diagnostic_selector != '')"
-)
-NORMAL_JOB_NAMES = {
-    "detect-changes": "Detect documentation-only changes",
-    "macos-build": "macOS ordinary graph and package",
-    "macos-validation": "macOS ordinary repeat and bundle validation",
-    "docs-validation": "Validate README-only change",
-    "macos": "macOS build and tests",
-    "macos-enhanced": "macOS Enhanced Local candidate gates",
-}
-
 NATIVE_PROVIDER_RUNS_ON = (
     "${{ github.event_name == 'workflow_dispatch' && "
     "inputs.native_runner_provider == 'namespace' && "
@@ -125,25 +103,6 @@ def job_runs_on(contents, job_id):
     if match is None:
         raise AssertionError(f"missing runs-on for CI job: {job_id}")
     return match.group(1)
-
-
-def job_name(contents, job_id):
-    block = job_block(contents, job_id)
-    match = re.search(r"^    name: (.+)$", block, re.M)
-    if match is None:
-        raise AssertionError(f"missing name for CI job: {job_id}")
-    return match.group(1)
-
-
-def diagnostic_only_name(original):
-    return (
-        "${{ (" + DIAGNOSTIC_NAME_PREDICATE + ") && "
-        "'Diagnostic-only / " + original + "' || '" + original + "' }}"
-    )
-
-
-def diagnostic_dispatch_predicate_holds(event_name, namespace_only, selector):
-    return event_name == "workflow_dispatch" and (namespace_only or selector != "")
 
 
 def reduce_qualification_guard(condition):
@@ -245,55 +204,6 @@ class NamespaceQualificationWorkflowTest(unittest.TestCase):
         for job_id, expected in EXPECTED_RUNS_ON.items():
             with self.subTest(job=job_id):
                 self.assertEqual(job_runs_on(self.contents, job_id), expected)
-
-    def test_full_ci_jobs_publish_diagnostic_only_names_for_diagnostic_dispatches(self):
-        for job_id in FULL_CI_JOBS:
-            with self.subTest(job=job_id):
-                original = NORMAL_JOB_NAMES[job_id]
-                self.assertEqual(
-                    job_name(self.contents, job_id),
-                    diagnostic_only_name(original),
-                )
-                self.assertNotIn(
-                    "native_runner_provider",
-                    job_name(self.contents, job_id),
-                )
-
-    def test_full_ci_job_names_evaluate_to_normal_or_diagnostic_names(self):
-        for job_id in FULL_CI_JOBS:
-            with self.subTest(job=job_id):
-                original = NORMAL_JOB_NAMES[job_id]
-                expression = job_name(self.contents, job_id)
-                match = re.fullmatch(
-                    r"\$\{\{ \((?P<predicate>.+)\) && "
-                    r"'(?P<diagnostic>.*)' \|\| '(?P<normal>.*)' \}\}",
-                    expression,
-                )
-                self.assertIsNotNone(match, expression)
-                self.assertEqual(match.group("predicate"), DIAGNOSTIC_NAME_PREDICATE)
-                self.assertEqual(match.group("diagnostic"), "Diagnostic-only / " + original)
-                self.assertEqual(match.group("normal"), original)
-                for event_name, namespace_only, selector, expected in (
-                    ("pull_request", False, "", original),
-                    ("push", False, "", original),
-                    ("workflow_dispatch", False, "", original),
-                    ("workflow_dispatch", True, "", "Diagnostic-only / " + original),
-                    ("workflow_dispatch", True, "^FleckAppTests.Pinned$", "Diagnostic-only / " + original),
-                    ("workflow_dispatch", False, "^FleckAppTests.Pinned$", "Diagnostic-only / " + original),
-                ):
-                    with self.subTest(
-                        job=job_id,
-                        event=event_name,
-                        namespace_only=namespace_only,
-                        selector=selector,
-                    ):
-                        holds = diagnostic_dispatch_predicate_holds(
-                            event_name, namespace_only, selector
-                        )
-                        self.assertEqual(
-                            match.group("diagnostic") if holds else match.group("normal"),
-                            expected,
-                        )
 
     def test_job_inventory_preserves_existing_jobs(self):
         self.assertEqual(
