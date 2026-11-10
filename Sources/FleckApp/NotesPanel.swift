@@ -1333,6 +1333,17 @@
               },
               onActivate: { noteID in
                 guard activateNoteAndScope(noteID) else { return }
+                searchController.setActivationFocusRestore {
+                  guard self.visibleSelectedNote?.id == noteID,
+                    let textView = self.editorCommands.textView,
+                    let window = textView.window,
+                    let contentView = window.contentView,
+                    textView.isDescendant(of: contentView)
+                  else { return false }
+                  if window.firstResponder === textView { return true }
+                  _ = window.makeFirstResponder(textView)
+                  return window.firstResponder === textView
+                }
               },
               onDismiss: dismissWorkspaceSearch
             )
