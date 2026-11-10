@@ -583,7 +583,9 @@ class CIDocsPathTests(unittest.TestCase):
             "  group: ci-${{ github.event_name == 'workflow_dispatch' && "
             "inputs.namespace_qualification_only && 'namespace-qualification-' || "
             "github.event_name == 'workflow_dispatch' && "
-            "inputs.ordinary_test_diagnostic_selector != '' && 'focused-' || '' }}"
+            "inputs.ordinary_test_diagnostic_selector != '' && 'focused-' || "
+            "github.event_name == 'workflow_dispatch' && "
+            "inputs.native_runner_provider == 'namespace' && 'namespace-native-' || '' }}"
             "${{ github.event.pull_request.number || github.ref }}\n"
             "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n",
             workflow,
