@@ -35,6 +35,16 @@ on:
         required: false
         type: string
         default: ''
+      native_runner_provider:
+        description: >-
+          Select the runner provider for the three heavy native macOS jobs;
+          defaults to GitHub-hosted.
+        required: false
+        type: choice
+        options:
+          - github-hosted
+          - namespace
+        default: github-hosted
 
 permissions:
   contents: read
@@ -83,7 +93,7 @@ jobs:
     name: macOS ordinary graph and package
     needs: detect-changes
     if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
-    runs-on: macos-26
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.native_runner_provider == 'namespace' && 'namespace-profile-exterminatorrat' || 'macos-26' }}
     timeout-minutes: 90
     outputs:
       source_commit: ${{ steps.source.outputs.commit }}
@@ -191,7 +201,7 @@ jobs:
     name: macOS ordinary repeat and bundle validation
     needs: detect-changes
     if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
-    runs-on: macos-26
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.native_runner_provider == 'namespace' && 'namespace-profile-exterminatorrat' || 'macos-26' }}
     timeout-minutes: 90
     outputs:
       source_commit: ${{ steps.source.outputs.commit }}
@@ -384,7 +394,7 @@ jobs:
     name: macOS Enhanced Local candidate gates
     needs: detect-changes
     if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
-    runs-on: macos-26
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.native_runner_provider == 'namespace' && 'namespace-profile-exterminatorrat' || 'macos-26' }}
     timeout-minutes: 90
     env:
       FLECK_TEST_APPKIT_WATCHDOG_SECONDS: "4800"
