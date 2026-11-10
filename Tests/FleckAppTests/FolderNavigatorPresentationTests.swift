@@ -390,9 +390,32 @@ struct FolderNavigatorPresentationTests {
     try fixture.replaceFocusedTextFieldDraft(with: "Personal")
     try fixture.click(fixture.element(identifier: "folder-unfiled"))
     await fixture.settle()
-    try #require(await fixture.waitForRenameEditor(
+    let renameReady = try await fixture.waitForRenameEditor(
       folderID: folder.id, reportingValidationError: true
-    ))
+    )
+    if !renameReady {
+      let fields = fixture.textFields.filter { $0.accessibilityIdentifier() == renameIdentifier }
+      let field = fields.first
+      let currentEditor = field?.currentEditor() as? NSTextView
+      print(
+        "FLECK_FOLDER_INVALID_BLUR_DIAGNOSTIC"
+          + " validationError=\(fixture.state.saveError?.hasPrefix("Could not update folder:") == true)"
+          + " fieldCount=\(fields.count)"
+          + " fieldAttached=\(field?.window === fixture.window)"
+          + " fieldHidden=\(field?.isHiddenOrHasHiddenAncestor ?? true)"
+          + " editorPresent=\(currentEditor != nil)"
+          + " editorOwnsFocus=\(currentEditor != nil && currentEditor === fixture.window.firstResponder)"
+          + " active=\(NSApp.isActive) appKeyWindowMatches=\(NSApp.keyWindow === fixture.window)"
+          + " key=\(fixture.window.isKeyWindow)"
+          + " saving=\(fixture.state.saveStatus == .saving)"
+          + " fieldText=\(String(reflecting: field?.stringValue))"
+          + " editorText=\(String(reflecting: currentEditor?.string))"
+          + " saveError=\(String(reflecting: fixture.state.saveError))"
+          + " folders=\(fixture.state.workspace.folders.map(\.name))"
+          + " responder=\(fixture.window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil")"
+      )
+    }
+    try #require(renameReady)
 
     #expect(fixture.state.workspace.folders.first?.name == "Work")
     #expect(fixture.isRenameFieldVisible(identifier: renameIdentifier))
