@@ -114,10 +114,35 @@ import Testing
 }
 
 @MainActor private func unfiledKeyViews(_ root: NSView) -> [NSView] {
+  guard let window = root.window, let element = unfiledAX(root, label: "Unfiled") else {
+    return []
+  }
+  guard let accessibilityFrame = element.value(forKey: "accessibilityFrame") as? NSValue
+  else { return [] }
+  let screenFrame = accessibilityFrame.rectValue
+  guard !screenFrame.isNull, !screenFrame.isInfinite,
+    screenFrame.minX.isFinite, screenFrame.minY.isFinite,
+    screenFrame.maxX.isFinite, screenFrame.maxY.isFinite,
+    screenFrame.width > 0, screenFrame.height > 0
+  else { return [] }
+  let ownerFrame = root.convert(window.convertFromScreen(screenFrame), from: nil)
+  guard !ownerFrame.isNull, !ownerFrame.isInfinite,
+    ownerFrame.minX.isFinite, ownerFrame.minY.isFinite,
+    ownerFrame.maxX.isFinite, ownerFrame.maxY.isFinite,
+    ownerFrame.width > 0, ownerFrame.height > 0
+  else { return [] }
+  let lowerBound = ownerFrame.minY - 5
+  let upperBound = ownerFrame.maxY + 5
+  guard ownerFrame.minX.isFinite, ownerFrame.maxX.isFinite, lowerBound.isFinite,
+    upperBound.isFinite, lowerBound < upperBound
+  else { return [] }
+  let band = lowerBound...upperBound
   var result: [NSView] = []
   func visit(_ view: NSView) {
     let frame = view.convert(view.bounds, to: root)
-    if String(describing: type(of: view)) == "KeyViewProxy", frame.minY >= 42, frame.maxY <= 82 {
+    if String(describing: type(of: view)) == "KeyViewProxy", frame.minY >= band.lowerBound,
+      frame.maxY <= band.upperBound
+    {
       result.append(view)
     }
     for child in view.subviews { visit(child) }
