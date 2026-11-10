@@ -1,5 +1,6 @@
 #if os(macOS)
   import AppKit
+  import CoreGraphics
   import CoreImage
   import FleckCore
   import SwiftUI
@@ -1055,50 +1056,53 @@
   }
 
   final class EditorScrollEdgeBlurView: NSView {
-    let blurRadius: CGFloat = 2
+    var blurRadius: CGFloat = 0
 
     override var isOpaque: Bool { false }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
   }
 
   final class NativeEditorScrollView: NSScrollView {
-    private static let scrollEdgeHeight: CGFloat = 20
+    struct ScrollEdgeBlurBand: Equatable {
+      let blurRadius: CGFloat
+      let depth: CGFloat
+    }
+
+    static let scrollEdgeBlurMaximumDepth: CGFloat = 22
+    static let scrollEdgeBlurMaximumRadius: CGFloat = 2
+    private static let scrollEdgeBlurDepthExponent = 0.55
+    private static let scrollEdgeBlurRadiusExponent = 0.7
+    private static let scrollEdgeBlurDepthRatios: [CGFloat] = [1, 0.68, 0.41]
+    private static let scrollEdgeBlurRadiusRatios: [CGFloat] = [1, 0.62, 0.38]
     private static let scrollEdgeRampDistance: CGFloat = 16
-    private static let scrollEdgeMask: NSImage = {
-      let height = Int(scrollEdgeHeight)
-      let image = NSImage(size: NSSize(width: 1, height: height))
-      guard
-        let representation = NSBitmapImageRep(
-          bitmapDataPlanes: nil,
-          pixelsWide: 1,
-          pixelsHigh: height,
-          bitsPerSample: 8,
-          samplesPerPixel: 4,
-          hasAlpha: true,
-          isPlanar: false,
-          colorSpaceName: .deviceRGB,
-          bitmapFormat: .alphaNonpremultiplied,
-          bytesPerRow: 0,
-          bitsPerPixel: 0
-        )
-      else { return image }
-      guard let bitmapData = representation.bitmapData else { return image }
-      for y in 0..<height {
-        let progress = CGFloat(height - 1 - y) / CGFloat(height - 1)
-        let alpha = progress * progress * (3 - 2 * progress)
-        let row = bitmapData.advanced(by: y * representation.bytesPerRow)
-        row[0] = 255
-        row[1] = 255
-        row[2] = 255
-        row[3] = UInt8((alpha * 255).rounded())
-      }
-      image.addRepresentation(representation)
-      image.resizingMode = .stretch
-      return image
-    }()
+
+    static func scrollEdgeBands(forAmount amount: Double) -> [ScrollEdgeBlurBand] {
+      let amount = AppPreferences.clampedScrollEdgeBlurAmount(amount)
+      guard amount > 0 else { return [] }
+      let depth = CGFloat(
+        Double(scrollEdgeBlurMaximumDepth) * pow(amount, scrollEdgeBlurDepthExponent)
+      )
+      let radius = CGFloat(
+        Double(scrollEdgeBlurMaximumRadius) * pow(amount, scrollEdgeBlurRadiusExponent)
+      )
+      return zip(scrollEdgeBlurDepthRatios, scrollEdgeBlurRadiusRatios)
+        .map { depthRatio, radiusRatio in
+          ScrollEdgeBlurBand(blurRadius: radius * radiusRatio, depth: depth * depthRatio)
+        }
+    }
 
     private var isLayingOutDocument = false
-    private let scrollEdgeBlurView = EditorScrollEdgeBlurView()
+    private var scrollEdgeBlurViews: [EditorScrollEdgeBlurView] = []
+    var showScrollEdgeBlur = false {
+      didSet { updateScrollEdgeEffect() }
+    }
+    var scrollEdgeBlurAmount = AppPreferences.defaultScrollEdgeBlurAmount {
+      didSet {
+        guard scrollEdgeBlurAmount != oldValue else { return }
+        configureScrollEdgeBands()
+        updateScrollEdgeEffect()
+      }
+    }
     var reduceTransparency = false {
       didSet { updateScrollEdgeEffect() }
     }
@@ -1148,54 +1152,122 @@
     }
 
     private func configureScrollEdgeEffect() {
-      guard
-        let blurFilter = CIFilter(
-          name: "CIGaussianBlur",
-          parameters: [kCIInputRadiusKey: scrollEdgeBlurView.blurRadius]
-        )
-      else { return }
-      scrollEdgeBlurView.wantsLayer = true
-      scrollEdgeBlurView.layer?.masksToBounds = true
-      scrollEdgeBlurView.backgroundFilters = [blurFilter]
-      var maskRect = NSRect(origin: .zero, size: Self.scrollEdgeMask.size)
-      guard
-        let maskImage = Self.scrollEdgeMask.cgImage(
-          forProposedRect: &maskRect,
-          context: nil,
-          hints: nil
-        )
-      else { return }
-      let maskLayer = CALayer()
-      maskLayer.contents = maskImage
-      maskLayer.contentsGravity = .resize
-      scrollEdgeBlurView.layer?.mask = maskLayer
-      scrollEdgeBlurView.isHidden = true
-      scrollEdgeBlurView.setAccessibilityElement(false)
-      scrollEdgeBlurView.setAccessibilityHidden(true)
-      addSubview(scrollEdgeBlurView, positioned: .above, relativeTo: contentView)
+      for _ in Self.scrollEdgeBlurDepthRatios {
+        let blurView = EditorScrollEdgeBlurView()
+        blurView.wantsLayer = true
+        blurView.layer?.masksToBounds = true
+        blurView.isHidden = true
+        blurView.setAccessibilityElement(false)
+        blurView.setAccessibilityHidden(true)
+        addSubview(blurView, positioned: .above, relativeTo: contentView)
+        scrollEdgeBlurViews.append(blurView)
+      }
+      configureScrollEdgeBands()
       updateScrollEdgeEffect()
     }
 
-    private func updateScrollEdgeEffect() {
-      let viewportFrame = contentView.frame
-      let height = min(Self.scrollEdgeHeight, viewportFrame.height)
-      scrollEdgeBlurView.frame = NSRect(
-        x: viewportFrame.minX,
-        y: viewportFrame.minY,
-        width: viewportFrame.width,
-        height: height
-      )
-      scrollEdgeBlurView.layer?.mask?.frame = scrollEdgeBlurView.bounds
+    private func configureScrollEdgeBands() {
+      let bands = Self.scrollEdgeBands(forAmount: scrollEdgeBlurAmount)
+      for (index, view) in scrollEdgeBlurViews.enumerated() {
+        guard index < bands.count,
+          let maskImage = Self.scrollEdgeMaskImage(for: bands[index]),
+          let blurFilter = CIFilter(
+            name: "CIGaussianBlur",
+            parameters: [kCIInputRadiusKey: bands[index].blurRadius]
+          )
+        else {
+          view.blurRadius = 0
+          view.backgroundFilters = []
+          view.layer?.mask = nil
+          view.isHidden = true
+          continue
+        }
+        view.blurRadius = bands[index].blurRadius
+        view.backgroundFilters = [blurFilter]
+        let maskLayer = CALayer()
+        maskLayer.contents = maskImage
+        maskLayer.contentsGravity = .resize
+        view.layer?.mask = maskLayer
+      }
+    }
 
+    private func updateScrollEdgeEffect() {
+      let bands = Self.scrollEdgeBands(forAmount: scrollEdgeBlurAmount)
+      let viewportFrame = contentView.frame
       let documentRect = contentView.documentRect
       let scrollOffset = max(0, contentView.bounds.minY - documentRect.minY)
       let progress = min(1, scrollOffset / Self.scrollEdgeRampDistance)
-      let easedProgress = progress * progress * (3 - 2 * progress)
-      let isVisible = !reduceTransparency
+      let easedProgress = Self.scrollEdgeEasedProgress(progress)
+      let isVisible = showScrollEdgeBlur
+        && !reduceTransparency
+        && !bands.isEmpty
         && documentRect.height > contentView.bounds.height + 0.5
         && easedProgress > 0
-      scrollEdgeBlurView.alphaValue = isVisible ? easedProgress : 0
-      scrollEdgeBlurView.isHidden = !isVisible
+
+      for (index, view) in scrollEdgeBlurViews.enumerated() {
+        guard index < bands.count else {
+          view.alphaValue = 0
+          view.isHidden = true
+          continue
+        }
+        let height = min(bands[index].depth, viewportFrame.height)
+        view.frame = NSRect(
+          x: viewportFrame.minX,
+          y: viewportFrame.minY,
+          width: viewportFrame.width,
+          height: height
+        )
+        view.layer?.mask?.frame = view.bounds
+        view.alphaValue = isVisible ? easedProgress : 0
+        view.isHidden = !isVisible
+      }
+    }
+
+    static func scrollEdgeEasedProgress(_ progress: CGFloat) -> CGFloat {
+      let clamped = min(1, max(0, progress))
+      return clamped * clamped * (3 - 2 * clamped)
+    }
+
+    static func scrollEdgeMaskAlpha(
+      depth: CGFloat,
+      band: ScrollEdgeBlurBand
+    ) -> CGFloat {
+      guard band.depth > 0 else { return 0 }
+      return scrollEdgeEasedProgress(1 - depth / band.depth)
+    }
+
+    private static func scrollEdgeMaskImage(for band: ScrollEdgeBlurBand) -> CGImage? {
+      let pixels = max(2, Int(band.depth.rounded()) + 1)
+      guard
+        let representation = NSBitmapImageRep(
+          bitmapDataPlanes: nil,
+          pixelsWide: 1,
+          pixelsHigh: pixels,
+          bitsPerSample: 8,
+          samplesPerPixel: 4,
+          hasAlpha: true,
+          isPlanar: false,
+          colorSpaceName: .deviceRGB,
+          bitmapFormat: .alphaNonpremultiplied,
+          bytesPerRow: 0,
+          bitsPerPixel: 0
+        ),
+        let bitmapData = representation.bitmapData
+      else { return nil }
+      for row in 0..<pixels {
+        let depth = CGFloat(row) / CGFloat(pixels - 1) * band.depth
+        let alpha = scrollEdgeMaskAlpha(depth: depth, band: band)
+        let bytes = bitmapData.advanced(by: row * representation.bytesPerRow)
+        bytes[0] = 255
+        bytes[1] = 255
+        bytes[2] = 255
+        bytes[3] = UInt8((alpha * 255).rounded())
+      }
+      let image = NSImage(size: NSSize(width: 1, height: CGFloat(pixels)))
+      image.addRepresentation(representation)
+      image.resizingMode = .stretch
+      var proposedRect = NSRect(origin: .zero, size: image.size)
+      return image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil)
     }
   }
 
@@ -1214,6 +1286,8 @@
     let onChange: (String, Data?) -> Void
     let fontFamily: String
     let fontSize: Double
+    let showScrollEdgeBlur: Bool
+    let scrollEdgeBlurAmount: Double
     let reduceMotion: Bool
     let automaticLists: Bool
     let commands: EditorCommands
@@ -1234,6 +1308,8 @@
       let liveNoteIDs: Set<UUID>
       let isEnabled: Bool
       let reduceTransparency: Bool
+      let showScrollEdgeBlur: Bool
+      let scrollEdgeBlurAmount: Double
       let reduceMotion: Bool
       let automaticLists: Bool
       let isVisible: Bool
@@ -1249,6 +1325,8 @@
       let liveNoteIDsChanged: Bool
       let isEnabledChanged: Bool
       let reduceTransparencyChanged: Bool
+      let showScrollEdgeBlurChanged: Bool
+      let scrollEdgeBlurAmountChanged: Bool
       let reduceMotionChanged: Bool
       let automaticListsChanged: Bool
       let visibilityChanged: Bool
@@ -1274,6 +1352,12 @@
         isEnabledChanged = previous.map { $0.isEnabled != current.isEnabled } ?? true
         reduceTransparencyChanged = previous.map {
           $0.reduceTransparency != current.reduceTransparency
+        } ?? true
+        showScrollEdgeBlurChanged = previous.map {
+          $0.showScrollEdgeBlur != current.showScrollEdgeBlur
+        } ?? true
+        scrollEdgeBlurAmountChanged = previous.map {
+          $0.scrollEdgeBlurAmount != current.scrollEdgeBlurAmount
         } ?? true
         reduceMotionChanged = previous.map { $0.reduceMotion != current.reduceMotion } ?? true
         automaticListsChanged = previous.map {
@@ -1315,6 +1399,8 @@
       textColorHex: String? = nil,
       backgroundColorHex: String? = nil,
       accentColorHex: String = AppPreferences.defaultAccentHex,
+      showScrollEdgeBlur: Bool = false,
+      scrollEdgeBlurAmount: Double = AppPreferences.defaultScrollEdgeBlurAmount,
       reduceMotion: Bool,
       automaticLists: Bool,
       commands: EditorCommands,
@@ -1336,6 +1422,8 @@
       self.onChange = onChange
       self.fontFamily = fontFamily
       self.fontSize = fontSize
+      self.showScrollEdgeBlur = showScrollEdgeBlur
+      self.scrollEdgeBlurAmount = scrollEdgeBlurAmount
       self.reduceMotion = reduceMotion
       self.automaticLists = automaticLists
       self.commands = commands
@@ -1358,6 +1446,8 @@
         liveNoteIDs: liveNoteIDs,
         isEnabled: isEnabled,
         reduceTransparency: reduceTransparency,
+        showScrollEdgeBlur: showScrollEdgeBlur,
+        scrollEdgeBlurAmount: scrollEdgeBlurAmount,
         reduceMotion: reduceMotion,
         automaticLists: automaticLists,
         isVisible: isVisible,
@@ -1382,6 +1472,8 @@
       scrollView.hasVerticalScroller = true
       scrollView.drawsBackground = false
       scrollView.autohidesScrollers = true
+      scrollView.showScrollEdgeBlur = showScrollEdgeBlur
+      scrollView.scrollEdgeBlurAmount = scrollEdgeBlurAmount
       scrollView.reduceTransparency = reduceTransparency
 
       let titleField = NSTextField()
@@ -1527,6 +1619,12 @@
       )
       if changes.reduceTransparencyChanged {
         scrollView.reduceTransparency = reduceTransparency
+      }
+      if changes.showScrollEdgeBlurChanged {
+        scrollView.showScrollEdgeBlur = showScrollEdgeBlur
+      }
+      if changes.scrollEdgeBlurAmountChanged {
+        scrollView.scrollEdgeBlurAmount = scrollEdgeBlurAmount
       }
       if isVisible {
         if commandsChanged || changes.bodyFontChanged || changes.visibilityChanged {
