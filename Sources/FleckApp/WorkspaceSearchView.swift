@@ -143,7 +143,14 @@
     private weak var hostingWindow: NSWindow?
     private var focusOrigin: WorkspaceSearchFocusOrigin?
     private var focusRestoreTask: Task<Void, Never>?
+    private var focusRestoreGeneration: UInt64 = 0
+    private var focusRestoreAction: (@MainActor () -> Bool)?
+    private var activationFocusRestore: (@MainActor () -> Bool)?
     private var hasActivatedCurrentPresentation = false
+
+    func setActivationFocusRestore(_ restore: (@MainActor () -> Bool)?) {
+      activationFocusRestore = restore
+    }
 
     init(
       searchOperation: @escaping SearchOperation = { query, notes, limit in
@@ -200,32 +207,44 @@
       cancelFocusRestore()
       cancelSearch()
       searchGeneration &+= 1
-      let restoreGeneration = searchGeneration
+      focusRestoreGeneration &+= 1
+      let restoreGeneration = focusRestoreGeneration
       isPresented = false
       query = ""
       results = []
       highlightedNoteID = nil
       resultGeneration = nil
       hasActivatedCurrentPresentation = false
+      let activationRestore = activationFocusRestore
+      activationFocusRestore = nil
       let origin = focusOrigin
       focusOrigin = nil
-      origin?.restore()
-      if let origin {
-        focusRestoreTask = Task { @MainActor [weak self] in
-          for _ in 0..<12 {
-            guard !Task.isCancelled else { return }
-            await Task.yield()
-            guard !Task.isCancelled,
-              let self,
-              self.searchGeneration == restoreGeneration
-            else {
-              return
-            }
-            if origin.restore() { break }
+      if let activationRestore {
+        focusRestoreAction = activationRestore
+      } else if let origin {
+        origin.restore()
+        focusRestoreAction = { origin.restore() }
+      }
+      guard focusRestoreAction != nil else { return }
+      focusRestoreTask = Task { @MainActor [weak self] in
+        for _ in 0..<12 {
+          guard !Task.isCancelled else { return }
+          await Task.yield()
+          guard !Task.isCancelled,
+            let self,
+            self.focusRestoreGeneration == restoreGeneration
+          else {
+            return
           }
-          guard let self, self.searchGeneration == restoreGeneration else { return }
-          self.focusRestoreTask = nil
+          if self.focusRestoreAction?() == true {
+            self.focusRestoreAction = nil
+            self.focusRestoreTask = nil
+            return
+          }
         }
+        guard let self, self.focusRestoreGeneration == restoreGeneration else { return }
+        self.focusRestoreAction = nil
+        self.focusRestoreTask = nil
       }
     }
 
@@ -397,8 +416,10 @@
     }
 
     private func cancelFocusRestore() {
+      focusRestoreGeneration &+= 1
       focusRestoreTask?.cancel()
       focusRestoreTask = nil
+      focusRestoreAction = nil
     }
 
     deinit {
