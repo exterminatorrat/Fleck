@@ -951,6 +951,7 @@
           .frame(width: 22, height: 22)
       }
       .buttonStyle(.borderless)
+      .fleckHoverFill(in: RoundedRectangle(cornerRadius: 5))
       .help("Dismiss \(label)")
       .accessibilityLabel("Dismiss \(label)")
     }
@@ -1747,6 +1748,10 @@
               }
             }
             .buttonStyle(.plain)
+            .fleckHoverFill(
+              in: Capsule(),
+              isAllowed: note.id != appState.workspace.selectedNoteID
+            )
             .accessibilityIdentifier("note-tab-\(note.id.uuidString)")
             .modifier(ReorderDragSource(begin: {
               let interaction = ReorderInteraction(sourceID: note.id, originalIDs: visibleNotes.map(\.id),
@@ -1901,6 +1906,7 @@
                   .contentShape(Rectangle())
               }
               .buttonStyle(.plain)
+              .fleckHoverFill(in: RoundedRectangle(cornerRadius: 5))
               .accessibilityLabel("Reveal earlier tabs")
               .accessibilityIdentifier("note-tab-overflow-earlier")
               .help("Show earlier tabs")
@@ -1916,6 +1922,7 @@
                   .contentShape(Rectangle())
               }
               .buttonStyle(.plain)
+              .fleckHoverFill(in: RoundedRectangle(cornerRadius: 5))
               .accessibilityLabel("Reveal later tabs")
               .accessibilityIdentifier("note-tab-overflow-later")
               .help("Show later tabs")
@@ -2989,6 +2996,7 @@
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .fleckHoverFill(in: RoundedRectangle(cornerRadius: 5))
         .accessibilityLabel("Reveal earlier folders")
         .help("Show earlier folders")
 
@@ -3002,6 +3010,7 @@
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .fleckHoverFill(in: RoundedRectangle(cornerRadius: 5))
         .accessibilityLabel("Reveal later folders")
         .help("Show later folders")
       }
@@ -3017,6 +3026,7 @@
             .frame(width: 24, height: 24)
         }
         .buttonStyle(.plain)
+        .fleckHoverFill(in: RoundedRectangle(cornerRadius: 5))
         .accessibilityLabel("New folder")
         .accessibilityIdentifier("folder-new")
 
@@ -3039,6 +3049,7 @@
                 .frame(width: 24, height: 24)
             }
             .buttonStyle(.plain)
+            .fleckHoverFill(in: RoundedRectangle(cornerRadius: 5))
             .disabled(trimmedFolderName.isEmpty)
             .accessibilityLabel("Create folder")
 
@@ -3049,6 +3060,7 @@
                 .frame(width: 24, height: 24)
             }
             .buttonStyle(.plain)
+            .fleckHoverFill(in: RoundedRectangle(cornerRadius: 5))
             .accessibilityLabel("Cancel new folder")
           }
           .transition(composerTransition)
@@ -3257,6 +3269,7 @@
       }
       .fixedSize(horizontal: true, vertical: false)
       .buttonStyle(.plain)
+      .fleckHoverFill(in: RoundedRectangle(cornerRadius: 6))
       .focused($focusedRow, equals: .trash)
       .focusable()
       .accessibilityLabel("Trash")
@@ -3288,6 +3301,7 @@
           )
         }
         .buttonStyle(.plain)
+        .fleckHoverFill(in: RoundedRectangle(cornerRadius: 6))
         .focusable()
         .focused($focusedRow, equals: .unfiled)
         .focusEffectDisabled()
@@ -3313,6 +3327,7 @@
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .fleckHoverFill(in: RoundedRectangle(cornerRadius: 5))
         .accessibilityLabel(
           isUnfiledCompact ? "Expand Unfiled" : "Collapse Unfiled"
         )
@@ -3367,6 +3382,7 @@
           )
         }
         .buttonStyle(.plain)
+        .fleckHoverFill(in: RoundedRectangle(cornerRadius: 6))
         .background(nativeNoteDropAnchor(.folder(folder.id)))
         .modifier(ReorderDropTarget(
           destinationID: folder.id, type: FolderDragPayload.folderType,
