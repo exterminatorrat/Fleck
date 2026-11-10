@@ -2846,7 +2846,7 @@
           .overlay(alignment: .trailing) {
             folderComposer
               .frame(
-                width: isCreatingFolder ? maskPresentation.composerWidth : 24,
+                width: isCreatingFolder ? maskPresentation.composerWidth : 28,
                 alignment: .leading
               )
           }
@@ -2980,7 +2980,7 @@
         }
         .frame(maxWidth: .infinity)
 
-        Color.clear.frame(width: 24, height: 24)
+        Color.clear.frame(width: 28, height: 28)
       }
     }
 
@@ -3023,7 +3023,8 @@
           beginNewFolder(source: currentInteractionSource)
         } label: {
           Image(systemName: "folder.badge.plus")
-            .frame(width: 24, height: 24)
+            .frame(width: 28, height: 28)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .fleckHoverFill(in: RoundedRectangle(cornerRadius: 5))
@@ -3266,6 +3267,8 @@
           isSelected: false,
           isEmpty: appState.trashedNotes.isEmpty
         )
+        .frame(minHeight: 28)
+        .contentShape(RoundedRectangle(cornerRadius: 6))
       }
       .fixedSize(horizontal: true, vertical: false)
       .buttonStyle(.plain)
@@ -3618,7 +3621,7 @@
     private var overflowPresentation: FolderNavigatorOverflowPresentation {
       FolderNavigatorOverflowPresentation(
         contentWidth: folderContentWidth,
-        referenceWidth: max(preTrashBandWidth - (rowFrames[.unfiled]?.width ?? 0) - 32, 0)
+        referenceWidth: max(preTrashBandWidth - (rowFrames[.unfiled]?.width ?? 0) - 36, 0)
       )
     }
 
