@@ -173,7 +173,7 @@ func folderValidationErrorSurvivesQueuedPersistenceSave(
   await state.waitUntilInitialLoad()
 
   let queuedSave = saveRequestedFirst ? state.saveNow() : nil
-  state.folderActionFailed(message)
+  state.folderActionFailed(message, folderID: nil)
 
   if let queuedSave {
     try await queuedSave.value
@@ -202,7 +202,7 @@ func folderValidationErrorSurvivesQueuedPersistenceSave(
 
   let save = state.saveNow()
   await gate.waitUntilHeld()
-  state.folderActionFailed(message)
+  state.folderActionFailed(message, folderID: nil)
   await gate.release()
   try await save.value
 
@@ -218,12 +218,58 @@ func folderValidationErrorSurvivesQueuedPersistenceSave(
     try state.renameFolder(id: work.id, name: "Personal")
     Issue.record("Expected the duplicate folder name to fail")
   } catch {
-    state.folderActionFailed("Could not update folder: \(String(describing: error))")
+    state.folderActionFailed(
+      "Could not update folder: \(String(describing: error))",
+      folderID: work.id
+    )
   }
   try #require(state.saveError != nil)
 
   try state.renameFolder(id: work.id, name: "Work")
-  state.folderActionSucceeded()
+  state.folderActionSucceeded(folderID: work.id)
+
+  #expect(state.saveError == nil)
+}
+
+@Test @MainActor func folderActionSuccessDoesNotClearAnotherFoldersValidationError() async throws {
+  let work = try folder(named: "Work")
+  let personal = try folder(named: "Personal")
+  let state = await folderedState(workspace: Workspace(folders: [work, personal]))
+
+  do {
+    try state.renameFolder(id: work.id, name: "Personal")
+    Issue.record("Expected the duplicate folder name to fail")
+  } catch {
+    state.folderActionFailed(
+      "Could not update folder: \(String(describing: error))",
+      folderID: work.id
+    )
+  }
+  try #require(state.saveError != nil)
+
+  try state.renameFolder(id: personal.id, name: "Archive")
+  state.folderActionSucceeded(folderID: personal.id)
+
+  #expect(state.saveError != nil)
+}
+
+@Test @MainActor func folderCreationSuccessClearsItsOwnValidationError() async throws {
+  let work = try folder(named: "Work")
+  let state = await folderedState(workspace: Workspace(folders: [work]))
+
+  do {
+    _ = try state.createFolder(named: "Work")
+    Issue.record("Expected the duplicate folder name to fail")
+  } catch {
+    state.folderActionFailed(
+      "Could not update folder: \(String(describing: error))",
+      folderID: nil
+    )
+  }
+  try #require(state.saveError != nil)
+
+  _ = try state.createFolder(named: "Archive")
+  state.folderActionSucceeded(folderID: nil)
 
   #expect(state.saveError == nil)
 }
@@ -233,7 +279,7 @@ func folderValidationErrorSurvivesQueuedPersistenceSave(
   let message = "Inline image import failed"
 
   state.inlineNoteImageImportFailed(message)
-  state.folderActionSucceeded()
+  state.folderActionSucceeded(folderID: nil)
   #expect(state.saveError == message)
 
   try await state.saveNow().value

@@ -69,7 +69,7 @@
 
     private enum SaveErrorOwner: Equatable {
       case persistence
-      case folder
+      case folder(id: UUID?)
     }
 
     @Published var workspace = Workspace() {
@@ -520,13 +520,14 @@
       saveError = message
     }
 
-    func folderActionFailed(_ message: String) {
-      recordSaveError(message, owner: .folder)
+    func folderActionFailed(_ message: String, folderID: UUID?) {
+      recordSaveError(message, owner: .folder(id: folderID))
     }
 
-    func folderActionSucceeded() {
-      guard saveError != nil, canClearSaveError(ownedBy: .folder) else { return }
-      recordSaveError(nil, owner: .folder)
+    func folderActionSucceeded(folderID: UUID?) {
+      let owner = SaveErrorOwner.folder(id: folderID)
+      guard saveError != nil, canClearSaveError(ownedBy: owner) else { return }
+      recordSaveError(nil, owner: owner)
     }
 
     private func recordSaveError(_ message: String?, owner: SaveErrorOwner) {
