@@ -3,14 +3,6 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
-## [1.7.25-beta.1] - 2026-11-10
-
-### Changed
-
-- Main-UI row and icon buttons (Trash, Unfiled, folders, the new-folder controls, folder and
-  tab overflow chevrons, note tabs, and banner dismissals) now draw the same quiet hover wash
-  as the chrome buttons, sized to each control and following increased contrast.
-
 ## [1.7.24-beta.1] - 2026-11-06
 
 ### Changed
