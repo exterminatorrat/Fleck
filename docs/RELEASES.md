@@ -19,6 +19,31 @@ file.
 - A preview label stays visible until compatibility and support promises are
   ready for an official release.
 
+## Release cadence
+
+Every build the maintainer approves becomes a release. One approved candidate,
+one public prerelease:
+
+1. A development candidate is built and delivered, as described in
+   ["Builds are not releases"](../AGENTS.md).
+2. The maintainer tests it and approves its behaviour.
+3. That candidate's source is projected onto `main`, and its version advances
+   past the internal version so no published binary shares a version string
+   with a local candidate.
+4. CI is green at the projection commit, and the release package is built from
+   that commit in Release configuration by the committed packager.
+5. `docs/release-notes/<version>.md` is written, the artifact and checksums are
+   recorded, an annotated `v<version>` tag is created on that commit, and the
+   GitHub Pre-release is published with the archive, checksums, release notes
+   and limitations.
+6. The tag, release page, download and checksum are verified from outside,
+   signed out.
+
+Approval covers the candidate's behaviour, never the release gates. Signing,
+notarization where available, package identity, archive extraction and green CI
+still have to pass before anything is published, and a withheld gate stops the
+release rather than lowering it.
+
 ## Version progression ladder
 
 Every published build follows `VERSION` (see [`build-identity.md`](build-identity.md)),
