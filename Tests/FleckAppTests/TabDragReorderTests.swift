@@ -1478,6 +1478,7 @@ func reorderInteractionNativeLifetimeDoesNotEndBetweenPointerEvents() throws {
   var motionSamples = HostedTabReorderMotionSamples()
   var animationDetails: HostedTabReorderAnimationDetails?
   var animationKeyPath: String?
+  var observedRenderedInterpolation = false
   repeat {
     await advanceTabStripHostEventBoundary(host)
     let layer = sibling.layer
@@ -1488,6 +1489,13 @@ func reorderInteractionNativeLifetimeDoesNotEndBetweenPointerEvents() throws {
         to: (animation.toValue as? NSNumber)?.doubleValue,
         duration: animation.duration)
       animationKeyPath = animation.keyPath
+    }
+    if animation != nil,
+      let presented = layer?.presentation()?.transform.m41,
+      let model = layer?.transform.m41,
+      abs(presented - model) > 0.01
+    {
+      observedRenderedInterpolation = true
     }
     guard captureMotionFrames else { continue }
     let sampleUptime = ProcessInfo.processInfo.systemUptime
@@ -1551,6 +1559,8 @@ func reorderInteractionNativeLifetimeDoesNotEndBetweenPointerEvents() throws {
   #expect(details.from == 0)
   #expect(details.to == Double(first.minX - second.minX))
   #expect(details.duration == AppMotion.standardDuration)
+  #expect(observedRenderedInterpolation,
+    "The rendered tab must interpolate while the reorder animation runs, not snap to its target")
   #expect(sibling.layer?.animation(forKey: "fleck.tab-reorder") == nil)
   let finalLayer = try #require(sibling.layer)
   let finalRoot = try #require(destination.layer)
