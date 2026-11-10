@@ -1688,11 +1688,15 @@
       }
       do {
         try appState.deleteFolder(id: folderID, activeFolderID: currentFolderID)
+        appState.folderActionSucceeded(folderID: folderID)
       } catch {
         if currentFolderID == folderID {
           activeFolderID = folderID
         }
-        appState.saveError = "Could not update folder: \(String(describing: error))"
+        appState.folderActionFailed(
+          "Could not update folder: \(String(describing: error))",
+          folderID: folderID
+        )
       }
     }
 
@@ -3742,11 +3746,14 @@
         return
       }
       do {
+        var actionFolderID: UUID?
         if isCreatingFolder {
           _ = try appState.createFolder(named: folderNameDraft)
         } else if let editingFolderID {
           try appState.renameFolder(id: editingFolderID, name: folderNameDraft)
+          actionFolderID = editingFolderID
         }
+        appState.folderActionSucceeded(folderID: actionFolderID)
         if preservingFocus {
           editingFolderID = nil
           isRenamingFolderTextEditing = false
@@ -3755,7 +3762,10 @@
           cancelFolderEditing(source: source)
         }
       } catch {
-        appState.saveError = "Could not update folder: \(String(describing: error))"
+        appState.folderActionFailed(
+          "Could not update folder: \(String(describing: error))",
+          folderID: isCreatingFolder ? nil : editingFolderID
+        )
         if preservingFocus, editingFolderID != nil {
           focusedRow = nil
           renameFocusRequest &+= 1
