@@ -349,6 +349,20 @@ class NamespaceQualificationWorkflowTest(unittest.TestCase):
             self.contents,
         )
 
+    def test_native_provider_concurrency_is_separate_from_queued_github_runs(self):
+        match = re.search(r"^  group: (.+)$", self.contents, re.M)
+        self.assertIsNotNone(match)
+        self.assertEqual(
+            match.group(1),
+            "ci-${{ github.event_name == 'workflow_dispatch' && "
+            "inputs.namespace_qualification_only && 'namespace-qualification-' || "
+            "github.event_name == 'workflow_dispatch' && "
+            "inputs.ordinary_test_diagnostic_selector != '' && 'focused-' || "
+            "github.event_name == 'workflow_dispatch' && "
+            "inputs.native_runner_provider == 'namespace' && 'namespace-native-' || '' }}"
+            "${{ github.event.pull_request.number || github.ref }}",
+        )
+
     def test_normal_run_conditions_retain_previous_behavior(self):
         self.assertIn(
             "github.event_name != 'workflow_dispatch' || "
