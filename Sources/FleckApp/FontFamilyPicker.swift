@@ -110,10 +110,12 @@
       searchField.setAccessibilityHelp("Choose a font for \(targetLabel)")
       searchField.delegate = self
       searchField.sendsSearchStringImmediately = true
+      searchField.focusRingType = .none
       let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("family"))
       column.resizingMask = .autoresizingMask
       table.addTableColumn(column)
       table.headerView = nil
+      table.focusRingType = .none
       table.rowHeight = 30
       table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
       table.autoresizingMask = [.width]
@@ -127,6 +129,7 @@
       table.onCancel = { [weak self] in self?.cancelOperation(nil) }
       table.setAccessibilityLabel("Font families")
       let scroll = NSScrollView()
+      scroll.focusRingType = .none
       scroll.documentView = table
       scroll.hasVerticalScroller = true
       scroll.verticalScroller = FontFamilyScroller()
@@ -135,6 +138,7 @@
       clearButton.target = self
       clearButton.action = #selector(clearSearch)
       clearButton.bezelStyle = .inline
+      clearButton.focusRingType = .none
       let empty = NSStackView(views: [emptyLabel, clearButton])
       empty.orientation = .vertical
       let list = NSView()
