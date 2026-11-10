@@ -645,3 +645,74 @@ private final class ManagedBulletImageFixture {
   #expect(observer.selectionChanges == 0)
   #expect(observer.textChanges == 0)
 }
+
+@Test @MainActor func wholeBulletCopiesWithTheDeclaredPasteboardTypesWhenTheNoteHoldsAnImage()
+  throws
+{
+  let fixture = try ManagedBulletImageFixture()
+  defer { fixture.remove() }
+  let reference = try fixture.makeReference()
+  let canonical = "• \(reference)\n• selected"
+  let display = fixture.store.projectedContent(from: NSAttributedString(string: canonical))
+  let imageCharacter = (display.string as NSString).range(of: "\u{fffc}")
+  let selectedText = (display.string as NSString).range(of: "selected")
+  try #require(imageCharacter.location != NSNotFound)
+  try #require(selectedText.location != NSNotFound)
+  #expect(
+    display.attribute(.attachment, at: imageCharacter.location, effectiveRange: nil)
+      is InlineNoteImageAttachment
+  )
+  #expect(NSIntersectionRange(imageCharacter, selectedText).length == 0)
+
+  let source = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 360, height: 180))
+  source.isRichText = true
+  source.inlineImageStore = fixture.store
+  source.textStorage?.setAttributedString(display)
+  source.setSelectedRange(selectedText)
+  let declaredTypes = source.writablePasteboardTypes
+  #expect(!declaredTypes.isEmpty)
+
+  let pasteboard = NSPasteboard.withUniqueName()
+  defer { pasteboard.releaseGlobally() }
+  #expect(source.writeSelection(to: pasteboard, types: declaredTypes))
+  #expect(pasteboard.pasteboardItems?.count == 1)
+  #expect(pasteboard.string(forType: .string) == "• selected")
+  #expect(pasteboard.data(forType: .rtf) != nil)
+}
+
+@Test @MainActor func sequentialLegacyTypeWritesKeepRichAndPlainForImageSelection() throws {
+  let fixture = try ManagedBulletImageFixture()
+  defer { fixture.remove() }
+  let reference = try fixture.makeReference()
+  let canonical = "• \(reference)"
+  let display = fixture.store.projectedContent(from: NSAttributedString(string: canonical))
+  let imageCharacter = (display.string as NSString).range(of: "\u{fffc}")
+  try #require(imageCharacter.location != NSNotFound)
+  #expect(
+    display.attribute(.attachment, at: imageCharacter.location, effectiveRange: nil)
+      is InlineNoteImageAttachment
+  )
+
+  let declaredSource = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+  declaredSource.isRichText = true
+  declaredSource.string = "declared"
+  declaredSource.setSelectedRange(NSRange(location: 0, length: 8))
+  let declaredTextTypes = declaredSource.writablePasteboardTypes
+  try #require(declaredTextTypes.count == 2)
+
+  let source = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 360, height: 180))
+  source.isRichText = true
+  source.inlineImageStore = fixture.store
+  source.textStorage?.setAttributedString(display)
+  source.setSelectedRange(imageCharacter)
+
+  let pasteboard = NSPasteboard.withUniqueName()
+  defer { pasteboard.releaseGlobally() }
+  _ = pasteboard.clearContents()
+  _ = pasteboard.declareTypes(declaredTextTypes, owner: nil)
+  for type in declaredTextTypes {
+    #expect(source.writeSelection(to: pasteboard, type: type))
+  }
+  #expect(pasteboard.string(forType: .string) == "• \(reference)")
+  #expect(pasteboard.data(forType: .rtf) != nil)
+}
