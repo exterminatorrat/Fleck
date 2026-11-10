@@ -1425,6 +1425,7 @@ func reorderInteractionNativeLifetimeDoesNotEndBetweenPointerEvents() throws {
   #expect(details.from == 0)
   #expect(details.to == Double(first.minX - second.minX))
   #expect(details.duration == AppMotion.standardDuration)
+  CATransaction.flush()
 
   let presentedRoot = try #require(destination.layer?.presentation())
   var frozenPositions: [CGFloat] = []
@@ -1443,7 +1444,7 @@ func reorderInteractionNativeLifetimeDoesNotEndBetweenPointerEvents() throws {
   #expect(intermediateRange.contains(twoThirdsPosition),
     "Two thirds of the way through the reorder animation the rendered tab must still sit between its origin and its target")
   let landedPosition = try frozenTabPosition(atProgress: 1)
-  #expect(abs(landedPosition - second.minX) < 1)
+  #expect(abs(landedPosition - first.minX) < 1)
 
   if captureMotionFrames {
     print("[TAB-REORDER-MOTION] request=\(hostedTabReorderDiagnosticNumber(animationRequestUptime)) "
