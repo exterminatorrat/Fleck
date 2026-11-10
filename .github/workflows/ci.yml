@@ -636,7 +636,7 @@ jobs:
   namespace-qualification:
     name: Namespace runner metadata qualification
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.namespace_qualification_only }}
-    runs-on: namespace-profile-exterminatorrat
+    runs-on: namespace-profile-fleck
     timeout-minutes: 5
     permissions:
       contents: read

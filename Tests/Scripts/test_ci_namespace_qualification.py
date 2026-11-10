@@ -36,7 +36,7 @@ EXPECTED_RUNS_ON = {
     "folder-navigator-diagnostic": "macos-26",
     "folder-navigator-diagnostic-enhanced": "macos-26",
     "ordinary-test-diagnostic": "macos-26",
-    QUALIFICATION_JOB: "namespace-profile-exterminatorrat",
+    QUALIFICATION_JOB: "namespace-profile-fleck",
 }
 
 ORIGINAL_CONDITIONS = {
@@ -230,9 +230,9 @@ class NamespaceQualificationWorkflowTest(unittest.TestCase):
 
     def test_qualification_job_uses_exact_runner_and_timeout(self):
         self.assertIn(
-            "runs-on: namespace-profile-exterminatorrat\n", self.qualification
+            "runs-on: namespace-profile-fleck\n", self.qualification
         )
-        self.assertNotIn("namespace-profile-fleck", self.qualification)
+        self.assertNotIn("namespace-profile-exterminatorrat", self.qualification)
         self.assertNotIn("macos-26", self.qualification)
         timeouts = re.findall(
             r"^    timeout-minutes: (\d+)$", self.qualification, re.M
