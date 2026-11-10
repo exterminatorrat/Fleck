@@ -23,7 +23,7 @@ QUALIFICATION_JOB = "namespace-qualification"
 NATIVE_PROVIDER_RUNS_ON = (
     "${{ github.event_name == 'workflow_dispatch' && "
     "inputs.native_runner_provider == 'namespace' && "
-    "'namespace-profile-exterminatorrat' || 'macos-26' }}"
+    "'namespace-profile-fleck' || 'macos-26' }}"
 )
 EXPECTED_RUNS_ON = {
     "detect-changes": "namespace-profile-fleck",
@@ -35,8 +35,8 @@ EXPECTED_RUNS_ON = {
     "own-window-capture-probe": "macos-26",
     "folder-navigator-diagnostic": "macos-26",
     "folder-navigator-diagnostic-enhanced": "macos-26",
-    "ordinary-test-diagnostic": "macos-26",
-    QUALIFICATION_JOB: "namespace-profile-exterminatorrat",
+    "ordinary-test-diagnostic": NATIVE_PROVIDER_RUNS_ON,
+    QUALIFICATION_JOB: "namespace-profile-fleck",
 }
 
 ORIGINAL_CONDITIONS = {
@@ -161,8 +161,13 @@ class NamespaceQualificationWorkflowTest(unittest.TestCase):
         options = re.findall(r"^          - (\S+)$", block, re.M)
         self.assertEqual(options, ["github-hosted", "namespace"])
 
-    def test_native_runner_provider_maps_only_three_existing_jobs(self):
-        for job_id in ("macos-build", "macos-validation", "macos-enhanced"):
+    def test_native_runner_provider_maps_three_heavy_and_one_focused_job(self):
+        for job_id in (
+            "macos-build",
+            "macos-validation",
+            "macos-enhanced",
+            "ordinary-test-diagnostic",
+        ):
             with self.subTest(job=job_id):
                 runs_on = job_runs_on(self.contents, job_id)
                 self.assertEqual(runs_on, NATIVE_PROVIDER_RUNS_ON)
@@ -172,18 +177,28 @@ class NamespaceQualificationWorkflowTest(unittest.TestCase):
                 self.assertIn(
                     "inputs.native_runner_provider == 'namespace'", runs_on
                 )
-                self.assertIn("'namespace-profile-exterminatorrat'", runs_on)
+                self.assertIn("'namespace-profile-fleck'", runs_on)
                 self.assertIn("|| 'macos-26'", runs_on)
         namespace_jobs = [
             job_id
             for job_id in ORIGINAL_JOBS
-            if "namespace-profile-exterminatorrat"
-            in job_runs_on(self.contents, job_id)
+            if job_runs_on(self.contents, job_id) == NATIVE_PROVIDER_RUNS_ON
         ]
         self.assertEqual(
             namespace_jobs,
-            ["macos-build", "macos-validation", "macos-enhanced"],
+            [
+                "macos-build",
+                "macos-validation",
+                "macos-enhanced",
+                "ordinary-test-diagnostic",
+            ],
         )
+        for job_id in ORIGINAL_JOBS:
+            with self.subTest(job=job_id):
+                self.assertNotIn(
+                    "namespace-profile-exterminatorrat",
+                    job_runs_on(self.contents, job_id),
+                )
 
     def test_all_other_runs_on_values_are_unchanged(self):
         for job_id, expected in EXPECTED_RUNS_ON.items():
@@ -230,9 +245,9 @@ class NamespaceQualificationWorkflowTest(unittest.TestCase):
 
     def test_qualification_job_uses_exact_runner_and_timeout(self):
         self.assertIn(
-            "runs-on: namespace-profile-exterminatorrat\n", self.qualification
+            "runs-on: namespace-profile-fleck\n", self.qualification
         )
-        self.assertNotIn("namespace-profile-fleck", self.qualification)
+        self.assertNotIn("namespace-profile-exterminatorrat", self.qualification)
         self.assertNotIn("macos-26", self.qualification)
         timeouts = re.findall(
             r"^    timeout-minutes: (\d+)$", self.qualification, re.M

@@ -654,7 +654,12 @@ class CIDocsPathTests(unittest.TestCase):
             "!inputs.namespace_qualification_only }}",
             diagnostic,
         )
-        self.assertIn("runs-on: macos-26", diagnostic)
+        self.assertIn(
+            "runs-on: ${{ github.event_name == 'workflow_dispatch' && "
+            "inputs.native_runner_provider == 'namespace' && "
+            "'namespace-profile-fleck' || 'macos-26' }}",
+            diagnostic,
+        )
         self.assertIn("timeout-minutes: 45", diagnostic)
         self.assertIn('FLECK_NATIVE_CAPTURE_QA: "0"', diagnostic)
         self.assertIn(
