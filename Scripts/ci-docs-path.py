@@ -3,6 +3,7 @@ import argparse
 import hashlib
 from html.parser import HTMLParser
 import json
+import os
 from pathlib import Path
 import re
 import stat
@@ -168,7 +169,14 @@ class HTMLReferences(HTMLParser):
         self.handle_starttag(tag, attributes)
 
 
-def validate_local_reference(repository, target):
+def tracked_paths(repository):
+    listing = git(repository, "ls-files", "-z")
+    if listing and not listing.endswith(b"\0"):
+        raise ValidationError("git source verification failed")
+    return frozenset(path for path in listing.split(b"\0") if path)
+
+
+def validate_local_reference(repository, target, tracked):
     try:
         parsed = urlsplit(target.strip())
     except ValueError as error:
@@ -176,13 +184,20 @@ def validate_local_reference(repository, target):
     if parsed.scheme or parsed.netloc or not parsed.path:
         return
     repository = Path(repository).resolve()
-    candidate = (repository / unquote(parsed.path)).resolve()
+    requested = repository / unquote(parsed.path)
     try:
-        candidate.relative_to(repository)
+        relatives = (
+            Path(os.path.normpath(requested)).relative_to(repository),
+            requested.resolve().relative_to(repository),
+        )
     except ValueError as error:
         raise ValidationError("README links must stay inside the repository") from error
-    if not candidate.exists():
-        raise ValidationError("README contains a broken local link")
+    for relative in relatives:
+        if relative == Path("."):
+            continue
+        name = os.fsencode(relative.as_posix())
+        if name not in tracked and not any(path.startswith(name + b"/") for path in tracked):
+            raise ValidationError("README contains a broken local link")
 
 
 def validate_readme(repository):
@@ -212,8 +227,9 @@ def validate_readme(repository):
     html_references = HTMLReferences()
     html_references.feed(text)
     references.extend(html_references.targets)
+    tracked = tracked_paths(repository)
     for target in references:
-        validate_local_reference(repository, target)
+        validate_local_reference(repository, target, tracked)
 
 
 def validate_documentation(repository, source_commit, expected):
