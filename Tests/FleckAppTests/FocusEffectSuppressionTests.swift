@@ -172,4 +172,3 @@ func FocusEffectSuppressionCoversTheAppKitFindBar() throws {
   #expect(editor.contains("performTextFinderAction(sender)"))
   #expect(formatting.contains("performTextFinderAction(sender)"))
 }
-
