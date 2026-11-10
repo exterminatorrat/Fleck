@@ -395,6 +395,120 @@ class CIDocsPathTests(unittest.TestCase):
         with self.assertRaises(CI_DOCS_PATH.ValidationError):
             CI_DOCS_PATH.validate_readme(fixture.repository)
 
+    def test_readme_accepts_exact_tracked_file_directory_and_root_links(self):
+        fixture = self.fixture()
+        fixture.write("docs/Guide.md", "# Guide\n")
+        fixture.commit("add documentation guide")
+        fixture.write(
+            "README.md",
+            "# Fleck\n\nAgent Connector documentation.\n\n"
+            "[testing](TESTING.md)\n"
+            "[testing relative](./TESTING.md)\n"
+            "[testing normalized](docs/../TESTING.md)\n"
+            "[testing fragment](TESTING.md#testing)\n"
+            "[testing encoded](TEST%49NG.md)\n"
+            '[icon](Assets/icon.svg "icon")\n'
+            "[guide](docs/Guide.md)\n"
+            "[docs](docs)\n"
+            "[docs slash](docs/)\n"
+            "[root](.)\n"
+            "[root slash](./)\n",
+        )
+        CI_DOCS_PATH.validate_readme(fixture.repository)
+
+    def test_readme_accepts_percent_encoded_space_and_non_ascii_tracked_paths(self):
+        fixture = self.fixture()
+        fixture.write("docs/Referência guide.md", "# Guide\n")
+        fixture.commit("add non-ascii guide")
+        fixture.write(
+            "README.md",
+            "# Fleck\n\nAgent Connector documentation.\n\n"
+            "[guide](docs/Refer%C3%AAncia%20guide.md)\n"
+            "[guide space](<docs/Referência guide.md>)\n",
+        )
+        CI_DOCS_PATH.validate_readme(fixture.repository)
+
+    def test_readme_accepts_tracked_symlink_to_tracked_file(self):
+        fixture = self.fixture()
+        (fixture.repository / "GuideLink.md").symlink_to("TESTING.md")
+        fixture.commit("add tracked guide link")
+        fixture.write(
+            "README.md",
+            "# Fleck\n\nAgent Connector documentation.\n\n"
+            "[guide](GuideLink.md)\n"
+            "[guide fragment](GuideLink.md#testing)\n",
+        )
+        CI_DOCS_PATH.validate_readme(fixture.repository)
+
+    def test_readme_rejects_wrong_case_symlink_spelling(self):
+        fixture = self.fixture()
+        (fixture.repository / "GuideLink.md").symlink_to("TESTING.md")
+        fixture.commit("add tracked guide link")
+        try:
+            (fixture.repository / "guidelink.md").symlink_to("TESTING.md")
+        except FileExistsError:
+            pass
+        fixture.write(
+            "README.md",
+            "# Fleck\n\nAgent Connector documentation.\n\n[guide](guidelink.md)\n",
+        )
+        with self.assertRaises(CI_DOCS_PATH.ValidationError):
+            CI_DOCS_PATH.validate_readme(fixture.repository)
+
+    def test_readme_rejects_symlink_escaping_the_repository(self):
+        fixture = self.fixture()
+        (fixture.parent / "outside.md").write_text("# Outside\n", encoding="utf-8")
+        (fixture.repository / "Outside.md").symlink_to("../outside.md")
+        fixture.commit("add escaping link")
+        fixture.write(
+            "README.md",
+            "# Fleck\n\nAgent Connector documentation.\n\n[outside](Outside.md)\n",
+        )
+        with self.assertRaises(CI_DOCS_PATH.ValidationError):
+            CI_DOCS_PATH.validate_readme(fixture.repository)
+
+    def test_readme_rejects_wrong_case_file_and_directory_links(self):
+        fixture = self.fixture()
+        fixture.write("docs/Guide.md", "# Guide\n")
+        fixture.commit("add documentation guide")
+        fixture.write("testing.md", "Testing instructions.\n")
+        fixture.write("Docs/Guide.md", "# Guide\n")
+        for link in ("[testing](testing.md)", "[guide](Docs/Guide.md)"):
+            with self.subTest(link=link):
+                fixture.write(
+                    "README.md",
+                    f"# Fleck\n\nAgent Connector documentation.\n\n{link}\n",
+                )
+                with self.assertRaises(CI_DOCS_PATH.ValidationError):
+                    CI_DOCS_PATH.validate_readme(fixture.repository)
+
+    def test_readme_rejects_tracked_symlinks_to_missing_or_untracked_targets(self):
+        fixture = self.fixture()
+        (fixture.repository / "MissingLink.md").symlink_to("missing.md")
+        (fixture.repository / "DraftLink.md").symlink_to("draft.md")
+        fixture.commit("add links without published targets")
+        fixture.write("draft.md", "# Draft\n")
+        for target in ("MissingLink.md", "DraftLink.md"):
+            with self.subTest(target=target):
+                fixture.write(
+                    "README.md",
+                    f"# Fleck\n\nAgent Connector documentation.\n\n[guide]({target})\n",
+                )
+                with self.assertRaises(CI_DOCS_PATH.ValidationError):
+                    CI_DOCS_PATH.validate_readme(fixture.repository)
+
+    def test_readme_rejects_untracked_only_local_targets(self):
+        fixture = self.fixture()
+        fixture.write("notes/draft.md", "# Draft\n")
+        for link in ("[draft](notes/draft.md)", "[notes](notes)", "[notes slash](notes/)"):
+            with self.subTest(link=link):
+                fixture.write(
+                    "README.md",
+                    f"# Fleck\n\nAgent Connector documentation.\n\n{link}\n",
+                )
+                with self.assertRaises(CI_DOCS_PATH.ValidationError):
+                    CI_DOCS_PATH.validate_readme(fixture.repository)
+
     def test_readme_rejects_binary_conflicts_and_legacy_terms(self):
         fixture = self.fixture()
         for contents in (
@@ -503,7 +617,13 @@ class CIDocsPathTests(unittest.TestCase):
             self.assertIn("outputs.route == 'full'", block)
         for forbidden in ("swift", "xcodebuild", "brew install", "package", "sign"):
             self.assertNotIn(forbidden, docs.casefold())
-        self.assertIn("name: macOS build and tests", aggregate)
+        self.assertIn(
+            "name: ${{ (github.event_name == 'workflow_dispatch' && "
+            "(inputs.namespace_qualification_only || "
+            "inputs.ordinary_test_diagnostic_selector != '')) && "
+            "'Diagnostic-only / macOS build and tests' || 'macOS build and tests' }}",
+            aggregate,
+        )
         self.assertIn(
             "if: ${{ !inputs.namespace_qualification_only && always() && "
             "(github.event_name != 'workflow_dispatch' || "
@@ -540,7 +660,12 @@ class CIDocsPathTests(unittest.TestCase):
             "!inputs.namespace_qualification_only }}",
             diagnostic,
         )
-        self.assertIn("runs-on: macos-26", diagnostic)
+        self.assertIn(
+            "runs-on: ${{ github.event_name == 'workflow_dispatch' && "
+            "inputs.native_runner_provider == 'namespace' && "
+            "'namespace-profile-fleck' || 'macos-26' }}",
+            diagnostic,
+        )
         self.assertIn("timeout-minutes: 45", diagnostic)
         self.assertIn('FLECK_NATIVE_CAPTURE_QA: "0"', diagnostic)
         self.assertIn(

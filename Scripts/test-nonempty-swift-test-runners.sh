@@ -2382,7 +2382,7 @@ for job_id, block, required_values in (
             "name: macOS build and tests",
             "if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.ordinary_test_diagnostic_selector == '') }}",
             "needs: [detect-changes, docs-validation, macos-build, macos-validation, macos-enhanced]",
-            "runs-on: ubuntu-latest",
+            "runs-on: namespace-profile-fleck",
         ),
     ),
 ):
@@ -2447,6 +2447,16 @@ boundary_names = (
     "Declare native capture boundary (candidate graph)",
 )
 normalized_workflow = current_workflow
+for job_id in ("detect-changes", "docs-validation", "macos"):
+    start, end, block = job_block(normalized_workflow, job_id)
+    runner = "    runs-on: namespace-profile-fleck\n"
+    if block.count(runner) != 1:
+        raise SystemExit(f"CI portable job {job_id} must use the Fleck Namespace profile")
+    normalized_workflow = (
+        normalized_workflow[:start]
+        + block.replace(runner, "    runs-on: ubuntu-latest\n", 1)
+        + normalized_workflow[end:]
+    )
 for input_block in input_blocks.values():
     normalized_workflow = normalized_workflow.replace(input_block, "", 1)
 for job_id, _, _, _ in supplemental_jobs:

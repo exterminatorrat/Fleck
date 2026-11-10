@@ -1113,8 +1113,14 @@
       fatalError("init(coder:) has not been implemented")
     }
 
+    override func tile() {
+      super.tile()
+      suppressFocusRingsInFindBar()
+    }
+
     override func layout() {
       super.layout()
+      suppressFocusRingsInFindBar()
       guard !isLayingOutDocument,
         let documentView = documentView as? NativeEditorDocumentView
       else {
@@ -1145,6 +1151,18 @@
     func relayoutDocument() {
       needsLayout = true
       layoutSubtreeIfNeeded()
+    }
+
+    private func suppressFocusRingsInFindBar() {
+      guard let findBarView else { return }
+      suppressFocusRing(in: findBarView)
+    }
+
+    private func suppressFocusRing(in view: NSView) {
+      view.focusRingType = .none
+      for subview in view.subviews {
+        suppressFocusRing(in: subview)
+      }
     }
 
     private func configureScrollEdgeEffect() {
@@ -1379,6 +1397,7 @@
       }
 
       let scrollView = NativeEditorScrollView()
+      scrollView.focusRingType = .none
       scrollView.hasVerticalScroller = true
       scrollView.drawsBackground = false
       scrollView.autohidesScrollers = true
@@ -1410,6 +1429,7 @@
 
       let textView = ListAwareTextView(frame: .zero)
       textView.delegate = context.coordinator
+      textView.focusRingType = .none
       textView.isRichText = true
       textView.isEditable = isEnabled
       textView.isSelectable = isEnabled
@@ -3802,6 +3822,7 @@
       button.setButtonType(.momentaryPushIn)
       button.bezelStyle = .texturedRounded
       button.isBordered = true
+      button.focusRingType = .none
       button.image = NSImage(
         systemSymbolName: "doc.on.clipboard",
         accessibilityDescription: "Paste options"
