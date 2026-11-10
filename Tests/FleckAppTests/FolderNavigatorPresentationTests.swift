@@ -374,7 +374,60 @@ struct FolderNavigatorPresentationTests {
     let renameField = try #require(
       fixture.textFields.first { $0.accessibilityIdentifier() == renameIdentifier }
     )
+    let unfiledNoteID = fixture.state.workspace.notes.first { $0.folderID == nil }?.id
+    func unfiledSelected() -> Bool {
+      fixture.state.workspace.selectedNoteID != nil
+        && fixture.state.workspace.selectedNoteID == unfiledNoteID
+    }
+    let phaseLog = RenamePhaseLog()
+    var phaseCancellables = Set<AnyCancellable>()
+    defer { phaseCancellables.removeAll() }
+    let center = NotificationCenter.default
+    center.publisher(for: NSControl.textDidBeginEditingNotification)
+      .merge(with: center.publisher(for: NSControl.textDidChangeNotification))
+      .merge(with: center.publisher(for: NSControl.textDidEndEditingNotification))
+      .sink { notification in
+        guard let field = notification.object as? NSTextField else { return }
+        let isRenameField =
+          field === renameField
+          || (field.accessibilityIdentifier() == renameIdentifier && field.window === fixture.window)
+        guard isRenameField else { return }
+        let kind =
+          notification.name == NSControl.textDidBeginEditingNotification ? "begin"
+          : notification.name == NSControl.textDidChangeNotification ? "change" : "end"
+        let owner = field === renameField ? "original" : "replacement"
+        phaseLog.record(
+          "\(kind) field=\(owner)",
+          field: field,
+          window: fixture.window,
+          selectionMatchesUnfiled: unfiledSelected()
+        )
+      }
+      .store(in: &phaseCancellables)
+    fixture.state.$saveError
+      .sink { value in
+        let error = value == nil
+          ? "nil"
+          : (value?.hasPrefix("Could not update folder:") == true ? "folder" : "other")
+        phaseLog.record(
+          "saveError=\(error)",
+          field: renameField,
+          window: fixture.window,
+          selectionMatchesUnfiled: unfiledSelected()
+        )
+      }
+      .store(in: &phaseCancellables)
+    let checkpoint: (String) -> Void = { name in
+      phaseLog.checkpoint(
+        name,
+        field: renameField,
+        window: fixture.window,
+        selectionMatchesUnfiled: unfiledSelected()
+      )
+    }
+    checkpoint("emptyEdit")
     try fixture.replaceFocusedTextFieldDraft(with: "")
+    checkpoint("firstBlur")
     try fixture.click(fixture.element(identifier: "folder-unfiled"))
     await fixture.settle()
 
@@ -384,16 +437,21 @@ struct FolderNavigatorPresentationTests {
     #expect(renameField.currentEditor() === fixture.window.firstResponder)
     #expect(fixture.state.saveError == nil)
 
+    checkpoint("refocus")
     try fixture.click(renameField)
     await fixture.settle()
     #expect(renameField.currentEditor() === fixture.window.firstResponder)
+    checkpoint("duplicateEdit")
     try fixture.replaceFocusedTextFieldDraft(with: "Personal")
+    checkpoint("secondBlur")
     try fixture.click(fixture.element(identifier: "folder-unfiled"))
     await fixture.settle()
+    checkpoint("finalWait")
     let renameReady = try await fixture.waitForRenameEditor(
       folderID: folder.id, reportingValidationError: true
     )
     if !renameReady {
+      print(phaseLog.dump)
       let fields = fixture.textFields.filter { $0.accessibilityIdentifier() == renameIdentifier }
       let field = fields.first
       let currentEditor = field?.currentEditor() as? NSTextView
@@ -1615,6 +1673,52 @@ private final class FolderNavigatorNativeDiagnostics: NSObject, NSTextFieldDeleg
     originalDelegate = nil
     originalDelegateType = nil
     originalSelectorAvailability = [:]
+  }
+}
+
+@MainActor
+private final class RenamePhaseLog {
+  private var phase = "setup"
+  private var entries: [String] = []
+
+  func checkpoint(
+    _ name: String,
+    field: NSTextField,
+    window: NSWindow,
+    selectionMatchesUnfiled: Bool
+  ) {
+    phase = name
+    entries.append("phase=\(name) \(state(field, window, selectionMatchesUnfiled))")
+  }
+
+  func record(
+    _ event: String,
+    field: NSTextField,
+    window: NSWindow,
+    selectionMatchesUnfiled: Bool
+  ) {
+    entries.append("\(event)@\(phase) \(state(field, window, selectionMatchesUnfiled))")
+  }
+
+  var dump: String {
+    "FLECK_FOLDER_RENAME_PHASES " + entries.joined(separator: " | ")
+  }
+
+  private func state(
+    _ field: NSTextField,
+    _ window: NSWindow,
+    _ selectionMatchesUnfiled: Bool
+  ) -> String {
+    let text: String
+    if field.stringValue.isEmpty {
+      text = "empty"
+    } else if field.stringValue == "Personal" {
+      text = "personal"
+    } else {
+      text = "other"
+    }
+    let focused = field.currentEditor() != nil && field.currentEditor() === window.firstResponder
+    return "text=\(text) sel=\(selectionMatchesUnfiled ? 1 : 0) focus=\(focused ? 1 : 0)"
   }
 }
 
