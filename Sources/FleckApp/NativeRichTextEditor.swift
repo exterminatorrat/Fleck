@@ -3175,6 +3175,9 @@
     }
 
     override func readSelection(from pasteboard: NSPasteboard) -> Bool {
+      guard pasteboard.name != .drag else {
+        return super.readSelection(from: pasteboard)
+      }
       if let inlineImageStore,
         let type = preferredPasteboardType(
           from: pasteboard.types ?? [],
@@ -3341,6 +3344,24 @@
       types: [NSPasteboard.PasteboardType]
     ) -> Bool {
       let selections = selectedRanges.map(\.rangeValue)
+      if pasteboard.name == .drag {
+        guard selections.contains(where: { containsInlineImage(in: $0) }),
+          let projection = projectedCopy(selections: selections)
+        else {
+          return super.writeSelection(to: pasteboard, types: types)
+        }
+        let exportTypes = types.compactMap(Self.copyFormat(for:))
+        guard !exportTypes.isEmpty else { return false }
+        pasteboard.declareTypes(exportTypes, owner: nil)
+        return exportTypes.allSatisfy { format in
+          writeProjectedSelection(
+            projection.selections,
+            from: projection.source,
+            to: pasteboard,
+            format: format
+          )
+        }
+      }
       let expandedSelections = expandedCopySelections(selections)
       let containsImages = selections.contains { containsInlineImage(in: $0) }
       let exportsText = !types.isEmpty
@@ -3522,6 +3543,20 @@
       type: NSPasteboard.PasteboardType
     ) -> Bool {
       let selections = selectedRanges.map(\.rangeValue)
+      if pasteboard.name == .drag {
+        guard let format = Self.copyFormat(for: type),
+          selections.contains(where: { containsInlineImage(in: $0) }),
+          let projection = projectedCopy(selections: selections)
+        else {
+          return super.writeSelection(to: pasteboard, type: type)
+        }
+        return writeProjectedSelection(
+          projection.selections,
+          from: projection.source,
+          to: pasteboard,
+          format: format
+        )
+      }
       let expandedSelections = expandedCopySelections(selections)
       let containsImages = selections.contains { containsInlineImage(in: $0) }
       let exportsText = (type == .rtf || type == .string)
