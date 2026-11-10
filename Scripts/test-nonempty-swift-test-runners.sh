@@ -2697,12 +2697,34 @@ current_workflow = workflow_path.read_text()
 
 qualification_guard = "!inputs.namespace_qualification_only"
 qualification_job = "namespace-qualification"
-native_jobs = ("macos-build", "macos-validation", "macos-enhanced")
+native_jobs = (
+    "macos-build", "macos-validation", "macos-enhanced", "ordinary-test-diagnostic",
+)
 native_routing = (
     "runs-on: ${{ github.event_name == 'workflow_dispatch' && "
     "inputs.native_runner_provider == 'namespace' && "
-    "'namespace-profile-exterminatorrat' || 'macos-26' }}"
+    "'namespace-profile-fleck' || 'macos-26' }}"
 )
+full_ci_job_names = {
+    "detect-changes": "Detect documentation-only changes",
+    "macos-build": "macOS ordinary graph and package",
+    "macos-validation": "macOS ordinary repeat and bundle validation",
+    "docs-validation": "Validate README-only change",
+    "macos": "macOS build and tests",
+    "macos-enhanced": "macOS Enhanced Local candidate gates",
+}
+diagnostic_name_predicate = (
+    "github.event_name == 'workflow_dispatch' && "
+    "(inputs.namespace_qualification_only || "
+    "inputs.ordinary_test_diagnostic_selector != '')"
+)
+
+
+def diagnostic_only_name(original):
+    return (
+        "${{ (" + diagnostic_name_predicate + ") && "
+        "'Diagnostic-only / " + original + "' || '" + original + "' }}"
+    )
 full_graph_condition = (
     "if: ${{ "
     f"{qualification_guard} && needs.detect-changes.result == 'success' && "
@@ -2843,7 +2865,8 @@ for job_id, block, required_values in (
     (
         "macos-build", build,
         (
-            "name: macOS ordinary graph and package", "needs: detect-changes",
+            diagnostic_only_name("macOS ordinary graph and package"),
+            "needs: detect-changes",
             full_graph_condition, native_routing, "timeout-minutes: 90",
             "python3 -B -m unittest discover -s Tests/Scripts -p test_ci_docs_path.py",
         ),
@@ -2861,7 +2884,7 @@ for job_id, block, required_values in (
     (
         "macos", aggregate,
         (
-            "name: macOS build and tests",
+            diagnostic_only_name("macOS build and tests"),
             aggregate_condition,
             "needs: [detect-changes, docs-validation, macos-build, macos-validation, macos-enhanced]",
             "runs-on: namespace-profile-fleck",
@@ -2893,8 +2916,8 @@ for required in (
     if required not in tooling:
         raise SystemExit(f"CI performance tooling step omitted: {required}")
 
-if current_workflow.count("name: macOS build and tests\n") != 1:
-    raise SystemExit("CI required aggregate name must occur exactly once")
+if current_workflow.count(diagnostic_only_name("macOS build and tests")) != 1:
+    raise SystemExit("CI required aggregate diagnostic name must occur exactly once")
 for block in (build, validation, aggregate):
     if re.search(r"uses: .*actions/(?:cache|upload-artifact|download-artifact)", block):
         raise SystemExit("CI ordinary/validation split must not transfer caches or artifacts")
@@ -2917,7 +2940,7 @@ for job_id in job_ids:
         raise SystemExit(f"CI job {job_id} has no runner selection")
     if (runner.group(1) == native_expression) != (job_id in native_jobs):
         raise SystemExit(
-            f"CI job {job_id} must be one of the three manual Namespace native jobs"
+            f"CI job {job_id} must be one of the four manual Namespace provider jobs"
         )
     if job_id == qualification_job:
         if condition.group(1) != (
@@ -2931,7 +2954,7 @@ for job_id in job_ids:
 qualification = job_block(current_workflow, qualification_job)[2]
 for required in (
     "name: Namespace runner metadata qualification",
-    "runs-on: namespace-profile-exterminatorrat",
+    "runs-on: namespace-profile-fleck",
     "timeout-minutes: 5",
 ):
     if required not in qualification:
@@ -3049,8 +3072,13 @@ for name in (ordinary_name, candidate_name):
         + normalized_workflow[end:]
     )
 if normalized_workflow.count(native_routing) != len(native_jobs):
-    raise SystemExit("declared native runner routing must select exactly three jobs")
+    raise SystemExit("declared native runner routing must select exactly four jobs")
 normalized_workflow = normalized_workflow.replace(native_routing, "runs-on: macos-26")
+for job_id, original in full_ci_job_names.items():
+    dynamic_name = diagnostic_only_name(original)
+    if normalized_workflow.count(dynamic_name) != 1:
+        raise SystemExit(f"CI diagnostic-only name fixture changed for {job_id}")
+    normalized_workflow = normalized_workflow.replace(dynamic_name, original, 1)
 if hashlib.sha256(normalized_workflow.encode()).hexdigest() != (
     "5b46bfd97b09c8cd12cc03541a127a095a73936abaf3a84fab8a6e278e34eb85"
 ):

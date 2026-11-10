@@ -503,7 +503,13 @@ class CIDocsPathTests(unittest.TestCase):
             self.assertIn("outputs.route == 'full'", block)
         for forbidden in ("swift", "xcodebuild", "brew install", "package", "sign"):
             self.assertNotIn(forbidden, docs.casefold())
-        self.assertIn("name: macOS build and tests", aggregate)
+        self.assertIn(
+            "name: ${{ (github.event_name == 'workflow_dispatch' && "
+            "(inputs.namespace_qualification_only || "
+            "inputs.ordinary_test_diagnostic_selector != '')) && "
+            "'Diagnostic-only / macOS build and tests' || 'macOS build and tests' }}",
+            aggregate,
+        )
         self.assertIn(
             "if: ${{ !inputs.namespace_qualification_only && always() && "
             "(github.event_name != 'workflow_dispatch' || "
@@ -540,7 +546,12 @@ class CIDocsPathTests(unittest.TestCase):
             "!inputs.namespace_qualification_only }}",
             diagnostic,
         )
-        self.assertIn("runs-on: macos-26", diagnostic)
+        self.assertIn(
+            "runs-on: ${{ github.event_name == 'workflow_dispatch' && "
+            "inputs.native_runner_provider == 'namespace' && "
+            "'namespace-profile-fleck' || 'macos-26' }}",
+            diagnostic,
+        )
         self.assertIn("timeout-minutes: 45", diagnostic)
         self.assertIn('FLECK_NATIVE_CAPTURE_QA: "0"', diagnostic)
         self.assertIn(
