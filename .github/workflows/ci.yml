@@ -37,8 +37,9 @@ on:
         default: ''
       native_runner_provider:
         description: >-
-          Select the runner provider for the three heavy native macOS jobs;
-          defaults to GitHub-hosted.
+          Select the runner provider for the three heavy native macOS jobs and
+          the supplemental focused ordinary test diagnostic; defaults to
+          GitHub-hosted.
         required: false
         type: choice
         options:

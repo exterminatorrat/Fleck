@@ -266,7 +266,29 @@
     }
   }
 
+  private struct FleckHoverFill<S: Shape>: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.fleckThemeSnapshot) private var theme
+    @State private var isHovered = false
+    let shape: S
+    let isAllowed: Bool
+
+    func body(content: Content) -> some View {
+      content
+        .background {
+          if isEnabled, isHovered, isAllowed {
+            shape.fill(Color.primary.opacity(theme.increasedContrast ? 0.18 : 0.08))
+          }
+        }
+        .onHover { isHovered = $0 }
+    }
+  }
+
   extension View {
+    func fleckHoverFill<S: Shape>(in shape: S, isAllowed: Bool = true) -> some View {
+      modifier(FleckHoverFill(shape: shape, isAllowed: isAllowed))
+    }
+
     func fleckThemedSurface(cornerRadius: CGFloat) -> some View {
       modifier(FleckThemedSurface(cornerRadius: cornerRadius))
     }

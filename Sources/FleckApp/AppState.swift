@@ -67,6 +67,11 @@
       case saved
     }
 
+    private enum SaveErrorOwner: Equatable {
+      case persistence
+      case folder(id: UUID?)
+    }
+
     @Published var workspace = Workspace() {
       didSet {
         if workspace != oldValue {
@@ -195,6 +200,8 @@
     private var initialLoadWaiters: [CheckedContinuation<Void, Never>] = []
     private var saveStatusResetTask: Task<Void, Never>?
     private var saveErrorGeneration = UUID()
+    private var saveErrorOwner: SaveErrorOwner?
+    private var saveErrorOwnerGeneration: UUID?
     private var themeSystemObserver: FleckThemeSystemObserver?
     private var agentConnectorStatusGeneration: UInt64 = 0
     private var pendingTrashNotes: [UUID: Note] = [:] {
@@ -516,6 +523,27 @@
 
     func inlineNoteImageImportFailed(_ message: String) {
       saveError = message
+    }
+
+    func folderActionFailed(_ message: String, folderID: UUID?) {
+      recordSaveError(message, owner: .folder(id: folderID))
+    }
+
+    func folderActionSucceeded(folderID: UUID?) {
+      let owner = SaveErrorOwner.folder(id: folderID)
+      guard saveError != nil, canClearSaveError(ownedBy: owner) else { return }
+      recordSaveError(nil, owner: owner)
+    }
+
+    private func recordSaveError(_ message: String?, owner: SaveErrorOwner) {
+      saveError = message
+      saveErrorOwner = message == nil ? nil : owner
+      saveErrorOwnerGeneration = message == nil ? nil : saveErrorGeneration
+    }
+
+    private func canClearSaveError(ownedBy owner: SaveErrorOwner) -> Bool {
+      saveError == nil
+        || (saveErrorOwner == owner && saveErrorOwnerGeneration == saveErrorGeneration)
     }
 
     @discardableResult
@@ -2393,6 +2421,7 @@
       activePersistCount += 1
       defer { activePersistCount -= 1 }
       let saveErrorGenerationAtStart = saveErrorGeneration
+      let clearsSaveErrorAtStart = canClearSaveError(ownedBy: .persistence)
       do {
         if let beforeSaveOperation {
           await beforeSaveOperation()
@@ -2426,7 +2455,7 @@
         if Task.isCancelled || error is CancellationError {
           throw CancellationError()
         }
-        saveError = error.localizedDescription
+        recordSaveError(error.localizedDescription, owner: .persistence)
         markSaveFailed()
         throw error
       }
@@ -2446,8 +2475,11 @@
         }
       }
       guard !Task.isCancelled else { return }
-      if saveErrorGeneration == saveErrorGenerationAtStart {
-        saveError = trashRefreshError?.localizedDescription
+      let succeededSaveError = trashRefreshError?.localizedDescription
+      if saveErrorGeneration == saveErrorGenerationAtStart,
+        succeededSaveError != nil || clearsSaveErrorAtStart
+      {
+        recordSaveError(succeededSaveError, owner: .persistence)
       }
       markSaveSucceeded()
     }
