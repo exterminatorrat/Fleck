@@ -1282,55 +1282,6 @@ private func advanceTabStripHostEventBoundary(_ view: NSView) async {
   }
 }
 
-private struct HostedTabReorderMotionSample {
-  let uptime: TimeInterval
-  let animationActive: Bool
-  let modelOffset: Double?
-  let presentationOffset: Double?
-  let convertedMinX: Double?
-  let windowVisible: Bool
-  let windowOcclusionVisible: Bool
-  let sourceInWindow: Bool
-  let sourceInDestination: Bool
-}
-
-private struct HostedTabReorderMotionSamples {
-  private static let capacity = 256
-  private var storage: [HostedTabReorderMotionSample?]
-  private var nextIndex = 0
-  private(set) var loopCount = 0
-  private(set) var firstSample: HostedTabReorderMotionSample?
-  private(set) var lastSample: HostedTabReorderMotionSample?
-  private(set) var firstActiveSample: HostedTabReorderMotionSample?
-  private(set) var lastActiveSample: HostedTabReorderMotionSample?
-  private(set) var activeSampleCount = 0
-
-  init() {
-    storage = Array(repeating: nil, count: Self.capacity)
-  }
-
-  var didWrap: Bool { loopCount > Self.capacity }
-
-  var retainedSamples: [HostedTabReorderMotionSample] {
-    let count = min(loopCount, Self.capacity)
-    let firstIndex = didWrap ? nextIndex : 0
-    return (0..<count).compactMap { storage[(firstIndex + $0) % Self.capacity] }
-  }
-
-  mutating func append(_ sample: HostedTabReorderMotionSample) {
-    if firstSample == nil { firstSample = sample }
-    lastSample = sample
-    if sample.animationActive {
-      activeSampleCount += 1
-      if firstActiveSample == nil { firstActiveSample = sample }
-      lastActiveSample = sample
-    }
-    storage[nextIndex] = sample
-    nextIndex = (nextIndex + 1) % Self.capacity
-    loopCount += 1
-  }
-}
-
 private struct HostedTabReorderAnimationDetails {
   let from: Double?
   let to: Double?
@@ -1340,22 +1291,6 @@ private struct HostedTabReorderAnimationDetails {
 private func hostedTabReorderDiagnosticNumber(_ value: Double?) -> String {
   guard let value else { return "nil" }
   return String(format: "%.6f", value)
-}
-
-private func hostedTabReorderDiagnosticSample(
-  _ sample: HostedTabReorderMotionSample?,
-  relativeTo uptime: TimeInterval
-) -> String {
-  guard let sample else { return "nil" }
-  return "t+\(hostedTabReorderDiagnosticNumber(sample.uptime - uptime))s "
-    + "active=\(sample.animationActive ? 1 : 0) "
-    + "model=\(hostedTabReorderDiagnosticNumber(sample.modelOffset)) "
-    + "presentation=\(hostedTabReorderDiagnosticNumber(sample.presentationOffset)) "
-    + "minX=\(hostedTabReorderDiagnosticNumber(sample.convertedMinX)) "
-    + "windowVisible=\(sample.windowVisible ? 1 : 0) "
-    + "windowOcclusionVisible=\(sample.windowOcclusionVisible ? 1 : 0) "
-    + "sourceInWindow=\(sample.sourceInWindow ? 1 : 0) "
-    + "sourceInDestination=\(sample.sourceInDestination ? 1 : 0)"
 }
 
 @Test func tabOverflowEndpointControlsStayEnabledForVisibleNotes() throws {
@@ -1470,97 +1405,63 @@ func reorderInteractionNativeLifetimeDoesNotEndBetweenPointerEvents() throws {
     positions.append(presentation.convert(presentation.bounds, to: root).minX)
   }
   let animationRequestUptime = ProcessInfo.processInfo.systemUptime
+  let captureMotionFrames = ProcessInfo.processInfo.environment["FLECK_TAB_REORDER_MOTION"] == "1"
+  let intermediateRange = (first.minX + 1)..<(second.minX - 1)
+  let motionLayer = try #require(sibling.layer)
+  motionLayer.speed = 0
+  motionLayer.timeOffset = 0
   controller.moved(to: window.convertPoint(toScreen:
     destination.convert(NSPoint(x: second.maxX, y: 15), to: nil)))
-  let captureMotionFrames = ProcessInfo.processInfo.environment["FLECK_TAB_REORDER_MOTION"] == "1"
-  let deadline = ProcessInfo.processInfo.systemUptime + 1
-  let intermediateRange = (first.minX + 1)..<(second.minX - 1)
-  var motionSamples = HostedTabReorderMotionSamples()
-  var animationDetails: HostedTabReorderAnimationDetails?
-  var animationKeyPath: String?
-  var observedRenderedInterpolation = false
-  repeat {
-    await advanceTabStripHostEventBoundary(host)
-    let layer = sibling.layer
-    let animation = layer?.animation(forKey: "fleck.tab-reorder")
-    if animationDetails == nil, let animation = animation as? CABasicAnimation {
-      animationDetails = HostedTabReorderAnimationDetails(
-        from: (animation.fromValue as? NSNumber)?.doubleValue,
-        to: (animation.toValue as? NSNumber)?.doubleValue,
-        duration: animation.duration)
-      animationKeyPath = animation.keyPath
-    }
-    if animation != nil,
-      let presented = layer?.presentation()?.transform.m41,
-      let model = layer?.transform.m41,
-      abs(presented - model) > 0.01
-    {
-      observedRenderedInterpolation = true
-    }
-    guard captureMotionFrames else { continue }
-    let sampleUptime = ProcessInfo.processInfo.systemUptime
-    let presentation = layer?.presentation()
-    let rootPresentation = destination.layer?.presentation()
-    var convertedMinX: CGFloat?
-    if let presentation, let rootPresentation {
-      convertedMinX = presentation.convert(presentation.bounds, to: rootPresentation).minX
-      if let convertedMinX { positions.append(convertedMinX) }
-    }
-    motionSamples.append(HostedTabReorderMotionSample(
-      uptime: sampleUptime,
-      animationActive: animation != nil,
-      modelOffset: layer.map { Double($0.transform.m41) },
-      presentationOffset: presentation.map { Double($0.transform.m41) },
-      convertedMinX: convertedMinX.map { Double($0) },
-      windowVisible: window.isVisible,
-      windowOcclusionVisible: window.occlusionState.contains(.visible),
-      sourceInWindow: sibling.window === window,
-      sourceInDestination: sibling.isDescendant(of: destination)))
-  } while ProcessInfo.processInfo.systemUptime < deadline
-    && sibling.layer?.animation(forKey: "fleck.tab-reorder") != nil
-  if captureMotionFrames {
-    let observationEndUptime = ProcessInfo.processInfo.systemUptime
-    let firstActiveOffset = motionSamples.firstActiveSample.map { $0.uptime - animationRequestUptime }
-    let lastActiveOffset = motionSamples.lastActiveSample.map { $0.uptime - animationRequestUptime }
-    let activeObservedSpan = motionSamples.firstActiveSample.flatMap { first in
-      motionSamples.lastActiveSample.map { $0.uptime - first.uptime }
-    }
-    let details = animationDetails
-    let retainedSamples = motionSamples.retainedSamples
-    let retainedTrace = retainedSamples
-      .map { hostedTabReorderDiagnosticSample($0, relativeTo: animationRequestUptime) }
-      .joined(separator: " | ")
-    print("[TAB-REORDER-MOTION] request=\(hostedTabReorderDiagnosticNumber(animationRequestUptime)) "
-      + "deadline=\(hostedTabReorderDiagnosticNumber(deadline)) "
-      + "end=\(hostedTabReorderDiagnosticNumber(observationEndUptime)) "
-      + "requestToDeadline=\(hostedTabReorderDiagnosticNumber(deadline - animationRequestUptime)) "
-      + "requestToEnd=\(hostedTabReorderDiagnosticNumber(observationEndUptime - animationRequestUptime)) "
-      + "loops=\(motionSamples.loopCount) retained=\(retainedSamples.count) "
-      + "wrapped=\(motionSamples.didWrap) activeSamples=\(motionSamples.activeSampleCount) "
-      + "activeFirst=\(hostedTabReorderDiagnosticNumber(firstActiveOffset)) "
-      + "activeLast=\(hostedTabReorderDiagnosticNumber(lastActiveOffset)) "
-      + "activeObservedSpan=\(hostedTabReorderDiagnosticNumber(activeObservedSpan)) "
-      + "animationFrom=\(hostedTabReorderDiagnosticNumber(details?.from)) "
-      + "animationTo=\(hostedTabReorderDiagnosticNumber(details?.to)) "
-      + "animationDuration=\(hostedTabReorderDiagnosticNumber(details?.duration)) "
-      + "windowVisible=\(window.isVisible) windowOcclusionVisible=\(window.occlusionState.contains(.visible)) "
-      + "windowKey=\(window.isKeyWindow) appActive=\(NSApp.isActive) "
-      + "sourceMatchesCurrentOwner=\(sourceView(destination) === sibling) sourceInWindow=\(sibling.window === window) "
-      + "sourceInDestination=\(sibling.isDescendant(of: destination)) sourceNoteMatches=\(sibling.noteID == notes[1].id)")
-    print("[TAB-REORDER-MOTION] first=\(hostedTabReorderDiagnosticSample(motionSamples.firstSample, relativeTo: animationRequestUptime))")
-    print("[TAB-REORDER-MOTION] last=\(hostedTabReorderDiagnosticSample(motionSamples.lastSample, relativeTo: animationRequestUptime))")
-    print("[TAB-REORDER-MOTION] firstActive=\(hostedTabReorderDiagnosticSample(motionSamples.firstActiveSample, relativeTo: animationRequestUptime))")
-    print("[TAB-REORDER-MOTION] lastActive=\(hostedTabReorderDiagnosticSample(motionSamples.lastActiveSample, relativeTo: animationRequestUptime))")
-    print("[TAB-REORDER-MOTION] positionCount=\(positions.count) positionMin=\(String(describing: positions.min())) positionMax=\(String(describing: positions.max())) range=\(intermediateRange)")
-    print("[TAB-REORDER-MOTION] samples=\(retainedTrace)")
-  }
-  let details = try #require(animationDetails, "Moving a tab must attach its reorder animation")
-  #expect(animationKeyPath == "transform.translation.x")
+  CATransaction.flush()
+  await advanceTabStripHostEventBoundary(host)
+  let reorderAnimation = try #require(
+    motionLayer.animation(forKey: "fleck.tab-reorder") as? CABasicAnimation,
+    "Moving a tab must attach its reorder animation to the tab layer")
+  let details = HostedTabReorderAnimationDetails(
+    from: (reorderAnimation.fromValue as? NSNumber)?.doubleValue,
+    to: (reorderAnimation.toValue as? NSNumber)?.doubleValue,
+    duration: reorderAnimation.duration)
+  #expect(reorderAnimation.keyPath == "transform.translation.x")
   #expect(details.from == 0)
   #expect(details.to == Double(first.minX - second.minX))
   #expect(details.duration == AppMotion.standardDuration)
-  #expect(observedRenderedInterpolation,
-    "The rendered tab must interpolate while the reorder animation runs, not snap to its target")
+
+  let presentedRoot = try #require(destination.layer?.presentation())
+  var frozenPositions: [CGFloat] = []
+  func frozenTabPosition(atProgress progress: Double) throws -> CGFloat {
+    motionLayer.timeOffset = AppMotion.standardDuration * progress
+    CATransaction.flush()
+    let presented = try #require(motionLayer.presentation())
+    let position = presented.convert(presented.bounds, to: presentedRoot).minX
+    frozenPositions.append(position)
+    return position
+  }
+  let thirdPosition = try frozenTabPosition(atProgress: 1.0 / 3.0)
+  #expect(intermediateRange.contains(thirdPosition),
+    "A third of the way through the reorder animation the rendered tab must sit between its origin and its target")
+  let twoThirdsPosition = try frozenTabPosition(atProgress: 2.0 / 3.0)
+  #expect(intermediateRange.contains(twoThirdsPosition),
+    "Two thirds of the way through the reorder animation the rendered tab must still sit between its origin and its target")
+  let landedPosition = try frozenTabPosition(atProgress: 1)
+  #expect(abs(landedPosition - second.minX) < 1)
+
+  if captureMotionFrames {
+    print("[TAB-REORDER-MOTION] request=\(hostedTabReorderDiagnosticNumber(animationRequestUptime)) "
+      + "from=\(hostedTabReorderDiagnosticNumber(details.from)) "
+      + "to=\(hostedTabReorderDiagnosticNumber(details.to)) "
+      + "duration=\(hostedTabReorderDiagnosticNumber(details.duration)) "
+      + "range=\(intermediateRange) "
+      + "frozen=\(frozenPositions.map { hostedTabReorderDiagnosticNumber(Double($0)) }.joined(separator: ","))")
+  }
+
+  motionLayer.speed = 1
+  motionLayer.timeOffset = 0
+  CATransaction.flush()
+  let removalDeadline = ProcessInfo.processInfo.systemUptime + 2
+  while sibling.layer?.animation(forKey: "fleck.tab-reorder") != nil,
+    ProcessInfo.processInfo.systemUptime < removalDeadline {
+    await advanceTabStripHostEventBoundary(host)
+  }
   #expect(sibling.layer?.animation(forKey: "fleck.tab-reorder") == nil)
   let finalLayer = try #require(sibling.layer)
   let finalRoot = try #require(destination.layer)
