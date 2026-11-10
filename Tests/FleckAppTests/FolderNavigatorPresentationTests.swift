@@ -195,6 +195,20 @@ struct FolderNavigatorPresentationTests {
     #expect(source.contains("try appState.renameFolder(id: editingFolderID, name: folderNameDraft)"))
   }
 
+  @Test func folderCreationClearsItsValidationErrorThroughTheCreateKey() throws {
+    let source = try folderNavigatorSource()
+    let commit = try #require(
+      source.components(separatedBy: "private func commitFolderEditing(").last?
+        .components(separatedBy: "private func cancelFolderEditing(").first
+    )
+
+    #expect(commit.contains("_ = try appState.createFolder(named: folderNameDraft)"))
+    #expect(!commit.contains("appState.createFolder(named: folderNameDraft).id"))
+    #expect(commit.contains("appState.folderActionSucceeded(folderID: actionFolderID)"))
+    #expect(commit.contains("folderID: isCreatingFolder ? nil : editingFolderID"))
+    #expect(commit.contains("actionFolderID = editingFolderID"))
+  }
+
   @Test
   func folderKeyboardMovementActivationAndRenameStayInOwningHost() async throws {
     let fixture = try await FolderNavigatorFixture(width: 640, names: ["Work", "Personal"])
