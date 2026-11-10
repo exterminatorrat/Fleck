@@ -2518,29 +2518,29 @@
     override func draw(_ dirtyRect: NSRect) {
       if checklistPresentationNeedsRefresh { refreshChecklistPresentation() }
 
-      var selectedBulletMarkers: [(range: NSRange, glyphs: NSRange, rect: NSRect)] = []
+      var selectedBulletPrefixes: [(range: NSRange, glyphs: NSRange, rect: NSRect)] = []
       if let layoutManager, let textContainer {
-        for markerRange in selectedBulletMarkerRanges() {
+        for prefixRange in selectedBulletPrefixRanges() {
           let glyphRange = layoutManager.glyphRange(
-            forCharacterRange: markerRange,
+            forCharacterRange: prefixRange,
             actualCharacterRange: nil
           )
           guard glyphRange.length > 0 else { continue }
-          let markerRect = layoutManager.boundingRect(
+          let prefixRect = layoutManager.boundingRect(
             forGlyphRange: glyphRange,
             in: textContainer
           ).offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
-          guard markerRect.intersects(dirtyRect) else { continue }
-          selectedBulletMarkers.append((markerRange, glyphRange, markerRect))
+          guard prefixRect.intersects(dirtyRect) else { continue }
+          selectedBulletPrefixes.append((prefixRange, glyphRange, prefixRect))
         }
       }
 
       NSGraphicsContext.saveGraphicsState()
-      if !selectedBulletMarkers.isEmpty {
+      if !selectedBulletPrefixes.isEmpty {
         let clippingPath = NSBezierPath(rect: dirtyRect)
         clippingPath.windingRule = .evenOdd
-        for marker in selectedBulletMarkers {
-          clippingPath.append(NSBezierPath(rect: marker.rect.intersection(dirtyRect)))
+        for prefix in selectedBulletPrefixes {
+          clippingPath.append(NSBezierPath(rect: prefix.rect.intersection(dirtyRect)))
         }
         clippingPath.addClip()
       }
@@ -2548,20 +2548,20 @@
       NSGraphicsContext.restoreGraphicsState()
 
       if let storage = textStorage {
-        for marker in selectedBulletMarkers {
+        for prefix in selectedBulletPrefixes {
           if drawsBackground {
             backgroundColor.setFill()
-            NSBezierPath(rect: marker.rect).fill()
+            NSBezierPath(rect: prefix.rect).fill()
           }
           if let background = storage.attribute(
             .backgroundColor,
-            at: marker.range.location,
+            at: prefix.range.location,
             effectiveRange: nil
           ) as? NSColor {
             background.setFill()
-            NSBezierPath(rect: marker.rect).fill()
+            NSBezierPath(rect: prefix.rect).fill()
           }
-          layoutManager?.drawGlyphs(forGlyphRange: marker.glyphs, at: textContainerOrigin)
+          layoutManager?.drawGlyphs(forGlyphRange: prefix.glyphs, at: textContainerOrigin)
         }
       }
 
@@ -2620,19 +2620,9 @@
       }
       if let item = parsedListItem(in: paragraphRange, string: ns),
         case .bullet = item.parsed.style,
-        item.contentRange.length == 0,
         selection.location == item.contentRange.location
       {
-        performUndoGroup {
-          _ = replaceText(
-            in: NSRange(
-              location: paragraphRange.location,
-              length: item.contentRange.location - paragraphRange.location
-            ),
-            with: "",
-            selecting: NSRange(location: paragraphRange.location, length: 0)
-          )
-        }
+        removeBulletPrefix(in: paragraphRange, contentStart: item.contentRange.location)
         return
       }
       guard let item = checklistItem(in: paragraphRange, string: ns),
@@ -2653,6 +2643,60 @@
           selecting: NSRange(location: item.markerRange.location, length: 0)
         )
       }
+    }
+
+    override func deleteWordBackward(_ sender: Any?) {
+      let selection = selectedRange()
+      let ns = string as NSString
+      guard selection.length == 0,
+        selection.location > 0,
+        selection.location <= ns.length,
+        let item = bulletListItem(at: selection.location, string: ns),
+        selection.location == item.contentRange.location
+      else {
+        super.deleteWordBackward(sender)
+        return
+      }
+      removeBulletPrefix(
+        in: ns.paragraphRange(for: NSRange(location: selection.location, length: 0)),
+        contentStart: item.contentRange.location
+      )
+    }
+
+    override func smartDeleteRange(forProposedRange proposedCharRange: NSRange) -> NSRange {
+      let expanded = super.smartDeleteRange(forProposedRange: proposedCharRange)
+      let ns = string as NSString
+      guard expanded.length > 0,
+        expanded.location != NSNotFound,
+        expanded.location >= 0,
+        NSMaxRange(expanded) <= ns.length,
+        proposedCharRange.location != NSNotFound,
+        proposedCharRange.location >= 0,
+        NSMaxRange(proposedCharRange) <= ns.length
+      else {
+        return expanded
+      }
+
+      var location = expanded.location
+      var end = NSMaxRange(expanded)
+      if let prefix = bulletPrefixRange(
+        in: ns.paragraphRange(for: NSRange(location: location, length: 0)),
+        string: ns
+      ), prefix.location <= location, location < NSMaxRange(prefix),
+        NSIntersectionRange(proposedCharRange, prefix).length == 0
+      {
+        location = NSMaxRange(prefix)
+      }
+      if let prefix = bulletPrefixRange(
+        in: ns.paragraphRange(for: NSRange(location: end - 1, length: 0)),
+        string: ns
+      ), prefix.location < end, end < NSMaxRange(prefix),
+        NSIntersectionRange(proposedCharRange, prefix).length == 0
+      {
+        end = prefix.location
+      }
+      guard end > location else { return NSRange(location: location, length: 0) }
+      return NSRange(location: location, length: end - location)
     }
 
     override func moveLeft(_ sender: Any?) {
@@ -2885,8 +2929,13 @@
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
       clearInlineImageTypingAttributes()
+      let hasExplicitReplacementRange = replacementRange.location != NSNotFound
       let effectiveRange =
-        replacementRange.location == NSNotFound ? selectedRange() : replacementRange
+        hasExplicitReplacementRange
+        ? normalizedBulletCaretRange(replacementRange)
+        : selectedRange()
+      let nativeReplacementRange =
+        hasExplicitReplacementRange ? effectiveRange : replacementRange
       if automaticLists,
         effectiveRange.length == 0,
         insertString as? String == " "
@@ -2922,7 +2971,7 @@
           let originalLength = (string as NSString).length
           let changeGeneration = textChangeGeneration
           performUndoGroup {
-            super.insertText(completedText, replacementRange: replacementRange)
+            super.insertText(completedText, replacementRange: nativeReplacementRange)
             guard textChangeGeneration > changeGeneration, let storage = textStorage else { return }
             let insertedLength = storage.length - originalLength + insertionRange.length
             guard insertionRange.location >= 0,
@@ -2946,11 +2995,11 @@
       } else if let text = insertString as? NSAttributedString {
         super.insertText(
           completedChecklistInsertion(text, replacing: effectiveRange),
-          replacementRange: replacementRange
+          replacementRange: nativeReplacementRange
         )
         return
       }
-      super.insertText(insertString, replacementRange: replacementRange)
+      super.insertText(insertString, replacementRange: nativeReplacementRange)
     }
 
     private func completedChecklistInsertion(
@@ -4559,11 +4608,11 @@
       )
     }
 
-    private func selectedBulletMarkerRanges() -> [NSRange] {
+    private func selectedBulletPrefixRanges() -> [NSRange] {
       let ns = string as NSString
       guard ns.length > 0 else { return [] }
-      var markers: [NSRange] = []
-      var seenMarkers = Set<NSRange>()
+      var prefixes: [NSRange] = []
+      var seenPrefixes = Set<NSRange>()
       for selection in selectedRanges.map(\.rangeValue) where selection.length > 0 {
         guard selection.location != NSNotFound,
           selection.location >= 0,
@@ -4577,19 +4626,18 @@
           let paragraphRange = ns.paragraphRange(
             for: NSRange(location: location, length: 0)
           )
-          if let item = parsedListItem(in: paragraphRange, string: ns),
-            case .bullet = item.parsed.style,
-            NSIntersectionRange(selection, item.markerRange).length > 0,
-            seenMarkers.insert(item.markerRange).inserted
+          if let prefix = bulletPrefixRange(in: paragraphRange, string: ns),
+            NSIntersectionRange(selection, prefix).length > 0,
+            seenPrefixes.insert(prefix).inserted
           {
-            markers.append(item.markerRange)
+            prefixes.append(prefix)
           }
           let nextLocation = NSMaxRange(paragraphRange)
           guard nextLocation > location else { break }
           location = nextLocation
         }
       }
-      return markers
+      return prefixes
     }
 
     private func parsedListItem(in paragraphRange: NSRange, string ns: NSString) -> (
@@ -4642,6 +4690,31 @@
       )
     }
 
+    private func removeBulletPrefix(in paragraphRange: NSRange, contentStart: Int) {
+      performUndoGroup {
+        _ = replaceText(
+          in: NSRange(
+            location: paragraphRange.location,
+            length: contentStart - paragraphRange.location
+          ),
+          with: "",
+          selecting: NSRange(location: paragraphRange.location, length: 0)
+        )
+      }
+    }
+
+    private func bulletPrefixRange(in paragraphRange: NSRange, string ns: NSString) -> NSRange? {
+      guard let item = parsedListItem(in: paragraphRange, string: ns),
+        case .bullet = item.parsed.style
+      else {
+        return nil
+      }
+      return NSRange(
+        location: item.markerRange.location,
+        length: item.contentRange.location - item.markerRange.location
+      )
+    }
+
     private func normalizedBulletCaretRange(_ range: NSRange) -> NSRange {
       let ns = string as NSString
       guard range.location != NSNotFound,
@@ -4652,13 +4725,30 @@
         return range
       }
 
-      guard range.length == 0,
-        let item = bulletListItem(at: range.location, string: ns),
-        range.location < item.contentRange.location
-      else {
-        return range
+      if range.length == 0 {
+        guard let item = bulletListItem(at: range.location, string: ns),
+          range.location < item.contentRange.location
+        else {
+          return range
+        }
+        return NSRange(location: item.contentRange.location, length: 0)
       }
-      return NSRange(location: item.contentRange.location, length: 0)
+
+      var location = range.location
+      var end = NSMaxRange(range)
+      if let prefix = bulletPrefixRange(
+        in: ns.paragraphRange(for: NSRange(location: location, length: 0)),
+        string: ns
+      ), prefix.location <= location, location < NSMaxRange(prefix) {
+        location = prefix.location
+      }
+      if let prefix = bulletPrefixRange(
+        in: ns.paragraphRange(for: NSRange(location: end - 1, length: 0)),
+        string: ns
+      ), prefix.location < end, end < NSMaxRange(prefix) {
+        end = NSMaxRange(prefix)
+      }
+      return NSRange(location: location, length: end - location)
     }
 
     private func rangesExcluding(
