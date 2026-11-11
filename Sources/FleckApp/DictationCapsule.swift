@@ -3086,6 +3086,7 @@
             .allowsHitTesting(false)
           }
         }
+        .focusEffectDisabled()
     }
 
     @ViewBuilder

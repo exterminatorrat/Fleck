@@ -194,6 +194,7 @@
           .environmentObject(appState)
           .environment(\.menuPanelGeometryStore, menuPanelGeometry)
           .fleckTheme(appState)
+          .focusEffectDisabled()
       }
       label: {
         DictationSettingsEnvironmentBridge(
@@ -222,6 +223,7 @@
           .environmentObject(appState)
           .fleckTheme(appState)
           .background(FloatingWindowConfigurator())
+          .focusEffectDisabled()
       }
       .windowResizability(.contentSize)
       .commands {
@@ -260,6 +262,7 @@
             minHeight: 520,
             idealHeight: 600
           )
+          .focusEffectDisabled()
       }
       .defaultSize(width: 840, height: 600)
       .windowResizability(.contentMinSize)
@@ -2136,6 +2139,7 @@
           self?.openDestination(noteID)
         }
       )
+      .focusEffectDisabled()
       let window = NSWindow(contentViewController: NSHostingController(rootView: view))
       window.title = "Dictation History"
       window.setContentSize(NSSize(width: 680, height: 480))
