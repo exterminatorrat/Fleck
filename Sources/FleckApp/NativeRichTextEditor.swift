@@ -2019,6 +2019,8 @@
   }
 
   final class ListAwareTextView: NSTextView, @MainActor NSLayoutManagerDelegate {
+    private lazy var imageEditing = InlineImageEditingController(textView: self)
+
     @MainActor
     private final class ChecklistIndentTextContainer: NSTextContainer {
       weak var listAwareTextView: ListAwareTextView?
@@ -2795,6 +2797,7 @@
           )
         }
       }
+      imageEditing.draw()
     }
 
     override func deleteBackward(_ sender: Any?) {
@@ -2887,6 +2890,7 @@
         guard let hitRect = checklistHitRect(for: item.markerRange) else { continue }
         addCursorRect(hitRect, cursor: .arrow)
       }
+      imageEditing.addCursorRects()
     }
 
     override func updateTrackingAreas() {
@@ -4933,6 +4937,8 @@
     override func didChangeText() {
       textChangeGeneration += 1
       super.didChangeText()
+      needsDisplay = true
+      window?.invalidateCursorRects(for: self)
     }
 
     override func setSelectedRange(_ range: NSRange) {
@@ -4941,6 +4947,10 @@
       super.setSelectedRange(normalizedRange)
       clearInlineImageTypingAttributes()
       if changed, !isApplyingPasteOption { cancelPasteOptions() }
+      if changed {
+        needsDisplay = true
+        window?.invalidateCursorRects(for: self)
+      }
     }
 
     override func selectionRange(
@@ -4965,6 +4975,8 @@
       }
       super.setSelectedRanges(adjustedRanges, affinity: affinity, stillSelecting: flag)
       clearInlineImageTypingAttributes()
+      needsDisplay = true
+      window?.invalidateCursorRects(for: self)
       guard !isApplyingPasteOption else { return }
       let currentRanges = selectedRanges
       guard previousRanges.count != currentRanges.count
@@ -4979,6 +4991,7 @@
     }
 
     override func cancelOperation(_ sender: Any?) {
+      if imageEditing.cancel() { return }
       guard hasPasteOptions else {
         super.cancelOperation(sender)
         return
@@ -5147,6 +5160,7 @@
 
     override func mouseDown(with event: NSEvent) {
       cancelPasteOptions()
+      if imageEditing.begin(with: event) { return }
       guard let layoutManager, let textContainer else {
         super.mouseDown(with: event)
         return
@@ -5207,6 +5221,43 @@
         contentLength: item.contentRange.length,
         currentlyCompleted: item.completed
       )
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+      if imageEditing.isDragging {
+        imageEditing.drag(with: event)
+      } else {
+        super.mouseDragged(with: event)
+      }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+      if imageEditing.isDragging {
+        imageEditing.end(with: event)
+      } else {
+        super.mouseUp(with: event)
+      }
+    }
+
+    @discardableResult
+    func applyInlineImageTransform(transform: InlineImageTransform, range: NSRange) -> Bool {
+      guard isEditable, transform.isValid,
+        let storage = textStorage,
+        let original = inlineImageAttachment(in: range),
+        let replacement = original.replacingTransform(transform)
+      else { return false }
+      var attributes = storage.attributes(at: range.location, effectiveRange: nil)
+      attributes[.attachment] = replacement
+      let content = NSAttributedString(string: "\u{fffc}", attributes: attributes)
+      var changed = false
+      breakUndoCoalescing()
+      performUndoGroup {
+        registerSelectionUndo(selectedRange())
+        changed = replaceAttributedText(in: range, with: content, selecting: range)
+        if changed { undoManager?.setActionName("Transform Image") }
+      }
+      breakUndoCoalescing()
+      return changed
     }
 
     private func replaceSelectedLines(
@@ -5881,6 +5932,23 @@
 
     override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
       var actions = super.accessibilityCustomActions() ?? []
+      if isEditable, selectedInlineImage() != nil {
+        actions.append(contentsOf: [
+          NSAccessibilityCustomAction(
+            name: "Enlarge image", target: self, selector: #selector(enlargeSelectedImage)
+          ),
+          NSAccessibilityCustomAction(
+            name: "Shrink image", target: self, selector: #selector(shrinkSelectedImage)
+          ),
+          NSAccessibilityCustomAction(
+            name: "Rotate image clockwise", target: self, selector: #selector(rotateSelectedImageClockwise)
+          ),
+          NSAccessibilityCustomAction(
+            name: "Rotate image counterclockwise", target: self,
+            selector: #selector(rotateSelectedImageCounterclockwise)
+          ),
+        ])
+      }
       if selectedChecklistLocation() != nil {
         actions.append(
           NSAccessibilityCustomAction(
@@ -5891,6 +5959,39 @@
         )
       }
       return actions
+    }
+
+    @objc func enlargeSelectedImage() -> Bool {
+      adjustSelectedImage(scale: 1.1, rotation: 0)
+    }
+
+    @objc func shrinkSelectedImage() -> Bool {
+      adjustSelectedImage(scale: 1 / 1.1, rotation: 0)
+    }
+
+    @objc func rotateSelectedImageClockwise() -> Bool {
+      adjustSelectedImage(scale: 1, rotation: 15)
+    }
+
+    @objc func rotateSelectedImageCounterclockwise() -> Bool {
+      adjustSelectedImage(scale: 1, rotation: -15)
+    }
+
+    private func adjustSelectedImage(scale: CGFloat, rotation: Double) -> Bool {
+      guard let selected = selectedInlineImage(), let layout = imageEditing.currentLayout else {
+        return false
+      }
+      let transform = selected.attachment.displayTransform ?? layout.transform
+      return applyInlineImageTransform(
+        transform: InlineImageTransform(
+          size: NSSize(
+            width: transform.size.width * scale,
+            height: transform.size.height * scale
+          ),
+          rotationDegrees: transform.rotationDegrees + rotation
+        ),
+        range: selected.range
+      )
     }
 
     @objc func toggleSelectedChecklist() -> Bool {
