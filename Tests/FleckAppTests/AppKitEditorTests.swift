@@ -5514,21 +5514,15 @@ private func withHostedTitleEditors(
   )
   let addFolderFrame = try #require(addFolder.value(forKey: "accessibilityFrame") as? NSValue)
     .rectValue
+  let expectedDisclosureFrame = CGSize(width: 28, height: 24)
   #expect(abs(addFolderFrame.width - 28) < 0.5)
   #expect(abs(addFolderFrame.height - 28) < 0.5)
-  #expect(hostedUnignoredAccessibilityElements(in: host, label: "Expand Unfiled").isEmpty)
+  #expect(hostedDisclosureHasAddFolderSizing(in: host) == false)
   #expect(window.makeFirstResponder(unfiledControl))
   await settleHostedView(host)
   let focused = hostedNavigatorKeyViewFrames(in: host)
   let focusedFolderFrame = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
-  let disclosure = try #require(
-    hostedUnignoredAccessibilityElements(in: host, label: "Expand Unfiled").first
-  )
-  let disclosureFrame = try #require(disclosure.value(forKey: "accessibilityFrame") as? NSValue)
-    .rectValue
-
-  #expect(abs(disclosureFrame.width - 28) < 0.5)
-  #expect(abs(disclosureFrame.height - 24) < 0.5)
+  #expect(hostedDisclosureFrame(in: host) == expectedDisclosureFrame)
   #expect(state.preferences.isUnfiledCompact)
   #expect(focused.count == before.count)
   #expect(focusedFolderFrame.minX == beforeFolderFrame.minX + 28)
@@ -6689,6 +6683,21 @@ private func hostedAccessibilityElements(in value: Any?, identifier: String) -> 
     matches.append(contentsOf: hostedAccessibilityElements(in: child, identifier: identifier))
   }
   return matches
+}
+
+@MainActor
+private func hostedDisclosureFrame(in host: NSView) -> CGSize? {
+  guard
+    let element = hostedUnignoredAccessibilityElements(in: host, label: "Expand Unfiled").first,
+    let frame = element.value(forKey: "accessibilityFrame") as? NSValue
+  else { return nil }
+  return frame.rectValue.size
+}
+
+@MainActor
+private func hostedDisclosureHasAddFolderSizing(in host: NSView) -> Bool {
+  guard let size = hostedDisclosureFrame(in: host) else { return false }
+  return abs(size.width - 28) < 0.5 && abs(size.height - 28) < 0.5
 }
 
 @MainActor
