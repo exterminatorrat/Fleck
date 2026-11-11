@@ -27,6 +27,164 @@
     let reference: String
   }
 
+  struct InlineNoteImageReference: Equatable, Sendable {
+    static let transformTitlePrefix = "fleck:"
+    static let maximumDimension = 20_000.0
+
+    let altText: String
+    let urlText: String
+    let titleText: String?
+    let transform: InlineImageTransform?
+
+    var url: URL? {
+      URL(string: urlText)
+    }
+
+    var text: String {
+      guard let titleText else { return "![\(altText)](\(urlText))" }
+      return "![\(altText)](\(urlText) \"\(titleText)\")"
+    }
+
+    func replacingTransform(_ transform: InlineImageTransform?) -> InlineNoteImageReference? {
+      guard let transform else {
+        return InlineNoteImageReference(
+          altText: altText,
+          urlText: urlText,
+          titleText: nil,
+          transform: nil
+        )
+      }
+      guard let title = Self.title(for: transform),
+        let persisted = Self.transform(fromTitle: title)
+      else { return nil }
+      return InlineNoteImageReference(
+        altText: altText,
+        urlText: urlText,
+        titleText: title,
+        transform: persisted
+      )
+    }
+
+    struct Match {
+      let range: NSRange
+      let reference: InlineNoteImageReference
+    }
+
+    static func parse(_ text: String) -> InlineNoteImageReference? {
+      let matches = matches(in: text)
+      let whole = NSRange(location: 0, length: (text as NSString).length)
+      guard matches.count == 1, matches[0].range == whole else { return nil }
+      return matches[0].reference
+    }
+
+    static func matches(in text: String) -> [Match] {
+      let source = text as NSString
+      let whole = NSRange(location: 0, length: source.length)
+      return expression.matches(in: text, range: whole).compactMap { match in
+        let urlText = source.substring(with: match.range(at: 2))
+        guard let url = URL(string: urlText), url.isFileURL else { return nil }
+        let titleRange = match.range(at: 3)
+        let titleText = titleRange.location == NSNotFound
+          ? nil
+          : source.substring(with: titleRange)
+        let parsedTransform: InlineImageTransform?
+        if let titleText {
+          guard let parsed = transform(fromTitle: titleText) else { return nil }
+          parsedTransform = parsed
+        } else {
+          parsedTransform = nil
+        }
+        return Match(
+          range: match.range,
+          reference: InlineNoteImageReference(
+            altText: source.substring(with: match.range(at: 1)),
+            urlText: urlText,
+            titleText: titleText,
+            transform: parsedTransform
+          )
+        )
+      }
+    }
+
+    static func title(for transform: InlineImageTransform) -> String? {
+      guard transform.isValid,
+        let width = persistedDimension(transform.size.width),
+        let height = persistedDimension(transform.size.height),
+        let degrees = persistedDegrees(transform.rotationDegrees)
+      else { return nil }
+      return "\(transformTitlePrefix)\(width)x\(height)@\(degrees)"
+    }
+
+    static func transform(fromTitle title: String) -> InlineImageTransform? {
+      guard title.hasPrefix(transformTitlePrefix) else { return nil }
+      let body = title.dropFirst(transformTitlePrefix.count)
+      guard let sizeMark = body.firstIndex(of: "x"),
+        let rotationMark = body.lastIndex(of: "@"),
+        sizeMark < rotationMark
+      else { return nil }
+      let widthText = body[..<sizeMark]
+      let heightText = body[body.index(after: sizeMark)..<rotationMark]
+      let degreesText = body[body.index(after: rotationMark)...]
+      guard let width = parsedNumber(widthText),
+        let height = parsedNumber(heightText),
+        let degrees = parsedNumber(degreesText),
+        width > 0,
+        height > 0,
+        width <= maximumDimension,
+        height <= maximumDimension,
+        degrees >= 0,
+        degrees < 360
+      else { return nil }
+      return InlineImageTransform(
+        size: CGSize(width: width, height: height),
+        rotationDegrees: degrees
+      )
+    }
+
+    private static func persistedDimension(_ value: CGFloat) -> String? {
+      let dimension = Double(value)
+      guard dimension.isFinite, dimension > 0, dimension <= maximumDimension else { return nil }
+      let hundredths = Int((dimension * 100).rounded())
+      guard hundredths > 0 else { return nil }
+      return decimalText(hundredths)
+    }
+
+    private static func persistedDegrees(_ value: Double) -> String? {
+      guard value.isFinite, value >= 0, value < 360 else { return nil }
+      return decimalText(Int((value * 100).rounded()) % 36_000)
+    }
+
+    private static func decimalText(_ hundredths: Int) -> String {
+      let whole = hundredths / 100
+      let fraction = hundredths % 100
+      guard fraction != 0 else { return String(whole) }
+      guard fraction % 10 != 0 else { return "\(whole).\(fraction / 10)" }
+      return "\(whole).\(fraction < 10 ? "0" : "")\(fraction)"
+    }
+
+    private static func parsedNumber(_ text: Substring) -> Double? {
+      guard !text.isEmpty, text.count <= 12 else { return nil }
+      var digits = 0
+      var dots = 0
+      for scalar in text.unicodeScalars {
+        if scalar.value >= 48, scalar.value <= 57 {
+          digits += 1
+        } else if scalar == "." {
+          dots += 1
+          guard dots == 1, digits > 0 else { return nil }
+        } else {
+          return nil
+        }
+      }
+      guard digits > 0, text.last != "." else { return nil }
+      return Double(text)
+    }
+
+    private static let expression = try! NSRegularExpression(
+      pattern: #"!\[([^\]\r\n]*)\]\((file://[^)\s\r\n]+)(?:[ \t]+"([^"\r\n]*)")?\)"#
+    )
+  }
+
   @MainActor
   final class InlineNoteImageStore {
     static let directoryName = "InlineNoteImages"
@@ -86,11 +244,11 @@
 
     func projectedContent(from source: NSAttributedString) -> NSAttributedString {
       let result = NSMutableAttributedString(attributedString: source)
-      for match in Self.referenceMatches(in: source.string).reversed() {
+      for match in InlineNoteImageReference.matches(in: source.string).reversed() {
         let reference = source.attributedSubstring(from: match.range)
         guard let attachment = projectedAttachment(
           for: reference,
-          fileURL: match.fileURL
+          reference: match.reference
         ) else {
           continue
         }
@@ -100,31 +258,30 @@
     }
 
     func projectedAttachment(for reference: NSAttributedString) -> NSAttributedString? {
-      guard let match = Self.referenceMatches(in: reference.string).first,
-        match.range == NSRange(location: 0, length: reference.length)
-      else { return nil }
-      return projectedAttachment(for: reference, fileURL: match.fileURL)
+      guard let parsed = InlineNoteImageReference.parse(reference.string) else { return nil }
+      return projectedAttachment(for: reference, reference: parsed)
     }
 
     private func projectedAttachment(
-      for reference: NSAttributedString,
-      fileURL: URL
+      for source: NSAttributedString,
+      reference: InlineNoteImageReference
     ) -> NSAttributedString? {
-      guard isManagedImageURL(fileURL),
+      guard let fileURL = reference.url,
+        isManagedImageURL(fileURL),
         let metadata = try? imageMetadata(at: fileURL),
         let image = thumbnail(
           at: fileURL,
           originalSize: metadata.pixelSize
-      )
+        )
       else { return nil }
       let attachment = InlineNoteImageAttachment(
-        sourceReference: reference.string,
+        sourceReference: reference.text,
         image: image,
         originalPixelSize: metadata.pixelSize,
         accessibilityLabel: "Image file \(fileURL.lastPathComponent)"
       )
-      var attributes = reference.length > 0
-        ? reference.attributes(at: 0, effectiveRange: nil)
+      var attributes = source.length > 0
+        ? source.attributes(at: 0, effectiveRange: nil)
         : [:]
       attributes.removeValue(forKey: .attachment)
       attributes.removeValue(forKey: .link)
@@ -226,35 +383,21 @@
       return UTType(typeIdentifier)?.preferredFilenameExtension ?? "image"
     }
 
-    private struct ReferenceMatch {
-      let range: NSRange
-      let fileURL: URL
-    }
-
     static func referenceRanges(in text: String) -> [NSRange] {
-      referenceMatches(in: text).map(\.range)
+      InlineNoteImageReference.matches(in: text).map(\.range)
     }
-
-    private static func referenceMatches(in text: String) -> [ReferenceMatch] {
-      let range = NSRange(location: 0, length: (text as NSString).length)
-      return referenceExpression.matches(in: text, range: range).compactMap { match in
-        guard let urlRange = Range(match.range(at: 1), in: text),
-          let url = URL(string: String(text[urlRange])),
-          url.isFileURL
-        else { return nil }
-        return ReferenceMatch(range: match.range, fileURL: url)
-      }
-    }
-
-    private static let referenceExpression = try! NSRegularExpression(
-      pattern: #"!\[[^\]\r\n]*\]\((file://[^)\r\n]+)\)"#
-    )
   }
 
   @MainActor
   final class InlineNoteImageAttachment: NSTextAttachment {
+    nonisolated static let maximumRenderedEdge: CGFloat = 2_048
+
     nonisolated let sourceReference: String
     nonisolated let originalPixelSize: NSSize
+    nonisolated let reference: InlineNoteImageReference?
+    nonisolated let displayTransform: InlineImageTransform?
+    nonisolated let imageAccessibilityLabel: String
+    let originalImage: NSImage
 
     init(
       sourceReference: String,
@@ -262,21 +405,112 @@
       originalPixelSize: NSSize,
       accessibilityLabel: String
     ) {
+      let parsed = InlineNoteImageReference.parse(sourceReference)
       self.sourceReference = sourceReference
       self.originalPixelSize = originalPixelSize
+      self.reference = parsed
+      self.displayTransform = parsed?.transform
+      self.imageAccessibilityLabel = accessibilityLabel
+      self.originalImage = image
       super.init(data: nil, ofType: nil)
-      image.accessibilityDescription = accessibilityLabel
-      self.image = image
-      let cell = NSTextAttachmentCell(imageCell: image)
-      cell.setAccessibilityElement(true)
-      cell.setAccessibilityLabel(accessibilityLabel)
-      attachmentCell = cell
+      install(image: image)
+    }
+
+    private init(
+      reference: InlineNoteImageReference,
+      image: NSImage,
+      originalPixelSize: NSSize,
+      accessibilityLabel: String
+    ) {
+      self.sourceReference = reference.text
+      self.originalPixelSize = originalPixelSize
+      self.reference = reference
+      self.displayTransform = reference.transform
+      self.imageAccessibilityLabel = accessibilityLabel
+      self.originalImage = image
+      super.init(data: nil, ofType: nil)
+      install(image: image)
     }
 
     required init?(coder: NSCoder) {
       sourceReference = ""
       originalPixelSize = .zero
+      reference = nil
+      displayTransform = nil
+      imageAccessibilityLabel = ""
+      originalImage = NSImage(size: .zero)
       super.init(coder: coder)
+    }
+
+    private func install(image: NSImage) {
+      image.accessibilityDescription = imageAccessibilityLabel
+      guard let displayTransform else {
+        self.image = image
+        return
+      }
+      let rendered = Self.renderedImage(original: image, transform: displayTransform)
+      rendered.accessibilityDescription = imageAccessibilityLabel
+      self.image = rendered
+    }
+
+    func replacingTransform(_ transform: InlineImageTransform?) -> InlineNoteImageAttachment? {
+      guard let reference, let next = reference.replacingTransform(transform) else { return nil }
+      return InlineNoteImageAttachment(
+        reference: next,
+        image: originalImage,
+        originalPixelSize: originalPixelSize,
+        accessibilityLabel: imageAccessibilityLabel
+      )
+    }
+
+    nonisolated func effectiveTransform(fitting bounds: NSRect) -> InlineImageTransform {
+      guard let displayTransform, displayTransform.isValid else {
+        return InlineImageTransform(
+          size: CGSize(width: max(0, bounds.width), height: max(0, bounds.height))
+        )
+      }
+      let envelope = displayTransform.rotatedSize
+      guard envelope.width > 0, envelope.height > 0, bounds.width > 0 else {
+        return displayTransform
+      }
+      return displayTransform.fitting(availableWidth: bounds.width)
+    }
+
+    static func renderedImage(
+      original: NSImage,
+      transform: InlineImageTransform?
+    ) -> NSImage {
+      guard let transform, transform.isValid else { return original }
+      let envelope = transform.rotatedSize
+      guard envelope.width > 0, envelope.height > 0 else { return original }
+      let scale = min(2, maximumRenderedEdge / max(envelope.width, envelope.height))
+      let rasterSize = CGSize(
+        width: max(1, (envelope.width * scale).rounded(.up)),
+        height: max(1, (envelope.height * scale).rounded(.up))
+      )
+      guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+        let context = CGContext(
+          data: nil,
+          width: Int(rasterSize.width),
+          height: Int(rasterSize.height),
+          bitsPerComponent: 8,
+          bytesPerRow: 0,
+          space: space,
+          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )
+      else { return original }
+      context.translateBy(x: 0, y: rasterSize.height)
+      context.scaleBy(x: 1, y: -1)
+      NSGraphicsContext.saveGraphicsState()
+      NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+      InlineNoteImageRendering.draw(
+        image: original,
+        transform: transform,
+        in: NSRect(origin: .zero, size: rasterSize)
+      )
+      NSGraphicsContext.restoreGraphicsState()
+      guard let raster = context.makeImage() else { return original }
+      return NSImage(cgImage: raster, size: envelope)
     }
 
     override func attachmentBounds(
@@ -289,17 +523,69 @@
         return .zero
       }
       let availableWidth = max(1, lineFrag.width)
-      let scale = min(
-        1,
-        availableWidth / originalPixelSize.width,
-        320 / originalPixelSize.height
-      )
+      guard let displayTransform, displayTransform.isValid else {
+        let scale = min(
+          1,
+          availableWidth / originalPixelSize.width,
+          320 / originalPixelSize.height
+        )
+        return NSRect(
+          x: 0,
+          y: 0,
+          width: floor(originalPixelSize.width * scale),
+          height: floor(originalPixelSize.height * scale)
+        )
+      }
+      let envelope = displayTransform.rotatedSize
+      let scale = min(1, availableWidth / envelope.width)
       return NSRect(
         x: 0,
         y: 0,
-        width: floor(originalPixelSize.width * scale),
-        height: floor(originalPixelSize.height * scale)
+        width: min(envelope.width * scale, availableWidth),
+        height: envelope.height * scale
       )
+    }
+  }
+
+  @MainActor
+  private enum InlineNoteImageRendering {
+    static func draw(image: NSImage, transform: InlineImageTransform?, in frame: NSRect) {
+      guard frame.width > 0, frame.height > 0 else { return }
+      guard let transform, transform.isValid else {
+        image.draw(
+          in: frame,
+          from: .zero,
+          operation: .sourceOver,
+          fraction: 1,
+          respectFlipped: true,
+          hints: nil
+        )
+        return
+      }
+      let envelope = transform.rotatedSize
+      guard envelope.width > 0, envelope.height > 0 else { return }
+      let scale = min(frame.width / envelope.width, frame.height / envelope.height)
+      let content = NSRect(
+        x: frame.midX - transform.size.width * scale / 2,
+        y: frame.midY - transform.size.height * scale / 2,
+        width: transform.size.width * scale,
+        height: transform.size.height * scale
+      )
+      NSGraphicsContext.saveGraphicsState()
+      let rotation = NSAffineTransform()
+      rotation.translateX(by: frame.midX, yBy: frame.midY)
+      rotation.rotate(byDegrees: CGFloat(transform.rotationDegrees))
+      rotation.translateX(by: -frame.midX, yBy: -frame.midY)
+      rotation.concat()
+      image.draw(
+        in: content,
+        from: .zero,
+        operation: .sourceOver,
+        fraction: 1,
+        respectFlipped: true,
+        hints: nil
+      )
+      NSGraphicsContext.restoreGraphicsState()
     }
   }
 

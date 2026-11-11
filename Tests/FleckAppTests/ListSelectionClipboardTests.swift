@@ -447,11 +447,13 @@ private final class ManagedBulletImageFixture {
   let pasteboard = NSPasteboard.withUniqueName()
   defer { pasteboard.releaseGlobally() }
 
-  #expect(source.writablePasteboardTypes == [.rtf, .string])
+  #expect(source.writablePasteboardTypes == [.html, .rtfd, .rtf, .string])
   #expect(source.writeSelection(to: pasteboard, types: source.writablePasteboardTypes))
   let copiedText = try #require(pasteboard.string(forType: .string))
   #expect(copiedText.contains("• first"))
-  #expect(copiedText.contains("• \(reference)"))
+  #expect(!copiedText.contains(reference))
+  #expect(!copiedText.contains("file://"))
+  #expect(!copiedText.contains("/Users/"))
   #expect(!copiedText.contains("omitted"))
   #expect(source.string == display.string)
   #expect(source.textStorage?.isEqual(to: initialStorage) == true)
@@ -460,7 +462,9 @@ private final class ManagedBulletImageFixture {
   #expect(observer.selectionChanges == 0)
   #expect(observer.textChanges == 0)
   #expect(pasteboard.data(forType: .tiff) == nil)
-  #expect(pasteboard.data(forType: .rtfd) == nil)
+  #expect(pasteboard.data(forType: .rtfd) != nil)
+  #expect(pasteboard.data(forType: .html) != nil)
+  #expect(pasteboard.data(forType: .fileURL) == nil)
 
   let directTextPasteboard = NSPasteboard.withUniqueName()
   defer { directTextPasteboard.releaseGlobally() }
@@ -477,23 +481,16 @@ private final class ManagedBulletImageFixture {
     documentAttributes: nil
   )
   let directFirst = (directRTF.string as NSString).range(of: "first").location
-  let directReference = (directRTF.string as NSString).range(of: reference).location
   #expect(directRTF.string.contains("• first"))
-  #expect(directRTF.string.contains("• \(reference)"))
+  #expect(!directRTF.string.contains(reference))
+  #expect(!directRTF.string.contains("file://"))
   #expect(!directRTF.string.contains("omitted"))
   #expect(!directRTF.string.contains("\u{fffc}"))
   #expect(directFirst != NSNotFound)
-  #expect(directReference != NSNotFound)
   if directFirst != NSNotFound {
     #expect(
       (directRTF.attribute(.font, at: directFirst, effectiveRange: nil) as? NSFont)?.pointSize
         == firstFont.pointSize
-    )
-  }
-  if directReference != NSNotFound {
-    #expect(
-      (directRTF.attribute(.font, at: directReference, effectiveRange: nil) as? NSFont)?.pointSize
-        == imageFont.pointSize
     )
   }
   var directContainsAttachment = false
@@ -519,10 +516,11 @@ private final class ManagedBulletImageFixture {
   defer { blockedImagePasteboard.releaseGlobally() }
   #expect(!source.writeSelection(to: blockedImagePasteboard, type: .tiff))
   #expect(blockedImagePasteboard.data(forType: .tiff) == nil)
-  let blockedRTFDPasteboard = NSPasteboard.withUniqueName()
-  defer { blockedRTFDPasteboard.releaseGlobally() }
-  #expect(!source.writeSelection(to: blockedRTFDPasteboard, type: .rtfd))
-  #expect(blockedRTFDPasteboard.data(forType: .rtfd) == nil)
+  let rtfdPasteboard = NSPasteboard.withUniqueName()
+  defer { rtfdPasteboard.releaseGlobally() }
+  #expect(source.writeSelection(to: rtfdPasteboard, type: .rtfd))
+  let mixedRTFD = try #require(rtfdPasteboard.data(forType: .rtfd))
+  #expect(mixedRTFD.range(of: "file://".data(using: .utf8)!) == nil)
 
   let richText = try NSAttributedString(
     data: #require(pasteboard.data(forType: .rtf)),
@@ -530,7 +528,8 @@ private final class ManagedBulletImageFixture {
     documentAttributes: nil
   )
   #expect(richText.string.contains("• first"))
-  #expect(richText.string.contains("• \(reference)"))
+  #expect(!richText.string.contains(reference))
+  #expect(!richText.string.contains("file://"))
   #expect(!richText.string.contains("omitted"))
   var containsAttachment = false
   richText.enumerateAttribute(
@@ -715,4 +714,48 @@ private final class ManagedBulletImageFixture {
   }
   #expect(pasteboard.string(forType: .string) == "• \(reference)")
   #expect(pasteboard.data(forType: .rtf) != nil)
+}
+
+@Test @MainActor func singleImageSelectionCopiesImagePayloadWithBulletReference() throws {
+  let fixture = try ManagedBulletImageFixture()
+  defer { fixture.remove() }
+  let reference = try fixture.makeReference()
+  let canonical = "• \(reference)"
+  let display = fixture.store.projectedContent(from: NSAttributedString(string: canonical))
+  let imageCharacter = (display.string as NSString).range(of: "\u{fffc}")
+  try #require(imageCharacter.location != NSNotFound)
+  #expect(
+    display.attribute(.attachment, at: imageCharacter.location, effectiveRange: nil)
+      is InlineNoteImageAttachment
+  )
+
+  let source = ListAwareTextView(frame: NSRect(x: 0, y: 0, width: 360, height: 180))
+  source.isRichText = true
+  source.inlineImageStore = fixture.store
+  source.textStorage?.setAttributedString(display)
+  source.setSelectedRange(imageCharacter)
+
+  let managedReferenceType = NSPasteboard.PasteboardType(
+    "com.harryjin.fleck.managed-image-reference"
+  )
+  #expect(
+    source.writablePasteboardTypes
+      == [.tiff, .png, managedReferenceType, .rtf, .string]
+  )
+  let pasteboard = NSPasteboard.withUniqueName()
+  defer { pasteboard.releaseGlobally() }
+  #expect(source.writeSelection(to: pasteboard, types: source.writablePasteboardTypes))
+  #expect(pasteboard.string(forType: .string) == nil)
+  #expect(pasteboard.data(forType: .rtf) == nil)
+  #expect(pasteboard.string(forType: managedReferenceType) == reference)
+  let tiffData = try #require(pasteboard.data(forType: .tiff))
+  let tiff = try #require(NSBitmapImageRep(data: tiffData))
+  #expect(tiff.pixelsWide == 2)
+  #expect(tiff.pixelsHigh == 2)
+  let pngData = try #require(pasteboard.data(forType: .png))
+  let png = try #require(NSBitmapImageRep(data: pngData))
+  #expect(png.pixelsWide == 2)
+  #expect(png.pixelsHigh == 2)
+  #expect(source.string == display.string)
+  #expect(source.selectedRanges.map(\.rangeValue) == [imageCharacter])
 }
