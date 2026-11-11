@@ -39,10 +39,10 @@ one public prerelease:
 6. The tag, release page, download and checksum are verified from outside,
    signed out.
 
-Approval covers the candidate's behaviour, never the release gates. Signing,
-notarization where available, package identity, archive extraction and green CI
-still have to pass before anything is published, and a withheld gate stops the
-release rather than lowering it.
+Approval covers the candidate's behaviour, never the release gates. The
+Developer ID signature, notarization and stapling, package identity, archive
+extraction and green CI still have to pass before anything is published, and a
+withheld gate stops the release rather than lowering it.
 
 ## Version progression ladder
 
