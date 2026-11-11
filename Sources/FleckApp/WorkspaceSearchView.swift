@@ -234,6 +234,7 @@
         let deadline = ContinuousClock.now + .seconds(2)
         let attachmentDeadline = ContinuousClock.now + .milliseconds(750)
         var attempts = 0
+        var restoredFocus = false
         while true {
           if restoresActivationFocus {
             if attempts > 0 {
@@ -265,10 +266,19 @@
           {
             continue
           }
+          if restoresActivationFocus, restoredFocus,
+            let responder = self.hostingWindow?.firstResponder,
+            !(responder is NSWindow)
+          {
+            continue
+          }
           if self.focusRestoreAction?() == true {
-            self.focusRestoreAction = nil
-            self.focusRestoreTask = nil
-            return
+            guard restoresActivationFocus else {
+              self.focusRestoreAction = nil
+              self.focusRestoreTask = nil
+              return
+            }
+            restoredFocus = true
           }
         }
         guard let self, self.focusRestoreGeneration == restoreGeneration else { return }
