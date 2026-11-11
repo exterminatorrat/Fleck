@@ -374,6 +374,28 @@ func WorkspaceSearchHostingKeepsCompactSurfaceInsideMinimumWidth() async throws 
   #expect(restores == 1)
 }
 
+@Test @MainActor func workspaceSearchActivationRestoreSurvivesAStuckSearchAttachment() async throws {
+  let controller = WorkspaceSearchController()
+  var restores = 0
+  controller.present()
+  let presentationID = controller.presentationID
+  controller.setSearchAttachment(true, presentationID: presentationID)
+  controller.setActivationFocusRestore {
+    restores += 1
+    return true
+  }
+
+  controller.dismiss()
+  let restored = try await waitForWorkspaceSearchActivationRestore(timeout: .seconds(2)) {
+    restores == 1
+  }
+  #expect(
+    restored,
+    "A search attachment that never detaches must not starve the activation focus restore"
+  )
+  #expect(restores == 1)
+}
+
 @Test @MainActor func workspaceSearchActivationRestoreRetriesPastLegacyYieldBudget() async throws {
   let controller = WorkspaceSearchController()
   var attempts = 0
