@@ -5516,13 +5516,13 @@ private func withHostedTitleEditors(
     .rectValue
   #expect(abs(addFolderFrame.width - 28) < 0.5)
   #expect(abs(addFolderFrame.height - 28) < 0.5)
-  #expect(visibleAccessibilityElement(label: "Expand Unfiled", owner: window) == nil)
+  #expect(hostedUnignoredAccessibilityElements(in: host, label: "Expand Unfiled").isEmpty)
   #expect(window.makeFirstResponder(unfiledControl))
   await settleHostedView(host)
   let focused = hostedNavigatorKeyViewFrames(in: host)
   let focusedFolderFrame = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
   let disclosure = try #require(
-    visibleAccessibilityElement(label: "Expand Unfiled", owner: window)
+    hostedUnignoredAccessibilityElements(in: host, label: "Expand Unfiled").first
   )
   let disclosureFrame = try #require(disclosure.value(forKey: "accessibilityFrame") as? NSValue)
     .rectValue
@@ -6687,6 +6687,19 @@ private func hostedAccessibilityElements(in value: Any?, identifier: String) -> 
     ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
   for child in NSAccessibility.unignoredChildren(from: rawChildren ?? []) {
     matches.append(contentsOf: hostedAccessibilityElements(in: child, identifier: identifier))
+  }
+  return matches
+}
+
+@MainActor
+private func hostedUnignoredAccessibilityElements(in value: Any?, label: String) -> [NSObject] {
+  guard let element = value as? NSObject else { return [] }
+  var matches = hostedAccessibilityLabel(element) == label ? [element] : []
+  let childrenSelector = NSSelectorFromString("accessibilityChildren")
+  let rawChildren = element.responds(to: childrenSelector)
+    ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+  for child in NSAccessibility.unignoredChildren(from: rawChildren ?? []) {
+    matches.append(contentsOf: hostedUnignoredAccessibilityElements(in: child, label: label))
   }
   return matches
 }
