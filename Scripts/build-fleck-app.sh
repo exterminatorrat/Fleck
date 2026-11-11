@@ -31,6 +31,16 @@ if ! xcode-select -p >/dev/null 2>&1 \
   exit 2
 fi
 
+readonly deployment_target='14.0'
+active_sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
+case "$active_sdk_version" in
+  '' | *[!0-9.]*)
+    printf 'error: could not determine the active macOS SDK version\n' >&2
+    exit 2
+    ;;
+esac
+readonly active_sdk_version
+
 cd "$repo_root"
 /bin/mkdir -p "$build_root"
 if [[ -n "$result_file" ]]; then
@@ -74,6 +84,34 @@ cleanup() {
   exit "$exit_code"
 }
 trap cleanup EXIT
+
+verify_linker_identity() {
+  local executable="$1"
+  local inspection identity
+  if ! inspection="$(xcrun otool -l "$executable" 2>/dev/null)"; then
+    printf 'error: packaged executable SDK/minOS identity could not be read: %s\n' \
+      "$executable" >&2
+    exit 1
+  fi
+  identity="$(printf '%s\n' "$inspection" | /usr/bin/awk '
+    $1 == "cmd" {
+      in_build_version = ($2 == "LC_BUILD_VERSION")
+      next
+    }
+    in_build_version && $1 == "minos" { minos = $2 }
+    in_build_version && $1 == "sdk" { sdk = $2; in_build_version = 0 }
+    END {
+      if (minos != "" && sdk != "") {
+        print minos " " sdk
+      }
+    }
+  ')"
+  if [[ "$identity" != "$deployment_target $active_sdk_version" ]]; then
+    printf 'error: packaged executable SDK/minOS identity does not match: %s (found %s, expected %s %s)\n' \
+      "$executable" "${identity:-missing}" "$deployment_target" "$active_sdk_version" >&2
+    exit 1
+  fi
+}
 "$identity_tool" begin \
   --repo "$repo_root" \
   --flavor development \
@@ -88,8 +126,12 @@ if [[ -e "$app_destination" || -L "$app_destination" ]]; then
   exit 1
 fi
 
-swift build -c release --product Fleck --disable-automatic-resolution
-swift build -c release --product fleck-agent --disable-automatic-resolution
+swift build -c release --product Fleck --disable-automatic-resolution \
+  -Xlinker -platform_version -Xlinker macos \
+  -Xlinker "$deployment_target" -Xlinker "$active_sdk_version"
+swift build -c release --product fleck-agent --disable-automatic-resolution \
+  -Xlinker -platform_version -Xlinker macos \
+  -Xlinker "$deployment_target" -Xlinker "$active_sdk_version"
 
 readonly release_directory="$repo_root/.build/release"
 readonly app_executable="$release_directory/Fleck"
@@ -106,6 +148,9 @@ for required_file in \
     exit 2
   fi
 done
+
+verify_linker_identity "$app_executable"
+verify_linker_identity "$helper_executable"
 
 staging_root="$(mktemp -d "$build_root/.fleck-app.XXXXXX")"
 
@@ -124,6 +169,8 @@ readonly staged_app="$staging_root/Fleck.app"
 /bin/chmod 755 \
   "$staged_app/Contents/MacOS/Fleck" \
   "$staged_app/Contents/SharedSupport/fleck-agent"
+verify_linker_identity "$staged_app/Contents/MacOS/Fleck"
+verify_linker_identity "$staged_app/Contents/SharedSupport/fleck-agent"
 linked_libraries="$(xcrun otool -L "$app_executable")"
 staged_sparkle=''
 if /usr/bin/grep -Fq '@rpath/Sparkle.framework/Versions/B/Sparkle ' <<<"$linked_libraries"; then

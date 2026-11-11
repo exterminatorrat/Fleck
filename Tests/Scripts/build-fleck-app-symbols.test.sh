@@ -27,6 +27,8 @@ fixture_root="$test_root/repository"
 fake_bin="$test_root/bin"
 strip_log="$test_root/strip.log"
 launch_sentinel="$test_root/launched"
+swift_log="$test_root/swift.log"
+source_hash_log="$test_root/source-hashes.log"
 /bin/mkdir -p \
   "$fixture_root/Scripts" \
   "$fixture_root/Sources/FleckApp" \
@@ -92,24 +94,72 @@ SCRIPT
 cat > "$fake_bin/swift" <<'SCRIPT'
 #!/bin/bash
 set -euo pipefail
+
 product=''
+linker_values=()
 while (( $# > 0 )); do
-  if [[ "$1" == '--product' ]]; then
-    product="$2"
-    break
-  fi
-  shift
+  case "$1" in
+    --product)
+      product="${2:-}"
+      shift 2
+      ;;
+    -Xlinker)
+      linker_values+=("${2:-}")
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
 done
-/bin/mkdir -p .build/release
+
+minos=''
+sdk=''
+for index in "${!linker_values[@]}"; do
+  if [[ "${linker_values[$index]}" == '-platform_version' ]]; then
+    minos="${linker_values[$((index + 2))]:-}"
+    sdk="${linker_values[$((index + 3))]:-}"
+  fi
+done
+[[ -n "$minos" ]] || minos='14.0'
+[[ -n "$sdk" ]] || sdk="$minos"
+
+printf '%s %s %s\n' "$product" "$minos" "$sdk" >> "$FLECK_TEST_SWIFT_LOG"
+
 case "$product" in
-  Fleck)
-    if [[ "${FLECK_TEST_LINK_SPARKLE:-0}" == 1 ]]; then
-      framework='.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework'
-      /bin/mkdir -p "$framework/Versions/B/Resources"
-      /bin/ln -s B "$framework/Versions/Current"
-      /bin/ln -s Versions/Current/Sparkle "$framework/Sparkle"
-      /bin/ln -s Versions/Current/Resources "$framework/Resources"
-      cat > "$framework/Versions/B/Resources/Info.plist" <<'PLIST'
+  Fleck | fleck-agent) ;;
+  *) exit 2 ;;
+esac
+
+/bin/mkdir -p .build/release
+fixture_source="$FLECK_TEST_ROOT/fixture-$product.c"
+cat > "$fixture_source" <<'C'
+#include <fcntl.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+int main(void) {
+  const char *sentinel = getenv("FLECK_TEST_LAUNCH_SENTINEL");
+  if (sentinel != NULL) {
+    int descriptor = open(sentinel, O_CREAT | O_WRONLY, 0644);
+    if (descriptor >= 0) {
+      close(descriptor);
+    }
+  }
+  return 0;
+}
+C
+link_flags=(
+  -Xlinker -platform_version -Xlinker macos
+  -Xlinker "$minos" -Xlinker "$sdk"
+)
+if [[ "$product" == 'Fleck' && "${FLECK_TEST_LINK_SPARKLE:-0}" == 1 ]]; then
+  framework='.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework'
+  /bin/mkdir -p "$framework/Versions/B/Resources"
+  /bin/ln -s B "$framework/Versions/Current"
+  /bin/ln -s Versions/Current/Sparkle "$framework/Sparkle"
+  /bin/ln -s Versions/Current/Resources "$framework/Resources"
+  cat > "$framework/Versions/B/Resources/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -119,27 +169,37 @@ case "$product" in
   <key>CFBundleVersion</key><string>1</string>
 </dict></plist>
 PLIST
-      /usr/bin/xcrun clang -dynamiclib -x c - -o "$framework/Versions/B/Sparkle" \
-        -install_name '@rpath/Sparkle.framework/Versions/B/Sparkle' <<'C'
+  /usr/bin/xcrun clang -dynamiclib -x c - -o "$framework/Versions/B/Sparkle" \
+    -install_name '@rpath/Sparkle.framework/Versions/B/Sparkle' <<'C'
 int sparkle_fixture_value(void) { return 42; }
 C
-      /usr/bin/xcrun clang -x c - -o .build/release/Fleck \
-        -F "$(/usr/bin/dirname "$framework")" -framework Sparkle \
-        -Wl,-rpath,@loader_path <<'C'
+  /usr/bin/xcrun clang -x c - -o .build/release/Fleck \
+    "${link_flags[@]}" \
+    -F "$(/usr/bin/dirname "$framework")" -framework Sparkle \
+    -Wl,-rpath,@loader_path <<'C'
 extern int sparkle_fixture_value(void);
 int main(void) { return sparkle_fixture_value() == 42 ? 0 : 1; }
 C
-      exit 0
-    fi
-    printf '#!/bin/sh\nDEBUG_SYMBOLS\n/bin/touch %q\n' "$FLECK_TEST_LAUNCH_SENTINEL" > .build/release/Fleck
-    /bin/chmod 755 .build/release/Fleck
-    ;;
-  fleck-agent)
-    printf '#!/bin/sh\nexit 0\n' > .build/release/fleck-agent
-    /bin/chmod 755 .build/release/fleck-agent
-    ;;
-  *) exit 2 ;;
-esac
+else
+  /usr/bin/xcrun clang -g "$fixture_source" -o ".build/release/$product" \
+    "${link_flags[@]}"
+fi
+
+if [[ -n "${FLECK_TEST_VTOOL_STAMP:-}" \
+  && "${FLECK_TEST_VTOOL_STAMP_PRODUCT:-$product}" == "$product" ]]; then
+  read -r -a vtool_arguments <<< "$FLECK_TEST_VTOOL_STAMP"
+  /usr/bin/xcrun vtool "${vtool_arguments[@]}" \
+    -output ".build/release/$product.stamped" ".build/release/$product"
+  /bin/mv -f ".build/release/$product.stamped" ".build/release/$product"
+fi
+if [[ "${FLECK_TEST_NON_MACHO:-0}" == 1 \
+  && "${FLECK_TEST_NON_MACHO_PRODUCT:-$product}" == "$product" ]]; then
+  printf 'not a Mach-O executable\n' > ".build/release/$product"
+fi
+/bin/chmod 755 ".build/release/$product"
+printf '%s %s\n' "$product" \
+  "$(/usr/bin/shasum -a 256 ".build/release/$product" | /usr/bin/awk '{print $1}')" \
+  >> "$FLECK_TEST_SOURCE_HASH_LOG"
 SCRIPT
 cat > "$fake_bin/move-staged" <<'SCRIPT'
 #!/bin/bash
@@ -153,6 +213,10 @@ SCRIPT
 cat > "$fake_bin/xcrun" <<'SCRIPT'
 #!/bin/bash
 set -euo pipefail
+if [[ "$1" == '--sdk' && "$2" == 'macosx' && "$3" == '--show-sdk-version' ]]; then
+  printf '27.0\n'
+  exit 0
+fi
 if [[ "$1" == '--find' && "$2" == 'swift' ]]; then
   printf '%s\n' "$FLECK_TEST_FAKE_BIN/move-staged"
   exit 0
@@ -160,18 +224,16 @@ fi
 if [[ "$1" == 'strip' && "$2" == '-S' && $# == 3 ]]; then
   printf '%s\n' "$3" >> "$FLECK_TEST_STRIP_LOG"
   [[ "${FLECK_TEST_STRIP_FAIL:-0}" != 1 ]] || exit 42
-  if [[ "${FLECK_TEST_LINK_SPARKLE:-0}" == 1 ]]; then
-    exec /usr/bin/strip -S "$3"
-  fi
-  /usr/bin/sed -i '' '/^DEBUG_SYMBOLS$/d' "$3"
-  exit 0
+  [[ "${FLECK_TEST_STRIP_NOOP:-0}" != 1 ]] || exit 0
+  exec /usr/bin/strip -S "$3"
 fi
-if [[ "$1" == 'otool' && "$2" == '-L' && $# == 3 ]]; then
-  if [[ "${FLECK_TEST_LINK_SPARKLE:-0}" == 1 ]]; then
-    exec /usr/bin/otool -L "$3"
+if [[ "$1" == 'otool' ]]; then
+  shift
+  if [[ "$1" == '-l' && "${FLECK_TEST_OTOOL_FAIL:-0}" == 1 ]]; then
+    /usr/bin/otool "$@" || true
+    exit 1
   fi
-  printf '%s:\n' "$3"
-  exit 0
+  exec /usr/bin/otool "$@"
 fi
 if [[ "$1" == 'install_name_tool' ]]; then
   shift
@@ -195,6 +257,9 @@ run_packager() {
     FLECK_TEST_FAKE_BIN="$fake_bin" \
     FLECK_TEST_LAUNCH_SENTINEL="$launch_sentinel" \
     FLECK_TEST_STRIP_LOG="$strip_log" \
+    FLECK_TEST_SWIFT_LOG="$swift_log" \
+    FLECK_TEST_SOURCE_HASH_LOG="$source_hash_log" \
+    FLECK_TEST_ROOT="$test_root" \
     "$@" \
     "$fixture_root/Scripts/build-fleck-app.sh" \
     --result-file "$result_file"
@@ -203,6 +268,8 @@ run_packager() {
 results="$fixture_root/.build/results"
 /bin/mkdir -p "$results"
 first_result="$results/first.json"
+: > "$swift_log"
+: > "$source_hash_log"
 run_packager "$first_result" >/dev/null
 original="$fixture_root/.build/release/Fleck"
 packaged_app="$("$fixture_root/Scripts/fleck-build-identity.py" read-result \
@@ -220,17 +287,108 @@ done
 [[ "$(/usr/bin/plutil -extract CFBundleIconFile raw -o - \
   "$(/usr/bin/dirname "$packaged")/../Info.plist")" == 'FleckAppIcon.icns' ]] \
   || fail 'packaged Info.plist does not name the primary native app icon'
-/usr/bin/grep -Fq 'DEBUG_SYMBOLS' "$original" \
+built_hash="$(/usr/bin/awk '$1 == "Fleck" { hash = $2 } END { print hash }' "$source_hash_log")"
+[[ -n "$built_hash" ]] || fail 'swift fixture did not record the built executable identity'
+built_debug_entries="$(/usr/bin/nm -pa "$original" 2>/dev/null \
+  | /usr/bin/awk '$5 == "OSO" {n += 1} END {print n + 0}')"
+[[ "$built_debug_entries" -gt 0 ]] \
+  || fail 'swift fixture did not emit a debug map for the built executable'
+packaged_debug_entries="$(/usr/bin/nm -pa "$packaged" 2>/dev/null \
+  | /usr/bin/awk '$5 == "OSO" {n += 1} END {print n + 0}')"
+[[ "$packaged_debug_entries" == 0 ]] \
+  || fail 'packager published an executable that still carries its debug map'
+[[ "$(/usr/bin/shasum -a 256 "$original" | /usr/bin/awk '{print $1}')" == "$built_hash" ]] \
   || fail 'packager changed the original release executable'
-if /usr/bin/grep -Fq 'DEBUG_SYMBOLS' "$packaged"; then
-  fail 'packager left debug symbols in the staged executable'
-fi
 [[ "$(/usr/bin/wc -l < "$strip_log" | /usr/bin/tr -d '[:space:]')" == 1 ]] \
   || fail 'packager did not strip exactly one executable'
 [[ "$(/bin/cat "$strip_log")" == *'/.build/.fleck-app.'*'/Fleck.app/Contents/MacOS/Fleck' ]] \
   || fail 'packager stripped a non-staged executable'
 /usr/bin/codesign --verify --deep --strict "$packaged_app"
 test ! -e "$launch_sentinel" || fail 'packager launched the executable'
+
+packaged_helper="$(/usr/bin/dirname "$packaged")/../SharedSupport/fleck-agent"
+for product in Fleck fleck-agent; do
+  /usr/bin/grep -Fxq "$product 14.0 27.0" "$swift_log" \
+    || fail "packager did not link $product with the active SDK and deployment target"
+done
+for executable in "$packaged" "$packaged_helper"; do
+  stamp="$(/usr/bin/vtool -show-build "$executable" | /usr/bin/awk '
+    $1 == "minos" { minos = $2 }
+    $1 == "sdk" { sdk = $2 }
+    END { print minos " " sdk }')"
+  [[ "$stamp" == '14.0 27.0' ]] \
+    || fail "packager published $(/usr/bin/basename "$executable") with SDK/minOS ${stamp:-missing}"
+done
+
+published_hash="$(/usr/bin/shasum -a 256 "$packaged" | /usr/bin/awk '{print $1}')"
+published_receipt_hash="$(/usr/bin/shasum -a 256 "$first_result" | /usr/bin/awk '{print $1}')"
+
+expect_rejection() {
+  local label="$1"
+  local result_path="$2"
+  local log_path="$3"
+  local expected_message="$4"
+  [[ ! -e "$result_path" ]] || fail "packager wrote a result receipt for $label"
+  /usr/bin/grep -Fq "$expected_message" "$log_path" \
+    || fail "packager did not reject $label before signing"
+  if /usr/bin/grep -Fq 'replacing existing signature' "$log_path"; then
+    fail "packager signed the app before rejecting $label"
+  fi
+  [[ "$(/usr/bin/shasum -a 256 "$packaged" | /usr/bin/awk '{print $1}')" == "$published_hash" ]] \
+    || fail "$label replaced the published app"
+  [[ "$(/usr/bin/shasum -a 256 "$first_result" | /usr/bin/awk '{print $1}')" == "$published_receipt_hash" ]] \
+    || fail "$label replaced the published receipt"
+  [[ "$(/usr/bin/find "$fixture_root/.build" -maxdepth 1 -name 'Fleck *.app' | /usr/bin/wc -l \
+    | /usr/bin/tr -d '[:space:]')" == 1 ]] \
+    || fail "$label published an app"
+}
+
+while IFS='|' read -r case_name stamp_arguments; do
+  rejected_result="$results/rejected-$case_name.json"
+  if run_packager "$rejected_result" \
+    FLECK_TEST_VTOOL_STAMP="$stamp_arguments" >"$test_root/rejected-$case_name.log" 2>&1; then
+    fail "packager published an app with a $case_name linker stamp"
+  fi
+  expect_rejection "a $case_name linker stamp" "$rejected_result" \
+    "$test_root/rejected-$case_name.log" \
+    'error: packaged executable SDK/minOS identity does not match'
+done <<'CASES'
+wrong-sdk|-replace -set-build-version macos 14.0 14.0
+wrong-minos|-replace -set-build-version macos 13.0 27.0
+missing-stamp|-remove-build-version macos
+CASES
+
+helper_only_result="$results/rejected-helper-sdk.json"
+if run_packager "$helper_only_result" \
+  FLECK_TEST_VTOOL_STAMP='-replace -set-build-version macos 14.0 14.0' \
+  FLECK_TEST_VTOOL_STAMP_PRODUCT='fleck-agent' >"$test_root/rejected-helper-sdk.log" 2>&1; then
+  fail 'packager published an app whose helper carried a stale SDK stamp'
+fi
+/usr/bin/grep -Fq 'release/fleck-agent' "$test_root/rejected-helper-sdk.log" \
+  || fail 'packager did not reject the helper executable by path'
+expect_rejection 'a stale helper SDK stamp' "$helper_only_result" \
+  "$test_root/rejected-helper-sdk.log" \
+  'error: packaged executable SDK/minOS identity does not match'
+
+if run_packager "$results/rejected-unreadable.json" \
+  FLECK_TEST_NON_MACHO=1 >"$test_root/rejected-unreadable.log" 2>&1; then
+  fail 'packager published an executable without a readable linker stamp'
+fi
+/usr/bin/grep -Fq 'found missing' "$test_root/rejected-unreadable.log" \
+  || fail 'packager did not reject an unreadable linker stamp as a missing identity'
+expect_rejection 'an unreadable linker stamp' "$results/rejected-unreadable.json" \
+  "$test_root/rejected-unreadable.log" \
+  'error: packaged executable SDK/minOS identity does not match'
+
+if run_packager "$results/rejected-otool-failure.json" \
+  FLECK_TEST_OTOOL_FAIL=1 >"$test_root/rejected-otool-failure.log" 2>&1; then
+  fail 'packager accepted a failed linker-identity read that still printed a valid identity'
+fi
+expect_rejection 'a failed linker-identity read' "$results/rejected-otool-failure.json" \
+  "$test_root/rejected-otool-failure.log" \
+  'error: packaged executable SDK/minOS identity could not be read'
+
+test ! -e "$launch_sentinel" || fail 'a rejected linker stamp launched the executable'
 
 packaged_hash="$(/usr/bin/shasum -a 256 "$packaged" | /usr/bin/awk '{print $1}')"
 if run_packager "$results/failed.json" FLECK_TEST_STRIP_FAIL=1 >/dev/null 2>&1; then
@@ -239,6 +397,16 @@ fi
 [[ "$(/usr/bin/shasum -a 256 "$packaged" | /usr/bin/awk '{print $1}')" == "$packaged_hash" ]] \
   || fail 'failed strip replaced the existing packaged app'
 test ! -e "$launch_sentinel" || fail 'failed strip path launched the executable'
+
+noop_result="$results/noop-strip.json"
+run_packager "$noop_result" FLECK_TEST_STRIP_NOOP=1 >/dev/null
+noop_app="$("$fixture_root/Scripts/fleck-build-identity.py" read-result \
+  --repo "$fixture_root" --result-file "$noop_result" --flavor development)"
+noop_debug_entries="$(/usr/bin/nm -pa "$noop_app/Contents/MacOS/Fleck" 2>/dev/null \
+  | /usr/bin/awk '$5 == "OSO" {n += 1} END {print n + 0}')"
+[[ "$noop_debug_entries" -gt 0 ]] \
+  || fail 'no-op strip mutation escaped the published debug-map verification'
+/bin/rm -rf "$noop_app" "$noop_result"
 
 test ! -e "$packaged_app/Contents/Frameworks" \
   || fail 'packager embedded an unlinked framework'
