@@ -5509,16 +5509,26 @@ private func withHostedTitleEditors(
   let beforeEditorFrame = host.convert(editor.bounds, from: editor)
   let unfiledControl = try #require(hostedNavigatorKeyViews(in: host).first)
   let unfiledFrame = unfiledControl.convert(unfiledControl.bounds, to: host)
-  #expect(
-    !before.contains { frame in
-      abs(frame.width - 28) < 0.5 && abs(frame.height - 28) < 0.5
-    }
+  let addFolder = try #require(
+    hostedAccessibilityElements(in: host, identifier: "folder-new").first
   )
+  let addFolderFrame = try #require(addFolder.value(forKey: "accessibilityFrame") as? NSValue)
+    .rectValue
+  #expect(abs(addFolderFrame.width - 28) < 0.5)
+  #expect(abs(addFolderFrame.height - 28) < 0.5)
+  #expect(visibleAccessibilityElement(label: "Expand Unfiled", owner: window) == nil)
   #expect(window.makeFirstResponder(unfiledControl))
   await settleHostedView(host)
   let focused = hostedNavigatorKeyViewFrames(in: host)
   let focusedFolderFrame = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
+  let disclosure = try #require(
+    visibleAccessibilityElement(label: "Expand Unfiled", owner: window)
+  )
+  let disclosureFrame = try #require(disclosure.value(forKey: "accessibilityFrame") as? NSValue)
+    .rectValue
 
+  #expect(abs(disclosureFrame.width - 28) < 0.5)
+  #expect(abs(disclosureFrame.height - 24) < 0.5)
   #expect(state.preferences.isUnfiledCompact)
   #expect(focused.count == before.count)
   #expect(focusedFolderFrame.minX == beforeFolderFrame.minX + 28)
