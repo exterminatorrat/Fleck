@@ -169,6 +169,7 @@ private struct HostedPanelFixture {
   let root: URL
   let state: AppState
   let commands: EditorCommands
+  let runtime: DictationRuntime
   let window: NSWindow
   let host: NSHostingView<AnyView>
   let textView: ListAwareTextView
@@ -179,6 +180,7 @@ private struct HostedPanelFixture {
 
   func cleanup() async {
     closeHostedEditor(window)
+    await runtime.shutdown()
     await quiesce()
     try? FileManager.default.removeItem(at: root)
   }
@@ -1021,6 +1023,7 @@ private func makeHostedPanelFixture(workspace: Workspace) async throws -> Hosted
   state.workspace = workspace
   let commands = EditorCommands()
   let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  await runtime.awaitStartupAssessment()
   let panel = NotesPanel(
     dictationRuntime: runtime,
     isPinned: false,
@@ -1048,12 +1051,14 @@ private func makeHostedPanelFixture(workspace: Workspace) async throws -> Hosted
       root: root,
       state: state,
       commands: commands,
+      runtime: runtime,
       window: window,
       host: host,
       textView: textView
     )
   } catch {
     closeHostedEditor(window)
+    await runtime.shutdown()
     await state.quiescePersistenceForTesting()
     try? FileManager.default.removeItem(at: root)
     throw error

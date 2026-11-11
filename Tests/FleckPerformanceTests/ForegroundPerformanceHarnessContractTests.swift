@@ -329,6 +329,74 @@ struct ForegroundPerformanceHarnessContractTests {
     #expect(await gate.wasCancelled() == false)
     #expect(weakState.value == nil)
   }
+
+  @Test
+  func hostedPanelFixtureOwnsRuntimeThroughStartupAndTeardown() throws {
+    let repository = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let source = try String(
+      contentsOf: repository.appendingPathComponent(
+        "Tests/FleckPerformanceTests/ForegroundPerformanceTests.swift"
+      ),
+      encoding: .utf8
+    )
+    let fixtureStart = try #require(
+      source.range(of: "private struct HostedPanelFixture")
+    )
+    let builderStart = try #require(
+      source.range(of: "private func makeHostedPanelFixture")
+    )
+    let fixtureSource = source[fixtureStart.lowerBound..<builderStart.lowerBound]
+    let builderSource = source[builderStart.lowerBound...]
+
+    #expect(fixtureSource.contains("let runtime: DictationRuntime"))
+    #expect(builderSource.contains("runtime: runtime"))
+    #expect(
+      appearsInOrder(
+        [
+          "closeHostedEditor(window)",
+          "await runtime.shutdown()",
+          "await quiesce()",
+          "try? FileManager.default.removeItem(at: root)",
+        ],
+        in: fixtureSource
+      )
+    )
+    #expect(
+      appearsInOrder(
+        [
+          "let runtime = DictationRuntime(",
+          "await runtime.awaitStartupAssessment()",
+          "return HostedPanelFixture(",
+        ],
+        in: builderSource
+      )
+    )
+    #expect(
+      appearsInOrder(
+        [
+          "closeHostedEditor(window)",
+          "await runtime.shutdown()",
+          "await state.quiescePersistenceForTesting()",
+          "try? FileManager.default.removeItem(at: root)",
+        ],
+        in: builderSource
+      )
+    )
+  }
+}
+
+private func appearsInOrder(_ markers: [String], in source: Substring) -> Bool {
+  var cursor = source.startIndex
+  for marker in markers {
+    guard let found = source.range(of: marker, range: cursor..<source.endIndex) else {
+      return false
+    }
+    cursor = found.upperBound
+  }
+  return true
 }
 
 private func decimal(_ value: String) -> Decimal {

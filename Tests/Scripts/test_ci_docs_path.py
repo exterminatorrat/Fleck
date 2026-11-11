@@ -662,8 +662,8 @@ class CIDocsPathTests(unittest.TestCase):
         )
         self.assertIn(
             "runs-on: ${{ github.event_name == 'workflow_dispatch' && "
-            "inputs.native_runner_provider == 'namespace' && "
-            "'namespace-profile-fleck' || 'macos-26' }}",
+            "inputs.native_runner_provider == 'github-hosted' && "
+            "'macos-26' || 'namespace-profile-fleck' }}",
             diagnostic,
         )
         self.assertIn("timeout-minutes: 45", diagnostic)
