@@ -3,6 +3,17 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.1-beta.1] - 2026-11-11
+
+### Fixed
+
+- Development packaging records the active macOS SDK separately from the macOS
+  14 deployment floor, preventing the build engine from selecting legacy system
+  appearance through an incorrect linked-SDK identity. The app and agent helper
+  are checked before signing and publication.
+- Preserve the full combined feature set integrated in #123; no Settings layout
+  or existing candidate artifact is changed by this packaging correction.
+
 ## [1.8.0-beta.1] - 2026-11-11
 
 First combined preview since the first public Developer Preview (`1.1.2-beta.2`,
