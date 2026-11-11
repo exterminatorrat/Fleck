@@ -1602,6 +1602,97 @@ func WorkspaceSearchHostingActivatesNamedFolderResultThroughProductionScope()
 }
 
 @Test @MainActor
+func WorkspaceSearchActivationReclaimsFocusDroppedDuringRestore() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-activation-focus-drop-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let work = try Folder(id: UUID(), name: "Work")
+  var target = Note(title: "Named folder target", body: "Folder body")
+  target.folderID = work.id
+  let state = AppState(store: LocalStore(rootURL: root), saveOperation: { _, _, _, _ in .committed })
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(notes: [target], selectedNoteID: target.id, folders: [work])
+
+  let commands = EditorCommands()
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      editorCommands: commands,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  let targetEditor = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+      .first { $0.string == target.body }
+  )
+  #expect(window.makeFirstResponder(targetEditor))
+
+  searchController.present(for: target.id)
+  await settleWorkspaceSearchHost(host)
+  searchController.setQuery(target.title, in: state.workspace.notes)
+  try #require(
+    await waitForWorkspaceSearchHostState(host) {
+      searchController.resultsAreCurrent
+        && searchController.results.map(\.noteID) == [target.id]
+    }
+  )
+  let queryField = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.placeholderString == "Search notes" }
+  )
+  #expect(window.makeFirstResponder(queryField))
+  window.sendEvent(
+    try #require(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: 0,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: "\r",
+        charactersIgnoringModifiers: "\r",
+        isARepeat: false,
+        keyCode: 36
+      )
+    )
+  )
+
+  try #require(
+    await waitForWorkspaceSearchHostState(host) {
+      !searchController.isPresented && window.firstResponder === targetEditor
+    },
+    "Timed out waiting for Return activation to restore the target editor"
+  )
+
+  await settleWorkspaceSearchActivationRestore()
+  _ = window.makeFirstResponder(nil)
+  let reclaimed = try await waitForWorkspaceSearchHostState(host) {
+    window.firstResponder === targetEditor
+  }
+  #expect(reclaimed, "Focus dropped during the activation restore was never reclaimed")
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
 func WorkspaceSearchHostingBlocksEveryShortcutWhilePresented() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent("workspace-search-shortcuts-" + UUID().uuidString, isDirectory: true)
