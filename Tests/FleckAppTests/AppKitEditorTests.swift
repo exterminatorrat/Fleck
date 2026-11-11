@@ -5522,11 +5522,15 @@ private func withHostedTitleEditors(
     ).first
   )
   let unfiledFrame = unfiledControl.convert(unfiledControl.bounds, to: host)
-  #expect(
-    !before.contains { frame in
-      abs(frame.width - 28) < 0.5 && abs(frame.height - 28) < 0.5
-    }
+  let addFolder = try #require(
+    hostedAccessibilityElements(in: host, identifier: "folder-new").first
   )
+  let addFolderFrame = try #require(addFolder.value(forKey: "accessibilityFrame") as? NSValue)
+    .rectValue
+  let expectedDisclosureFrame = CGSize(width: 28, height: 24)
+  #expect(abs(addFolderFrame.width - 28) < 0.5)
+  #expect(abs(addFolderFrame.height - 28) < 0.5)
+  #expect(hostedDisclosureHasAddFolderSizing(in: host) == false)
   #expect(window.makeFirstResponder(unfiledControl))
   await settleHostedView(host)
   let focused = hostedNavigatorKeyViewFrames(
@@ -5534,7 +5538,7 @@ private func withHostedTitleEditors(
     identifiers: ["folder-unfiled", "folder-\(folder.id.uuidString)"]
   )
   let focusedFolderFrame = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
-
+  #expect(hostedDisclosureFrame(in: host) == expectedDisclosureFrame)
   #expect(state.preferences.isUnfiledCompact)
   #expect(focused.count == before.count)
   #expect(focusedFolderFrame.minX == beforeFolderFrame.minX + 28)
@@ -6751,6 +6755,34 @@ private func hostedAccessibilityElements(in value: Any?, identifier: String) -> 
     ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
   for child in NSAccessibility.unignoredChildren(from: rawChildren ?? []) {
     matches.append(contentsOf: hostedAccessibilityElements(in: child, identifier: identifier))
+  }
+  return matches
+}
+
+@MainActor
+private func hostedDisclosureFrame(in host: NSView) -> CGSize? {
+  guard
+    let element = hostedUnignoredAccessibilityElements(in: host, label: "Expand Unfiled").first,
+    let frame = element.value(forKey: "accessibilityFrame") as? NSValue
+  else { return nil }
+  return frame.rectValue.size
+}
+
+@MainActor
+private func hostedDisclosureHasAddFolderSizing(in host: NSView) -> Bool {
+  guard let size = hostedDisclosureFrame(in: host) else { return false }
+  return abs(size.width - 28) < 0.5 && abs(size.height - 28) < 0.5
+}
+
+@MainActor
+private func hostedUnignoredAccessibilityElements(in value: Any?, label: String) -> [NSObject] {
+  guard let element = value as? NSObject else { return [] }
+  var matches = hostedAccessibilityLabel(element) == label ? [element] : []
+  let childrenSelector = NSSelectorFromString("accessibilityChildren")
+  let rawChildren = element.responds(to: childrenSelector)
+    ? element.perform(childrenSelector)?.takeUnretainedValue() as? [Any] : nil
+  for child in NSAccessibility.unignoredChildren(from: rawChildren ?? []) {
+    matches.append(contentsOf: hostedUnignoredAccessibilityElements(in: child, label: label))
   }
   return matches
 }
