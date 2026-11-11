@@ -351,6 +351,184 @@ func WorkspaceSearchHostingKeepsCompactSurfaceInsideMinimumWidth() async throws 
   #expect(restores == 0)
 }
 
+@Test @MainActor func workspaceSearchActivationRestoreWaitsForScopedSearchAttachment() async throws {
+  let controller = WorkspaceSearchController()
+  var restores = 0
+  controller.present()
+  let presentationID = controller.presentationID
+  controller.setSearchAttachment(true, presentationID: presentationID)
+  controller.setActivationFocusRestore {
+    restores += 1
+    return true
+  }
+
+  controller.dismiss()
+  await settleWorkspaceSearchActivationRestore()
+  #expect(restores == 0)
+
+  controller.setSearchAttachment(false, presentationID: presentationID)
+  let restored = try await waitForWorkspaceSearchActivationRestore {
+    restores == 1
+  }
+  #expect(restored)
+  #expect(restores == 1)
+}
+
+@Test @MainActor func workspaceSearchActivationRestoreSurvivesAStuckSearchAttachment() async throws {
+  let controller = WorkspaceSearchController()
+  var restores = 0
+  controller.present()
+  let presentationID = controller.presentationID
+  controller.setSearchAttachment(true, presentationID: presentationID)
+  controller.setActivationFocusRestore {
+    restores += 1
+    return true
+  }
+
+  controller.dismiss()
+  let restored = try await waitForWorkspaceSearchActivationRestore(timeout: .seconds(2)) {
+    restores == 1
+  }
+  #expect(
+    restored,
+    "A search attachment that never detaches must not starve the activation focus restore"
+  )
+  #expect(restores == 1)
+}
+
+@Test @MainActor func workspaceSearchActivationRestoreRetriesPastLegacyYieldBudget() async throws {
+  let controller = WorkspaceSearchController()
+  var attempts = 0
+  var restored = false
+  controller.present()
+  controller.setActivationFocusRestore {
+    attempts += 1
+    guard attempts > 12 else { return false }
+    restored = true
+    return true
+  }
+
+  controller.dismiss()
+  let finished = try await waitForWorkspaceSearchActivationRestore(
+    timeout: .seconds(2)
+  ) {
+    restored
+  }
+  #expect(finished, "Activation restoration stopped retrying before its target mounted")
+  #expect(restored)
+  #expect(attempts == 13)
+}
+
+@Test @MainActor func workspaceSearchStaleAttachmentCannotClearNewPresentation() async throws {
+  let controller = WorkspaceSearchController()
+  controller.present()
+  let firstPresentationID = controller.presentationID
+  controller.setSearchAttachment(true, presentationID: firstPresentationID)
+  controller.setActivationFocusRestore { false }
+  controller.dismiss()
+
+  controller.present()
+  let secondPresentationID = controller.presentationID
+  #expect(secondPresentationID != firstPresentationID)
+  controller.setSearchAttachment(true, presentationID: secondPresentationID)
+  controller.setSearchAttachment(false, presentationID: firstPresentationID)
+
+  var restores = 0
+  controller.setActivationFocusRestore {
+    restores += 1
+    return true
+  }
+
+  controller.dismiss()
+  await settleWorkspaceSearchActivationRestore()
+  #expect(restores == 0)
+
+  controller.setSearchAttachment(false, presentationID: secondPresentationID)
+  let restored = try await waitForWorkspaceSearchActivationRestore {
+    restores == 1
+  }
+  #expect(restored)
+}
+
+@Test @MainActor
+func workspaceSearchHostedActivationRestoreWaitsForRealSearchSurface() async throws {
+  let controller = WorkspaceSearchController()
+  let targetEditor = WorkspaceSearchRefusingTextView(
+    frame: NSRect(x: 20, y: 20, width: 240, height: 60)
+  )
+  targetEditor.string = "Target editor"
+  let priorResponder = NSTextView(frame: NSRect(x: 20, y: 100, width: 240, height: 24))
+  let host = NSHostingView(
+    rootView: WorkspaceSearchAttachmentFixture(
+      controller: controller,
+      showsSurface: false,
+      accent: .blue
+    )
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 480, height: 320),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 320))
+  host.frame = window.contentView?.bounds ?? .zero
+  window.contentView?.addSubview(host)
+  window.contentView?.addSubview(targetEditor)
+  window.contentView?.addSubview(priorResponder)
+  window.makeKeyAndOrderFront(nil)
+  defer {
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+
+  controller.present()
+  host.rootView = WorkspaceSearchAttachmentFixture(
+    controller: controller,
+    showsSurface: true,
+    accent: .blue
+  )
+  await settleWorkspaceSearchHost(host)
+  #expect(window.makeFirstResponder(priorResponder))
+  #expect(window.firstResponder === priorResponder)
+
+  var attempts = 0
+  controller.setActivationFocusRestore {
+    attempts += 1
+    window.makeFirstResponder(targetEditor)
+    return window.firstResponder === targetEditor
+  }
+
+  controller.dismiss()
+  await settleWorkspaceSearchActivationRestore()
+  #expect(
+    window.firstResponder !== targetEditor,
+    "Restoration ran while the real search surface was still attached"
+  )
+  #expect(attempts == 0)
+
+  targetEditor.remainingRefusals = 13
+  host.rootView = WorkspaceSearchAttachmentFixture(
+    controller: controller,
+    showsSurface: false,
+    accent: .blue
+  )
+  await settleWorkspaceSearchHost(host)
+  let restored = try await waitForWorkspaceSearchActivationRestore(
+    timeout: .seconds(2)
+  ) {
+    window.firstResponder === targetEditor
+  }
+  #expect(
+    restored,
+    "Restoration never reached the target editor after the surface detached and the target accepted focus"
+  )
+  #expect(window.firstResponder === targetEditor)
+  #expect(targetEditor.refusalCount == 13)
+  #expect(attempts >= 14)
+}
+
+
 @Test
 func WorkspaceSearchDismissalsUseNotesPanelAnimationContract() throws {
   let root = URL(fileURLWithPath: #filePath)
@@ -1831,6 +2009,66 @@ private func waitForWorkspaceSearchHostState(
     let now = clock.now
     guard now < deadline else { return false }
     try await Task.sleep(for: min(.milliseconds(10), now.duration(to: deadline)))
+  }
+}
+
+@MainActor
+private func settleWorkspaceSearchActivationRestore(
+  for duration: Duration = .milliseconds(200)
+) async {
+  _ = try? await waitForWorkspaceSearchActivationRestore(timeout: duration) { false }
+}
+
+@MainActor
+private func waitForWorkspaceSearchActivationRestore(
+  timeout: Duration = .seconds(1),
+  until condition: @MainActor () -> Bool
+) async throws -> Bool {
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: timeout)
+  while true {
+    try Task.checkCancellation()
+    if condition() { return true }
+    let now = clock.now
+    guard now < deadline else { return false }
+    try await Task.sleep(for: min(.milliseconds(10), now.duration(to: deadline)))
+  }
+}
+
+private struct WorkspaceSearchAttachmentFixture: View {
+  let controller: WorkspaceSearchController
+  let showsSurface: Bool
+  let accent: Color
+
+  var body: some View {
+    ZStack {
+      Color.clear
+      if showsSurface {
+        WorkspaceSearchView(
+          controller: controller,
+          notes: [],
+          accent: accent,
+          presentationID: controller.presentationID,
+          reduceMotion: true,
+          currentNoteIDs: { [] },
+          onActivate: { _ in },
+          onDismiss: {}
+        )
+      }
+    }
+  }
+}
+
+@MainActor
+private final class WorkspaceSearchRefusingTextView: NSTextView {
+  var remainingRefusals = 0
+  private(set) var refusalCount = 0
+
+  override func becomeFirstResponder() -> Bool {
+    guard remainingRefusals > 0 else { return super.becomeFirstResponder() }
+    remainingRefusals -= 1
+    refusalCount += 1
+    return false
   }
 }
 

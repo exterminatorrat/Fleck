@@ -141,6 +141,7 @@
     private var searchGeneration: UInt64 = 0
     private var resultGeneration: UInt64?
     private weak var hostingWindow: NSWindow?
+    private var attachedPresentationID: UInt64?
     private var focusOrigin: WorkspaceSearchFocusOrigin?
     private var focusRestoreTask: Task<Void, Never>?
     private var focusRestoreGeneration: UInt64 = 0
@@ -195,6 +196,7 @@
       hasActivatedCurrentPresentation = false
       presentationKind = presentation
       isPresented = true
+      attachedPresentationID = nil
     }
 
     func dismiss(ifPresentationID presentationID: UInt64) {
@@ -219,6 +221,7 @@
       activationFocusRestore = nil
       let origin = focusOrigin
       focusOrigin = nil
+      let dismissedPresentationID = presentationID
       if let activationRestore {
         focusRestoreAction = activationRestore
       } else if let origin {
@@ -226,15 +229,41 @@
         focusRestoreAction = { origin.restore() }
       }
       guard focusRestoreAction != nil else { return }
+      let restoresActivationFocus = activationRestore != nil
       focusRestoreTask = Task { @MainActor [weak self] in
-        for _ in 0..<12 {
-          guard !Task.isCancelled else { return }
-          await Task.yield()
+        let deadline = ContinuousClock.now + .seconds(2)
+        let attachmentDeadline = ContinuousClock.now + .milliseconds(750)
+        var attempts = 0
+        while true {
+          if restoresActivationFocus {
+            if attempts > 0 {
+              let now = ContinuousClock.now
+              guard now < deadline else { break }
+              do {
+                try await Task.sleep(for: min(.milliseconds(16), now.duration(to: deadline)))
+              } catch {
+                return
+              }
+            } else {
+              await Task.yield()
+            }
+          } else {
+            guard !Task.isCancelled else { return }
+            guard attempts < 12 else { break }
+            await Task.yield()
+          }
           guard !Task.isCancelled,
             let self,
             self.focusRestoreGeneration == restoreGeneration
           else {
             return
+          }
+          attempts += 1
+          if restoresActivationFocus,
+            self.attachedPresentationID == dismissedPresentationID,
+            ContinuousClock.now < attachmentDeadline
+          {
+            continue
           }
           if self.focusRestoreAction?() == true {
             self.focusRestoreAction = nil
@@ -250,6 +279,11 @@
 
     func setHostingWindow(_ window: NSWindow?) {
       hostingWindow = window
+    }
+
+    func setSearchAttachment(_ attached: Bool, presentationID: UInt64) {
+      guard presentationID == self.presentationID else { return }
+      attachedPresentationID = attached ? presentationID : nil
     }
 
     func setQuery(_ query: String, in notes: [Note]) {
@@ -656,6 +690,21 @@
     }
   }
 
+  struct WorkspaceSearchAttachmentReader: NSViewRepresentable {
+    let controller: WorkspaceSearchController
+    let presentationID: UInt64
+
+    func makeNSView(context: Context) -> WorkspaceSearchWindowObserver {
+      WorkspaceSearchWindowObserver { window in
+        controller.setSearchAttachment(window != nil, presentationID: presentationID)
+      }
+    }
+
+    func updateNSView(_ nsView: WorkspaceSearchWindowObserver, context: Context) {
+      controller.setSearchAttachment(nsView.window != nil, presentationID: presentationID)
+    }
+  }
+
   struct WorkspaceSearchView: View {
     @Environment(\.fleckThemeSnapshot) private var theme
     @ObservedObject var controller: WorkspaceSearchController
@@ -857,6 +906,13 @@
         .padding(.top, 8)
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+      .background(
+        WorkspaceSearchAttachmentReader(
+          controller: controller,
+          presentationID: presentationID
+        )
+        .frame(width: 0, height: 0)
+      )
       .onMoveCommand { direction in
         switch direction {
         case .up:

@@ -119,6 +119,174 @@ private actor AppStateRetrySaveOutcome {
   }
 }
 
+private actor AppStateSaveGate {
+  private var isHolding = false
+  private var isReleased = false
+  private var hasEntered = false
+  private var enterWaiters: [CheckedContinuation<Void, Never>] = []
+  private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+  func hold() {
+    isHolding = true
+  }
+
+  func pass() async {
+    guard isHolding, !isReleased else { return }
+    if !hasEntered {
+      hasEntered = true
+      let waiters = enterWaiters
+      enterWaiters = []
+      for waiter in waiters {
+        waiter.resume()
+      }
+    }
+    await withCheckedContinuation { releaseWaiters.append($0) }
+  }
+
+  func waitUntilHeld() async {
+    guard !hasEntered else { return }
+    await withCheckedContinuation { enterWaiters.append($0) }
+  }
+
+  func release() {
+    isReleased = true
+    let waiters = releaseWaiters
+    releaseWaiters = []
+    for waiter in waiters {
+      waiter.resume()
+    }
+  }
+}
+
+@Test(arguments: [false, true]) @MainActor
+func folderValidationErrorSurvivesQueuedPersistenceSave(
+  saveRequestedFirst: Bool
+) async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let message = "Could not update folder: duplicateName"
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in .committed }
+  )
+  await state.waitUntilInitialLoad()
+
+  let queuedSave = saveRequestedFirst ? state.saveNow() : nil
+  state.folderActionFailed(message, folderID: nil)
+
+  if let queuedSave {
+    try await queuedSave.value
+  } else {
+    try await state.saveNow().value
+  }
+
+  #expect(state.saveError == message)
+}
+
+@Test @MainActor func folderValidationErrorSurvivesInFlightPersistenceSave() async throws {
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let message = "Could not update folder: duplicateName"
+  let gate = AppStateSaveGate()
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in
+      await gate.pass()
+      return .committed
+    }
+  )
+  await state.waitUntilInitialLoad()
+  await gate.hold()
+
+  let save = state.saveNow()
+  await gate.waitUntilHeld()
+  state.folderActionFailed(message, folderID: nil)
+  await gate.release()
+  try await save.value
+
+  #expect(state.saveError == message)
+}
+
+@Test @MainActor func folderActionSuccessClearsItsOwnValidationError() async throws {
+  let work = try folder(named: "Work")
+  let personal = try folder(named: "Personal")
+  let state = await folderedState(workspace: Workspace(folders: [work, personal]))
+
+  do {
+    try state.renameFolder(id: work.id, name: "Personal")
+    Issue.record("Expected the duplicate folder name to fail")
+  } catch {
+    state.folderActionFailed(
+      "Could not update folder: \(String(describing: error))",
+      folderID: work.id
+    )
+  }
+  try #require(state.saveError != nil)
+
+  try state.renameFolder(id: work.id, name: "Work")
+  state.folderActionSucceeded(folderID: work.id)
+
+  #expect(state.saveError == nil)
+}
+
+@Test @MainActor func folderActionSuccessDoesNotClearAnotherFoldersValidationError() async throws {
+  let work = try folder(named: "Work")
+  let personal = try folder(named: "Personal")
+  let state = await folderedState(workspace: Workspace(folders: [work, personal]))
+
+  do {
+    try state.renameFolder(id: work.id, name: "Personal")
+    Issue.record("Expected the duplicate folder name to fail")
+  } catch {
+    state.folderActionFailed(
+      "Could not update folder: \(String(describing: error))",
+      folderID: work.id
+    )
+  }
+  try #require(state.saveError != nil)
+
+  try state.renameFolder(id: personal.id, name: "Archive")
+  state.folderActionSucceeded(folderID: personal.id)
+
+  #expect(state.saveError != nil)
+}
+
+@Test @MainActor func folderCreationSuccessClearsItsOwnValidationError() async throws {
+  let work = try folder(named: "Work")
+  let state = await folderedState(workspace: Workspace(folders: [work]))
+
+  do {
+    _ = try state.createFolder(named: "Work")
+    Issue.record("Expected the duplicate folder name to fail")
+  } catch {
+    state.folderActionFailed(
+      "Could not update folder: \(String(describing: error))",
+      folderID: nil
+    )
+  }
+  try #require(state.saveError != nil)
+
+  _ = try state.createFolder(named: "Archive")
+  state.folderActionSucceeded(folderID: nil)
+
+  #expect(state.saveError == nil)
+}
+
+@Test @MainActor func folderActionSuccessPreservesUnrelatedSaveError() async throws {
+  let state = await folderedState(workspace: Workspace())
+  let message = "Inline image import failed"
+
+  state.inlineNoteImageImportFailed(message)
+  state.folderActionSucceeded(folderID: nil)
+  #expect(state.saveError == message)
+
+  try await state.saveNow().value
+
+  #expect(state.saveError == message)
+}
+
 @Test @MainActor func editingReportsSavingThenSaved() async throws {
   let root = FileManager.default.temporaryDirectory
     .appendingPathComponent(UUID().uuidString, isDirectory: true)
