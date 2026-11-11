@@ -3,6 +3,16 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.7.26-beta.1] - 2026-11-09
+
+### Changed
+
+- Avoid redundant editor presentation and selected-content mutation work while preserving canonical rich text, note value semantics, and editor identity.
+- Prepare independent agent journal transactions off the main actor and skip redundant write preflight persistence only for a known committed clean generation.
+- Reuse validated snapshot payloads within a load without weakening integrity checks or introducing a cross-load cache.
+- Preserve live and unavailable note-link presentation when caret-only formatting changes typing attributes without changing the note.
+- Retain the changes as provisional: historical integrated validation includes eleven inconclusive metrics and does not establish performance acceptance for this public source projection.
+
 ## [1.7.24-beta.1] - 2026-11-06
 
 ### Changed

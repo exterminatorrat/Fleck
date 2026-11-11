@@ -173,6 +173,49 @@ if [ "${1:-}" = build ] && [ "${2:-}" = --build-tests ]; then
   exit "${FAKE_BUILD_EXIT:-0}"
 fi
 
+if [ "${1:-}" = build ] && [ "${2:-}" = --target ]; then
+  target_name="${3:-}"
+  if [ -n "${FAKE_EXPECT_TARGET:-}" ] &&
+    [ "$target_name" != "$FAKE_EXPECT_TARGET" ]; then
+    printf 'error: expected target %s, got %s\n' \
+      "$FAKE_EXPECT_TARGET" "$target_name" >&2
+    exit 91
+  fi
+  /bin/mkdir -p "$FAKE_STATE/bin"
+  if [ "${FAKE_SKIP_TARGET_BUNDLE:-0}" != 1 ]; then
+    target_bundle="$FAKE_STATE/bin/$target_name.xctest"
+    if [ "${FAKE_TARGET_BUNDLE_SYMLINK:-0}" = 1 ]; then
+      target_bundle_target="$FAKE_STATE/target-bundle-target/$target_name.xctest"
+      /bin/mkdir -p "$target_bundle_target/Contents/MacOS"
+      printf '%s\n' 'fake target test bundle' \
+        > "$target_bundle_target/Contents/MacOS/$target_name"
+      /bin/chmod +x "$target_bundle_target/Contents/MacOS/$target_name"
+      /bin/ln -s "$target_bundle_target" "$target_bundle"
+    else
+      /bin/mkdir -p "$target_bundle/Contents/MacOS"
+      if [ "${FAKE_TARGET_EXECUTABLE_SYMLINK:-0}" = 1 ]; then
+        target_binary_target="$FAKE_STATE/target-binary-target/$target_name"
+        /bin/mkdir -p "$FAKE_STATE/target-binary-target"
+        printf '%s\n' 'fake target test bundle executable' > "$target_binary_target"
+        /bin/chmod +x "$target_binary_target"
+        /bin/ln -s "$target_binary_target" \
+          "$target_bundle/Contents/MacOS/$target_name"
+      elif [ "${FAKE_SKIP_TARGET_EXECUTABLE:-0}" != 1 ]; then
+        printf '%s\n' 'fake target test bundle' \
+          > "$target_bundle/Contents/MacOS/$target_name"
+        /bin/chmod +x "$target_bundle/Contents/MacOS/$target_name"
+      fi
+    fi
+  fi
+  if [ "${FAKE_TARGET_WITH_DECOY:-0}" = 1 ]; then
+    decoy="$FAKE_STATE/bin/OtherPackageTests.xctest/Contents/MacOS"
+    /bin/mkdir -p "$decoy"
+    printf '%s\n' 'unselected test bundle' > "$decoy/OtherPackageTests"
+    /bin/chmod +x "$decoy/OtherPackageTests"
+  fi
+  exit "${FAKE_BUILD_EXIT:-0}"
+fi
+
 if [ "${1:-}" = build ] && [ "${2:-}" = --show-bin-path ]; then
   printf '%s\n' "$FAKE_STATE/bin"
   exit "${FAKE_BIN_PATH_EXIT:-0}"
@@ -319,6 +362,23 @@ if [ -f "$FAKE_STATE/host-path-forwarding-contract" ] &&
   [[ ${FLECK_TEST_APPKIT_HOST_APP_PATH+x} ]]; then
   printf '%s\n' 'error: fake host received the internal host-app path variable' >&2
   exit 97
+fi
+if [ -f "$FAKE_STATE/performance-forwarding-contract" ]; then
+  [[ "${FLECK_PERF_RUN:-}" = 1 &&
+     "${FLECK_PERF_CONFIGURATION:-}" = release &&
+     -n "${FLECK_PERF_BUILD_SYSTEM:-}" &&
+     "${FLECK_PERF_BASELINE_RECEIPT:-}" = /tmp/fleck-perf-baseline.json &&
+     "${FLECK_PERF_SWIFT_VERSION:-}" = 'Swift version 6.4.0 (swift-6.4-RELEASE)' ]] || {
+    printf '%s\n' 'error: fake host lost a performance setting' >&2
+    exit 97
+  }
+  if [[ ${FLECK_TEST_SWIFT_BUILD_SYSTEM+x} ||
+        ${FLECK_TEST_SWIFT_CONFIGURATION+x} ||
+        ${FLECK_TEST_SWIFT_TARGET+x} ]]; then
+    printf '%s\n' 'error: fake host received a build-only setting' >&2
+    exit 97
+  fi
+  printf '%s\n' pass >> "$FAKE_STATE/performance-environment-observations"
 fi
 if [ -f "$FAKE_STATE/environment-forwarding-contract" ]; then
   if [[ ${FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR+x} ]]; then
@@ -557,9 +617,10 @@ while [ "$#" -gt 0 ]; do
       forwarded_environment_names+=("$environment_name")
       forwarded_environment_assignments+=("$environment_assignment")
       printf 'environment:%s\n' "$environment_name" >> "$FAKE_STATE/open-environments"
-      if [ -f "$FAKE_STATE/environment-forwarding-contract" ]; then
+      if [ -f "$FAKE_STATE/environment-forwarding-contract" ] ||
+        [ -f "$FAKE_STATE/performance-forwarding-contract" ]; then
         case "$environment_name" in
-          FLECK_SETTINGS_WINDOW_CAPTURE_DIR|FLECK_SETTINGS_MODELS_CAPTURE_DIR|FLECK_NATIVE_CAPTURE_QA|FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC)
+          FLECK_SETTINGS_WINDOW_CAPTURE_DIR|FLECK_SETTINGS_MODELS_CAPTURE_DIR|FLECK_NATIVE_CAPTURE_QA|FLECK_FOLDER_NAVIGATOR_DIAGNOSTIC|FLECK_PERF_RUN|FLECK_PERF_BUILD_SYSTEM|FLECK_PERF_CONFIGURATION|FLECK_PERF_BASELINE_RECEIPT|FLECK_PERF_SWIFT_VERSION)
             printf 'environment:%s\n' "$environment_assignment" \
               >> "$FAKE_STATE/open-environment-probes"
             ;;
@@ -621,6 +682,11 @@ printf '%s\n' "$app_path" >> "$FAKE_STATE/host-app-paths"
 if [ -n "${FAKE_PRESERVE_HOST_APP_PATH:-}" ] &&
   [ ! -e "$FAKE_PRESERVE_HOST_APP_PATH" ]; then
   /bin/cp -R "$app_path" "$FAKE_PRESERVE_HOST_APP_PATH"
+fi
+if [ -f "$FAKE_STATE/performance-forwarding-contract" ]; then
+  unset FLECK_PERF_RUN FLECK_PERF_CONFIGURATION FLECK_PERF_BASELINE_RECEIPT \
+    FLECK_PERF_BUILD_SYSTEM FLECK_PERF_SWIFT_VERSION FLECK_TEST_SWIFT_BUILD_SYSTEM \
+    FLECK_TEST_SWIFT_CONFIGURATION FLECK_TEST_SWIFT_TARGET
 fi
 if [ -f "$FAKE_STATE/environment-forwarding-contract" ]; then
   for probe_name in FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR \
@@ -872,12 +938,15 @@ reset_invocations() {
   : > "$fixture_state/sample-pids"
   : > "$fixture_state/output"
   printf 'ordinary root lock\n' > "$fixture_root/Package.resolved"
-  /bin/rm -rf -- "$fixture_state/bin"
+  /bin/rm -rf -- "$fixture_state/bin" "$fixture_state/target-bundle-target" \
+    "$fixture_state/target-binary-target"
   /bin/rm -f -- "$fixture_state/enhanced-scratch" \
     "$fixture_state/resolver-root-backup" \
     "$fixture_state/resolver-root" \
     "$fixture_state/selected-runtime-identifiers" \
     "$fixture_state/environment-forwarding-contract" \
+    "$fixture_state/performance-forwarding-contract" \
+    "$fixture_state/performance-environment-observations" \
     "$fixture_state/host-path-forwarding-contract" \
     "$fixture_state/host-environment-observations"
 }
@@ -927,6 +996,8 @@ run_enhanced_with_controls() {
 run_appkit_environment_probe() {
   (
     cd "$foreign_root"
+    unset FLECK_TEST_SWIFT_BUILD_SYSTEM FLECK_TEST_SWIFT_CONFIGURATION \
+      FLECK_TEST_SWIFT_TARGET
     unset FLECK_SETTINGS_SIDEBAR_CAPTURE_DIR FLECK_ENHANCED_CANDIDATE
     FLECK_SETTINGS_WINDOW_CAPTURE_DIR=''
     export FLECK_SETTINGS_WINDOW_CAPTURE_DIR
@@ -941,6 +1012,96 @@ run_appkit_environment_probe() {
       FAKE_STATE="$fixture_state" \
       FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
       FAKE_RUN_OUTPUT='✔ Test run with 1 test in 0 suites passed after 0.001 seconds.' \
+      "$fixture_scripts/run-swift-tests-with-appkit-host.sh" \
+        "$fixture_root" '' '^FleckCoreTests\.known\(\)$'
+  )
+}
+
+run_appkit_test_probe() {
+  (
+    cd "$foreign_root"
+    PATH="$fixture_bin:$PATH" \
+      FLECK_TEST_APPKIT_OPEN_PATH="$fixture_bin/open" \
+      FLECK_TEST_APPKIT_SAMPLE_PATH="$fixture_bin/sample" \
+      FLECK_TEST_APPKIT_CODESIGN_PATH="$fixture_bin/codesign" \
+      FAKE_STATE="$fixture_state" \
+      FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+      FAKE_RUN_OUTPUT='✔ Test run with 1 test in 0 suites passed after 0.001 seconds.' \
+      FAKE_EXPECT_NO_PARALLEL=1 \
+      "$fixture_scripts/run-swift-tests-with-appkit-host.sh" \
+        "$fixture_root" '' '^FleckCoreTests\.known\(\)$'
+  )
+}
+
+run_appkit_target_without_engine_probe() {
+  (
+    unset FLECK_TEST_SWIFT_BUILD_SYSTEM
+    FLECK_TEST_SWIFT_TARGET=FleckPerformanceTests run_appkit_test_probe
+  )
+}
+
+run_performance_environment_probe() {
+  (
+    cd "$foreign_root"
+    unset FLECK_TEST_SWIFT_TARGET
+    PATH="$fixture_bin:$PATH" \
+      FLECK_TEST_APPKIT_OPEN_PATH="$fixture_bin/open" \
+      FLECK_TEST_APPKIT_SAMPLE_PATH="$fixture_bin/sample" \
+      FLECK_TEST_APPKIT_CODESIGN_PATH="$fixture_bin/codesign" \
+      FLECK_TEST_SWIFT_BUILD_SYSTEM=native \
+      FLECK_TEST_SWIFT_CONFIGURATION=release \
+      FLECK_PERF_RUN=1 \
+      FLECK_PERF_BASELINE_RECEIPT=/tmp/fleck-perf-baseline.json \
+      FLECK_PERF_SWIFT_VERSION='Swift version 6.4.0 (swift-6.4-RELEASE)' \
+      FAKE_STATE="$fixture_state" \
+      FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+      FAKE_RUN_OUTPUT='✔ Test run with 1 test in 0 suites passed after 0.001 seconds.' \
+      FAKE_EXPECT_NO_PARALLEL=1 \
+      "$fixture_scripts/run-swift-tests-with-appkit-host.sh" \
+        "$fixture_root" '' '^FleckCoreTests\.known\(\)$'
+  )
+}
+
+run_performance_target_probe() {
+  (
+    cd "$foreign_root"
+    PATH="$fixture_bin:$PATH" \
+      FLECK_TEST_APPKIT_OPEN_PATH="$fixture_bin/open" \
+      FLECK_TEST_APPKIT_SAMPLE_PATH="$fixture_bin/sample" \
+      FLECK_TEST_APPKIT_CODESIGN_PATH="$fixture_bin/codesign" \
+      FLECK_TEST_SWIFT_BUILD_SYSTEM=swiftbuild \
+      FLECK_TEST_SWIFT_CONFIGURATION=release \
+      FLECK_TEST_SWIFT_TARGET=FleckPerformanceTests \
+      FLECK_PERF_RUN=1 \
+      FLECK_PERF_BASELINE_RECEIPT=/tmp/fleck-perf-baseline.json \
+      FLECK_PERF_SWIFT_VERSION='Swift version 6.4.0 (swift-6.4-RELEASE)' \
+      FAKE_STATE="$fixture_state" \
+      FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+      FAKE_RUN_OUTPUT='✔ Test run with 1 test in 0 suites passed after 0.001 seconds.' \
+      FAKE_EXPECT_TARGET=FleckPerformanceTests \
+      FAKE_EXPECT_NO_PARALLEL=1 \
+      FAKE_TARGET_WITH_DECOY=1 \
+      "$fixture_scripts/run-swift-tests-with-appkit-host.sh" \
+        "$fixture_root" '' '^FleckCoreTests\.known\(\)$'
+  )
+}
+
+run_performance_default_engine_probe() {
+  (
+    cd "$foreign_root"
+    unset FLECK_TEST_SWIFT_BUILD_SYSTEM FLECK_TEST_SWIFT_TARGET
+    PATH="$fixture_bin:$PATH" \
+      FLECK_TEST_APPKIT_OPEN_PATH="$fixture_bin/open" \
+      FLECK_TEST_APPKIT_SAMPLE_PATH="$fixture_bin/sample" \
+      FLECK_TEST_APPKIT_CODESIGN_PATH="$fixture_bin/codesign" \
+      FLECK_TEST_SWIFT_CONFIGURATION=release \
+      FLECK_PERF_RUN=1 \
+      FLECK_PERF_BASELINE_RECEIPT=/tmp/fleck-perf-baseline.json \
+      FLECK_PERF_SWIFT_VERSION='Swift version 6.4.0 (swift-6.4-RELEASE)' \
+      FAKE_STATE="$fixture_state" \
+      FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+      FAKE_RUN_OUTPUT='✔ Test run with 1 test in 0 suites passed after 0.001 seconds.' \
+      FAKE_EXPECT_NO_PARALLEL=1 \
       "$fixture_scripts/run-swift-tests-with-appkit-host.sh" \
         "$fixture_root" '' '^FleckCoreTests\.known\(\)$'
   )
@@ -984,6 +1145,207 @@ if [[ "${FLECK_TEST_FOLDER_DIAGNOSTIC_CONTRACT_ONLY:-0}" = 1 ]]; then
   printf '%s\n' 'Folder navigator diagnostic environment contracts passed.'
   exit 0
 fi
+
+assert_performance_environment_forwarding_contracts() {
+  reset_invocations
+  : > "$fixture_state/performance-forwarding-contract"
+  run_capture "$fixture_state/output" run_performance_environment_probe
+  assert_status 0
+  /usr/bin/grep -Fxq 'matched test count: 1' "$fixture_state/output" ||
+    fail 'performance host probe did not resolve exactly one test'
+  for assignment in \
+    'FLECK_PERF_RUN=1' \
+    'FLECK_PERF_BUILD_SYSTEM=native' \
+    'FLECK_PERF_CONFIGURATION=release' \
+    'FLECK_PERF_BASELINE_RECEIPT=/tmp/fleck-perf-baseline.json' \
+    'FLECK_PERF_SWIFT_VERSION=Swift version 6.4.0 (swift-6.4-RELEASE)'; do
+    forwarded_count="$(/usr/bin/grep -Fxc "environment:$assignment" \
+      "$fixture_state/open-environment-probes" || true)"
+    [[ "$forwarded_count" -eq 2 ]] ||
+      fail "AppKit host did not forward the performance setting to both phases: ${assignment%%=*}"
+  done
+  for environment_name in FLECK_TEST_SWIFT_BUILD_SYSTEM \
+    FLECK_TEST_SWIFT_CONFIGURATION FLECK_TEST_SWIFT_TARGET; do
+    if /usr/bin/grep -E -q "^environment:$environment_name(=|$)" \
+      "$fixture_state/open-environments"; then
+      fail "AppKit host forwarded a build-only setting: $environment_name"
+    fi
+  done
+  [[ "$(wc -l < "$fixture_state/performance-environment-observations" | tr -d ' ')" -eq 2 ]] ||
+    fail 'fake AppKit hosts did not both receive the performance settings'
+  assert_root_lock
+}
+
+assert_performance_environment_forwarding_contracts
+
+assert_performance_default_engine_forwarding_contracts() {
+  reset_invocations
+  : > "$fixture_state/performance-forwarding-contract"
+  run_capture "$fixture_state/output" run_performance_default_engine_probe
+  assert_status 0
+  forwarded_count="$(/usr/bin/grep -Fxc \
+    'environment:FLECK_PERF_BUILD_SYSTEM=default' \
+    "$fixture_state/open-environment-probes" || true)"
+  [[ "$forwarded_count" -eq 2 ]] ||
+    fail 'AppKit hosts did not receive the literal default build-system metadata'
+  assert_root_lock
+}
+
+assert_performance_default_engine_forwarding_contracts
+
+assert_performance_target_environment_forwarding_contracts() {
+  local expected_bundle="$fixture_state/bin/FleckPerformanceTests.xctest/Contents/MacOS/FleckPerformanceTests"
+  reset_invocations
+  : > "$fixture_state/performance-forwarding-contract"
+  run_capture "$fixture_state/output" run_performance_target_probe
+  assert_status 0
+  for assignment in \
+    'FLECK_PERF_RUN=1' \
+    'FLECK_PERF_BUILD_SYSTEM=swiftbuild' \
+    'FLECK_PERF_CONFIGURATION=release' \
+    'FLECK_PERF_BASELINE_RECEIPT=/tmp/fleck-perf-baseline.json' \
+    'FLECK_PERF_SWIFT_VERSION=Swift version 6.4.0 (swift-6.4-RELEASE)'; do
+    forwarded_count="$(/usr/bin/grep -Fxc "environment:$assignment" \
+      "$fixture_state/open-environment-probes" || true)"
+    [[ "$forwarded_count" -eq 2 ]] ||
+      fail "target-mode AppKit host did not forward the performance setting to both phases: ${assignment%%=*}"
+  done
+  for environment_name in FLECK_TEST_SWIFT_BUILD_SYSTEM \
+    FLECK_TEST_SWIFT_CONFIGURATION FLECK_TEST_SWIFT_TARGET; do
+    if /usr/bin/grep -E -q "^environment:$environment_name(=|$)" \
+      "$fixture_state/open-environments"; then
+      fail "target-mode AppKit host forwarded a build-only setting: $environment_name"
+    fi
+  done
+  [[ "$(wc -l < "$fixture_state/swift-invocations" | tr -d ' ')" -eq 2 ]] ||
+    fail 'target mode must use only the build and matching bin-path lookup'
+  /usr/bin/grep -Fxq \
+    "$fixture_root|build --target FleckPerformanceTests --disable-automatic-resolution --build-system swiftbuild --configuration release -Xswiftc -enable-testing" \
+    "$fixture_state/swift-invocations" ||
+    fail 'target mode did not build the selected testable Release target with swiftbuild'
+  /usr/bin/grep -Fxq \
+    "$fixture_root|build --show-bin-path --target FleckPerformanceTests --disable-automatic-resolution --build-system swiftbuild --configuration release -Xswiftc -enable-testing" \
+    "$fixture_state/swift-invocations" ||
+    fail 'target mode did not preserve testability, target, configuration, and engine for bin lookup'
+  if /usr/bin/grep -Fq -- '--build-tests' "$fixture_state/swift-invocations"; then
+    fail 'per-target build must not request the aggregate --build-tests graph'
+  fi
+  [[ -x "$fixture_state/bin/OtherPackageTests.xctest/Contents/MacOS/OtherPackageTests" ]] ||
+    fail 'target-selection fixture did not create its decoy bundle'
+  [[ "$(/usr/bin/grep -Fc "$expected_bundle|" "$fixture_state/host-invocations")" -eq 2 ]] ||
+    fail 'target mode did not select the exact target bundle for both host phases'
+  [[ "$(wc -l < "$fixture_state/performance-environment-observations" | tr -d ' ')" -eq 2 ]] ||
+    fail 'target-mode AppKit hosts did not both receive performance metadata'
+  assert_root_lock
+}
+
+assert_performance_target_environment_forwarding_contracts
+
+assert_target_configuration_rejection_contracts() {
+  local invalid_engine invalid_target
+  for invalid_target in '' '../FleckPerformanceTests' 'Fleck/PerformanceTests'; do
+    reset_invocations
+    FLECK_TEST_SWIFT_BUILD_SYSTEM=swiftbuild \
+      FLECK_TEST_SWIFT_TARGET="$invalid_target" \
+      run_capture "$fixture_state/output" run_appkit_test_probe
+    assert_status 2
+    /usr/bin/grep -Fq 'FLECK_TEST_SWIFT_TARGET must be a non-empty safe Swift target name' \
+      "$fixture_state/output" || fail 'empty or unsafe target name was not rejected explicitly'
+    [[ ! -s "$fixture_state/swift-invocations" ]] ||
+      fail 'invalid target name reached SwiftPM'
+    assert_root_lock
+  done
+
+  reset_invocations
+  run_capture "$fixture_state/output" run_appkit_target_without_engine_probe
+  assert_status 2
+  /usr/bin/grep -Fq 'FLECK_TEST_SWIFT_TARGET requires FLECK_TEST_SWIFT_BUILD_SYSTEM=swiftbuild' \
+    "$fixture_state/output" || fail 'omitted target-mode build engine was not rejected explicitly'
+  [[ ! -s "$fixture_state/swift-invocations" ]] ||
+    fail 'target mode without an explicit engine reached SwiftPM'
+  assert_root_lock
+
+  for invalid_engine in native xcode unsupported; do
+    reset_invocations
+    FLECK_TEST_SWIFT_BUILD_SYSTEM="$invalid_engine" \
+      FLECK_TEST_SWIFT_TARGET=FleckPerformanceTests \
+      run_capture "$fixture_state/output" run_appkit_test_probe
+    assert_status 2
+    /usr/bin/grep -Fq 'FLECK_TEST_SWIFT_TARGET requires FLECK_TEST_SWIFT_BUILD_SYSTEM=swiftbuild' \
+      "$fixture_state/output" ||
+      fail "target mode accepted unsupported build engine '$invalid_engine'"
+    [[ ! -s "$fixture_state/swift-invocations" ]] ||
+      fail "target mode with '$invalid_engine' reached SwiftPM"
+    assert_root_lock
+  done
+
+  reset_invocations
+  FLECK_TEST_SWIFT_BUILD_SYSTEM=swiftbuild \
+    FLECK_TEST_SWIFT_CONFIGURATION=optimized \
+    FLECK_TEST_SWIFT_TARGET=FleckPerformanceTests \
+    run_capture "$fixture_state/output" run_appkit_test_probe
+  assert_status 2
+  /usr/bin/grep -Fq 'FLECK_TEST_SWIFT_CONFIGURATION must be debug or release' \
+    "$fixture_state/output" || fail 'invalid target-mode configuration was not rejected explicitly'
+  [[ ! -s "$fixture_state/swift-invocations" ]] ||
+    fail 'invalid target-mode configuration reached SwiftPM'
+  assert_root_lock
+}
+
+assert_target_configuration_rejection_contracts
+
+assert_target_bundle_fail_closed_contracts() {
+  local test_case
+  for test_case in missing symlink non-executable executable-symlink; do
+    reset_invocations
+    case "$test_case" in
+      missing)
+        FLECK_TEST_SWIFT_BUILD_SYSTEM=swiftbuild \
+          FLECK_TEST_SWIFT_CONFIGURATION=release \
+          FLECK_TEST_SWIFT_TARGET=FleckPerformanceTests \
+          FAKE_SKIP_TARGET_BUNDLE=1 FAKE_TARGET_WITH_DECOY=1 \
+          run_capture "$fixture_state/output" run_appkit_test_probe
+        ;;
+      symlink)
+        FLECK_TEST_SWIFT_BUILD_SYSTEM=swiftbuild \
+          FLECK_TEST_SWIFT_CONFIGURATION=release \
+          FLECK_TEST_SWIFT_TARGET=FleckPerformanceTests \
+          FAKE_TARGET_BUNDLE_SYMLINK=1 \
+          run_capture "$fixture_state/output" run_appkit_test_probe
+        ;;
+      non-executable)
+        FLECK_TEST_SWIFT_BUILD_SYSTEM=swiftbuild \
+          FLECK_TEST_SWIFT_CONFIGURATION=release \
+          FLECK_TEST_SWIFT_TARGET=FleckPerformanceTests \
+          FAKE_SKIP_TARGET_EXECUTABLE=1 \
+          run_capture "$fixture_state/output" run_appkit_test_probe
+        ;;
+      executable-symlink)
+        FLECK_TEST_SWIFT_BUILD_SYSTEM=swiftbuild \
+          FLECK_TEST_SWIFT_CONFIGURATION=release \
+          FLECK_TEST_SWIFT_TARGET=FleckPerformanceTests \
+          FAKE_TARGET_EXECUTABLE_SYMLINK=1 \
+          run_capture "$fixture_state/output" run_appkit_test_probe
+        ;;
+    esac
+    [[ "$RUN_STATUS" -ne 0 ]] ||
+      fail "$test_case target bundle unexpectedly passed"
+    if [[ "$test_case" = non-executable || "$test_case" = executable-symlink ]]; then
+      /usr/bin/grep -Fq 'freshly built Swift test bundle has no safe executable:' \
+        "$fixture_state/output" ||
+        fail 'target bundle without an executable was not rejected explicitly'
+    else
+      /usr/bin/grep -Fq 'freshly built Swift test bundle for target FleckPerformanceTests is missing or unsafe:' \
+        "$fixture_state/output" ||
+        fail "$test_case target bundle was not rejected explicitly"
+    fi
+    [[ ! -s "$fixture_state/open-invocations" && ! -s "$fixture_state/host-invocations" ]] ||
+      fail "$test_case target bundle reached the AppKit host"
+    assert_root_lock
+  done
+}
+
+assert_target_bundle_fail_closed_contracts
 
 assert_completion_contracts() {
   local runner="$1"
@@ -1069,12 +1431,25 @@ run_capture "$fixture_state/output" run_ordinary 'FleckCoreTests\.known\(\)$'
 readonly real_sdk="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
 readonly real_platform="$(/usr/bin/xcrun --sdk macosx --show-sdk-platform-path)"
 readonly real_frameworks="$real_platform/Developer/Library/Frameworks"
-readonly real_host="$fixture_state/AppKitTestHost"
+readonly real_host_app="$fixture_state/RealAppKitTestHost.app"
+readonly real_host="$real_host_app/Contents/MacOS/AppKitTestHost"
 readonly real_host_config="$fixture_state/real-host-configuration"
 readonly real_host_receipt="$fixture_state/real-host-receipt"
 readonly real_host_process="$fixture_state/real-host-process"
 readonly real_host_phase="$fixture_state/real-host-phase"
 readonly real_host_log="$fixture_state/real-host-log"
+/bin/mkdir -p "$real_host_app/Contents/MacOS"
+/bin/cat > "$real_host_app/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleExecutable</key><string>AppKitTestHost</string>
+  <key>CFBundleIdentifier</key><string>org.fleck.runner-contract-host</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>NSPrincipalClass</key><string>AppKitTestProbeApplication</string>
+  <key>LSUIElement</key><true/>
+</dict></plist>
+PLIST
 "$(/usr/bin/xcrun --sdk macosx --find swiftc)" -parse-as-library \
   -sdk "$real_sdk" -F "$real_frameworks" \
   -framework AppKit -framework Testing \
@@ -1097,7 +1472,13 @@ readonly list_branch_line="$(/usr/bin/grep -nF \
   'if parsedArguments.testingArguments.listTests == true' "$appkit_host_source" | \
   /usr/bin/head -n 1 | /usr/bin/cut -d: -f1)"
 readonly appkit_initialization_line="$(/usr/bin/grep -nF \
-  'let application = NSApplication.shared' "$appkit_host_source" | \
+  'let sharedApplication = AppKitTestProbeApplication.shared' "$appkit_host_source" | \
+  /usr/bin/head -n 1 | /usr/bin/cut -d: -f1)"
+readonly probe_installation_line="$(/usr/bin/grep -nF \
+  'application.installModelsClickObservers()' "$appkit_host_source" | \
+  /usr/bin/head -n 1 | /usr/bin/cut -d: -f1)"
+readonly application_run_line="$(/usr/bin/grep -nF \
+  'application.run()' "$appkit_host_source" | \
   /usr/bin/head -n 1 | /usr/bin/cut -d: -f1)"
 readonly launch_guard_line="$(/usr/bin/grep -nF \
   'guard !didStartTestRun' "$appkit_host_source" | \
@@ -1115,10 +1496,13 @@ readonly run_entry_line="$(/usr/bin/grep -nF \
   'Testing.__swiftPMEntryPoint(passing: testingArguments)' "$appkit_host_source" | \
   /usr/bin/head -n 1 | /usr/bin/cut -d: -f1)"
 [[ -n "$bundle_validation_line" && -n "$list_branch_line" && \
-  -n "$appkit_initialization_line" && \
+  -n "$appkit_initialization_line" && -n "$probe_installation_line" && \
+  -n "$application_run_line" && \
+  "$appkit_initialization_line" -lt "$probe_installation_line" && \
+  "$probe_installation_line" -lt "$bundle_validation_line" && \
   "$bundle_validation_line" -lt "$list_branch_line" && \
-  "$list_branch_line" -lt "$appkit_initialization_line" ]] ||
-  fail 'AppKit initialization precedes CPU-only bundle/list validation'
+  "$list_branch_line" -lt "$application_run_line" ]] ||
+  fail 'host must install its diagnostic principal class before bundle loading and validate/list before the run loop'
 [[ -n "$launch_guard_line" && -n "$activation_request_line" && \
   -n "$activation_task_line" && \
   "$launch_guard_line" -lt "$activation_request_line" && \
@@ -1644,6 +2028,48 @@ FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
   fail 'ordinary no-match did not list through the native host'
 [[ "$(/usr/bin/stat -f %i "$fixture_root/Package.resolved")" = \
   "$ordinary_unchanged_inode" ]] || fail 'ordinary runner replaced an unchanged root lock'
+assert_root_lock
+
+reset_invocations
+FLECK_TEST_SWIFT_BUILD_SYSTEM=invalid \
+  run_capture "$fixture_state/output" run_ordinary '^FleckCoreTests\.known\(\)$'
+assert_status 2
+/usr/bin/grep -Fq 'error: unsupported FLECK_TEST_SWIFT_BUILD_SYSTEM' \
+  "$fixture_state/output" || fail 'invalid Swift build-system selection was not rejected'
+[[ ! -s "$fixture_state/swift-invocations" ]] ||
+  fail 'invalid Swift build-system selection reached swift'
+assert_root_lock
+
+reset_invocations
+FLECK_TEST_SWIFT_CONFIGURATION=optimized \
+  run_capture "$fixture_state/output" run_ordinary '^FleckCoreTests\.known\(\)$'
+assert_status 2
+/usr/bin/grep -Fq 'error: FLECK_TEST_SWIFT_CONFIGURATION must be debug or release' \
+  "$fixture_state/output" || fail 'invalid Swift test configuration was not rejected'
+[[ ! -s "$fixture_state/swift-invocations" ]] ||
+  fail 'invalid Swift test configuration reached swift'
+assert_root_lock
+
+reset_invocations
+FLECK_TEST_SWIFT_BUILD_SYSTEM=native \
+FLECK_TEST_SWIFT_CONFIGURATION=release \
+FAKE_LIST_OUTPUT='FleckCoreTests.known()' \
+FAKE_RUN_OUTPUT='✔ Test run with 1 test in 0 suites passed after 0.001 seconds.' \
+FAKE_EXPECT_FILTER='^(FleckCoreTests\.known\(\)/)' \
+FAKE_EXPECT_NO_PARALLEL=1 \
+  run_capture "$fixture_state/output" \
+  run_ordinary '^FleckCoreTests\.known\(\)$'
+assert_status 0
+[[ "$(wc -l < "$fixture_state/swift-invocations" | tr -d ' ')" -eq 2 ]] ||
+  fail 'Release native-host build did not invoke build and show-bin-path exactly once'
+/usr/bin/grep -Fxq \
+  "$fixture_root|build --build-tests --disable-automatic-resolution --build-system native --configuration release" \
+  "$fixture_state/swift-invocations" ||
+  fail 'Release configuration or native build system was missing from the test build'
+/usr/bin/grep -Fxq \
+  "$fixture_root|build --show-bin-path --disable-automatic-resolution --build-system native --configuration release" \
+  "$fixture_state/swift-invocations" ||
+  fail 'Release configuration or native build system was missing from show-bin-path'
 assert_root_lock
 
 readonly nested_root="$fixture_root/Tools/Nested"
@@ -2269,10 +2695,65 @@ root = pathlib.Path(sys.argv[1]).resolve()
 workflow_path = root / ".github/workflows/ci.yml"
 current_workflow = workflow_path.read_text()
 
+qualification_guard = "!inputs.namespace_qualification_only"
+qualification_job = "namespace-qualification"
+native_jobs = (
+    "macos-build", "macos-validation", "macos-enhanced", "ordinary-test-diagnostic",
+)
+native_routing = (
+    "runs-on: ${{ github.event_name == 'workflow_dispatch' && "
+    "inputs.native_runner_provider == 'namespace' && "
+    "'namespace-profile-fleck' || 'macos-26' }}"
+)
+full_ci_job_names = {
+    "detect-changes": "Detect documentation-only changes",
+    "macos-build": "macOS ordinary graph and package",
+    "macos-validation": "macOS ordinary repeat and bundle validation",
+    "docs-validation": "Validate README-only change",
+    "macos": "macOS build and tests",
+    "macos-enhanced": "macOS Enhanced Local candidate gates",
+}
+diagnostic_name_predicate = (
+    "github.event_name == 'workflow_dispatch' && "
+    "(inputs.namespace_qualification_only || "
+    "inputs.ordinary_test_diagnostic_selector != '')"
+)
+
+
+def diagnostic_only_name(original):
+    return (
+        "${{ (" + diagnostic_name_predicate + ") && "
+        "'Diagnostic-only / " + original + "' || '" + original + "' }}"
+    )
+full_graph_condition = (
+    "if: ${{ "
+    f"{qualification_guard} && needs.detect-changes.result == 'success' && "
+    "needs.detect-changes.outputs.route == 'full' }}"
+)
+aggregate_condition = (
+    "if: ${{ "
+    f"{qualification_guard} && always() && (github.event_name != 'workflow_dispatch' "
+    "|| inputs.ordinary_test_diagnostic_selector == '') }}"
+)
+qualified_concurrency = (
+    "  group: ci-${{ github.event_name == 'workflow_dispatch' && "
+    "inputs.namespace_qualification_only && 'namespace-qualification-' || "
+    "github.event_name == 'workflow_dispatch' && "
+    "inputs.ordinary_test_diagnostic_selector != '' && 'focused-' || "
+    "github.event_name == 'workflow_dispatch' && "
+    "inputs.native_runner_provider == 'namespace' && 'namespace-native-' || '' }}"
+    "${{ github.event.pull_request.number || github.ref }}"
+)
+prior_concurrency = (
+    "  group: ci-${{ github.event_name == 'workflow_dispatch' && "
+    "inputs.ordinary_test_diagnostic_selector != '' && 'focused-' || '' }}"
+    "${{ github.event.pull_request.number || github.ref }}"
+)
+
 def job_block(contents, job_id):
     match = re.search(rf"^  {re.escape(job_id)}:\n", contents, re.M)
     if match is None:
-        raise SystemExit(f"missing supplemental CI job: {job_id}")
+        raise SystemExit(f"missing CI job: {job_id}")
     following = re.search(r"^  [A-Za-z0-9_-]+:\n", contents[match.end():], re.M)
     end = match.end() + following.start() if following else len(contents)
     return match.start(), end, contents[match.start():end]
@@ -2301,6 +2782,25 @@ for input_name in ("folder_navigator_probe", "folder_navigator_recording"):
             raise SystemExit(f"{input_name} input omitted: {required}")
     input_blocks[input_name] = input_block
 
+provider_match = re.search(
+    r"^      native_runner_provider:\n(?:^ {8}.*\n)+", current_workflow, re.M
+)
+if provider_match is None:
+    raise SystemExit("native_runner_provider input is missing")
+provider_block = provider_match.group(0)
+if current_workflow.count(provider_block) != 1:
+    raise SystemExit("native_runner_provider input must occur exactly once")
+for required in ("required: false", "type: choice", "default: github-hosted"):
+    if required not in provider_block:
+        raise SystemExit(f"native_runner_provider input omitted: {required}")
+if re.findall(r"^          - (\S+)$", provider_block, re.M) != [
+    "github-hosted",
+    "namespace",
+]:
+    raise SystemExit(
+        "native_runner_provider must offer exactly GitHub-hosted and manual namespace"
+    )
+
 supplemental_jobs = (
     (
         "folder-navigator-diagnostic",
@@ -2323,7 +2823,9 @@ for job_id, job_name, selector, enhanced in supplemental_jobs:
     _, _, block = job_block(current_workflow, job_id)
     for required in (
         f"name: {job_name}",
-        "if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe }}",
+        "if: ${{ github.event_name == 'workflow_dispatch' && "
+        f"inputs.folder_navigator_probe && {qualification_guard} }}",
+        "runs-on: macos-26",
         recording_environment,
         'test "$source_commit" = "$GITHUB_SHA"',
         selector,
@@ -2334,6 +2836,8 @@ for job_id, job_name, selector, enhanced in supplemental_jobs:
         raise SystemExit(f"supplemental CI job {job_id} has unexpected diagnostic recording")
     if enhanced != ("Scripts/test-enhanced-candidate-pin.sh" in block):
         raise SystemExit(f"supplemental CI job {job_id} has unexpected candidate pin validation")
+    if "namespace-profile" in block:
+        raise SystemExit(f"supplemental CI job {job_id} must stay GitHub-hosted")
 
 def step_block(contents, name):
     match = re.search(rf"^      - name: {re.escape(name)}\n", contents, re.M)
@@ -2361,16 +2865,17 @@ for job_id, block, required_values in (
     (
         "macos-build", build,
         (
-            "name: macOS ordinary graph and package", "needs: detect-changes",
-            "outputs.route == 'full'", "runs-on: macos-26", "timeout-minutes: 90",
+            diagnostic_only_name("macOS ordinary graph and package"),
+            "needs: detect-changes",
+            full_graph_condition, native_routing, "timeout-minutes: 90",
             "python3 -B -m unittest discover -s Tests/Scripts -p test_ci_docs_path.py",
         ),
     ),
     (
         "macos-validation", validation,
         (
-            "needs: detect-changes", "outputs.route == 'full'",
-            "runs-on: macos-26", "timeout-minutes: 90",
+            "needs: detect-changes", full_graph_condition, native_routing,
+            "timeout-minutes: 90",
             'FLECK_NATIVE_CAPTURE_QA: "0"', "unset FLECK_ENHANCED_CANDIDATE FLECK_APP",
             "bash Tests/Scripts/validate-macos-no-launch.test.sh", "Scripts/validate-macos.sh",
             "Strict native screenshot/pixel capture: NOT RUN",
@@ -2379,8 +2884,8 @@ for job_id, block, required_values in (
     (
         "macos", aggregate,
         (
-            "name: macOS build and tests",
-            "if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.ordinary_test_diagnostic_selector == '') }}",
+            diagnostic_only_name("macOS build and tests"),
+            aggregate_condition,
             "needs: [detect-changes, docs-validation, macos-build, macos-validation, macos-enhanced]",
             "runs-on: namespace-profile-fleck",
         ),
@@ -2400,11 +2905,61 @@ for block in (build, validation):
     ):
         if required not in block:
             raise SystemExit(f"CI split source identity omitted: {required}")
-if current_workflow.count("name: macOS build and tests\n") != 1:
-    raise SystemExit("CI required aggregate name must occur exactly once")
+
+tooling = step_block(build, "Test performance measurement tooling")[2]
+for required in (
+    "unset FLECK_ENHANCED_CANDIDATE FLECK_PERF_RUN FLECK_PERF_PREBUILT_RECEIPT",
+    "python3 -B -m unittest discover -s Tests/Scripts -p test_validate_perf_prebuilt.py",
+    "Tests/Scripts/prebuilt-perf-wrapper.test.sh",
+    "Scripts/test-nonempty-swift-test-runners.sh",
+):
+    if required not in tooling:
+        raise SystemExit(f"CI performance tooling step omitted: {required}")
+
+if current_workflow.count(diagnostic_only_name("macOS build and tests")) != 1:
+    raise SystemExit("CI required aggregate diagnostic name must occur exactly once")
 for block in (build, validation, aggregate):
     if re.search(r"uses: .*actions/(?:cache|upload-artifact|download-artifact)", block):
         raise SystemExit("CI ordinary/validation split must not transfer caches or artifacts")
+
+jobs_section = re.search(r"^jobs:\n", current_workflow, re.M)
+if jobs_section is None:
+    raise SystemExit("CI jobs section is missing")
+job_ids = re.findall(
+    r"^  ([a-z0-9-]+):\n", current_workflow[jobs_section.end():], re.M
+)
+existing_jobs = tuple(job_id for job_id in job_ids if job_id != qualification_job)
+native_expression = native_routing.removeprefix("runs-on: ")
+for job_id in job_ids:
+    _, _, block = job_block(current_workflow, job_id)
+    condition = re.search(r"^    if: (.+)$", block, re.M)
+    if condition is None:
+        raise SystemExit(f"CI job {job_id} has no dispatch condition")
+    runner = re.search(r"^    runs-on: (.+)$", block, re.M)
+    if runner is None:
+        raise SystemExit(f"CI job {job_id} has no runner selection")
+    if (runner.group(1) == native_expression) != (job_id in native_jobs):
+        raise SystemExit(
+            f"CI job {job_id} must be one of the four manual Namespace provider jobs"
+        )
+    if job_id == qualification_job:
+        if condition.group(1) != (
+            "${{ github.event_name == 'workflow_dispatch' && "
+            "inputs.namespace_qualification_only }}"
+        ):
+            raise SystemExit("CI qualification job must be the only qualification-only route")
+    elif condition.group(1).count(qualification_guard) != 1:
+        raise SystemExit(f"CI job {job_id} must skip namespace qualification-only runs")
+
+qualification = job_block(current_workflow, qualification_job)[2]
+for required in (
+    "name: Namespace runner metadata qualification",
+    "runs-on: namespace-profile-fleck",
+    "timeout-minutes: 5",
+):
+    if required not in qualification:
+        raise SystemExit(f"CI qualification job omitted: {required}")
+
 gate = step_block(aggregate, "Require docs-only or full current-source coverage")[2]
 run_body = re.search(r"^        run: \|\n(.*)", gate, re.M | re.S)
 if run_body is None:
@@ -2447,18 +3002,47 @@ boundary_names = (
     "Declare native capture boundary (candidate graph)",
 )
 normalized_workflow = current_workflow
-for job_id in ("detect-changes", "docs-validation", "macos"):
-    start, end, block = job_block(normalized_workflow, job_id)
-    runner = "    runs-on: namespace-profile-fleck\n"
-    if block.count(runner) != 1:
-        raise SystemExit(f"CI portable job {job_id} must use the Fleck Namespace profile")
-    normalized_workflow = (
-        normalized_workflow[:start]
-        + block.replace(runner, "    runs-on: ubuntu-latest\n", 1)
-        + normalized_workflow[end:]
+normalized_inputs = dict(input_blocks)
+for input_name in ("native_runner_provider", "namespace_qualification_only"):
+    if dispatch.group("body").count(f"{input_name}:") != 1:
+        raise SystemExit(f"workflow_dispatch must declare one {input_name} input")
+    input_match = re.search(
+        rf"^      {re.escape(input_name)}:\n(?:^ {{8}}.*\n)+",
+        current_workflow,
+        re.M,
     )
-for input_block in input_blocks.values():
+    if input_match is None:
+        raise SystemExit(f"{input_name} input block is missing")
+    if input_name == "namespace_qualification_only":
+        for required in ("required: false", "type: boolean", "default: false"):
+            if required not in input_match.group(0):
+                raise SystemExit(f"{input_name} input omitted: {required}")
+    normalized_inputs[input_name] = input_match.group(0)
+for input_name, input_block in normalized_inputs.items():
+    if normalized_workflow.count(input_block) != 1:
+        raise SystemExit(f"{input_name} input block must occur exactly once")
     normalized_workflow = normalized_workflow.replace(input_block, "", 1)
+if normalized_workflow.count(qualified_concurrency) != 1:
+    raise SystemExit("namespace qualification concurrency isolation changed")
+normalized_workflow = normalized_workflow.replace(qualified_concurrency, prior_concurrency, 1)
+start, end, _ = job_block(normalized_workflow, qualification_job)
+if start >= 2 and normalized_workflow[start - 2:start] == "\n\n":
+    start -= 1
+normalized_workflow = normalized_workflow[:start] + normalized_workflow[end:]
+normalized_workflow, guarded_prefixes = re.subn(
+    r"^(    if: \$\{\{ )" + re.escape(qualification_guard) + r" && ",
+    r"\1",
+    normalized_workflow,
+    flags=re.M,
+)
+normalized_workflow, guarded_suffixes = re.subn(
+    r" && " + re.escape(qualification_guard) + r" \}\}$",
+    " }}",
+    normalized_workflow,
+    flags=re.M,
+)
+if guarded_prefixes + guarded_suffixes != len(existing_jobs):
+    raise SystemExit("declared qualification guard normalization lost a job condition")
 for job_id, _, _, _ in supplemental_jobs:
     start, end, _ = job_block(normalized_workflow, job_id)
     if start >= 2 and normalized_workflow[start - 2:start] == "\n\n":
@@ -2487,10 +3071,21 @@ for name in (ordinary_name, candidate_name):
         + block.replace(environment, "", 1)
         + normalized_workflow[end:]
     )
+if normalized_workflow.count(native_routing) != len(native_jobs):
+    raise SystemExit("declared native runner routing must select exactly four jobs")
+normalized_workflow = normalized_workflow.replace(native_routing, "runs-on: macos-26")
+for job_id, original in full_ci_job_names.items():
+    dynamic_name = diagnostic_only_name(original)
+    if normalized_workflow.count(dynamic_name) != 1:
+        raise SystemExit(f"CI diagnostic-only name fixture changed for {job_id}")
+    normalized_workflow = normalized_workflow.replace(dynamic_name, original, 1)
 if hashlib.sha256(normalized_workflow.encode()).hexdigest() != (
-    "e8cdd4f9811be83caa83b40b1b8f0caa55f278d9de0b3abe5e65855288f64934"
+    "5b46bfd97b09c8cd12cc03541a127a095a73936abaf3a84fab8a6e278e34eb85"
 ):
-    raise SystemExit("CI changed outside the declared split and native-capture boundary fixture")
+    raise SystemExit(
+        "CI changed outside the declared qualification, native routing, split, "
+        "and native-capture boundary fixture"
+    )
 
 test_name = "hostedGlassAndSolidMenuPanelsCaptureSyntheticChromeAndOpaqueEditor"
 test_path = root / "Tests/FleckAppTests/AppKitEditorTests.swift"

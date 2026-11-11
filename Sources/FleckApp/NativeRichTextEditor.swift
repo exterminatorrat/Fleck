@@ -446,13 +446,13 @@
       transform: (NSFont, [NSAttributedString.Key: Any]) -> NSFont
     ) {
       guard let textView else { return }
-      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       let range = textView.selectedRange()
       if range.length == 0 {
         let current = textView.typingAttributes[.font] as? NSFont ?? defaultValue
         textView.typingAttributes[.font] = transform(current, textView.typingAttributes)
         return
       }
+      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       textView.textStorage?.beginEditing()
       let original = textView.textStorage?.attributedSubstring(from: range)
       textView.textStorage?.enumerateAttributes(in: range) { attributes, subrange, _ in
@@ -467,7 +467,6 @@
 
     private func applyColor(_ color: NSColor?, key: NSAttributedString.Key) {
       guard canPerformBodyCommand, let textView else { return }
-      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       let range = textView.selectedRange()
       if range.length == 0 {
         textView.typingAttributes[key] = color
@@ -475,6 +474,7 @@
         return
       }
       guard let storage = textView.textStorage else { return }
+      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       let original = storage.attributedSubstring(from: range)
       if let color {
         storage.addAttribute(key, value: color, range: range)
@@ -506,13 +506,13 @@
 
     private func toggleAttribute(_ key: NSAttributedString.Key, enabledValue: Int) {
       guard canPerformBodyCommand, let textView else { return }
-      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       let range = textView.selectedRange()
       if range.length == 0 {
         let isEnabled = (textView.typingAttributes[key] as? Int ?? 0) != 0
         textView.typingAttributes[key] = isEnabled ? 0 : enabledValue
         return
       }
+      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       var shouldEnable = false
       textView.textStorage?.enumerateAttribute(key, in: range) { value, _, stop in
         if (value as? Int ?? 0) == 0 {
@@ -999,6 +999,16 @@
     }
 
     func updateLayout(width: CGFloat, minimumHeight: CGFloat) {
+      let signpostState = FleckPerformanceSignposts.signposter.beginInterval(
+        FleckPerformanceSignposts.editorLayout
+      )
+      defer {
+        FleckPerformanceSignposts.signposter.endInterval(
+          FleckPerformanceSignposts.editorLayout,
+          signpostState
+        )
+      }
+
       let width = max(0, width)
       let titleHeight = max(24, titleField.fittingSize.height)
       let leadingCompensation = Self.nativeTitleTextInset
@@ -1215,6 +1225,82 @@
     let onOpenNoteLink: ((UUID) -> Void)?
     let onUnavailableNoteLink: (() -> Void)?
 
+    struct PresentationInputs {
+      let title: String
+      let titleFontFamily: String
+      let fontFamily: String
+      let fontSize: Double
+      let palette: FleckThemePalette
+      let liveNoteIDs: Set<UUID>
+      let isEnabled: Bool
+      let reduceTransparency: Bool
+      let reduceMotion: Bool
+      let automaticLists: Bool
+      let isVisible: Bool
+      let contentSize: NSSize
+    }
+
+    struct PresentationChanges {
+      let contentReloaded: Bool
+      let titleChanged: Bool
+      let titleFontFamilyChanged: Bool
+      let bodyFontChanged: Bool
+      let paletteChanged: Bool
+      let liveNoteIDsChanged: Bool
+      let isEnabledChanged: Bool
+      let reduceTransparencyChanged: Bool
+      let reduceMotionChanged: Bool
+      let automaticListsChanged: Bool
+      let visibilityChanged: Bool
+      let contentSizeChanged: Bool
+
+      init(
+        previous: PresentationInputs?,
+        current: PresentationInputs,
+        contentReloaded: Bool
+      ) {
+        self.contentReloaded = contentReloaded
+        titleChanged = previous.map { $0.title != current.title } ?? true
+        titleFontFamilyChanged = previous.map {
+          $0.titleFontFamily != current.titleFontFamily
+        } ?? true
+        bodyFontChanged = previous.map {
+          $0.fontFamily != current.fontFamily || $0.fontSize != current.fontSize
+        } ?? true
+        paletteChanged = previous.map { $0.palette != current.palette } ?? true
+        liveNoteIDsChanged = previous.map {
+          $0.liveNoteIDs != current.liveNoteIDs
+        } ?? true
+        isEnabledChanged = previous.map { $0.isEnabled != current.isEnabled } ?? true
+        reduceTransparencyChanged = previous.map {
+          $0.reduceTransparency != current.reduceTransparency
+        } ?? true
+        reduceMotionChanged = previous.map { $0.reduceMotion != current.reduceMotion } ?? true
+        automaticListsChanged = previous.map {
+          $0.automaticLists != current.automaticLists
+        } ?? true
+        visibilityChanged = previous.map { $0.isVisible != current.isVisible } ?? true
+        contentSizeChanged = previous.map { $0.contentSize != current.contentSize } ?? true
+      }
+
+      var shouldRefreshBaseAppearance: Bool {
+        contentReloaded || paletteChanged
+      }
+
+      var shouldRefreshNoteLinks: Bool {
+        contentReloaded || paletteChanged || liveNoteIDsChanged
+      }
+
+      var shouldUpdateTypingFont: Bool {
+        !contentReloaded && bodyFontChanged
+      }
+
+      var shouldRelayoutDocument: Bool {
+        contentReloaded || titleChanged || titleFontFamilyChanged || bodyFontChanged
+          || automaticListsChanged || contentSizeChanged
+      }
+    }
+
     init(
       text: String,
       richTextRTF: Data?,
@@ -1262,9 +1348,36 @@
       self.onUnavailableNoteLink = onUnavailableNoteLink
     }
 
+    private func presentationInputs(for contentSize: NSSize) -> PresentationInputs {
+      PresentationInputs(
+        title: title,
+        titleFontFamily: titleFontFamily,
+        fontFamily: fontFamily,
+        fontSize: fontSize,
+        palette: theme.palette,
+        liveNoteIDs: liveNoteIDs,
+        isEnabled: isEnabled,
+        reduceTransparency: reduceTransparency,
+        reduceMotion: reduceMotion,
+        automaticLists: automaticLists,
+        isVisible: isVisible,
+        contentSize: contentSize
+      )
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
     func makeNSView(context: Context) -> NSScrollView {
+      let signpostState = FleckPerformanceSignposts.signposter.beginInterval(
+        FleckPerformanceSignposts.editorMount
+      )
+      defer {
+        FleckPerformanceSignposts.signposter.endInterval(
+          FleckPerformanceSignposts.editorMount,
+          signpostState
+        )
+      }
+
       let scrollView = NativeEditorScrollView()
       scrollView.hasVerticalScroller = true
       scrollView.drawsBackground = false
@@ -1344,6 +1457,7 @@
       scrollView.documentView = documentView
       documentView.autoresizingMask = [.width]
       context.coordinator.scrollView = scrollView
+      context.coordinator.attachedCommands = commands
       if let undoManager = textView.undoManager {
         context.coordinator.undoManager = undoManager
       }
@@ -1357,6 +1471,9 @@
         to: NSPoint(x: scrollView.contentView.bounds.origin.x, y: 0)
       )
       scrollView.reflectScrolledClipView(scrollView.contentView)
+      context.coordinator.presentationInputs = presentationInputs(
+        for: scrollView.contentView.bounds.size
+      )
       return scrollView
     }
 
@@ -1391,60 +1508,89 @@
         let documentView = scrollView.documentView as? NativeEditorDocumentView
       else { return }
       let textView = documentView.textView
-      context.coordinator.parent = self
-      context.coordinator.scrollView = scrollView
-      scrollView.reduceTransparency = reduceTransparency
+      let coordinator = context.coordinator
+      coordinator.parent = self
+      coordinator.scrollView = scrollView
+      let currentInputs = presentationInputs(for: scrollView.contentView.bounds.size)
+      let commandsChanged = coordinator.attachedCommands !== commands
       if let undoManager = textView.undoManager {
-        context.coordinator.undoManager = undoManager
+        coordinator.undoManager = undoManager
+      }
+      let reloadedContent = applyExternalContentIfNeeded(
+        to: textView,
+        coordinator: coordinator
+      )
+      let changes = PresentationChanges(
+        previous: coordinator.presentationInputs,
+        current: currentInputs,
+        contentReloaded: reloadedContent
+      )
+      if changes.reduceTransparencyChanged {
+        scrollView.reduceTransparency = reduceTransparency
       }
       if isVisible {
-        commands.configureBodyDefaults(family: fontFamily, size: fontSize)
-        commands.textView = textView
+        if commandsChanged || changes.bodyFontChanged || changes.visibilityChanged {
+          commands.configureBodyDefaults(family: fontFamily, size: fontSize)
+        }
+        if commands.textView !== textView {
+          commands.textView = textView
+        }
       }
-      textView.automaticLists = automaticLists
-      textView.isEditable = isEnabled
-      textView.isSelectable = isEnabled
-      textView.checklistAccentColor = theme.nsColor(.accent)
-      textView.checklistSecondaryColor = theme.nsColor(.textSecondary)
-      textView.noteLinkWarningColor = theme.nsColor(.warning)
-      textView.reduceMotion = reduceMotion
-      (documentView.titleField.cell as? NoteTitleCell)?.accentColor = theme.nsColor(.focusRing)
-      let titleTextColor = theme.nsColor(.textPrimary)
-      documentView.titleField.isEnabled = isEnabled
-      documentView.titleField.setAccessibilityElement(isEnabled)
-      documentView.titleField.font = EditorTypography.titleNSFont(family: titleFontFamily)
+      coordinator.attachedCommands = commands
+      if changes.automaticListsChanged {
+        textView.automaticLists = automaticLists
+      }
+      if changes.isEnabledChanged {
+        textView.isEditable = isEnabled
+        textView.isSelectable = isEnabled
+        documentView.titleField.isEnabled = isEnabled
+        documentView.titleField.setAccessibilityElement(isEnabled)
+      }
+      if changes.paletteChanged {
+        textView.checklistAccentColor = theme.nsColor(.accent)
+        textView.checklistSecondaryColor = theme.nsColor(.textSecondary)
+        textView.noteLinkWarningColor = theme.nsColor(.warning)
+        (documentView.titleField.cell as? NoteTitleCell)?.accentColor = theme.nsColor(
+          .focusRing
+        )
+        documentView.setCanvasColor(
+          theme.nsColor(.editorOpaque),
+          titleTextColor: theme.nsColor(.textPrimary)
+        )
+        Self.applyAccentAppearance(to: textView, palette: theme.palette)
+      }
+      if changes.reduceMotionChanged {
+        textView.reduceMotion = reduceMotion
+      }
+      if changes.titleFontFamilyChanged {
+        documentView.titleField.font = EditorTypography.titleNSFont(family: titleFontFamily)
+      }
       if documentView.titleField.stringValue != title {
         documentView.titleField.stringValue = title
       }
-      textView.clearNoteLinkPresentation()
-      let reloadedContent = applyExternalContentIfNeeded(to: textView, coordinator: context.coordinator)
-      applyColors(to: textView)
-      documentView.setCanvasColor(
-        theme.nsColor(.editorOpaque),
-        titleTextColor: titleTextColor
-      )
-      Self.applyAccentAppearance(to: textView, palette: theme.palette)
-      configureNoteLinks(on: textView)
-      if !reloadedContent,
-        context.coordinator.fontFamily != fontFamily
-        || context.coordinator.fontSize != fontSize
-      {
+      if changes.shouldRefreshBaseAppearance {
+        applyColors(to: textView)
+      }
+      configureNoteLinks(on: textView, refresh: changes.shouldRefreshNoteLinks)
+      if changes.shouldUpdateTypingFont {
         applyTypingFont(to: textView)
       }
-      context.coordinator.fontFamily = fontFamily
-      context.coordinator.fontSize = fontSize
-      scrollView.relayoutDocument()
+      if changes.shouldRelayoutDocument {
+        scrollView.relayoutDocument()
+      }
+      coordinator.presentationInputs = currentInputs
     }
 
-    private func configureNoteLinks(on textView: ListAwareTextView) {
-      textView.liveNoteIDs = liveNoteIDs
+    private func configureNoteLinks(on textView: ListAwareTextView, refresh: Bool = true) {
       textView.onRequestNoteLink = onRequestNoteLink
       textView.onOpenNoteLink = onOpenNoteLink
       textView.onUnavailableNoteLink = onUnavailableNoteLink
-      textView.refreshNoteLinks(
-        accentColorHex: theme.palette[.link],
-        liveNoteIDs: liveNoteIDs
-      )
+      if refresh {
+        textView.refreshNoteLinks(
+          accentColorHex: theme.palette[.link],
+          liveNoteIDs: liveNoteIDs
+        )
+      }
     }
 
     @discardableResult
@@ -1476,6 +1622,7 @@
       else {
         return false
       }
+      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       (textView as? ListAwareTextView)?.cancelPasteOptions()
       let current = NSAttributedString(attributedString: textView.textStorage ?? NSTextStorage())
       let currentSource = InlineNoteImageProjection.expanded(current)
@@ -1726,8 +1873,8 @@
       var parent: NativeRichTextEditor
       weak var undoManager: UndoManager?
       fileprivate weak var scrollView: NativeEditorScrollView?
-      var fontFamily: String
-      var fontSize: Double
+      var presentationInputs: NativeRichTextEditor.PresentationInputs?
+      weak var attachedCommands: EditorCommands?
       var text: String
       var richTextRTF: Data?
       var lastModelText: String
@@ -1740,8 +1887,6 @@
       @MainActor
       init(parent: NativeRichTextEditor) {
         self.parent = parent
-        fontFamily = parent.fontFamily
-        fontSize = parent.fontSize
         text = parent.text
         richTextRTF = parent.richTextRTF
         lastModelText = parent.text
@@ -1749,6 +1894,16 @@
       }
 
       func textDidChange(_ notification: Notification) {
+        let signpostState = FleckPerformanceSignposts.signposter.beginInterval(
+          FleckPerformanceSignposts.editorChange
+        )
+        defer {
+          FleckPerformanceSignposts.signposter.endInterval(
+            FleckPerformanceSignposts.editorChange,
+            signpostState
+          )
+        }
+
         guard let textView = notification.object as? NSTextView else { return }
         if let undoManager = textView.undoManager {
           self.undoManager = undoManager
@@ -1759,7 +1914,19 @@
           return
         }
         let snapshot = InlineNoteImageProjection.expanded(displaySnapshot)
-        let updatedRTF = try? NoteRichTextCodec.encode(snapshot)
+        let updatedRTF: Data?
+        do {
+          let serializationState = FleckPerformanceSignposts.signposter.beginInterval(
+            FleckPerformanceSignposts.editorSerialization
+          )
+          defer {
+            FleckPerformanceSignposts.signposter.endInterval(
+              FleckPerformanceSignposts.editorSerialization,
+              serializationState
+            )
+          }
+          updatedRTF = try? NoteRichTextCodec.encode(snapshot)
+        }
         text = snapshot.string
         richTextRTF = updatedRTF
         if let linkTextView = textView as? ListAwareTextView {

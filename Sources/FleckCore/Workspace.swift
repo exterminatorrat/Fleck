@@ -10,6 +10,11 @@ public enum FolderError: Error, Equatable, Sendable {
   case invalidTarget
 }
 
+public enum WorkspaceMutationResult: Equatable, Sendable {
+  case unchanged
+  case changed
+}
+
 public struct Folder: Codable, Equatable, Sendable {
   public let id: UUID
   public var name: String
@@ -266,14 +271,17 @@ public struct Workspace: Codable, Equatable, Sendable {
     ensureNoteExists(now: now)
   }
 
+  @discardableResult
   public mutating func updateNote(
     id: UUID,
     title: String? = nil,
     body: String? = nil,
     isPinned: Bool? = nil,
     now: Date = Date()
-  ) {
-    guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+  ) -> WorkspaceMutationResult {
+    guard let index = notes.firstIndex(where: { $0.id == id }) else {
+      return .unchanged
+    }
     var changed = false
     var incrementsRevision = false
     if let title, title != notes[index].title {
@@ -290,26 +298,29 @@ public struct Workspace: Codable, Equatable, Sendable {
       notes[index].isPinned = isPinned
       changed = true
     }
-    guard changed else { return }
+    guard changed else { return .unchanged }
     if incrementsRevision {
       notes[index].revision += 1
     }
     notes[index].modifiedAt = now
+    return .changed
   }
 
+  @discardableResult
   public mutating func updateContent(
     id: UUID,
     body: String,
     rtf: Data?,
     now: Date = Date()
-  ) {
+  ) -> WorkspaceMutationResult {
     guard let index = notes.firstIndex(where: { $0.id == id }),
       notes[index].body != body || notes[index].richTextRTF != rtf
-    else { return }
+    else { return .unchanged }
     notes[index].body = body
     notes[index].richTextRTF = rtf
     notes[index].revision += 1
     notes[index].modifiedAt = now
+    return .changed
   }
 
   public mutating func setTitleFontFamily(

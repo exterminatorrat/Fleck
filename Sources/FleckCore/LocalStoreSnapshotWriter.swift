@@ -798,6 +798,8 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
       return nil
     }
 
+    var verifiedMarkdownBodies: [UUID: String] = [:]
+    var verifiedRTFData: [UUID: Data] = [:]
     if Self.supportsIntegrity(manifest.snapshotIntegrityVersion) {
       guard
         let preferencesData,
@@ -813,10 +815,12 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
         guard
           let expected = markdownSHA256[key],
           let bodyData = try? Data(contentsOf: noteURL(id, in: directory)),
-          sha256(bodyData) == expected
+          sha256(bodyData) == expected,
+          let body = String(data: bodyData, encoding: .utf8)
         else {
           return nil
         }
+        verifiedMarkdownBodies[id] = body
         if let expectedRTF = rtfSHA256[key] {
           guard
             let richTextData = try? Data(contentsOf: rtfURL(id, in: directory)),
@@ -824,6 +828,7 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
           else {
             return nil
           }
+          verifiedRTFData[id] = richTextData
         }
       }
     } else if manifest.snapshotIntegrityVersion != nil {
@@ -847,23 +852,33 @@ public final class LocalStoreSnapshotWriter: @unchecked Sendable {
     var folderMigrationWarnings = folderRepair.warnings
     let validFolderIDs = Set(folderRepair.folders.map(\.id))
     let notes = manifest.noteOrder.compactMap { id -> Note? in
-      guard
-        let metadata = manifest.metadata[id],
-        let body = try? String(
-          contentsOf: noteURL(id, in: directory),
-          encoding: .utf8
-        )
-      else {
-        return nil
+      guard let metadata = manifest.metadata[id] else { return nil }
+      let body: String
+      if let verifiedBody = verifiedMarkdownBodies[id] {
+        body = verifiedBody
+      } else {
+        guard
+          let legacyBody = try? String(
+            contentsOf: noteURL(id, in: directory),
+            encoding: .utf8
+          )
+        else {
+          return nil
+        }
+        body = legacyBody
       }
       let key = id.uuidString.lowercased()
       let shouldLoadRTF =
         manifest.snapshotIntegrityVersion == nil
         || manifest.rtfSHA256?[key] != nil
-      let richTextRTF =
-        shouldLoadRTF
-        ? try? Data(contentsOf: rtfURL(id, in: directory))
-        : nil
+      let richTextRTF: Data?
+      if !shouldLoadRTF {
+        richTextRTF = nil
+      } else if let verifiedRTF = verifiedRTFData[id] {
+        richTextRTF = verifiedRTF
+      } else {
+        richTextRTF = try? Data(contentsOf: rtfURL(id, in: directory))
+      }
       let folderID: UUID?
       if metadata.folderIDWasMalformed {
         folderID = nil
