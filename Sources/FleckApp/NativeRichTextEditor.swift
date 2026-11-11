@@ -2909,13 +2909,16 @@
     }
 
     override func mouseMoved(with event: NSEvent) {
-      updateHoveredChecklistMarker(at: convert(event.locationInWindow, from: nil))
       super.mouseMoved(with: event)
+      let point = convert(event.locationInWindow, from: nil)
+      updateHoveredChecklistMarker(at: point)
+      imageEditing.updateHoverCursor(at: point)
     }
 
     override func mouseExited(with event: NSEvent) {
-      updateHoveredChecklistMarker(at: nil)
       super.mouseExited(with: event)
+      updateHoveredChecklistMarker(at: nil)
+      imageEditing.clearHoverCursor()
     }
 
     override func insertNewline(_ sender: Any?) {

@@ -31,6 +31,7 @@ final class InlineImageEditingController {
 
   private weak var textView: ListAwareTextView?
   private var dragState: DragState?
+  private var activeHoverCursor: NSCursor?
 
   init(textView: ListAwareTextView) {
     self.textView = textView
@@ -160,21 +161,55 @@ final class InlineImageEditingController {
   func addCursorRects() {
     guard let textView, textView.isEditable, let layout = currentLayout else { return }
     let visibleRect = textView.visibleRect
+    let radius = InlineImageEditingLayout.handleCursorRectRadius
+    let rotationDegrees = layout.transform.rotationDegrees
     for handle in InlineImageHandle.allCases {
       guard let center = layout.handleCenters[handle] else { continue }
-      let rect = hitRect(
-        around: center,
-        radius: InlineImageEditingLayout.handleHitRadius
-      )
+      let rect = hitRect(around: center, radius: radius)
       guard rect.intersects(visibleRect) else { continue }
-      textView.addCursorRect(rect, cursor: cursor(for: handle))
+      textView.addCursorRect(rect, cursor: cursor(for: handle, rotationDegrees: rotationDegrees))
     }
-    let rotationRect = hitRect(
-      around: layout.rotationHandleCenter,
-      radius: InlineImageEditingLayout.handleHitRadius
-    )
+    let rotationRect = hitRect(around: layout.rotationHandleCenter, radius: radius)
     guard rotationRect.intersects(visibleRect) else { return }
     textView.addCursorRect(rotationRect, cursor: .crosshair)
+  }
+
+  func hoverCursor(at point: NSPoint) -> NSCursor? {
+    guard dragState == nil,
+      textView?.isEditable == true,
+      let layout = currentLayout
+    else { return nil }
+    switch layout.hitTarget(at: point) {
+    case .resize(let handle):
+      return cursor(for: handle, rotationDegrees: layout.transform.rotationDegrees)
+    case .rotate:
+      return .crosshair
+    case .body, .none:
+      return nil
+    }
+  }
+
+  @discardableResult
+  func updateHoverCursor(at point: NSPoint) -> Bool {
+    let claimed = hoverCursor(at: point)
+    let previous = activeHoverCursor
+    activeHoverCursor = claimed
+    guard let claimed else {
+      restoreTextCursor(from: previous)
+      return false
+    }
+    guard NSCursor.current !== claimed else { return true }
+    claimed.set()
+    return true
+  }
+
+  func clearHoverCursor() {
+    activeHoverCursor = nil
+  }
+
+  private func restoreTextCursor(from previous: NSCursor?) {
+    guard let previous, NSCursor.current === previous else { return }
+    NSCursor.iBeam.set()
   }
 
   private func startResize(
@@ -404,7 +439,8 @@ final class InlineImageEditingController {
   private func visibleRotationHandle(in layout: InlineImageEditingLayout) -> InlineImageEditingLayout {
     guard let textView else { return layout }
     let center = layout.center
-    let safeBounds = textView.bounds.insetBy(dx: 12, dy: 12)
+    let margin = InlineImageEditingLayout.rotationHandleRadius + 6
+    let safeBounds = textView.bounds.insetBy(dx: margin, dy: margin)
     guard !safeBounds.contains(layout.rotationHandleCenter) else { return layout }
     let opposite = NSPoint(
       x: center.x * 2 - layout.rotationHandleCenter.x,
@@ -448,15 +484,51 @@ final class InlineImageEditingController {
     )
   }
 
-  private func cursor(for handle: InlineImageHandle) -> NSCursor {
-    switch handle {
-    case .left, .right:
-      return .resizeLeftRight
-    case .top, .bottom:
-      return .resizeUpDown
-    case .topLeft, .topRight, .bottomRight, .bottomLeft:
-      return .crosshair
+  func cursor(for handle: InlineImageHandle, rotationDegrees: Double) -> NSCursor {
+    Self.frameResizeCursor(handle.resizeDirection(rotationDegrees: rotationDegrees))
+  }
+
+  private static var frameResizeCursors: [InlineImageResizeDirection: NSCursor] = [:]
+
+  private static func frameResizeCursor(_ direction: InlineImageResizeDirection) -> NSCursor {
+    if let cached = frameResizeCursors[direction] { return cached }
+    let cursor: NSCursor
+    if #available(macOS 15.0, *) {
+      cursor = NSCursor.frameResize(position: direction.frameResizePosition, directions: .all)
+    } else {
+      cursor = legacyFrameResizeCursor(direction)
     }
+    frameResizeCursors[direction] = cursor
+    return cursor
+  }
+
+  private static func legacyFrameResizeCursor(_ direction: InlineImageResizeDirection) -> NSCursor {
+    let side: CGFloat = 22
+    let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+      let radians = CGFloat(direction.screenAngleDegrees) * .pi / 180
+      let cosine = cos(radians)
+      let sine = sin(radians)
+      let place: (CGFloat, CGFloat) -> NSPoint = { horizontal, vertical in
+        NSPoint(
+          x: rect.midX + horizontal * cosine - vertical * sine,
+          y: rect.midY + horizontal * sine + vertical * cosine
+        )
+      }
+      for sign: CGFloat in [-1, 1] {
+        let arrowhead = NSBezierPath()
+        arrowhead.move(to: place(sign * 9.5, 0))
+        arrowhead.line(to: place(sign * 4, 3.4))
+        arrowhead.line(to: place(sign * 4, -3.4))
+        arrowhead.close()
+        NSColor.black.setFill()
+        arrowhead.fill()
+        arrowhead.lineWidth = 1
+        NSColor.white.setStroke()
+        arrowhead.stroke()
+      }
+      return true
+    }
+    return NSCursor(image: image, hotSpot: NSPoint(x: side / 2, y: side / 2))
   }
 
   private func invalidateCursorRects() {
@@ -533,8 +605,8 @@ final class InlineImageEditingController {
     }
 
     let center = layout.rotationHandleCenter
-    let radius = InlineImageEditingLayout.handleSize / 2 + 1
-    let circle = NSBezierPath(
+    let radius = InlineImageEditingLayout.rotationHandleRadius
+    let disk = NSBezierPath(
       ovalIn: NSRect(
         x: center.x - radius,
         y: center.y - radius,
@@ -543,43 +615,39 @@ final class InlineImageEditingController {
       )
     )
     NSColor.white.setFill()
-    circle.fill()
-    circle.lineWidth = 1
+    disk.fill()
+    disk.lineWidth = 1
     NSColor.black.setStroke()
-    circle.stroke()
+    disk.stroke()
 
-    let arcRadius = radius / 2
-    let arc = NSBezierPath()
-    arc.appendArc(
-      withCenter: center,
-      radius: arcRadius,
-      startAngle: 40,
-      endAngle: 300,
-      clockwise: false
+    guard let glyph = Self.rotationGlyph else { return }
+    let glyphSide = InlineImageEditingLayout.rotationGlyphSide
+    glyph.draw(
+      in: NSRect(
+        x: center.x - glyphSide / 2,
+        y: center.y - glyphSide / 2,
+        width: glyphSide,
+        height: glyphSide
+      ),
+      from: .zero,
+      operation: .sourceOver,
+      fraction: 1,
+      respectFlipped: true,
+      hints: nil
     )
-    arc.lineWidth = 1
-    NSColor.black.setStroke()
-    arc.stroke()
-
-    let angle = 40 * Double.pi / 180
-    let cosine = CGFloat(cos(angle))
-    let sine = CGFloat(sin(angle))
-    let inner = NSPoint(
-      x: center.x + cosine * arcRadius,
-      y: center.y + sine * arcRadius
-    )
-    let tip = NSPoint(
-      x: center.x + cosine * (arcRadius + 2),
-      y: center.y + sine * (arcRadius + 2)
-    )
-    let arrow = NSBezierPath()
-    arrow.move(to: tip)
-    arrow.line(to: NSPoint(x: inner.x - sine, y: inner.y + cosine))
-    arrow.line(to: NSPoint(x: inner.x + sine, y: inner.y - cosine))
-    arrow.close()
-    NSColor.black.setFill()
-    arrow.fill()
   }
+
+  private static let rotationGlyph: NSImage? = {
+    guard
+      let symbol = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil),
+      let configured = symbol.withSymbolConfiguration(
+        NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+          .applying(NSImage.SymbolConfiguration(paletteColors: [.black]))
+      )
+    else { return nil }
+    configured.isTemplate = false
+    return configured
+  }()
 
   private var accentColor: NSColor {
     guard let textView else { return .controlAccentColor }
@@ -588,6 +656,22 @@ final class InlineImageEditingController {
       against: EditorCanvasInk.canvasColor(for: textView),
       minimumContrast: 3
     )
+  }
+}
+
+@available(macOS 15.0, *)
+private extension InlineImageResizeDirection {
+  var frameResizePosition: NSCursor.FrameResizePosition {
+    switch self {
+    case .right: .right
+    case .topRight: .topRight
+    case .top: .top
+    case .topLeft: .topLeft
+    case .left: .left
+    case .bottomLeft: .bottomLeft
+    case .bottom: .bottom
+    case .bottomRight: .bottomRight
+    }
   }
 }
 #endif

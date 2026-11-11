@@ -209,6 +209,59 @@ enum InlineImageHandle: CaseIterable, Hashable, Sendable {
   }
 }
 
+enum InlineImageResizeDirection: CaseIterable, Hashable, Sendable {
+  case right
+  case topRight
+  case top
+  case topLeft
+  case left
+  case bottomLeft
+  case bottom
+  case bottomRight
+
+  init(horizontalSign: CGFloat, verticalSign: CGFloat, rotationDegrees: Double) {
+    let rotated = inlineImageRotate(
+      CGPoint(x: horizontalSign, y: verticalSign),
+      radians: rotationDegrees * .pi / 180
+    )
+    guard rotated.x.isFinite, rotated.y.isFinite else {
+      self = InlineImageResizeDirection(horizontalSign: horizontalSign, verticalSign: verticalSign)
+      return
+    }
+    let screenDegrees = atan2(Double(-rotated.y), Double(rotated.x)) * 180 / .pi
+    let count = Self.allCases.count
+    let octant = Int((screenDegrees / 45).rounded()) % count
+    self = Self.allCases[(octant + count) % count]
+  }
+
+  var screenAngleDegrees: Double {
+    Double(Self.allCases.firstIndex(of: self) ?? 0) * 45
+  }
+
+  private init(horizontalSign: CGFloat, verticalSign: CGFloat) {
+    switch (horizontalSign, verticalSign) {
+    case (0, -1): self = .top
+    case (1, -1): self = .topRight
+    case (1, 0): self = .right
+    case (1, 1): self = .bottomRight
+    case (0, 1): self = .bottom
+    case (-1, 1): self = .bottomLeft
+    case (-1, 0): self = .left
+    default: self = .topLeft
+    }
+  }
+}
+
+extension InlineImageHandle {
+  func resizeDirection(rotationDegrees: Double) -> InlineImageResizeDirection {
+    InlineImageResizeDirection(
+      horizontalSign: horizontalSign,
+      verticalSign: verticalSign,
+      rotationDegrees: rotationDegrees
+    )
+  }
+}
+
 enum InlineImageHitTarget: Equatable, Sendable {
   case resize(InlineImageHandle)
   case rotate
@@ -219,7 +272,10 @@ enum InlineImageHitTarget: Equatable, Sendable {
 struct InlineImageEditingLayout: Equatable, Sendable {
   static let handleSize: CGFloat = 8
   static let handleHitRadius: CGFloat = 11
+  static let handleCursorRectRadius: CGFloat = handleHitRadius * 0.7
   static let rotationHandleOffset: CGFloat = 22
+  static let rotationHandleRadius: CGFloat = 9
+  static let rotationGlyphSide: CGFloat = 12
 
   let transform: InlineImageTransform
   let center: CGPoint

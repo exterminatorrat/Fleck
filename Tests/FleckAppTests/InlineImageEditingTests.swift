@@ -232,14 +232,230 @@ import Testing
   #expect(references.contains(image.sourceReference))
 }
 
+@Test func imageResizeCursorsFollowTheRotatedHandleGeometry() {
+  let upright: [(InlineImageHandle, InlineImageResizeDirection)] = [
+    (.topLeft, .topLeft),
+    (.top, .top),
+    (.topRight, .topRight),
+    (.right, .right),
+    (.bottomRight, .bottomRight),
+    (.bottom, .bottom),
+    (.bottomLeft, .bottomLeft),
+    (.left, .left),
+  ]
+  for (handle, direction) in upright {
+    #expect(handle.resizeDirection(rotationDegrees: 0) == direction)
+  }
+  #expect(InlineImageHandle.right.resizeDirection(rotationDegrees: 90) == .bottom)
+  #expect(InlineImageHandle.top.resizeDirection(rotationDegrees: 90) == .right)
+  #expect(InlineImageHandle.topRight.resizeDirection(rotationDegrees: 90) == .bottomRight)
+  #expect(InlineImageHandle.right.resizeDirection(rotationDegrees: 45) == .bottomRight)
+  #expect(InlineImageHandle.topRight.resizeDirection(rotationDegrees: 45) == .right)
+  #expect(InlineImageHandle.left.resizeDirection(rotationDegrees: 180) == .right)
+}
+
+@Test func imageResizeCursorsWrapNormalizedRotations() {
+  for handle in InlineImageHandle.allCases {
+    let upright = handle.resizeDirection(rotationDegrees: 0)
+    #expect(handle.resizeDirection(rotationDegrees: 360) == upright)
+    #expect(
+      handle.resizeDirection(rotationDegrees: 405)
+        == handle.resizeDirection(rotationDegrees: 45)
+    )
+    #expect(
+      handle.resizeDirection(rotationDegrees: -90)
+        == handle.resizeDirection(rotationDegrees: 270)
+    )
+  }
+}
+
+@Test func imageEditingCursorRectsStayInsideTheHitTargets() throws {
+  let layout = InlineImageTransform(size: CGSize(width: 100, height: 50))
+    .layout(centeredAt: CGPoint(x: 200, y: 100))
+  let radius = InlineImageEditingLayout.handleCursorRectRadius
+  #expect(radius * CGFloat(2).squareRoot() < InlineImageEditingLayout.handleHitRadius)
+  for handle in InlineImageHandle.allCases {
+    let center = try #require(layout.handleCenters[handle])
+    for horizontal: CGFloat in [-radius, radius] {
+      for vertical: CGFloat in [-radius, radius] {
+        #expect(
+          layout.hitTarget(at: CGPoint(x: center.x + horizontal, y: center.y + vertical))
+            == .resize(handle)
+        )
+      }
+    }
+  }
+  let rotation = layout.rotationHandleCenter
+  for horizontal: CGFloat in [-radius, radius] {
+    for vertical: CGFloat in [-radius, radius] {
+      #expect(layout.hitTarget(at: CGPoint(x: rotation.x + horizontal, y: rotation.y + vertical)) == .rotate)
+    }
+  }
+}
+
+@Test func imageEditingRotationControlFitsItsHitTarget() {
+  #expect(InlineImageEditingLayout.rotationHandleRadius * 2 == 18)
+  #expect(InlineImageEditingLayout.rotationGlyphSide == 12)
+  #expect(InlineImageEditingLayout.rotationGlyphSide < InlineImageEditingLayout.rotationHandleRadius * 2)
+  #expect(InlineImageEditingLayout.rotationHandleRadius < InlineImageEditingLayout.handleHitRadius)
+  #expect(
+    InlineImageEditingLayout.rotationHandleRadius * 2
+      < InlineImageEditingLayout.rotationHandleOffset
+  )
+}
+
+@Test @MainActor func imageEditingHoverCursorCoversTheWholeCircularHitTarget() throws {
+  let fixture = try ImageEditingFixture()
+  defer { fixture.close() }
+  let controller = InlineImageEditingController(textView: fixture.editor)
+  let layout = try #require(controller.currentLayout)
+  let top = try #require(layout.handleCenters[.top])
+  let inset = InlineImageEditingLayout.handleCursorRectRadius
+  let radius = InlineImageEditingLayout.handleHitRadius
+  let expected = controller.cursor(for: .top, rotationDegrees: 0)
+  let outward = NSPoint(x: top.x, y: top.y - radius + 0.5)
+  let diagonal = NSPoint(x: top.x + 6.5, y: top.y - 8.5)
+  #expect(abs(outward.y - top.y) > inset)
+  #expect(abs(diagonal.y - top.y) > inset)
+  #expect(hypot(diagonal.x - top.x, diagonal.y - top.y) < radius)
+  #expect(controller.hoverCursor(at: outward) === expected)
+  #expect(controller.hoverCursor(at: diagonal) === expected)
+}
+
+@Test @MainActor func imageEditingHoverCursorReappliesAfterTheTextCursorReturns() throws {
+  let fixture = try ImageEditingFixture()
+  defer { fixture.close() }
+  let priorCursor = NSCursor.current
+  defer { priorCursor.set() }
+  let controller = InlineImageEditingController(textView: fixture.editor)
+  let layout = try #require(controller.currentLayout)
+  let top = try #require(layout.handleCenters[.top])
+  let resize = controller.cursor(for: .top, rotationDegrees: 0)
+
+  #expect(controller.updateHoverCursor(at: top))
+  #expect(NSCursor.current === resize)
+  NSCursor.iBeam.set()
+  #expect(controller.updateHoverCursor(at: top))
+  #expect(NSCursor.current === resize)
+
+  #expect(!controller.updateHoverCursor(at: layout.center))
+  #expect(NSCursor.current === NSCursor.iBeam)
+
+  NSCursor.arrow.set()
+  controller.clearHoverCursor()
+  #expect(NSCursor.current === NSCursor.arrow)
+  #expect(controller.hoverCursor(at: top) === resize)
+}
+
+@Test @MainActor func imageEditingHoverCursorPreservesACursorItDidNotSet() throws {
+  let fixture = try ImageEditingFixture()
+  defer { fixture.close() }
+  let priorCursor = NSCursor.current
+  defer { priorCursor.set() }
+  let controller = InlineImageEditingController(textView: fixture.editor)
+  let layout = try #require(controller.currentLayout)
+  let top = try #require(layout.handleCenters[.top])
+  let resize = controller.cursor(for: .top, rotationDegrees: 0)
+
+  NSCursor.pointingHand.set()
+  #expect(!controller.updateHoverCursor(at: layout.center))
+  #expect(NSCursor.current === NSCursor.pointingHand)
+
+  #expect(controller.updateHoverCursor(at: top))
+  #expect(NSCursor.current === resize)
+  NSCursor.pointingHand.set()
+  #expect(!controller.updateHoverCursor(at: layout.center))
+  #expect(NSCursor.current === NSCursor.pointingHand)
+}
+
+@Test @MainActor func imageHandleHoverAndClickOutrankAnOverlappingChecklistMarker() throws {
+  let fixture = try ImageEditingFixture(width: 600, imageWidth: 16, imageHeight: 16, checklistPrefix: "○ ")
+  defer { fixture.close() }
+  let priorCursor = NSCursor.current
+  defer { priorCursor.set() }
+  let editor = fixture.editor
+  let controller = InlineImageEditingController(textView: editor)
+  let layout = try #require(controller.currentLayout)
+  let markerRect = try #require(editor.checklistHitRect(for: NSRange(location: 0, length: 1)))
+  let radius = InlineImageEditingLayout.handleHitRadius
+  let overlap = try #require(
+    InlineImageHandle.allCases.compactMap { handle -> (InlineImageHandle, NSPoint)? in
+      guard let center = layout.handleCenters[handle] else { return nil }
+      let hitRect = NSRect(
+        x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2
+      )
+      let intersection = hitRect.intersection(markerRect)
+      guard !intersection.isEmpty else { return nil }
+      let point = NSPoint(x: intersection.midX, y: intersection.midY)
+      guard layout.hitTarget(at: point) == .resize(handle) else { return nil }
+      return (handle, point)
+    }.first
+  )
+  let (handle, point) = overlap
+
+  NSCursor.arrow.set()
+  editor.mouseMoved(with: try fixture.event(.mouseMoved, point: point))
+  #expect(
+    NSCursor.current
+      === controller.cursor(for: handle, rotationDegrees: layout.transform.rotationDegrees)
+  )
+
+  let before = InlineNoteImageProjection.expanded(try #require(editor.textStorage)).string
+  editor.mouseDown(with: try fixture.event(.leftMouseDown, point: point))
+  #expect(InlineNoteImageProjection.expanded(try #require(editor.textStorage)).string == before)
+  #expect(editor.selectedRange() == fixture.range)
+}
+
+@Test @MainActor func imageEditingHoverCursorFollowsTheNearestHandle() throws {
+  let fixture = try ImageEditingFixture(imageWidth: 16, imageHeight: 16)
+  defer { fixture.close() }
+  let controller = InlineImageEditingController(textView: fixture.editor)
+  let layout = try #require(controller.currentLayout)
+  let bottomRight = try #require(layout.handleCenters[.bottomRight])
+  let bottomLeft = try #require(layout.handleCenters[.bottomLeft])
+  let nearestBottomRight = NSPoint(
+    x: bottomRight.x + (bottomLeft.x - bottomRight.x) * 0.2,
+    y: bottomRight.y
+  )
+  #expect(controller.hoverCursor(at: nearestBottomRight) === controller.cursor(
+    for: .bottomRight,
+    rotationDegrees: 0
+  ))
+  #expect(controller.hoverCursor(at: layout.rotationHandleCenter) === NSCursor.crosshair)
+}
+
+@Test @MainActor func imageEditingHoverCursorFollowsRotationAndBodyFallback() throws {
+  let fixture = try ImageEditingFixture()
+  defer { fixture.close() }
+  let controller = InlineImageEditingController(textView: fixture.editor)
+  let layout = try #require(controller.currentLayout)
+  #expect(controller.hoverCursor(at: layout.center) == nil)
+  #expect(controller.hoverCursor(at: layout.rotationHandleCenter) === NSCursor.crosshair)
+  #expect(
+    controller.cursor(for: .right, rotationDegrees: 90)
+      === controller.cursor(for: .bottom, rotationDegrees: 0)
+  )
+  #expect(
+    controller.cursor(for: .topRight, rotationDegrees: 0)
+      !== controller.cursor(for: .topLeft, rotationDegrees: 0)
+  )
+}
+
 @MainActor
 private final class ImageEditingFixture {
   let root: URL
   let editor: ListAwareTextView
   let window: NSWindow
-  let range = NSRange(location: 7, length: 1)
+  let range: NSRange
 
-  init(width: CGFloat = 600, imageWidth: Int = 240, imageHeight: Int = 120) throws {
+  init(
+    width: CGFloat = 600,
+    imageWidth: Int = 240,
+    imageHeight: Int = 120,
+    checklistPrefix: String? = nil
+  ) throws {
+    range = checklistPrefix.map { NSRange(location: $0.utf16.count, length: 1) }
+      ?? NSRange(location: 7, length: 1)
     root = FileManager.default.temporaryDirectory.appendingPathComponent(
       "FleckImageEditing-\(UUID().uuidString)", isDirectory: true
     )
@@ -268,7 +484,7 @@ private final class ImageEditingFixture {
     editor.inlineImageStore = store
     editor.textContainerInset = NSSize(width: 16, height: 36)
     editor.textStorage?.setAttributedString(store.projectedContent(from: NSAttributedString(
-      string: "Before\n\(reference)\nAfter",
+      string: checklistPrefix.map { "\($0)\(reference)" } ?? "Before\n\(reference)\nAfter",
       attributes: [.font: NSFont.systemFont(ofSize: 17)]
     )))
     window = NSWindow(
