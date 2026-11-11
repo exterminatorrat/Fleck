@@ -2937,9 +2937,10 @@
     }
 
     private var folderNavigationLayer: some View {
-      HStack(spacing: 4) {
+      HStack(spacing: 0) {
         rootRow
           .background(rowFrameReader(for: .unfiled))
+          .padding(.trailing, 4)
 
         ScrollViewReader { scrollProxy in
           HStack(spacing: 0) {
@@ -3636,7 +3637,7 @@
     private var overflowPresentation: FolderNavigatorOverflowPresentation {
       FolderNavigatorOverflowPresentation(
         contentWidth: folderContentWidth,
-        referenceWidth: max(preTrashBandWidth - (rowFrames[.unfiled]?.width ?? 0) - 36, 0)
+        referenceWidth: max(preTrashBandWidth - (rowFrames[.unfiled]?.width ?? 0) - 32, 0)
       )
     }
 
