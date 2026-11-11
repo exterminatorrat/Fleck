@@ -224,6 +224,7 @@ fi
 if [[ "$1" == 'strip' && "$2" == '-S' && $# == 3 ]]; then
   printf '%s\n' "$3" >> "$FLECK_TEST_STRIP_LOG"
   [[ "${FLECK_TEST_STRIP_FAIL:-0}" != 1 ]] || exit 42
+  [[ "${FLECK_TEST_STRIP_NOOP:-0}" != 1 ]] || exit 0
   exec /usr/bin/strip -S "$3"
 fi
 if [[ "$1" == 'otool' ]]; then
@@ -288,8 +289,14 @@ done
   || fail 'packaged Info.plist does not name the primary native app icon'
 built_hash="$(/usr/bin/awk '$1 == "Fleck" { hash = $2 } END { print hash }' "$source_hash_log")"
 [[ -n "$built_hash" ]] || fail 'swift fixture did not record the built executable identity'
-[[ "$(/usr/bin/shasum -a 256 "$packaged" | /usr/bin/awk '{print $1}')" != "$built_hash" ]] \
-  || fail 'packager did not strip debug information from the staged executable'
+built_debug_entries="$(/usr/bin/nm -pa "$original" 2>/dev/null \
+  | /usr/bin/awk '$5 == "OSO" {n += 1} END {print n + 0}')"
+[[ "$built_debug_entries" -gt 0 ]] \
+  || fail 'swift fixture did not emit a debug map for the built executable'
+packaged_debug_entries="$(/usr/bin/nm -pa "$packaged" 2>/dev/null \
+  | /usr/bin/awk '$5 == "OSO" {n += 1} END {print n + 0}')"
+[[ "$packaged_debug_entries" == 0 ]] \
+  || fail 'packager published an executable that still carries its debug map'
 [[ "$(/usr/bin/shasum -a 256 "$original" | /usr/bin/awk '{print $1}')" == "$built_hash" ]] \
   || fail 'packager changed the original release executable'
 [[ "$(/usr/bin/wc -l < "$strip_log" | /usr/bin/tr -d '[:space:]')" == 1 ]] \
@@ -390,6 +397,16 @@ fi
 [[ "$(/usr/bin/shasum -a 256 "$packaged" | /usr/bin/awk '{print $1}')" == "$packaged_hash" ]] \
   || fail 'failed strip replaced the existing packaged app'
 test ! -e "$launch_sentinel" || fail 'failed strip path launched the executable'
+
+noop_result="$results/noop-strip.json"
+run_packager "$noop_result" FLECK_TEST_STRIP_NOOP=1 >/dev/null
+noop_app="$("$fixture_root/Scripts/fleck-build-identity.py" read-result \
+  --repo "$fixture_root" --result-file "$noop_result" --flavor development)"
+noop_debug_entries="$(/usr/bin/nm -pa "$noop_app/Contents/MacOS/Fleck" 2>/dev/null \
+  | /usr/bin/awk '$5 == "OSO" {n += 1} END {print n + 0}')"
+[[ "$noop_debug_entries" -gt 0 ]] \
+  || fail 'no-op strip mutation escaped the published debug-map verification'
+/bin/rm -rf "$noop_app" "$noop_result"
 
 test ! -e "$packaged_app/Contents/Frameworks" \
   || fail 'packager embedded an unlinked framework'
