@@ -1202,6 +1202,12 @@
       SettingsAccentPresentation(theme: theme)
     }
 
+    private var scrollEdgeBlurAmountLabel: String {
+      appState.preferences.scrollEdgeBlurAmount.formatted(
+        .percent.precision(.fractionLength(0))
+      )
+    }
+
     private func cancelSettingsSearch() {
       searchQuery = ""
       highlightedSearchTarget = nil
@@ -1358,6 +1364,42 @@
             .disabled(appState.preferences.chromeAppearance == .solid)
         }
         .settingsSearchAnchor(.appearanceGlassOpacity, request: searchRequest)
+
+        Text("Editor")
+          .fleckUIFont(.headline)
+          .padding(.top, 12)
+        SettingsToggleRow(
+          title: "Scroll edge blur",
+          detail: "Soften note text as it scrolls under the top of the editor. Reduce Transparency turns this off.",
+          isOn: preferenceBinding(\.showScrollEdgeBlur),
+          tint: accentPresentation.color
+        )
+        .settingsSearchAnchor(.appearanceScrollEdgeBlur, request: searchRequest)
+        SettingsPreferenceRow(
+          "Blur amount",
+          detail: "Set how far and how strongly note text softens at the top edge."
+        ) {
+          HStack(spacing: 8) {
+            Slider(value: preferenceBinding(\.scrollEdgeBlurAmount), in: 0...1) {
+              Text("Blur amount")
+            }
+            .labelsHidden()
+            .frame(width: 120)
+            .accessibilityValue(scrollEdgeBlurAmountLabel)
+            .accessibilityHint(
+              "Set how far and how strongly note text softens at the top edge."
+            )
+            .accessibilityIdentifier("settings-scroll-edge-blur-amount")
+            Text(scrollEdgeBlurAmountLabel)
+              .fleckUIFont(.caption)
+              .monospacedDigit()
+              .foregroundStyle(theme.color(.caption))
+              .frame(width: 40, alignment: .trailing)
+          }
+          .disabled(!appState.preferences.showScrollEdgeBlur)
+        }
+        .accessibilityElement(children: .contain)
+        .settingsSearchAnchor(.appearanceScrollEdgeBlurAmount, request: searchRequest)
 
         Text("Menu size")
           .fleckUIFont(.headline)

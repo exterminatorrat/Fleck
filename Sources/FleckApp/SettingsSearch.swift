@@ -15,6 +15,8 @@
     case appearanceColorTheme
     case appearanceChromeAppearance
     case appearanceGlassOpacity
+    case appearanceScrollEdgeBlur
+    case appearanceScrollEdgeBlurAmount
     case appearanceWidth
     case appearanceHeight
 
@@ -69,6 +71,8 @@
       case .appearanceColorTheme: "appearance-color-theme"
       case .appearanceChromeAppearance: "appearance-chrome-appearance"
       case .appearanceGlassOpacity: "appearance-glass-opacity"
+      case .appearanceScrollEdgeBlur: "appearance-scroll-edge-blur"
+      case .appearanceScrollEdgeBlurAmount: "appearance-scroll-edge-blur-amount"
       case .appearanceWidth: "appearance-width"
       case .appearanceHeight: "appearance-height"
       case .shortcut(let action): "shortcut-\(action.rawValue)"
@@ -312,6 +316,18 @@
         "Glass opacity",
         to: .appearance,
         aliases: ["transparency"]
+      )
+      add(
+        .appearanceScrollEdgeBlur,
+        "Scroll edge blur",
+        to: .appearance,
+        aliases: ["editor blur", "scroll blur", "fade text", "soften text", "transparency"]
+      )
+      add(
+        .appearanceScrollEdgeBlurAmount,
+        "Blur amount",
+        to: .appearance,
+        aliases: ["blur strength", "blur depth", "blur size", "soften amount"]
       )
       add(.appearanceWidth, "Width", to: .appearance, aliases: ["menu panel size"])
       add(.appearanceHeight, "Height", to: .appearance, aliases: ["menu panel size"])

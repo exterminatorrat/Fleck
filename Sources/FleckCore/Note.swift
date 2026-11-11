@@ -15,6 +15,24 @@ public struct Note: Identifiable, Codable, Equatable, Sendable {
   public var folderID: UUID?
   public var titleFontFamily: String?
 
+  public static func == (lhs: Note, rhs: Note) -> Bool {
+    guard
+      lhs.id == rhs.id,
+      lhs.tabColorHex == rhs.tabColorHex,
+      lhs.createdAt == rhs.createdAt,
+      lhs.modifiedAt == rhs.modifiedAt,
+      lhs.isPinned == rhs.isPinned,
+      lhs.agentAccess == rhs.agentAccess,
+      lhs.revision == rhs.revision,
+      lhs.folderID == rhs.folderID,
+      lhs.titleFontFamily == rhs.titleFontFamily
+    else { return false }
+
+    return lhs.title == rhs.title
+      && lhs.body == rhs.body
+      && lhs.richTextRTF == rhs.richTextRTF
+  }
+
   public init(
     id: UUID = UUID(),
     title: String = "Untitled",

@@ -71,6 +71,27 @@ repository visibility, or modify repository settings without explicit
 authorization. When external writes are authorized, use a focused pull request
 and report the checks performed and any remaining gates.
 
+## Builds are not releases
+
+Internal builds are development candidates, not releases. An allocator-issued
+candidate is typically built in Debug configuration, ad-hoc signed, and cut from
+development source that is not on `main`. Keep it in the maintainer's local
+candidate store with its build receipt and provenance file. Never tag one,
+upload one to GitHub Releases, describe one as shipped or published, or treat a
+delivered candidate as acceptance of the feature it demonstrates.
+
+A GitHub Release happens only as described in
+[`docs/RELEASES.md`](docs/RELEASES.md): a promoted milestone whose source is on
+`main`, green CI at that exact commit, the intended Developer ID signature with
+notarization and stapling, an annotated `v<version>` tag, a
+`docs/release-notes/<version>.md` file, and attached artifacts with checksums.
+Each release is a deliberate owner decision; building a candidate never implies
+one.
+
+A public version advances past every internal version already used and is never
+reused for different content. When an internal candidate has taken a version
+string, a public projection must not claim it.
+
 ## Licensing and public artifacts
 
 First-party source and documentation are licensed under MPL-2.0 except for the

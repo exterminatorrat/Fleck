@@ -35,19 +35,37 @@ on:
         required: false
         type: string
         default: ''
+      native_runner_provider:
+        description: >-
+          Select the runner provider for the three heavy native macOS jobs and
+          the supplemental focused ordinary test diagnostic; defaults to
+          Namespace. GitHub-hosted remains available for explicit manual runs.
+        required: false
+        type: choice
+        options:
+          - github-hosted
+          - namespace
+        default: namespace
+      namespace_qualification_only:
+        description: >-
+          Run only the bounded Namespace runner metadata qualification; every
+          existing job skips.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event_name == 'workflow_dispatch' && inputs.ordinary_test_diagnostic_selector != '' && 'focused-' || '' }}${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event_name == 'workflow_dispatch' && inputs.namespace_qualification_only && 'namespace-qualification-' || github.event_name == 'workflow_dispatch' && inputs.ordinary_test_diagnostic_selector != '' && 'focused-' || github.event_name == 'workflow_dispatch' && inputs.native_runner_provider == 'namespace' && 'namespace-native-' || '' }}${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   detect-changes:
-    name: Detect documentation-only changes
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.ordinary_test_diagnostic_selector == '' }}
-    runs-on: ubuntu-latest
+    name: ${{ (github.event_name == 'workflow_dispatch' && (inputs.namespace_qualification_only || inputs.ordinary_test_diagnostic_selector != '')) && 'Diagnostic-only / Detect documentation-only changes' || 'Detect documentation-only changes' }}
+    if: ${{ !inputs.namespace_qualification_only && (github.event_name != 'workflow_dispatch' || inputs.ordinary_test_diagnostic_selector == '') }}
+    runs-on: namespace-profile-fleck
     timeout-minutes: 5
     permissions:
       contents: read
@@ -80,10 +98,10 @@ jobs:
           --output "$GITHUB_OUTPUT"
 
   macos-build:
-    name: macOS ordinary graph and package
+    name: ${{ (github.event_name == 'workflow_dispatch' && (inputs.namespace_qualification_only || inputs.ordinary_test_diagnostic_selector != '')) && 'Diagnostic-only / macOS ordinary graph and package' || 'macOS ordinary graph and package' }}
     needs: detect-changes
-    if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
-    runs-on: macos-26
+    if: ${{ !inputs.namespace_qualification_only && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.native_runner_provider == 'github-hosted' && 'macos-26' || 'namespace-profile-fleck' }}
     timeout-minutes: 90
     outputs:
       source_commit: ${{ steps.source.outputs.commit }}
@@ -165,6 +183,12 @@ jobs:
         run: Scripts/audit-agent-boundary.sh
       - name: Test packaged app symbol stripping
         run: Tests/Scripts/build-fleck-app-symbols.test.sh
+      - name: Test performance measurement tooling
+        run: |
+          unset FLECK_ENHANCED_CANDIDATE FLECK_PERF_RUN FLECK_PERF_PREBUILT_RECEIPT
+          python3 -B -m unittest discover -s Tests/Scripts -p test_validate_perf_prebuilt.py
+          Tests/Scripts/prebuilt-perf-wrapper.test.sh
+          Scripts/test-nonempty-swift-test-runners.sh
       - name: Package Fleck app
         run: |
           mkdir -p .build/ci-development-result
@@ -188,10 +212,10 @@ jobs:
           test -z "$(git status --porcelain)"
 
   macos-validation:
-    name: macOS ordinary repeat and bundle validation
+    name: ${{ (github.event_name == 'workflow_dispatch' && (inputs.namespace_qualification_only || inputs.ordinary_test_diagnostic_selector != '')) && 'Diagnostic-only / macOS ordinary repeat and bundle validation' || 'macOS ordinary repeat and bundle validation' }}
     needs: detect-changes
-    if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
-    runs-on: macos-26
+    if: ${{ !inputs.namespace_qualification_only && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.native_runner_provider == 'github-hosted' && 'macos-26' || 'namespace-profile-fleck' }}
     timeout-minutes: 90
     outputs:
       source_commit: ${{ steps.source.outputs.commit }}
@@ -270,10 +294,10 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   docs-validation:
-    name: Validate README-only change
+    name: ${{ (github.event_name == 'workflow_dispatch' && (inputs.namespace_qualification_only || inputs.ordinary_test_diagnostic_selector != '')) && 'Diagnostic-only / Validate README-only change' || 'Validate README-only change' }}
     needs: detect-changes
-    if: ${{ needs.detect-changes.outputs.route == 'docs' }}
-    runs-on: ubuntu-latest
+    if: ${{ !inputs.namespace_qualification_only && needs.detect-changes.outputs.route == 'docs' }}
+    runs-on: namespace-profile-fleck
     timeout-minutes: 5
     permissions:
       contents: read
@@ -310,10 +334,10 @@ jobs:
           --output "$GITHUB_OUTPUT"
 
   macos:
-    name: macOS build and tests
-    if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.ordinary_test_diagnostic_selector == '') }}
+    name: ${{ (github.event_name == 'workflow_dispatch' && (inputs.namespace_qualification_only || inputs.ordinary_test_diagnostic_selector != '')) && 'Diagnostic-only / macOS build and tests' || 'macOS build and tests' }}
+    if: ${{ !inputs.namespace_qualification_only && always() && (github.event_name != 'workflow_dispatch' || inputs.ordinary_test_diagnostic_selector == '') }}
     needs: [detect-changes, docs-validation, macos-build, macos-validation, macos-enhanced]
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-fleck
     timeout-minutes: 90
     env:
       DETECTOR_RESULT: ${{ needs.detect-changes.result }}
@@ -381,10 +405,10 @@ jobs:
           esac
 
   macos-enhanced:
-    name: macOS Enhanced Local candidate gates
+    name: ${{ (github.event_name == 'workflow_dispatch' && (inputs.namespace_qualification_only || inputs.ordinary_test_diagnostic_selector != '')) && 'Diagnostic-only / macOS Enhanced Local candidate gates' || 'macOS Enhanced Local candidate gates' }}
     needs: detect-changes
-    if: ${{ needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
-    runs-on: macos-26
+    if: ${{ !inputs.namespace_qualification_only && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.native_runner_provider == 'github-hosted' && 'macos-26' || 'namespace-profile-fleck' }}
     timeout-minutes: 90
     env:
       FLECK_TEST_APPKIT_WATCHDOG_SECONDS: "4800"
@@ -437,7 +461,7 @@ jobs:
 
   own-window-capture-probe:
     name: Supplemental own-window capture probe
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.own_window_capture_probe }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.own_window_capture_probe && !inputs.namespace_qualification_only }}
     runs-on: macos-26
     timeout-minutes: 15
     permissions:
@@ -494,7 +518,7 @@ jobs:
 
   folder-navigator-diagnostic:
     name: Supplemental folder navigator diagnostic (ordinary)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe && !inputs.namespace_qualification_only }}
     runs-on: macos-26
     timeout-minutes: 60
     permissions:
@@ -530,7 +554,7 @@ jobs:
 
   folder-navigator-diagnostic-enhanced:
     name: Supplemental folder navigator diagnostic (Enhanced)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.folder_navigator_probe && !inputs.namespace_qualification_only }}
     runs-on: macos-26
     timeout-minutes: 60
     permissions:
@@ -568,8 +592,8 @@ jobs:
 
   ordinary-test-diagnostic:
     name: Supplemental focused ordinary test diagnostic
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.ordinary_test_diagnostic_selector != '' }}
-    runs-on: macos-26
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.ordinary_test_diagnostic_selector != '' && !inputs.namespace_qualification_only }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.native_runner_provider == 'github-hosted' && 'macos-26' || 'namespace-profile-fleck' }}
     timeout-minutes: 45
     permissions:
       contents: read
@@ -615,3 +639,67 @@ jobs:
           fi
           unset FLECK_ENHANCED_CANDIDATE FLECK_GLASS_SYNTHETIC_CAPTURE_DIR
           Scripts/run-nonempty-swift-tests.sh "$FLECK_TEST_SELECTOR"
+
+  namespace-qualification:
+    name: Namespace runner metadata qualification
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.namespace_qualification_only }}
+    runs-on: namespace-profile-fleck
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    steps:
+      - name: Verify qualification runner platform
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" != "macOS" || "$RUNNER_ARCH" != "ARM64" || \
+            "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
+            printf 'error: qualification requires macOS arm64; observed RUNNER_OS=%s RUNNER_ARCH=%s uname=%s/%s\n' \
+              "$RUNNER_OS" "$RUNNER_ARCH" "$(uname -s)" "$(uname -m)" >&2
+            exit 1
+          fi
+          printf 'Qualification platform: macOS arm64\n'
+      - name: Report bounded runner and toolchain metadata
+        run: |
+          set -euo pipefail
+          printf 'Source commit (GITHUB_SHA): %s\n' "$GITHUB_SHA"
+          printf 'Runner OS: %s; architecture: %s; name: %s\n' \
+            "$RUNNER_OS" "$RUNNER_ARCH" "$RUNNER_NAME"
+          sw_vers
+          uname -m
+          xcodebuild -version
+          swift --version
+          xcrun --show-sdk-version
+          xcrun --show-sdk-path
+      - name: Report GUI domain and nonmutating pmset permission query
+        run: |
+          set -euo pipefail
+          if launchctl print "gui/$(id -u)" >/dev/null 2>&1; then
+            printf 'GUI domain: present\n'
+          else
+            printf 'GUI domain: unavailable\n'
+          fi
+          pmset_query='sudo -n -l /usr/bin/pmset -a displaysleep 0 sleep 0'
+          pmset_status=0
+          sudo -n -l /usr/bin/pmset -a displaysleep 0 sleep 0 >/dev/null 2>&1 || pmset_status=$?
+          if [[ "$pmset_status" -eq 0 ]]; then
+            printf 'pmset permission query allowed (exit 0): %s\n' "$pmset_query"
+          else
+            printf 'pmset permission query not allowed (exit %s): %s\n' \
+              "$pmset_status" "$pmset_query"
+          fi
+      - name: Report existing brew and ripgrep availability
+        run: |
+          set -euo pipefail
+          if command -v brew >/dev/null 2>&1; then
+            brew_version="$(brew --version)"
+            printf 'brew: present (%s)\n' "${brew_version%%$'\n'*}"
+          else
+            printf 'brew: absent\n'
+          fi
+          if command -v rg >/dev/null 2>&1; then
+            printf 'rg: present (%s)\n' "$(rg --version | head -n 1)"
+          else
+            printf 'rg: absent\n'
+          fi

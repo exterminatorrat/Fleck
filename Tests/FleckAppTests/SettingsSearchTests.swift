@@ -46,6 +46,24 @@
       #expect(opacity.anchor == .appearanceGlassOpacity)
     }
 
+    @Test func scrollEdgeBlurControlsRemainSearchableAsSeparateSettings() throws {
+      let blur = try #require(
+        SettingsSearchIndex.results(for: "Scroll edge blur").first
+      )
+      let amount = try #require(
+        SettingsSearchIndex.results(for: "Blur amount").first
+      )
+
+      #expect(blur.target == .appearanceScrollEdgeBlur)
+      #expect(blur.anchor == .appearanceScrollEdgeBlur)
+      #expect(amount.target == .appearanceScrollEdgeBlurAmount)
+      #expect(amount.anchor == .appearanceScrollEdgeBlurAmount)
+      #expect(
+        SettingsSearchIndex.results(for: "blur strength").first?.target
+          == .appearanceScrollEdgeBlurAmount
+      )
+    }
+
     @Test func noMatchReturnsAnEmptyDeterministicResultList() {
       #expect(SettingsSearchIndex.results(for: "definitely-not-a-setting").isEmpty)
       #expect(
@@ -107,6 +125,8 @@
             .appearanceColorTheme,
             .appearanceChromeAppearance,
             .appearanceGlassOpacity,
+            .appearanceScrollEdgeBlur,
+            .appearanceScrollEdgeBlurAmount,
             .appearanceWidth,
             .appearanceHeight,
           ]

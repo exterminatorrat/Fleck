@@ -15,7 +15,7 @@ concurrency:
 jobs:
   ubuntu-gates:
     name: Qualify portable CI gates on Ubuntu
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-fleck
     timeout-minutes: 5
     env:
       PYTHONDONTWRITEBYTECODE: "1"

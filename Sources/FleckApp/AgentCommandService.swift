@@ -21,6 +21,7 @@
     var agentCommitProofs: [AgentWorkspaceCommitProof] { get }
     func refreshAgentEventMonitoring() async
     func flushPendingPersistenceForAgent() async throws
+    func flushPendingPersistenceForAgentWrite() async throws
     func commitAgentWorkspace(
       _ workspace: Workspace,
       expectedGeneration: UInt64,
@@ -32,6 +33,10 @@
 
   extension AgentWorkspaceStateAccess {
     func refreshAgentEventMonitoring() async {}
+
+    func flushPendingPersistenceForAgentWrite() async throws {
+      try await flushPendingPersistenceForAgent()
+    }
   }
 
   protocol AgentProfileAuthorizing: Sendable {
@@ -740,7 +745,7 @@
       requestContext: RequestContext,
       beginRequest: () -> Void
     ) async throws -> AgentWorkspaceResponse {
-      try await state.flushPendingPersistenceForAgent()
+      try await state.flushPendingPersistenceForAgentWrite()
       try requireRequestContext(requestContext)
       let generation = state.persistenceGeneration
       let workspace = requestContext.workspace
@@ -1012,7 +1017,11 @@
         }
       }
       do {
-        try activityStore.prepare(pending.transaction)
+        let activityStore = self.activityStore
+        let transaction = pending.transaction
+        try await Task.detached(priority: .utility) {
+          try activityStore.prepare(transaction)
+        }.value
       } catch let error as AgentWorkspaceError {
         throw error
       } catch {

@@ -1,5 +1,6 @@
 #if os(macOS)
   import AppKit
+  import CoreGraphics
   import CoreImage
   import FleckCore
   import SwiftUI
@@ -446,13 +447,13 @@
       transform: (NSFont, [NSAttributedString.Key: Any]) -> NSFont
     ) {
       guard let textView else { return }
-      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       let range = textView.selectedRange()
       if range.length == 0 {
         let current = textView.typingAttributes[.font] as? NSFont ?? defaultValue
         textView.typingAttributes[.font] = transform(current, textView.typingAttributes)
         return
       }
+      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       textView.textStorage?.beginEditing()
       let original = textView.textStorage?.attributedSubstring(from: range)
       textView.textStorage?.enumerateAttributes(in: range) { attributes, subrange, _ in
@@ -467,7 +468,6 @@
 
     private func applyColor(_ color: NSColor?, key: NSAttributedString.Key) {
       guard canPerformBodyCommand, let textView else { return }
-      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       let range = textView.selectedRange()
       if range.length == 0 {
         textView.typingAttributes[key] = color
@@ -475,6 +475,7 @@
         return
       }
       guard let storage = textView.textStorage else { return }
+      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       let original = storage.attributedSubstring(from: range)
       if let color {
         storage.addAttribute(key, value: color, range: range)
@@ -506,13 +507,13 @@
 
     private func toggleAttribute(_ key: NSAttributedString.Key, enabledValue: Int) {
       guard canPerformBodyCommand, let textView else { return }
-      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       let range = textView.selectedRange()
       if range.length == 0 {
         let isEnabled = (textView.typingAttributes[key] as? Int ?? 0) != 0
         textView.typingAttributes[key] = isEnabled ? 0 : enabledValue
         return
       }
+      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       var shouldEnable = false
       textView.textStorage?.enumerateAttribute(key, in: range) { value, _, stop in
         if (value as? Int ?? 0) == 0 {
@@ -999,6 +1000,16 @@
     }
 
     func updateLayout(width: CGFloat, minimumHeight: CGFloat) {
+      let signpostState = FleckPerformanceSignposts.signposter.beginInterval(
+        FleckPerformanceSignposts.editorLayout
+      )
+      defer {
+        FleckPerformanceSignposts.signposter.endInterval(
+          FleckPerformanceSignposts.editorLayout,
+          signpostState
+        )
+      }
+
       let width = max(0, width)
       let titleHeight = max(24, titleField.fittingSize.height)
       let leadingCompensation = Self.nativeTitleTextInset
@@ -1045,50 +1056,53 @@
   }
 
   final class EditorScrollEdgeBlurView: NSView {
-    let blurRadius: CGFloat = 2
+    var blurRadius: CGFloat = 0
 
     override var isOpaque: Bool { false }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
   }
 
   final class NativeEditorScrollView: NSScrollView {
-    private static let scrollEdgeHeight: CGFloat = 20
+    struct ScrollEdgeBlurBand: Equatable {
+      let blurRadius: CGFloat
+      let depth: CGFloat
+    }
+
+    static let scrollEdgeBlurMaximumDepth: CGFloat = 22
+    static let scrollEdgeBlurMaximumRadius: CGFloat = 2
+    private static let scrollEdgeBlurDepthExponent = 0.55
+    private static let scrollEdgeBlurRadiusExponent = 0.7
+    private static let scrollEdgeBlurDepthRatios: [CGFloat] = [1, 0.68, 0.41]
+    private static let scrollEdgeBlurRadiusRatios: [CGFloat] = [1, 0.62, 0.38]
     private static let scrollEdgeRampDistance: CGFloat = 16
-    private static let scrollEdgeMask: NSImage = {
-      let height = Int(scrollEdgeHeight)
-      let image = NSImage(size: NSSize(width: 1, height: height))
-      guard
-        let representation = NSBitmapImageRep(
-          bitmapDataPlanes: nil,
-          pixelsWide: 1,
-          pixelsHigh: height,
-          bitsPerSample: 8,
-          samplesPerPixel: 4,
-          hasAlpha: true,
-          isPlanar: false,
-          colorSpaceName: .deviceRGB,
-          bitmapFormat: .alphaNonpremultiplied,
-          bytesPerRow: 0,
-          bitsPerPixel: 0
-        )
-      else { return image }
-      guard let bitmapData = representation.bitmapData else { return image }
-      for y in 0..<height {
-        let progress = CGFloat(height - 1 - y) / CGFloat(height - 1)
-        let alpha = progress * progress * (3 - 2 * progress)
-        let row = bitmapData.advanced(by: y * representation.bytesPerRow)
-        row[0] = 255
-        row[1] = 255
-        row[2] = 255
-        row[3] = UInt8((alpha * 255).rounded())
-      }
-      image.addRepresentation(representation)
-      image.resizingMode = .stretch
-      return image
-    }()
+
+    static func scrollEdgeBands(forAmount amount: Double) -> [ScrollEdgeBlurBand] {
+      let amount = AppPreferences.clampedScrollEdgeBlurAmount(amount)
+      guard amount > 0 else { return [] }
+      let depth = CGFloat(
+        Double(scrollEdgeBlurMaximumDepth) * pow(amount, scrollEdgeBlurDepthExponent)
+      )
+      let radius = CGFloat(
+        Double(scrollEdgeBlurMaximumRadius) * pow(amount, scrollEdgeBlurRadiusExponent)
+      )
+      return zip(scrollEdgeBlurDepthRatios, scrollEdgeBlurRadiusRatios)
+        .map { depthRatio, radiusRatio in
+          ScrollEdgeBlurBand(blurRadius: radius * radiusRatio, depth: depth * depthRatio)
+        }
+    }
 
     private var isLayingOutDocument = false
-    private let scrollEdgeBlurView = EditorScrollEdgeBlurView()
+    private var scrollEdgeBlurViews: [EditorScrollEdgeBlurView] = []
+    var showScrollEdgeBlur = false {
+      didSet { updateScrollEdgeEffect() }
+    }
+    var scrollEdgeBlurAmount = AppPreferences.defaultScrollEdgeBlurAmount {
+      didSet {
+        guard scrollEdgeBlurAmount != oldValue else { return }
+        configureScrollEdgeBands()
+        updateScrollEdgeEffect()
+      }
+    }
     var reduceTransparency = false {
       didSet { updateScrollEdgeEffect() }
     }
@@ -1103,8 +1117,14 @@
       fatalError("init(coder:) has not been implemented")
     }
 
+    override func tile() {
+      super.tile()
+      suppressFocusRingsInFindBar()
+    }
+
     override func layout() {
       super.layout()
+      suppressFocusRingsInFindBar()
       guard !isLayingOutDocument,
         let documentView = documentView as? NativeEditorDocumentView
       else {
@@ -1137,55 +1157,135 @@
       layoutSubtreeIfNeeded()
     }
 
+    private func suppressFocusRingsInFindBar() {
+      guard let findBarView else { return }
+      suppressFocusRing(in: findBarView)
+    }
+
+    private func suppressFocusRing(in view: NSView) {
+      view.focusRingType = .none
+      for subview in view.subviews {
+        suppressFocusRing(in: subview)
+      }
+    }
+
     private func configureScrollEdgeEffect() {
-      guard
-        let blurFilter = CIFilter(
-          name: "CIGaussianBlur",
-          parameters: [kCIInputRadiusKey: scrollEdgeBlurView.blurRadius]
-        )
-      else { return }
-      scrollEdgeBlurView.wantsLayer = true
-      scrollEdgeBlurView.layer?.masksToBounds = true
-      scrollEdgeBlurView.backgroundFilters = [blurFilter]
-      var maskRect = NSRect(origin: .zero, size: Self.scrollEdgeMask.size)
-      guard
-        let maskImage = Self.scrollEdgeMask.cgImage(
-          forProposedRect: &maskRect,
-          context: nil,
-          hints: nil
-        )
-      else { return }
-      let maskLayer = CALayer()
-      maskLayer.contents = maskImage
-      maskLayer.contentsGravity = .resize
-      scrollEdgeBlurView.layer?.mask = maskLayer
-      scrollEdgeBlurView.isHidden = true
-      scrollEdgeBlurView.setAccessibilityElement(false)
-      scrollEdgeBlurView.setAccessibilityHidden(true)
-      addSubview(scrollEdgeBlurView, positioned: .above, relativeTo: contentView)
+      for _ in Self.scrollEdgeBlurDepthRatios {
+        let blurView = EditorScrollEdgeBlurView()
+        blurView.wantsLayer = true
+        blurView.layer?.masksToBounds = true
+        blurView.isHidden = true
+        blurView.setAccessibilityElement(false)
+        blurView.setAccessibilityHidden(true)
+        addSubview(blurView, positioned: .above, relativeTo: contentView)
+        scrollEdgeBlurViews.append(blurView)
+      }
+      configureScrollEdgeBands()
       updateScrollEdgeEffect()
     }
 
-    private func updateScrollEdgeEffect() {
-      let viewportFrame = contentView.frame
-      let height = min(Self.scrollEdgeHeight, viewportFrame.height)
-      scrollEdgeBlurView.frame = NSRect(
-        x: viewportFrame.minX,
-        y: viewportFrame.minY,
-        width: viewportFrame.width,
-        height: height
-      )
-      scrollEdgeBlurView.layer?.mask?.frame = scrollEdgeBlurView.bounds
+    private func configureScrollEdgeBands() {
+      let bands = Self.scrollEdgeBands(forAmount: scrollEdgeBlurAmount)
+      for (index, view) in scrollEdgeBlurViews.enumerated() {
+        guard index < bands.count,
+          let maskImage = Self.scrollEdgeMaskImage(for: bands[index]),
+          let blurFilter = CIFilter(
+            name: "CIGaussianBlur",
+            parameters: [kCIInputRadiusKey: bands[index].blurRadius]
+          )
+        else {
+          view.blurRadius = 0
+          view.backgroundFilters = []
+          view.layer?.mask = nil
+          view.isHidden = true
+          continue
+        }
+        view.blurRadius = bands[index].blurRadius
+        view.backgroundFilters = [blurFilter]
+        let maskLayer = CALayer()
+        maskLayer.contents = maskImage
+        maskLayer.contentsGravity = .resize
+        view.layer?.mask = maskLayer
+      }
+    }
 
+    private func updateScrollEdgeEffect() {
+      let bands = Self.scrollEdgeBands(forAmount: scrollEdgeBlurAmount)
+      let viewportFrame = contentView.frame
       let documentRect = contentView.documentRect
       let scrollOffset = max(0, contentView.bounds.minY - documentRect.minY)
       let progress = min(1, scrollOffset / Self.scrollEdgeRampDistance)
-      let easedProgress = progress * progress * (3 - 2 * progress)
-      let isVisible = !reduceTransparency
+      let easedProgress = Self.scrollEdgeEasedProgress(progress)
+      let isVisible = showScrollEdgeBlur
+        && !reduceTransparency
+        && !bands.isEmpty
         && documentRect.height > contentView.bounds.height + 0.5
         && easedProgress > 0
-      scrollEdgeBlurView.alphaValue = isVisible ? easedProgress : 0
-      scrollEdgeBlurView.isHidden = !isVisible
+
+      for (index, view) in scrollEdgeBlurViews.enumerated() {
+        guard index < bands.count else {
+          view.alphaValue = 0
+          view.isHidden = true
+          continue
+        }
+        let height = min(bands[index].depth, viewportFrame.height)
+        view.frame = NSRect(
+          x: viewportFrame.minX,
+          y: viewportFrame.minY,
+          width: viewportFrame.width,
+          height: height
+        )
+        view.layer?.mask?.frame = view.bounds
+        view.alphaValue = isVisible ? easedProgress : 0
+        view.isHidden = !isVisible
+      }
+    }
+
+    static func scrollEdgeEasedProgress(_ progress: CGFloat) -> CGFloat {
+      let clamped = min(1, max(0, progress))
+      return clamped * clamped * (3 - 2 * clamped)
+    }
+
+    static func scrollEdgeMaskAlpha(
+      depth: CGFloat,
+      band: ScrollEdgeBlurBand
+    ) -> CGFloat {
+      guard band.depth > 0 else { return 0 }
+      return scrollEdgeEasedProgress(1 - depth / band.depth)
+    }
+
+    private static func scrollEdgeMaskImage(for band: ScrollEdgeBlurBand) -> CGImage? {
+      let pixels = max(2, Int(band.depth.rounded()) + 1)
+      guard
+        let representation = NSBitmapImageRep(
+          bitmapDataPlanes: nil,
+          pixelsWide: 1,
+          pixelsHigh: pixels,
+          bitsPerSample: 8,
+          samplesPerPixel: 4,
+          hasAlpha: true,
+          isPlanar: false,
+          colorSpaceName: .deviceRGB,
+          bitmapFormat: .alphaNonpremultiplied,
+          bytesPerRow: 0,
+          bitsPerPixel: 0
+        ),
+        let bitmapData = representation.bitmapData
+      else { return nil }
+      for row in 0..<pixels {
+        let depth = CGFloat(row) / CGFloat(pixels - 1) * band.depth
+        let alpha = scrollEdgeMaskAlpha(depth: depth, band: band)
+        let bytes = bitmapData.advanced(by: row * representation.bytesPerRow)
+        bytes[0] = 255
+        bytes[1] = 255
+        bytes[2] = 255
+        bytes[3] = UInt8((alpha * 255).rounded())
+      }
+      let image = NSImage(size: NSSize(width: 1, height: CGFloat(pixels)))
+      image.addRepresentation(representation)
+      image.resizingMode = .stretch
+      var proposedRect = NSRect(origin: .zero, size: image.size)
+      return image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil)
     }
   }
 
@@ -1204,6 +1304,8 @@
     let onChange: (String, Data?) -> Void
     let fontFamily: String
     let fontSize: Double
+    let showScrollEdgeBlur: Bool
+    let scrollEdgeBlurAmount: Double
     let reduceMotion: Bool
     let automaticLists: Bool
     let commands: EditorCommands
@@ -1214,6 +1316,92 @@
     let onRequestNoteLink: ((NSRange) -> Void)?
     let onOpenNoteLink: ((UUID) -> Void)?
     let onUnavailableNoteLink: (() -> Void)?
+
+    struct PresentationInputs {
+      let title: String
+      let titleFontFamily: String
+      let fontFamily: String
+      let fontSize: Double
+      let palette: FleckThemePalette
+      let liveNoteIDs: Set<UUID>
+      let isEnabled: Bool
+      let reduceTransparency: Bool
+      let showScrollEdgeBlur: Bool
+      let scrollEdgeBlurAmount: Double
+      let reduceMotion: Bool
+      let automaticLists: Bool
+      let isVisible: Bool
+      let contentSize: NSSize
+    }
+
+    struct PresentationChanges {
+      let contentReloaded: Bool
+      let titleChanged: Bool
+      let titleFontFamilyChanged: Bool
+      let bodyFontChanged: Bool
+      let paletteChanged: Bool
+      let liveNoteIDsChanged: Bool
+      let isEnabledChanged: Bool
+      let reduceTransparencyChanged: Bool
+      let showScrollEdgeBlurChanged: Bool
+      let scrollEdgeBlurAmountChanged: Bool
+      let reduceMotionChanged: Bool
+      let automaticListsChanged: Bool
+      let visibilityChanged: Bool
+      let contentSizeChanged: Bool
+
+      init(
+        previous: PresentationInputs?,
+        current: PresentationInputs,
+        contentReloaded: Bool
+      ) {
+        self.contentReloaded = contentReloaded
+        titleChanged = previous.map { $0.title != current.title } ?? true
+        titleFontFamilyChanged = previous.map {
+          $0.titleFontFamily != current.titleFontFamily
+        } ?? true
+        bodyFontChanged = previous.map {
+          $0.fontFamily != current.fontFamily || $0.fontSize != current.fontSize
+        } ?? true
+        paletteChanged = previous.map { $0.palette != current.palette } ?? true
+        liveNoteIDsChanged = previous.map {
+          $0.liveNoteIDs != current.liveNoteIDs
+        } ?? true
+        isEnabledChanged = previous.map { $0.isEnabled != current.isEnabled } ?? true
+        reduceTransparencyChanged = previous.map {
+          $0.reduceTransparency != current.reduceTransparency
+        } ?? true
+        showScrollEdgeBlurChanged = previous.map {
+          $0.showScrollEdgeBlur != current.showScrollEdgeBlur
+        } ?? true
+        scrollEdgeBlurAmountChanged = previous.map {
+          $0.scrollEdgeBlurAmount != current.scrollEdgeBlurAmount
+        } ?? true
+        reduceMotionChanged = previous.map { $0.reduceMotion != current.reduceMotion } ?? true
+        automaticListsChanged = previous.map {
+          $0.automaticLists != current.automaticLists
+        } ?? true
+        visibilityChanged = previous.map { $0.isVisible != current.isVisible } ?? true
+        contentSizeChanged = previous.map { $0.contentSize != current.contentSize } ?? true
+      }
+
+      var shouldRefreshBaseAppearance: Bool {
+        contentReloaded || paletteChanged
+      }
+
+      var shouldRefreshNoteLinks: Bool {
+        contentReloaded || paletteChanged || liveNoteIDsChanged
+      }
+
+      var shouldUpdateTypingFont: Bool {
+        !contentReloaded && bodyFontChanged
+      }
+
+      var shouldRelayoutDocument: Bool {
+        contentReloaded || titleChanged || titleFontFamilyChanged || bodyFontChanged
+          || automaticListsChanged || contentSizeChanged
+      }
+    }
 
     init(
       text: String,
@@ -1229,6 +1417,8 @@
       textColorHex: String? = nil,
       backgroundColorHex: String? = nil,
       accentColorHex: String = AppPreferences.defaultAccentHex,
+      showScrollEdgeBlur: Bool = false,
+      scrollEdgeBlurAmount: Double = AppPreferences.defaultScrollEdgeBlurAmount,
       reduceMotion: Bool,
       automaticLists: Bool,
       commands: EditorCommands,
@@ -1250,6 +1440,8 @@
       self.onChange = onChange
       self.fontFamily = fontFamily
       self.fontSize = fontSize
+      self.showScrollEdgeBlur = showScrollEdgeBlur
+      self.scrollEdgeBlurAmount = scrollEdgeBlurAmount
       self.reduceMotion = reduceMotion
       self.automaticLists = automaticLists
       self.commands = commands
@@ -1262,13 +1454,45 @@
       self.onUnavailableNoteLink = onUnavailableNoteLink
     }
 
+    private func presentationInputs(for contentSize: NSSize) -> PresentationInputs {
+      PresentationInputs(
+        title: title,
+        titleFontFamily: titleFontFamily,
+        fontFamily: fontFamily,
+        fontSize: fontSize,
+        palette: theme.palette,
+        liveNoteIDs: liveNoteIDs,
+        isEnabled: isEnabled,
+        reduceTransparency: reduceTransparency,
+        showScrollEdgeBlur: showScrollEdgeBlur,
+        scrollEdgeBlurAmount: scrollEdgeBlurAmount,
+        reduceMotion: reduceMotion,
+        automaticLists: automaticLists,
+        isVisible: isVisible,
+        contentSize: contentSize
+      )
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
     func makeNSView(context: Context) -> NSScrollView {
+      let signpostState = FleckPerformanceSignposts.signposter.beginInterval(
+        FleckPerformanceSignposts.editorMount
+      )
+      defer {
+        FleckPerformanceSignposts.signposter.endInterval(
+          FleckPerformanceSignposts.editorMount,
+          signpostState
+        )
+      }
+
       let scrollView = NativeEditorScrollView()
+      scrollView.focusRingType = .none
       scrollView.hasVerticalScroller = true
       scrollView.drawsBackground = false
       scrollView.autohidesScrollers = true
+      scrollView.showScrollEdgeBlur = showScrollEdgeBlur
+      scrollView.scrollEdgeBlurAmount = scrollEdgeBlurAmount
       scrollView.reduceTransparency = reduceTransparency
 
       let titleField = NSTextField()
@@ -1297,6 +1521,7 @@
 
       let textView = ListAwareTextView(frame: .zero)
       textView.delegate = context.coordinator
+      textView.focusRingType = .none
       textView.isRichText = true
       textView.isEditable = isEnabled
       textView.isSelectable = isEnabled
@@ -1344,6 +1569,7 @@
       scrollView.documentView = documentView
       documentView.autoresizingMask = [.width]
       context.coordinator.scrollView = scrollView
+      context.coordinator.attachedCommands = commands
       if let undoManager = textView.undoManager {
         context.coordinator.undoManager = undoManager
       }
@@ -1357,6 +1583,9 @@
         to: NSPoint(x: scrollView.contentView.bounds.origin.x, y: 0)
       )
       scrollView.reflectScrolledClipView(scrollView.contentView)
+      context.coordinator.presentationInputs = presentationInputs(
+        for: scrollView.contentView.bounds.size
+      )
       return scrollView
     }
 
@@ -1391,60 +1620,95 @@
         let documentView = scrollView.documentView as? NativeEditorDocumentView
       else { return }
       let textView = documentView.textView
-      context.coordinator.parent = self
-      context.coordinator.scrollView = scrollView
-      scrollView.reduceTransparency = reduceTransparency
+      let coordinator = context.coordinator
+      coordinator.parent = self
+      coordinator.scrollView = scrollView
+      let currentInputs = presentationInputs(for: scrollView.contentView.bounds.size)
+      let commandsChanged = coordinator.attachedCommands !== commands
       if let undoManager = textView.undoManager {
-        context.coordinator.undoManager = undoManager
+        coordinator.undoManager = undoManager
+      }
+      let reloadedContent = applyExternalContentIfNeeded(
+        to: textView,
+        coordinator: coordinator
+      )
+      let changes = PresentationChanges(
+        previous: coordinator.presentationInputs,
+        current: currentInputs,
+        contentReloaded: reloadedContent
+      )
+      if changes.reduceTransparencyChanged {
+        scrollView.reduceTransparency = reduceTransparency
+      }
+      if changes.showScrollEdgeBlurChanged {
+        scrollView.showScrollEdgeBlur = showScrollEdgeBlur
+      }
+      if changes.scrollEdgeBlurAmountChanged {
+        scrollView.scrollEdgeBlurAmount = scrollEdgeBlurAmount
       }
       if isVisible {
-        commands.configureBodyDefaults(family: fontFamily, size: fontSize)
-        commands.textView = textView
+        if commandsChanged || changes.bodyFontChanged || changes.visibilityChanged {
+          commands.configureBodyDefaults(family: fontFamily, size: fontSize)
+        }
+        if commands.textView !== textView {
+          commands.textView = textView
+        }
       }
-      textView.automaticLists = automaticLists
-      textView.isEditable = isEnabled
-      textView.isSelectable = isEnabled
-      textView.checklistAccentColor = theme.nsColor(.accent)
-      textView.checklistSecondaryColor = theme.nsColor(.textSecondary)
-      textView.noteLinkWarningColor = theme.nsColor(.warning)
-      textView.reduceMotion = reduceMotion
-      (documentView.titleField.cell as? NoteTitleCell)?.accentColor = theme.nsColor(.focusRing)
-      let titleTextColor = theme.nsColor(.textPrimary)
-      documentView.titleField.isEnabled = isEnabled
-      documentView.titleField.setAccessibilityElement(isEnabled)
-      documentView.titleField.font = EditorTypography.titleNSFont(family: titleFontFamily)
+      coordinator.attachedCommands = commands
+      if changes.automaticListsChanged {
+        textView.automaticLists = automaticLists
+      }
+      if changes.isEnabledChanged {
+        textView.isEditable = isEnabled
+        textView.isSelectable = isEnabled
+        documentView.titleField.isEnabled = isEnabled
+        documentView.titleField.setAccessibilityElement(isEnabled)
+      }
+      if changes.paletteChanged {
+        textView.checklistAccentColor = theme.nsColor(.accent)
+        textView.checklistSecondaryColor = theme.nsColor(.textSecondary)
+        textView.noteLinkWarningColor = theme.nsColor(.warning)
+        (documentView.titleField.cell as? NoteTitleCell)?.accentColor = theme.nsColor(
+          .focusRing
+        )
+        documentView.setCanvasColor(
+          theme.nsColor(.editorOpaque),
+          titleTextColor: theme.nsColor(.textPrimary)
+        )
+        Self.applyAccentAppearance(to: textView, palette: theme.palette)
+      }
+      if changes.reduceMotionChanged {
+        textView.reduceMotion = reduceMotion
+      }
+      if changes.titleFontFamilyChanged {
+        documentView.titleField.font = EditorTypography.titleNSFont(family: titleFontFamily)
+      }
       if documentView.titleField.stringValue != title {
         documentView.titleField.stringValue = title
       }
-      textView.clearNoteLinkPresentation()
-      let reloadedContent = applyExternalContentIfNeeded(to: textView, coordinator: context.coordinator)
-      applyColors(to: textView)
-      documentView.setCanvasColor(
-        theme.nsColor(.editorOpaque),
-        titleTextColor: titleTextColor
-      )
-      Self.applyAccentAppearance(to: textView, palette: theme.palette)
-      configureNoteLinks(on: textView)
-      if !reloadedContent,
-        context.coordinator.fontFamily != fontFamily
-        || context.coordinator.fontSize != fontSize
-      {
+      if changes.shouldRefreshBaseAppearance {
+        applyColors(to: textView)
+      }
+      configureNoteLinks(on: textView, refresh: changes.shouldRefreshNoteLinks)
+      if changes.shouldUpdateTypingFont {
         applyTypingFont(to: textView)
       }
-      context.coordinator.fontFamily = fontFamily
-      context.coordinator.fontSize = fontSize
-      scrollView.relayoutDocument()
+      if changes.shouldRelayoutDocument {
+        scrollView.relayoutDocument()
+      }
+      coordinator.presentationInputs = currentInputs
     }
 
-    private func configureNoteLinks(on textView: ListAwareTextView) {
-      textView.liveNoteIDs = liveNoteIDs
+    private func configureNoteLinks(on textView: ListAwareTextView, refresh: Bool = true) {
       textView.onRequestNoteLink = onRequestNoteLink
       textView.onOpenNoteLink = onOpenNoteLink
       textView.onUnavailableNoteLink = onUnavailableNoteLink
-      textView.refreshNoteLinks(
-        accentColorHex: theme.palette[.link],
-        liveNoteIDs: liveNoteIDs
-      )
+      if refresh {
+        textView.refreshNoteLinks(
+          accentColorHex: theme.palette[.link],
+          liveNoteIDs: liveNoteIDs
+        )
+      }
     }
 
     @discardableResult
@@ -1476,6 +1740,7 @@
       else {
         return false
       }
+      (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       (textView as? ListAwareTextView)?.cancelPasteOptions()
       let current = NSAttributedString(attributedString: textView.textStorage ?? NSTextStorage())
       let currentSource = InlineNoteImageProjection.expanded(current)
@@ -1726,8 +1991,8 @@
       var parent: NativeRichTextEditor
       weak var undoManager: UndoManager?
       fileprivate weak var scrollView: NativeEditorScrollView?
-      var fontFamily: String
-      var fontSize: Double
+      var presentationInputs: NativeRichTextEditor.PresentationInputs?
+      weak var attachedCommands: EditorCommands?
       var text: String
       var richTextRTF: Data?
       var lastModelText: String
@@ -1740,8 +2005,6 @@
       @MainActor
       init(parent: NativeRichTextEditor) {
         self.parent = parent
-        fontFamily = parent.fontFamily
-        fontSize = parent.fontSize
         text = parent.text
         richTextRTF = parent.richTextRTF
         lastModelText = parent.text
@@ -1749,6 +2012,16 @@
       }
 
       func textDidChange(_ notification: Notification) {
+        let signpostState = FleckPerformanceSignposts.signposter.beginInterval(
+          FleckPerformanceSignposts.editorChange
+        )
+        defer {
+          FleckPerformanceSignposts.signposter.endInterval(
+            FleckPerformanceSignposts.editorChange,
+            signpostState
+          )
+        }
+
         guard let textView = notification.object as? NSTextView else { return }
         if let undoManager = textView.undoManager {
           self.undoManager = undoManager
@@ -1759,7 +2032,19 @@
           return
         }
         let snapshot = InlineNoteImageProjection.expanded(displaySnapshot)
-        let updatedRTF = try? NoteRichTextCodec.encode(snapshot)
+        let updatedRTF: Data?
+        do {
+          let serializationState = FleckPerformanceSignposts.signposter.beginInterval(
+            FleckPerformanceSignposts.editorSerialization
+          )
+          defer {
+            FleckPerformanceSignposts.signposter.endInterval(
+              FleckPerformanceSignposts.editorSerialization,
+              serializationState
+            )
+          }
+          updatedRTF = try? NoteRichTextCodec.encode(snapshot)
+        }
         text = snapshot.string
         richTextRTF = updatedRTF
         if let linkTextView = textView as? ListAwareTextView {
@@ -1832,6 +2117,8 @@
   }
 
   final class ListAwareTextView: NSTextView, @MainActor NSLayoutManagerDelegate {
+    private lazy var imageEditing = InlineImageEditingController(textView: self)
+
     @MainActor
     private final class ChecklistIndentTextContainer: NSTextContainer {
       weak var listAwareTextView: ListAwareTextView?
@@ -1912,6 +2199,23 @@
     private static let noteLinkSeparatorMenuTag = 0xF1EC
     private static let noteLinkRequestMenuTag = 0xF1ED
     private static let noteLinkOpenMenuTag = 0xF1EE
+    private static let copyImageMenuTag = 0xF1EF
+    private static let managedImageReferenceType = NSPasteboard.PasteboardType(
+      "com.harryjin.fleck.managed-image-reference"
+    )
+    private static let publicImagePasteboardTypes: [NSPasteboard.PasteboardType] = [.tiff, .png]
+    private static let managedImagePasteboardTypes: [NSPasteboard.PasteboardType] =
+      publicImagePasteboardTypes + [managedImageReferenceType]
+      + [.rtf, .string]
+    private static let projectedSelectionType = NSPasteboard.PasteboardType(
+      "com.harryjin.fleck.projected-selection"
+    )
+    private static let mixedSelectionPasteboardTypes: [NSPasteboard.PasteboardType] = [
+      .html, .rtfd, .rtf, .string,
+    ]
+    private static let clipboardImageMaximumDimension = 2048
+    private static let maximumProjectedSelectionBytes = 4 * 1024 * 1024
+    private static let referencePasteboardTypes: [NSPasteboard.PasteboardType] = [.rtf, .string]
     private static let legacyFilenamesPasteboardType = NSPasteboard.PasteboardType(
       "NSFilenamesPboardType"
     )
@@ -2518,29 +2822,29 @@
     override func draw(_ dirtyRect: NSRect) {
       if checklistPresentationNeedsRefresh { refreshChecklistPresentation() }
 
-      var selectedBulletMarkers: [(range: NSRange, glyphs: NSRange, rect: NSRect)] = []
+      var selectedBulletPrefixes: [(range: NSRange, glyphs: NSRange, rect: NSRect)] = []
       if let layoutManager, let textContainer {
-        for markerRange in selectedBulletMarkerRanges() {
+        for prefixRange in selectedBulletPrefixRanges() {
           let glyphRange = layoutManager.glyphRange(
-            forCharacterRange: markerRange,
+            forCharacterRange: prefixRange,
             actualCharacterRange: nil
           )
           guard glyphRange.length > 0 else { continue }
-          let markerRect = layoutManager.boundingRect(
+          let prefixRect = layoutManager.boundingRect(
             forGlyphRange: glyphRange,
             in: textContainer
           ).offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
-          guard markerRect.intersects(dirtyRect) else { continue }
-          selectedBulletMarkers.append((markerRange, glyphRange, markerRect))
+          guard prefixRect.intersects(dirtyRect) else { continue }
+          selectedBulletPrefixes.append((prefixRange, glyphRange, prefixRect))
         }
       }
 
       NSGraphicsContext.saveGraphicsState()
-      if !selectedBulletMarkers.isEmpty {
+      if !selectedBulletPrefixes.isEmpty {
         let clippingPath = NSBezierPath(rect: dirtyRect)
         clippingPath.windingRule = .evenOdd
-        for marker in selectedBulletMarkers {
-          clippingPath.append(NSBezierPath(rect: marker.rect.intersection(dirtyRect)))
+        for prefix in selectedBulletPrefixes {
+          clippingPath.append(NSBezierPath(rect: prefix.rect.intersection(dirtyRect)))
         }
         clippingPath.addClip()
       }
@@ -2548,20 +2852,20 @@
       NSGraphicsContext.restoreGraphicsState()
 
       if let storage = textStorage {
-        for marker in selectedBulletMarkers {
+        for prefix in selectedBulletPrefixes {
           if drawsBackground {
             backgroundColor.setFill()
-            NSBezierPath(rect: marker.rect).fill()
+            NSBezierPath(rect: prefix.rect).fill()
           }
           if let background = storage.attribute(
             .backgroundColor,
-            at: marker.range.location,
+            at: prefix.range.location,
             effectiveRange: nil
           ) as? NSColor {
             background.setFill()
-            NSBezierPath(rect: marker.rect).fill()
+            NSBezierPath(rect: prefix.rect).fill()
           }
-          layoutManager?.drawGlyphs(forGlyphRange: marker.glyphs, at: textContainerOrigin)
+          layoutManager?.drawGlyphs(forGlyphRange: prefix.glyphs, at: textContainerOrigin)
         }
       }
 
@@ -2591,6 +2895,7 @@
           )
         }
       }
+      imageEditing.draw()
     }
 
     override func deleteBackward(_ sender: Any?) {
@@ -2620,19 +2925,9 @@
       }
       if let item = parsedListItem(in: paragraphRange, string: ns),
         case .bullet = item.parsed.style,
-        item.contentRange.length == 0,
         selection.location == item.contentRange.location
       {
-        performUndoGroup {
-          _ = replaceText(
-            in: NSRange(
-              location: paragraphRange.location,
-              length: item.contentRange.location - paragraphRange.location
-            ),
-            with: "",
-            selecting: NSRange(location: paragraphRange.location, length: 0)
-          )
-        }
+        removeBulletPrefix(in: paragraphRange, contentStart: item.contentRange.location)
         return
       }
       guard let item = checklistItem(in: paragraphRange, string: ns),
@@ -2653,6 +2948,60 @@
           selecting: NSRange(location: item.markerRange.location, length: 0)
         )
       }
+    }
+
+    override func deleteWordBackward(_ sender: Any?) {
+      let selection = selectedRange()
+      let ns = string as NSString
+      guard selection.length == 0,
+        selection.location > 0,
+        selection.location <= ns.length,
+        let item = bulletListItem(at: selection.location, string: ns),
+        selection.location == item.contentRange.location
+      else {
+        super.deleteWordBackward(sender)
+        return
+      }
+      removeBulletPrefix(
+        in: ns.paragraphRange(for: NSRange(location: selection.location, length: 0)),
+        contentStart: item.contentRange.location
+      )
+    }
+
+    override func smartDeleteRange(forProposedRange proposedCharRange: NSRange) -> NSRange {
+      let expanded = super.smartDeleteRange(forProposedRange: proposedCharRange)
+      let ns = string as NSString
+      guard expanded.length > 0,
+        expanded.location != NSNotFound,
+        expanded.location >= 0,
+        NSMaxRange(expanded) <= ns.length,
+        proposedCharRange.location != NSNotFound,
+        proposedCharRange.location >= 0,
+        NSMaxRange(proposedCharRange) <= ns.length
+      else {
+        return expanded
+      }
+
+      var location = expanded.location
+      var end = NSMaxRange(expanded)
+      if let prefix = bulletPrefixRange(
+        in: ns.paragraphRange(for: NSRange(location: location, length: 0)),
+        string: ns
+      ), prefix.location <= location, location < NSMaxRange(prefix),
+        NSIntersectionRange(proposedCharRange, prefix).length == 0
+      {
+        location = NSMaxRange(prefix)
+      }
+      if let prefix = bulletPrefixRange(
+        in: ns.paragraphRange(for: NSRange(location: end - 1, length: 0)),
+        string: ns
+      ), prefix.location < end, end < NSMaxRange(prefix),
+        NSIntersectionRange(proposedCharRange, prefix).length == 0
+      {
+        end = prefix.location
+      }
+      guard end > location else { return NSRange(location: location, length: 0) }
+      return NSRange(location: location, length: end - location)
     }
 
     override func moveLeft(_ sender: Any?) {
@@ -2683,6 +3032,7 @@
         guard let hitRect = checklistHitRect(for: item.markerRange) else { continue }
         addCursorRect(hitRect, cursor: .arrow)
       }
+      imageEditing.addCursorRects()
     }
 
     override func updateTrackingAreas() {
@@ -2701,13 +3051,16 @@
     }
 
     override func mouseMoved(with event: NSEvent) {
-      updateHoveredChecklistMarker(at: convert(event.locationInWindow, from: nil))
       super.mouseMoved(with: event)
+      let point = convert(event.locationInWindow, from: nil)
+      updateHoveredChecklistMarker(at: point)
+      imageEditing.updateHoverCursor(at: point)
     }
 
     override func mouseExited(with event: NSEvent) {
-      updateHoveredChecklistMarker(at: nil)
       super.mouseExited(with: event)
+      updateHoveredChecklistMarker(at: nil)
+      imageEditing.clearHoverCursor()
     }
 
     override func insertNewline(_ sender: Any?) {
@@ -2885,8 +3238,13 @@
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
       clearInlineImageTypingAttributes()
+      let hasExplicitReplacementRange = replacementRange.location != NSNotFound
       let effectiveRange =
-        replacementRange.location == NSNotFound ? selectedRange() : replacementRange
+        hasExplicitReplacementRange
+        ? normalizedBulletCaretRange(replacementRange)
+        : selectedRange()
+      let nativeReplacementRange =
+        hasExplicitReplacementRange ? effectiveRange : replacementRange
       if automaticLists,
         effectiveRange.length == 0,
         insertString as? String == " "
@@ -2922,7 +3280,7 @@
           let originalLength = (string as NSString).length
           let changeGeneration = textChangeGeneration
           performUndoGroup {
-            super.insertText(completedText, replacementRange: replacementRange)
+            super.insertText(completedText, replacementRange: nativeReplacementRange)
             guard textChangeGeneration > changeGeneration, let storage = textStorage else { return }
             let insertedLength = storage.length - originalLength + insertionRange.length
             guard insertionRange.location >= 0,
@@ -2946,11 +3304,11 @@
       } else if let text = insertString as? NSAttributedString {
         super.insertText(
           completedChecklistInsertion(text, replacing: effectiveRange),
-          replacementRange: replacementRange
+          replacementRange: nativeReplacementRange
         )
         return
       }
-      super.insertText(insertString, replacementRange: replacementRange)
+      super.insertText(insertString, replacementRange: nativeReplacementRange)
     }
 
     private func completedChecklistInsertion(
@@ -2993,7 +3351,10 @@
     }
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
-      [.fileURL] + super.readablePasteboardTypes.filter { $0 != .fileURL }
+      let inherited = [.fileURL] + super.readablePasteboardTypes.filter { $0 != .fileURL }
+      guard inlineImageStore != nil else { return inherited }
+      let privateTypes = [Self.managedImageReferenceType, Self.projectedSelectionType]
+      return privateTypes + inherited.filter { !privateTypes.contains($0) }
     }
 
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
@@ -3008,6 +3369,34 @@
     }
 
     override func readSelection(from pasteboard: NSPasteboard) -> Bool {
+      guard pasteboard.name != .drag else {
+        return super.readSelection(from: pasteboard)
+      }
+      if let projected = projectedSelectionPaste(from: pasteboard) {
+        return insertProjectedPaste(projected)
+          || super.readSelection(from: pasteboard)
+      }
+      if let inlineImageStore,
+        let reference = pasteboard.string(forType: Self.managedImageReferenceType),
+        let projected = projectedManagedImageReference(reference, store: inlineImageStore)
+      {
+        return insertProjectedPaste(projected)
+          || super.readSelection(from: pasteboard)
+      }
+      if let inlineImageStore,
+        (pasteboard.types ?? []).contains(where: { Self.isInlineImagePasteboardType($0) })
+      {
+        for type in Self.referencePasteboardTypes {
+          if let projected = projectedManagedReferencePaste(
+            from: pasteboard,
+            type: type,
+            store: inlineImageStore
+          ) {
+            return insertProjectedPaste(projected)
+              || super.readSelection(from: pasteboard)
+          }
+        }
+      }
       if let inlineImageStore,
         let type = preferredPasteboardType(
           from: pasteboard.types ?? [],
@@ -3029,6 +3418,27 @@
       from pasteboard: NSPasteboard,
       type: NSPasteboard.PasteboardType
     ) -> Bool {
+      if type == Self.projectedSelectionType {
+        if let projected = projectedSelectionPaste(from: pasteboard) {
+          return insertProjectedPaste(projected)
+        }
+        let publicTypes = readablePasteboardTypes.filter {
+          $0 != Self.projectedSelectionType && $0 != Self.managedImageReferenceType
+        }
+        guard let fallback = preferredPasteboardType(
+          from: pasteboard.types ?? [],
+          restrictedToTypesFrom: publicTypes
+        ) else { return false }
+        return readSelection(from: pasteboard, type: fallback)
+      }
+      if type == Self.managedImageReferenceType,
+        let inlineImageStore,
+        let reference = pasteboard.string(forType: type),
+        let projected = projectedManagedImageReference(reference, store: inlineImageStore)
+      {
+        return insertProjectedPaste(projected)
+          || super.readSelection(from: pasteboard, type: type)
+      }
       if let inlineImageStore,
         let projected = projectedManagedReferencePaste(
           from: pasteboard,
@@ -3164,18 +3574,94 @@
     }
 
     override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
-      selectedRanges.map(\.rangeValue).contains { containsInlineImage(in: $0) }
-        ? [.rtf, .string]
+      if selectedImageCopy() != nil { return Self.managedImagePasteboardTypes }
+      return selectedRanges.map(\.rangeValue).contains { containsInlineImage(in: $0) }
+        ? Self.mixedSelectionPasteboardTypes
         : super.writablePasteboardTypes
+    }
+
+    override func copy(_ sender: Any?) {
+      if let image = selectedImageCopy() {
+        _ = writeManagedImageCopy(image.attachment, to: NSPasteboard.general)
+        return
+      }
+      let selections = selectedRanges.map(\.rangeValue)
+      if selections.contains(where: { containsInlineImage(in: $0) }) {
+        _ = writeMixedSelectionCopy(selections, to: NSPasteboard.general)
+        return
+      }
+      super.copy(sender)
     }
 
     override func writeSelection(
       to pasteboard: NSPasteboard,
       types: [NSPasteboard.PasteboardType]
     ) -> Bool {
-      let ns = string as NSString
       let selections = selectedRanges.map(\.rangeValue)
-      let expandedSelections = selections.map { selection -> NSRange in
+      if pasteboard.name == .drag {
+        guard selections.contains(where: { containsInlineImage(in: $0) }),
+          let projection = projectedCopy(selections: selections)
+        else {
+          return super.writeSelection(to: pasteboard, types: types)
+        }
+        let exportTypes = types.compactMap(Self.copyFormat(for:))
+        guard !exportTypes.isEmpty else { return false }
+        pasteboard.declareTypes(exportTypes, owner: nil)
+        return exportTypes.allSatisfy { format in
+          writeProjectedSelection(
+            projection.selections,
+            from: projection.source,
+            to: pasteboard,
+            format: format
+          )
+        }
+      }
+      let expandedSelections = expandedCopySelections(selections)
+      if let image = selectedImageCopy(),
+        types.contains(where: { Self.isInlineImagePasteboardType($0) })
+      {
+        return writeManagedImageCopy(image.attachment, to: pasteboard)
+      }
+      let containsImages = selections.contains { containsInlineImage(in: $0) }
+      if containsImages, selectedImageCopy() == nil {
+        let textOnly = !types.isEmpty
+          && types.allSatisfy { Self.copyFormat(for: $0) != nil }
+        if textOnly {
+          return writeSanitizedTextSelection(
+            expandedSelections,
+            to: pasteboard,
+            types: types
+          )
+        }
+        return writeMixedSelectionCopy(selections, to: pasteboard)
+      }
+      let exportsText = !types.isEmpty
+        && types.allSatisfy { $0 == .rtf || $0 == .string }
+        && selections.contains { $0.length > 0 }
+      guard expandedSelections != selections || containsImages || exportsText,
+        let projection = projectedCopy(selections: expandedSelections)
+      else {
+        return super.writeSelection(to: pasteboard, types: types)
+      }
+
+      let exportTypes = projection.containsImages
+        ? types.filter { Self.copyFormat(for: $0) != nil }
+        : types
+      guard !exportTypes.isEmpty else { return false }
+      if !projection.containsImages && !exportsText {
+        return writeExportedSelection(projection, to: pasteboard, types: exportTypes)
+      }
+      return writeProjectedSelection(
+        projection.selections,
+        from: projection.source,
+        to: pasteboard,
+        types: exportTypes
+      )
+    }
+
+    private func expandedCopySelections(_ selections: [NSRange]) -> [NSRange] {
+      let ns = string as NSString
+      return selections.map { selection -> NSRange in
         guard selection.length > 0,
           selection.location != NSNotFound,
           selection.location >= 0,
@@ -3192,43 +3678,48 @@
           length: NSMaxRange(selection) - item.paragraphRange.location
         )
       }
-      let containsImages = selections.contains { containsInlineImage(in: $0) }
-      let exportsText = !types.isEmpty
-        && types.allSatisfy { $0 == .rtf || $0 == .string }
-        && selections.contains { $0.length > 0 }
-      guard expandedSelections != selections || containsImages || exportsText,
-        let storage = textStorage
-      else {
-        return super.writeSelection(to: pasteboard, types: types)
-      }
+    }
 
+    private func projectedCopy(
+      selections: [NSRange]
+    ) -> (source: NSAttributedString, selections: [NSRange], containsImages: Bool)? {
+      guard let storage = textStorage else { return nil }
       let display = NSAttributedString(attributedString: storage)
-      let source = InlineNoteImageProjection.expanded(display)
-      let sourceSelections = expandedSelections.map {
-        InlineNoteImageProjection.sourceRange(forDisplayRange: $0, in: display)
-      }
-      let hasManagedImages = Self.containsInlineImage(in: display)
-      let exportTypes = hasManagedImages
-        ? types.filter { $0 == .rtf || $0 == .string }
-        : types
-      guard !exportTypes.isEmpty else { return false }
-      if !hasManagedImages && !exportsText {
-        let exporter = NSTextView(frame: bounds)
-        exporter.isRichText = isRichText
-        exporter.textStorage?.setAttributedString(source)
-        exporter.setSelectedRanges(
-          sourceSelections.map { NSValue(range: $0) },
-          affinity: selectionAffinity,
-          stillSelecting: false
-        )
-        return exporter.writeSelection(to: pasteboard, types: exportTypes)
-      }
-      return writeProjectedSelection(
-        sourceSelections,
-        from: source,
-        to: pasteboard,
-        types: exportTypes
+      return (
+        InlineNoteImageProjection.expanded(display),
+        selections.map {
+          InlineNoteImageProjection.sourceRange(forDisplayRange: $0, in: display)
+        },
+        Self.containsInlineImage(in: display)
       )
+    }
+
+    private static func copyFormat(
+      for type: NSPasteboard.PasteboardType
+    ) -> NSPasteboard.PasteboardType? {
+      if type == .rtf || type.rawValue == "NeXT Rich Text Format v1.0 pasteboard type" {
+        return .rtf
+      }
+      if type == .string || type.rawValue == "NSStringPboardType" {
+        return .string
+      }
+      return nil
+    }
+
+    private func writeExportedSelection(
+      _ projection: (source: NSAttributedString, selections: [NSRange], containsImages: Bool),
+      to pasteboard: NSPasteboard,
+      types: [NSPasteboard.PasteboardType]
+    ) -> Bool {
+      let exporter = NSTextView(frame: bounds)
+      exporter.isRichText = isRichText
+      exporter.textStorage?.setAttributedString(projection.source)
+      exporter.setSelectedRanges(
+        projection.selections.map { NSValue(range: $0) },
+        affinity: selectionAffinity,
+        stillSelecting: false
+      )
+      return exporter.writeSelection(to: pasteboard, types: types)
     }
 
     private func writeProjectedSelection(
@@ -3237,6 +3728,45 @@
       to pasteboard: NSPasteboard,
       types: [NSPasteboard.PasteboardType]
     ) -> Bool {
+      let formats = Set(types.compactMap(Self.copyFormat(for:)))
+      guard !formats.isEmpty else { return false }
+      let item = NSPasteboardItem()
+      guard let exportText = projectedExportText(selections, from: source) else { return false }
+      if formats.contains(.rtf) {
+        guard let data = try? exportText.data(
+          from: NSRange(location: 0, length: exportText.length),
+          documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+        ), item.setData(data, forType: .rtf) else { return false }
+      }
+      if formats.contains(.string), !item.setString(exportText.string, forType: .string) {
+        return false
+      }
+      guard !item.types.isEmpty else { return false }
+      pasteboard.clearContents()
+      return pasteboard.writeObjects([item])
+    }
+
+    private func writeProjectedSelection(
+      _ selections: [NSRange],
+      from source: NSAttributedString,
+      to pasteboard: NSPasteboard,
+      format: NSPasteboard.PasteboardType
+    ) -> Bool {
+      guard let exportText = projectedExportText(selections, from: source) else { return false }
+      if format == .rtf {
+        guard let data = try? exportText.data(
+          from: NSRange(location: 0, length: exportText.length),
+          documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+        ) else { return false }
+        return pasteboard.setData(data, forType: .rtf)
+      }
+      return pasteboard.setString(exportText.string, forType: .string)
+    }
+
+    private func projectedExportText(
+      _ selections: [NSRange],
+      from source: NSAttributedString
+    ) -> NSAttributedString? {
       guard !selections.isEmpty,
         selections.allSatisfy({
           $0.location != NSNotFound
@@ -3245,7 +3775,7 @@
             && $0.location <= source.length
             && $0.length <= source.length - $0.location
         })
-      else { return false }
+      else { return nil }
 
       let copiedText = NSMutableAttributedString(string: "")
       for (index, selection) in selections.enumerated() {
@@ -3254,19 +3784,7 @@
         }
         copiedText.append(source.attributedSubstring(from: selection))
       }
-      let exportText = Self.clipboardSafeAttributedString(copiedText)
-      let item = NSPasteboardItem()
-      if types.contains(.rtf) {
-        let range = NSRange(location: 0, length: exportText.length)
-        guard let data = try? exportText.data(
-          from: range,
-          documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
-        ), item.setData(data, forType: .rtf) else { return false }
-      }
-      if types.contains(.string), !item.setString(exportText.string, forType: .string) {
-        return false
-      }
-      return !item.types.isEmpty && pasteboard.writeObjects([item])
+      return Self.clipboardSafeAttributedString(copiedText)
     }
 
     private static func clipboardSafeAttributedString(
@@ -3296,27 +3814,65 @@
       type: NSPasteboard.PasteboardType
     ) -> Bool {
       let selections = selectedRanges.map(\.rangeValue)
-      let ns = string as NSString
-      let expandsBullet = selections.contains { selection in
-        guard selection.length > 0,
-          selection.location != NSNotFound,
-          selection.location >= 0,
-          selection.location <= ns.length,
-          selection.length <= ns.length - selection.location,
-          let item = bulletListItem(at: selection.location, string: ns)
-        else { return false }
-        return selection.location == item.contentRange.location
-          && NSMaxRange(selection) >= NSMaxRange(item.contentRange)
+      if pasteboard.name == .drag {
+        if Self.isInlineImagePasteboardType(type), selectedInlineImage() != nil { return false }
+        guard let format = Self.copyFormat(for: type),
+          selections.contains(where: { containsInlineImage(in: $0) }),
+          let projection = projectedCopy(selections: selections)
+        else {
+          return super.writeSelection(to: pasteboard, type: type)
+        }
+        return writeProjectedSelection(
+          projection.selections,
+          from: projection.source,
+          to: pasteboard,
+          format: format
+        )
+      }
+      let expandedSelections = expandedCopySelections(selections)
+      if let image = selectedImageCopy(),
+        Self.isInlineImagePasteboardType(type),
+        let data = Self.inlineImageData(image.attachment, type: type)
+      {
+        return pasteboard.setData(data, forType: type)
       }
       let containsImages = selections.contains { containsInlineImage(in: $0) }
+      if containsImages, selectedImageCopy() == nil,
+        let requestedFormat = Self.copyFormat(for: type)
+      {
+        return writeSanitizedTextFlavor(
+          requestedFormat,
+          requestedType: type,
+          selections: expandedSelections,
+          to: pasteboard
+        )
+      }
+      if containsImages, selectedImageCopy() == nil, type == .html || type == .rtfd {
+        return writeMixedSelectionFlavor(
+          type,
+          selections: selections,
+          to: pasteboard
+        )
+      }
       let exportsText = (type == .rtf || type == .string)
         && textStorage != nil
         && selections.contains { $0.length > 0 }
-      guard expandsBullet || containsImages || exportsText else {
+      guard expandedSelections != selections || containsImages || exportsText,
+        let projection = projectedCopy(selections: expandedSelections)
+      else {
         return super.writeSelection(to: pasteboard, type: type)
       }
-      if containsImages, type != .rtf && type != .string { return false }
-      return writeSelection(to: pasteboard, types: [type])
+      if containsImages, Self.copyFormat(for: type) == nil { return false }
+      guard let format = Self.copyFormat(for: type) else {
+        guard !projection.containsImages else { return false }
+        return writeExportedSelection(projection, to: pasteboard, types: [type])
+      }
+      return writeProjectedSelection(
+        projection.selections,
+        from: projection.source,
+        to: pasteboard,
+        format: format
+      )
     }
 
     private func containsInlineImage(in range: NSRange) -> Bool {
@@ -3333,6 +3889,524 @@
         stop.pointee = true
       }
       return found
+    }
+
+    private func selectedInlineImage() -> (attachment: InlineNoteImageAttachment, range: NSRange)? {
+      let ranges = selectedRanges.map(\.rangeValue)
+      guard ranges.count == 1, let range = ranges.first,
+        let attachment = inlineImageAttachment(in: range)
+      else { return nil }
+      return (attachment, range)
+    }
+
+    private func selectedImageCopy() -> (attachment: InlineNoteImageAttachment, range: NSRange)? {
+      let ranges = selectedRanges.map(\.rangeValue)
+      guard ranges.count == 1, let range = ranges.first, range.length > 0,
+        let storage = textStorage,
+        range.location != NSNotFound,
+        range.location >= 0,
+        NSMaxRange(range) <= storage.length
+      else { return nil }
+      var attachment: InlineNoteImageAttachment?
+      var rejects = false
+      storage.enumerateAttribute(.attachment, in: range) { value, _, _ in
+        guard let image = value as? InlineNoteImageAttachment else {
+          if value != nil { rejects = true }
+          return
+        }
+        if attachment != nil { rejects = true }
+        attachment = image
+      }
+      guard !rejects, let image = attachment else { return nil }
+      let ns = storage.string as NSString
+      for index in range.location..<NSMaxRange(range) {
+        if storage.attribute(.attachment, at: index, effectiveRange: nil)
+          is InlineNoteImageAttachment
+        {
+          continue
+        }
+        let character = ns.substring(with: NSRange(location: index, length: 1))
+        guard character.unicodeScalars.allSatisfy({
+          CharacterSet.whitespacesAndNewlines.contains($0)
+        }) else { return nil }
+      }
+      return (image, range)
+    }
+
+    private func projectedManagedImageReference(
+      _ reference: String,
+      store: InlineNoteImageStore
+    ) -> NSAttributedString? {
+      guard let attachment = store.projectedAttachment(for: NSAttributedString(string: reference))
+      else { return nil }
+      let projected = NSMutableAttributedString(attributedString: attachment)
+      var attributes = pasteDestinationAttributes(for: selectedRange())
+      attributes.removeValue(forKey: .attachment)
+      attributes.removeValue(forKey: .link)
+      projected.addAttributes(
+        attributes,
+        range: NSRange(location: 0, length: projected.length)
+      )
+      return projected
+    }
+
+    @discardableResult
+    func writeManagedImageCopy(
+      _ image: InlineNoteImageAttachment,
+      to pasteboard: NSPasteboard
+    ) -> Bool {
+      let item = NSPasteboardItem()
+      var wrotePublicImage = false
+      for type in Self.publicImagePasteboardTypes {
+        guard let data = Self.inlineImageData(image, type: type) else { continue }
+        guard item.setData(data, forType: type) else { return false }
+        wrotePublicImage = true
+      }
+      guard wrotePublicImage,
+        item.setString(image.sourceReference, forType: Self.managedImageReferenceType)
+      else { return false }
+      pasteboard.clearContents()
+      return pasteboard.writeObjects([item])
+    }
+
+    private struct MixedClipboardPayload {
+      let html: Data
+      let rtfd: Data
+      let rtf: Data
+      let plain: String
+      let canonical: Data
+    }
+
+    private func mixedClipboardPayload(_ selections: [NSRange]) -> MixedClipboardPayload? {
+      let displaySelections = expandedCopySelections(selections)
+      guard let display = mixedClipboardDisplay(displaySelections),
+        let html = htmlClipboardData(for: display),
+        let rtfd = rtfdClipboardData(for: display),
+        let canonical = canonicalSelectionRTF(displaySelections)
+      else { return nil }
+      let sanitized = sanitizedSelectionText(display)
+      guard let rtf = try? sanitized.data(
+        from: NSRange(location: 0, length: sanitized.length),
+        documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+      ) else { return nil }
+      return MixedClipboardPayload(
+        html: html,
+        rtfd: rtfd,
+        rtf: rtf,
+        plain: sanitized.string,
+        canonical: canonical
+      )
+    }
+
+    private func writeMixedSelectionCopy(
+      _ selections: [NSRange],
+      to pasteboard: NSPasteboard
+    ) -> Bool {
+      guard let payload = mixedClipboardPayload(selections) else { return false }
+      let item = NSPasteboardItem()
+      guard item.setData(payload.html, forType: .html),
+        item.setData(payload.rtfd, forType: .rtfd),
+        item.setData(payload.rtf, forType: .rtf),
+        item.setString(payload.plain, forType: .string),
+        item.setData(payload.canonical, forType: Self.projectedSelectionType)
+      else { return false }
+      pasteboard.clearContents()
+      return pasteboard.writeObjects([item])
+    }
+
+    private func writeMixedSelectionFlavor(
+      _ type: NSPasteboard.PasteboardType,
+      selections: [NSRange],
+      to pasteboard: NSPasteboard
+    ) -> Bool {
+      guard let payload = mixedClipboardPayload(selections) else { return false }
+      if type == .html { return pasteboard.setData(payload.html, forType: .html) }
+      if type == .rtfd { return pasteboard.setData(payload.rtfd, forType: .rtfd) }
+      return false
+    }
+
+    private func sanitizedTextPayload(
+      _ selections: [NSRange]
+    ) -> (rtf: Data, plain: String)? {
+      guard let display = mixedClipboardDisplay(selections) else { return nil }
+      let sanitized = sanitizedSelectionText(display)
+      guard let rtf = try? sanitized.data(
+        from: NSRange(location: 0, length: sanitized.length),
+        documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+      ) else { return nil }
+      return (rtf: rtf, plain: sanitized.string)
+    }
+
+    private func writeSanitizedTextSelection(
+      _ selections: [NSRange],
+      to pasteboard: NSPasteboard,
+      types: [NSPasteboard.PasteboardType]
+    ) -> Bool {
+      guard let payload = sanitizedTextPayload(selections) else { return false }
+      let item = NSPasteboardItem()
+      for type in types {
+        guard let format = Self.copyFormat(for: type) else { return false }
+        if format == .rtf {
+          guard item.setData(payload.rtf, forType: .rtf) else { return false }
+        } else {
+          guard item.setString(payload.plain, forType: .string) else { return false }
+        }
+      }
+      pasteboard.clearContents()
+      return pasteboard.writeObjects([item])
+    }
+
+    private func writeSanitizedTextFlavor(
+      _ format: NSPasteboard.PasteboardType,
+      requestedType: NSPasteboard.PasteboardType,
+      selections: [NSRange],
+      to pasteboard: NSPasteboard
+    ) -> Bool {
+      guard let payload = sanitizedTextPayload(selections) else { return false }
+      let canonical: NSPasteboard.PasteboardType = format == .rtf ? .rtf : .string
+      for type in Set([requestedType, canonical]) {
+        if format == .rtf {
+          guard pasteboard.setData(payload.rtf, forType: type) else { return false }
+        } else {
+          guard pasteboard.setString(payload.plain, forType: type) else { return false }
+        }
+      }
+      return true
+    }
+
+    private func mixedClipboardDisplay(_ selections: [NSRange]) -> NSAttributedString? {
+      guard let storage = textStorage, !selections.isEmpty else { return nil }
+      let display = NSAttributedString(attributedString: storage)
+      let joined = NSMutableAttributedString(string: "")
+      for (index, range) in selections.enumerated() {
+        guard range.location != NSNotFound,
+          range.location >= 0,
+          NSMaxRange(range) <= display.length
+        else { return nil }
+        if index > 0 {
+          joined.append(NSAttributedString(string: "\n"))
+        }
+        joined.append(display.attributedSubstring(from: range))
+      }
+      guard Self.containsInlineImage(in: joined) else { return nil }
+      return Self.clipboardSafeAttributedString(Self.sanitizedImageRuns(joined))
+    }
+
+    private static func sanitizedImageRuns(_ display: NSAttributedString) -> NSAttributedString {
+      let result = NSMutableAttributedString(attributedString: display)
+      var imageRanges: [NSRange] = []
+      display.enumerateAttribute(
+        .attachment,
+        in: NSRange(location: 0, length: display.length)
+      ) { value, range, _ in
+        if value is InlineNoteImageAttachment { imageRanges.append(range) }
+      }
+      for range in imageRanges {
+        result.removeAttribute(.link, range: range)
+      }
+      return result
+    }
+
+    private static func managedImageCount(in text: NSAttributedString) -> Int {
+      var count = 0
+      text.enumerateAttribute(
+        .attachment,
+        in: NSRange(location: 0, length: text.length)
+      ) { value, _, _ in
+        if value is InlineNoteImageAttachment { count += 1 }
+      }
+      return count
+    }
+
+    private func canonicalSelectionRTF(_ displaySelections: [NSRange]) -> Data? {
+      guard let projection = projectedCopy(selections: displaySelections),
+        let text = projectedExportText(projection.selections, from: projection.source)
+      else { return nil }
+      guard let data = try? text.data(
+        from: NSRange(location: 0, length: text.length),
+        documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+      ), data.count <= Self.maximumProjectedSelectionBytes
+      else { return nil }
+      return data
+    }
+
+    private func sanitizedSelectionText(_ display: NSAttributedString) -> NSAttributedString {
+      let sanitized = NSMutableAttributedString(attributedString: display)
+      var replacements: [(NSRange, NSAttributedString)] = []
+      display.enumerateAttribute(
+        .attachment,
+        in: NSRange(location: 0, length: display.length)
+      ) { value, range, _ in
+        guard let attachment = value as? InlineNoteImageAttachment else { return }
+        var attributes = display.attributes(at: range.location, effectiveRange: nil)
+        attributes.removeValue(forKey: .attachment)
+        attributes.removeValue(forKey: .link)
+        replacements.append((
+          range,
+          NSAttributedString(
+            string: Self.clipboardAltText(for: attachment),
+            attributes: attributes
+          )
+        ))
+      }
+      for (range, text) in replacements.reversed() {
+        sanitized.replaceCharacters(in: range, with: text)
+      }
+      return sanitized
+    }
+
+    private func htmlClipboardData(for display: NSAttributedString) -> Data? {
+      let tokenized = NSMutableAttributedString(attributedString: display)
+      let nonce = UUID().uuidString
+      var images: [(token: String, attachment: InlineNoteImageAttachment)] = []
+      var replacements: [(NSRange, NSAttributedString)] = []
+      display.enumerateAttribute(
+        .attachment,
+        in: NSRange(location: 0, length: display.length)
+      ) { value, range, _ in
+        guard let attachment = value as? InlineNoteImageAttachment else { return }
+        var attributes = display.attributes(at: range.location, effectiveRange: nil)
+        attributes.removeValue(forKey: .attachment)
+        attributes.removeValue(forKey: .link)
+        let token = "FLECKIMAGETOKEN\(images.count)-" + nonce
+        images.append((token, attachment))
+        replacements.append((
+          range,
+          NSAttributedString(string: token, attributes: attributes)
+        ))
+      }
+      guard !images.isEmpty else { return nil }
+      for (range, replacement) in replacements.reversed() {
+        tokenized.replaceCharacters(in: range, with: replacement)
+      }
+      guard let data = try? tokenized.data(
+        from: NSRange(location: 0, length: tokenized.length),
+        documentAttributes: [.documentType: NSAttributedString.DocumentType.html]
+      ), var html = String(data: data, encoding: .utf8)
+      else { return nil }
+      for image in images {
+        guard let png = Self.clipboardPNG(for: image.attachment) else { return nil }
+        let tag = Self.clipboardImageTag(
+          png: png,
+          alt: Self.clipboardAltText(for: image.attachment),
+          size: clipboardImageDisplaySize(for: image.attachment)
+        )
+        guard html.contains(image.token) else { return nil }
+        html = html.replacingOccurrences(of: image.token, with: tag)
+      }
+      for image in images where html.contains(image.token) {
+        return nil
+      }
+      return html.data(using: .utf8)
+    }
+
+    private func rtfdClipboardData(for display: NSAttributedString) -> Data? {
+      let converted = NSMutableAttributedString(attributedString: display)
+      var replacements: [(NSRange, NSAttributedString)] = []
+      var failed = false
+      display.enumerateAttribute(
+        .attachment,
+        in: NSRange(location: 0, length: display.length)
+      ) { value, range, _ in
+        guard let image = value as? InlineNoteImageAttachment else { return }
+        guard let png = Self.clipboardPNG(for: image) else {
+          failed = true
+          return
+        }
+        let wrapper = FileWrapper(regularFileWithContents: png)
+        wrapper.preferredFilename = "image-\(replacements.count).png"
+        let attachment = NSTextAttachment()
+        attachment.fileWrapper = wrapper
+        attachment.bounds = NSRect(
+          origin: .zero,
+          size: clipboardImageDisplaySize(for: image)
+        )
+        var attributes = display.attributes(at: range.location, effectiveRange: nil)
+        attributes.removeValue(forKey: .attachment)
+        attributes.removeValue(forKey: .link)
+        let replacement = NSMutableAttributedString(attachment: attachment)
+        replacement.addAttributes(
+          attributes,
+          range: NSRange(location: 0, length: replacement.length)
+        )
+        replacements.append((range, replacement))
+      }
+      guard !failed, !replacements.isEmpty else { return nil }
+      for (range, replacement) in replacements.reversed() {
+        converted.replaceCharacters(in: range, with: replacement)
+      }
+      return try? converted.data(
+        from: NSRange(location: 0, length: converted.length),
+        documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd]
+      )
+    }
+
+    private func clipboardImageDisplaySize(
+      for attachment: InlineNoteImageAttachment
+    ) -> NSSize {
+      let rect = attachment.attachmentBounds(
+        for: textContainer,
+        proposedLineFragment: NSRect(origin: .zero, size: bounds.size),
+        glyphPosition: .zero,
+        characterIndex: 0
+      )
+      if rect.size.width > 0, rect.size.height > 0 { return rect.size }
+      if attachment.originalPixelSize.width > 0, attachment.originalPixelSize.height > 0 {
+        return attachment.originalPixelSize
+      }
+      return NSSize(width: 1, height: 1)
+    }
+
+    private static func clipboardPNG(for attachment: InlineNoteImageAttachment) -> Data? {
+      guard let image = attachment.image,
+        let tiff = image.tiffRepresentation,
+        let bitmap = NSBitmapImageRep(data: tiff)
+      else { return nil }
+      let longest = max(bitmap.pixelsWide, bitmap.pixelsHigh)
+      if longest <= clipboardImageMaximumDimension {
+        return bitmap.representation(using: .png, properties: [:])
+      }
+      let ratio = Double(clipboardImageMaximumDimension) / Double(longest)
+      let width = max(1, Int((Double(bitmap.pixelsWide) * ratio).rounded()))
+      let height = max(1, Int((Double(bitmap.pixelsHigh) * ratio).rounded()))
+      guard let target = NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: width,
+        pixelsHigh: height,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+      ) else { return nil }
+      target.size = NSSize(width: width, height: height)
+      guard let context = NSGraphicsContext(bitmapImageRep: target) else { return nil }
+      NSGraphicsContext.saveGraphicsState()
+      NSGraphicsContext.current = context
+      context.imageInterpolation = .high
+      image.draw(
+        in: NSRect(x: 0, y: 0, width: width, height: height),
+        from: .zero,
+        operation: .copy,
+        fraction: 1,
+        respectFlipped: true,
+        hints: nil
+      )
+      NSGraphicsContext.restoreGraphicsState()
+      return target.representation(using: .png, properties: [:])
+    }
+
+    private static func clipboardImageTag(png: Data, alt: String, size: NSSize) -> String {
+      let width = Int(size.width.rounded())
+      let height = Int(size.height.rounded())
+      let dimensions = width > 0 && height > 0 ? " width=\"\(width)\" height=\"\(height)\"" : ""
+      return "<img src=\"data:image/png;base64,\(png.base64EncodedString())\" alt=\"\(clipboardHTMLEscaped(alt))\"\(dimensions)>"
+    }
+
+    private static func clipboardHTMLEscaped(_ text: String) -> String {
+      return text
+        .replacingOccurrences(of: "&", with: "&amp;")
+        .replacingOccurrences(of: "<", with: "&lt;")
+        .replacingOccurrences(of: ">", with: "&gt;")
+        .replacingOccurrences(of: "\"", with: "&quot;")
+    }
+
+    private static func clipboardAltText(for attachment: InlineNoteImageAttachment) -> String {
+      let label = attachment.image?.accessibilityDescription ?? ""
+      let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty,
+        !trimmed.contains("/"),
+        !trimmed.lowercased().contains("file:")
+      else { return "Image" }
+      return trimmed
+    }
+
+    private func projectedSelectionPaste(
+      from pasteboard: NSPasteboard
+    ) -> NSAttributedString? {
+      guard let store = inlineImageStore,
+        let data = pasteboard.data(forType: Self.projectedSelectionType),
+        !data.isEmpty,
+        data.count <= Self.maximumProjectedSelectionBytes,
+        let decoded = try? NSAttributedString(
+          data: data,
+          options: [.documentType: NSAttributedString.DocumentType.rtf],
+          documentAttributes: nil
+        ),
+        !Self.containsAttachment(in: decoded)
+      else { return nil }
+      let expectedImages = InlineNoteImageStore.referenceRanges(in: decoded.string).count
+      guard expectedImages > 0 else { return nil }
+      let projected = store.projectedContent(from: decoded)
+      guard Self.managedImageCount(in: projected) == expectedImages else { return nil }
+      return projected
+    }
+
+    private func inlineImageAttachment(in range: NSRange) -> InlineNoteImageAttachment? {
+      guard let storage = textStorage,
+        range.location != NSNotFound,
+        range.location >= 0,
+        range.length == 1,
+        NSMaxRange(range) <= storage.length
+      else { return nil }
+      return storage.attribute(.attachment, at: range.location, effectiveRange: nil)
+        as? InlineNoteImageAttachment
+    }
+
+    private func inlineImageAttachment(atViewPoint point: NSPoint) -> InlineNoteImageAttachment? {
+      guard let layoutManager, let textContainer, layoutManager.numberOfGlyphs > 0 else {
+        return nil
+      }
+      layoutManager.ensureLayout(for: textContainer)
+      let textPoint = NSPoint(
+        x: point.x - textContainerOrigin.x,
+        y: point.y - textContainerOrigin.y
+      )
+      let glyphIndex = layoutManager.glyphIndex(for: textPoint, in: textContainer)
+      guard glyphIndex < layoutManager.numberOfGlyphs,
+        layoutManager
+          .boundingRect(
+            forGlyphRange: NSRange(location: glyphIndex, length: 1),
+            in: textContainer
+          )
+          .contains(textPoint)
+      else { return nil }
+      let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+      return inlineImageAttachment(in: NSRange(location: characterIndex, length: 1))
+    }
+
+    private func inlineImageRange(
+      _ attachment: InlineNoteImageAttachment,
+      in storage: NSTextStorage
+    ) -> NSRange? {
+      var result: NSRange?
+      storage.enumerateAttribute(
+        .attachment,
+        in: NSRange(location: 0, length: storage.length)
+      ) { value, range, stop in
+        guard value as? InlineNoteImageAttachment === attachment else { return }
+        result = NSRange(location: range.location, length: 1)
+        stop.pointee = true
+      }
+      return result
+    }
+
+    private static func isInlineImagePasteboardType(
+      _ type: NSPasteboard.PasteboardType
+    ) -> Bool {
+      type == .tiff || type == .png
+    }
+
+    private static func inlineImageData(
+      _ attachment: InlineNoteImageAttachment,
+      type: NSPasteboard.PasteboardType
+    ) -> Data? {
+      guard isInlineImagePasteboardType(type), let tiff = attachment.image?.tiffRepresentation
+      else { return nil }
+      if type == .tiff { return tiff }
+      return NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
     }
 
     override func paste(_ sender: Any?) {
@@ -3576,6 +4650,7 @@
       button.setButtonType(.momentaryPushIn)
       button.bezelStyle = .texturedRounded
       button.isBordered = true
+      button.focusRingType = .none
       button.image = NSImage(
         systemSymbolName: "doc.on.clipboard",
         accessibilityDescription: "Paste options"
@@ -3900,8 +4975,22 @@
           $0.tag == Self.noteLinkSeparatorMenuTag
             || $0.tag == Self.noteLinkRequestMenuTag
             || $0.tag == Self.noteLinkOpenMenuTag
+            || $0.tag == Self.copyImageMenuTag
         }
         .forEach(menu.removeItem)
+
+      if let image = inlineImageAttachment(
+        atViewPoint: convert(event.locationInWindow, from: nil)
+      ) {
+        let copyItem = menu.addItem(
+          withTitle: "Copy Image",
+          action: #selector(copyImageFromMenu(_:)),
+          keyEquivalent: ""
+        )
+        copyItem.tag = Self.copyImageMenuTag
+        copyItem.target = self
+        copyItem.representedObject = image
+      }
 
       let separator = NSMenuItem.separator()
       separator.tag = Self.noteLinkSeparatorMenuTag
@@ -3925,10 +5014,25 @@
       return menu
     }
 
+    @objc func copyImageFromMenu(_ sender: NSMenuItem) {
+      guard let image = sender.representedObject as? InlineNoteImageAttachment else { return }
+      _ = copyInlineImage(image, to: NSPasteboard.general)
+    }
+
+    @discardableResult
+    func copyInlineImage(_ image: InlineNoteImageAttachment, to pasteboard: NSPasteboard) -> Bool {
+      guard let storage = textStorage, inlineImageRange(image, in: storage) != nil else {
+        return false
+      }
+      return writeManagedImageCopy(image, to: pasteboard)
+    }
+
     override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
       switch menuItem.action {
       case #selector(requestNoteLinkFromMenu(_:)):
         return isEditable
+      case #selector(copyImageFromMenu(_:)):
+        return menuItem.representedObject is InlineNoteImageAttachment
       case #selector(openNoteLinkFromMenu(_:)):
         guard let link = noteLinkAtSelection() else { return false }
         return liveNoteIDs.contains(link.targetNoteID)
@@ -3983,6 +5087,8 @@
     override func didChangeText() {
       textChangeGeneration += 1
       super.didChangeText()
+      needsDisplay = true
+      window?.invalidateCursorRects(for: self)
     }
 
     override func setSelectedRange(_ range: NSRange) {
@@ -3991,6 +5097,10 @@
       super.setSelectedRange(normalizedRange)
       clearInlineImageTypingAttributes()
       if changed, !isApplyingPasteOption { cancelPasteOptions() }
+      if changed {
+        needsDisplay = true
+        window?.invalidateCursorRects(for: self)
+      }
     }
 
     override func selectionRange(
@@ -4015,6 +5125,8 @@
       }
       super.setSelectedRanges(adjustedRanges, affinity: affinity, stillSelecting: flag)
       clearInlineImageTypingAttributes()
+      needsDisplay = true
+      window?.invalidateCursorRects(for: self)
       guard !isApplyingPasteOption else { return }
       let currentRanges = selectedRanges
       guard previousRanges.count != currentRanges.count
@@ -4029,6 +5141,7 @@
     }
 
     override func cancelOperation(_ sender: Any?) {
+      if imageEditing.cancel() { return }
       guard hasPasteOptions else {
         super.cancelOperation(sender)
         return
@@ -4197,6 +5310,7 @@
 
     override func mouseDown(with event: NSEvent) {
       cancelPasteOptions()
+      if imageEditing.begin(with: event) { return }
       guard let layoutManager, let textContainer else {
         super.mouseDown(with: event)
         return
@@ -4257,6 +5371,43 @@
         contentLength: item.contentRange.length,
         currentlyCompleted: item.completed
       )
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+      if imageEditing.isDragging {
+        imageEditing.drag(with: event)
+      } else {
+        super.mouseDragged(with: event)
+      }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+      if imageEditing.isDragging {
+        imageEditing.end(with: event)
+      } else {
+        super.mouseUp(with: event)
+      }
+    }
+
+    @discardableResult
+    func applyInlineImageTransform(transform: InlineImageTransform, range: NSRange) -> Bool {
+      guard isEditable, transform.isValid,
+        let storage = textStorage,
+        let original = inlineImageAttachment(in: range),
+        let replacement = original.replacingTransform(transform)
+      else { return false }
+      var attributes = storage.attributes(at: range.location, effectiveRange: nil)
+      attributes[.attachment] = replacement
+      let content = NSAttributedString(string: "\u{fffc}", attributes: attributes)
+      var changed = false
+      breakUndoCoalescing()
+      performUndoGroup {
+        registerSelectionUndo(selectedRange())
+        changed = replaceAttributedText(in: range, with: content, selecting: range)
+        if changed { undoManager?.setActionName("Transform Image") }
+      }
+      breakUndoCoalescing()
+      return changed
     }
 
     private func replaceSelectedLines(
@@ -4559,11 +5710,11 @@
       )
     }
 
-    private func selectedBulletMarkerRanges() -> [NSRange] {
+    private func selectedBulletPrefixRanges() -> [NSRange] {
       let ns = string as NSString
       guard ns.length > 0 else { return [] }
-      var markers: [NSRange] = []
-      var seenMarkers = Set<NSRange>()
+      var prefixes: [NSRange] = []
+      var seenPrefixes = Set<NSRange>()
       for selection in selectedRanges.map(\.rangeValue) where selection.length > 0 {
         guard selection.location != NSNotFound,
           selection.location >= 0,
@@ -4577,19 +5728,18 @@
           let paragraphRange = ns.paragraphRange(
             for: NSRange(location: location, length: 0)
           )
-          if let item = parsedListItem(in: paragraphRange, string: ns),
-            case .bullet = item.parsed.style,
-            NSIntersectionRange(selection, item.markerRange).length > 0,
-            seenMarkers.insert(item.markerRange).inserted
+          if let prefix = bulletPrefixRange(in: paragraphRange, string: ns),
+            NSIntersectionRange(selection, prefix).length > 0,
+            seenPrefixes.insert(prefix).inserted
           {
-            markers.append(item.markerRange)
+            prefixes.append(prefix)
           }
           let nextLocation = NSMaxRange(paragraphRange)
           guard nextLocation > location else { break }
           location = nextLocation
         }
       }
-      return markers
+      return prefixes
     }
 
     private func parsedListItem(in paragraphRange: NSRange, string ns: NSString) -> (
@@ -4642,6 +5792,31 @@
       )
     }
 
+    private func removeBulletPrefix(in paragraphRange: NSRange, contentStart: Int) {
+      performUndoGroup {
+        _ = replaceText(
+          in: NSRange(
+            location: paragraphRange.location,
+            length: contentStart - paragraphRange.location
+          ),
+          with: "",
+          selecting: NSRange(location: paragraphRange.location, length: 0)
+        )
+      }
+    }
+
+    private func bulletPrefixRange(in paragraphRange: NSRange, string ns: NSString) -> NSRange? {
+      guard let item = parsedListItem(in: paragraphRange, string: ns),
+        case .bullet = item.parsed.style
+      else {
+        return nil
+      }
+      return NSRange(
+        location: item.markerRange.location,
+        length: item.contentRange.location - item.markerRange.location
+      )
+    }
+
     private func normalizedBulletCaretRange(_ range: NSRange) -> NSRange {
       let ns = string as NSString
       guard range.location != NSNotFound,
@@ -4652,13 +5827,30 @@
         return range
       }
 
-      guard range.length == 0,
-        let item = bulletListItem(at: range.location, string: ns),
-        range.location < item.contentRange.location
-      else {
-        return range
+      if range.length == 0 {
+        guard let item = bulletListItem(at: range.location, string: ns),
+          range.location < item.contentRange.location
+        else {
+          return range
+        }
+        return NSRange(location: item.contentRange.location, length: 0)
       }
-      return NSRange(location: item.contentRange.location, length: 0)
+
+      var location = range.location
+      var end = NSMaxRange(range)
+      if let prefix = bulletPrefixRange(
+        in: ns.paragraphRange(for: NSRange(location: location, length: 0)),
+        string: ns
+      ), prefix.location <= location, location < NSMaxRange(prefix) {
+        location = prefix.location
+      }
+      if let prefix = bulletPrefixRange(
+        in: ns.paragraphRange(for: NSRange(location: end - 1, length: 0)),
+        string: ns
+      ), prefix.location < end, end < NSMaxRange(prefix) {
+        end = NSMaxRange(prefix)
+      }
+      return NSRange(location: location, length: end - location)
     }
 
     private func rangesExcluding(
@@ -4931,6 +6123,23 @@
 
     override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
       var actions = super.accessibilityCustomActions() ?? []
+      if isEditable, selectedInlineImage() != nil {
+        actions.append(contentsOf: [
+          NSAccessibilityCustomAction(
+            name: "Enlarge image", target: self, selector: #selector(enlargeSelectedImage)
+          ),
+          NSAccessibilityCustomAction(
+            name: "Shrink image", target: self, selector: #selector(shrinkSelectedImage)
+          ),
+          NSAccessibilityCustomAction(
+            name: "Rotate image clockwise", target: self, selector: #selector(rotateSelectedImageClockwise)
+          ),
+          NSAccessibilityCustomAction(
+            name: "Rotate image counterclockwise", target: self,
+            selector: #selector(rotateSelectedImageCounterclockwise)
+          ),
+        ])
+      }
       if selectedChecklistLocation() != nil {
         actions.append(
           NSAccessibilityCustomAction(
@@ -4941,6 +6150,39 @@
         )
       }
       return actions
+    }
+
+    @objc func enlargeSelectedImage() -> Bool {
+      adjustSelectedImage(scale: 1.1, rotation: 0)
+    }
+
+    @objc func shrinkSelectedImage() -> Bool {
+      adjustSelectedImage(scale: 1 / 1.1, rotation: 0)
+    }
+
+    @objc func rotateSelectedImageClockwise() -> Bool {
+      adjustSelectedImage(scale: 1, rotation: 15)
+    }
+
+    @objc func rotateSelectedImageCounterclockwise() -> Bool {
+      adjustSelectedImage(scale: 1, rotation: -15)
+    }
+
+    private func adjustSelectedImage(scale: CGFloat, rotation: Double) -> Bool {
+      guard let selected = selectedInlineImage(), let layout = imageEditing.currentLayout else {
+        return false
+      }
+      let transform = selected.attachment.displayTransform ?? layout.transform
+      return applyInlineImageTransform(
+        transform: InlineImageTransform(
+          size: NSSize(
+            width: transform.size.width * scale,
+            height: transform.size.height * scale
+          ),
+          rotationDegrees: transform.rotationDegrees + rotation
+        ),
+        range: selected.range
+      )
     }
 
     @objc func toggleSelectedChecklist() -> Bool {

@@ -202,7 +202,7 @@ import Testing
   editor.setSelectedRange(geometries[0].characterRange)
   #expect(editor.writeSelection(to: pasteboard, types: editor.writablePasteboardTypes))
   editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
-  #expect(editor.readSelection(from: pasteboard, type: .rtf))
+  #expect(editor.readSelection(from: pasteboard))
   harness.settle()
   let pastedSource = InlineNoteImageProjection.expanded(try #require(editor.textStorage))
   #expect(try attachmentGeometries(in: editor).count == 6)

@@ -3,6 +3,191 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.0-beta.1] - 2026-11-11
+
+First combined preview since the first public Developer Preview (`1.1.2-beta.2`,
+2026-09-18), integrating the sixteen open pull requests onto `main`. Everything
+below accumulated after that release, so this entry is the full change record
+rather than one integration layer. The candidate is ad-hoc signed and not
+notarized; no GitHub Release is published for this version until it can be signed
+and notarized as `docs/RELEASES.md` requires.
+
+### Added
+
+- Paste-style inline image editing: selecting an image draws a dashed outline with
+  eight square handles, four corners that keep the image's proportions and four
+  side midpoints that change one axis, plus a rotation handle above the image that
+  snaps to 15-degree steps while Shift is held. Each completed drag is one undo
+  step, Escape cancels it, and size and rotation are remembered when the note is
+  reopened (#122).
+- Copying an inline image now puts picture data on the clipboard instead of a file
+  path, including when the selection also contains text, and a separate native
+  text view pastes the image back correctly (#119).
+- An optional scroll-edge blur at the top of the editor, with a persisted Blur
+  amount slider in Settings → Appearance. It is off by default, shallow by
+  design, and suppressed by Reduce Transparency (#117).
+- Agent Activity shows recorded agent edits as a unified line diff, with removed
+  lines marked red and added lines marked green, and spoken labels that identify
+  each kind without relying on colour. Changes over 400 combined lines or 1 MiB
+  keep the previous Before/After presentation (#113).
+- Selected-text drags keep AppKit's native pasteboard path, so a dragged selection
+  arrives with its formatting instead of as flattened text (#115).
+- An opt-in performance recorder that collects foreground frame and interval
+  samples for a bounded window, used to measure editor and panel work without
+  changing default behaviour (#106).
+- An opt-in bounded Apple Speech lifecycle diagnostic that records per-attempt
+  cancellation, reservation ownership and first-buffer receipts without capturing
+  transcripts or device data (#82).
+- Agent event subscriptions: agents can subscribe to note and task events for one
+  note or one folder, with each delivery verified, signed and receipted, and event
+  observation off unless it is enabled for a specific approved profile (#91).
+- Dictation capture filing into a chosen note and heading, in bounded chunks, with
+  an on-disk receipt that lets an interrupted capture resume on relaunch and one
+  undo that reverses the whole capture (#75).
+- Recovery actions inside the dictation capsule for a failed capture — Try again,
+  Copy text, History and Destination — each with its own accessibility label
+  (#83).
+- Tabs that fit no longer reserve space for navigation arrows, and the strip
+  returns to its leading edge when overflow ends (#86).
+- Inline folder renaming with a native inline text field that commits on Return or
+  focus loss and cancels on Escape (#80).
+
+### Changed
+
+- The default appearance is the neutral Fleck Monochrome palette with solid window
+  chrome and a neutral grey accent, replacing the earlier translucent,
+  purple-accented default. Accent, editor text colour and editor background now
+  come from the selected theme rather than separate pickers, and window chrome is
+  an explicit Solid or Glass choice.
+- Main-UI buttons, row buttons, icon buttons and Notes header actions show a quiet
+  theme-adaptive hover background and no background at rest; disabled controls
+  skip the wash, and the header actions keep consistent 28-point hit targets
+  (#109, #111, #121).
+- The native blue focus ring is gone across the app: focus effects are disabled at
+  every product hosting root, including the menu-bar panel, the pinned window,
+  Settings, Dictation History and the dictation capsule (#107).
+- Copy and cut keep expanding whole list items, while a drag now preserves the
+  exact highlighted selection; image selections export managed references on the
+  native pasteboard (#115).
+- A bullet marker and the space after it are one structural prefix: selecting,
+  deleting or pasting around a marker can no longer leave `•text`, Backspace at the
+  start of the body removes the whole prefix, and smart-delete expansion cannot
+  consume a separator the selection did not include (#120).
+- Font-size changes apply when the field is finished or its popover closes rather
+  than on every keystroke (#92).
+- The dictation capsule stays at the bottom of the screen and a clean save returns
+  straight to standby without a success message or action row.
+- Folder renaming keeps an invalid name on screen with its validation error and
+  focus intact instead of discarding it.
+
+### Fixed
+
+- Focus returns to the editor after activating a search result, including when the
+  dismissal is delayed or the search surface never finishes detaching: the restore
+  now runs against a bounded deadline instead of a fixed number of run-loop yields
+  (#114, #116).
+- Tab-overflow animation coverage no longer depends on sampling frames from a
+  loaded machine; the reorder test now freezes the layer clock, lets the real
+  controller attach its animation, and requires the presented frames to land
+  between the origin and target slots (#118).
+- A closed folder-name composer no longer keeps consuming pointer clicks, and
+  starting a folder while the strip overflows no longer moves its scroll position.
+- Folder validation errors raised by a newer edit are no longer cleared by an older
+  save finishing afterwards.
+- Wrapped checklist text no longer shifts its indentation, and completing an item
+  no longer leaves stale strikethrough behind (#81).
+- Hanging indents with a negative tail indent survive loading, saving, dictated
+  appends and agent edits instead of snapping back (#90).
+- Indent and outdent after an empty list marker no longer move the caret to the
+  wrong side of the marker, including when renumbering changes a number's width
+  (#63).
+- Dictation failures no longer report success or an unrelated cause: insertion
+  failure and save failure are distinguished, and Copy text is offered only when
+  text exists (#83).
+- Cleanup fallbacks no longer claim a clean result when the cleanup service is
+  unavailable, misses its deadline or is cancelled, and dictionary-protected words
+  are still honoured (#83).
+- The MCP helper no longer dies with SIGPIPE when its output pipe closes, and event
+  observation fails closed when the privacy generation was interrupted or the
+  trusted-clock watermark is in the future (#79, #89).
+- Activity panel scrollbar thumbs no longer drift outside the track at fractional
+  scroll positions, and a held thumb keeps its size.
+- Resizing the notes panel no longer emits repeated text-view frame updates, adopts
+  a frame that moves the axis you did not drag, or lets an older interaction
+  overwrite a newer one.
+
+### Performance and known limitations
+
+- This build is still laggy, and its performance is not good yet. Treat it as a
+  test build: typing in long notes, switching notes, opening the panel and
+  animations all need more work, and further performance work is expected.
+- No packaged-app performance measurement exists for this build. The repository's
+  own baseline marks typing, launch, panel presentation, note switching, save,
+  idle CPU and resident memory as not captured, and records only synthetic
+  persistence figures from Debug tests.
+- Repeated panel resizing no longer re-posts frame updates once relaid out, and
+  selection work over many bullet markers now walks each marker once instead of
+  rescanning — the two measured improvements in this build (#88, #105).
+- Inline images are copied as picture data limited to 2048 points on the long edge;
+  the original file is not embedded in the clipboard or in exports.
+- A destination that discards HTML images drops them from a mixed text-and-image
+  clipboard payload. Vivaldi and a stock native text view keep both the text and
+  the images; the Capy composer currently keeps only the text.
+- The Enhanced Local graph remains a separate, unapproved debug-only candidate and
+  is not part of this build.
+- Native Intel Macs and a full macOS 14 run are still not verified.
+- Notarization, Developer ID signing, and an update feed are not part of this
+  build; Sparkle embedding stays held.
+
+### Infrastructure and documentation
+
+- CI can run the native macOS jobs on either the GitHub-hosted runners or the
+  qualified Namespace provider, chosen per dispatch, and the qualification job
+  proves the mapping instead of assuming it (#116).
+- Public versions are documented as advancing past every internal version already
+  used, internal builds are documented as candidates rather than releases, and the
+  documentation-only CI path validates README links against tracked paths (#112).
+- Shared native test repairs, benchmark fixtures and the performance measurement
+  guide landed with the feature projections (#105, #106, #108).
+
+## [1.7.29-beta.1] - 2026-11-09
+
+### Changed
+
+- Give Notes header actions consistent 28-point hit targets and 6-point rounded
+  hover highlights, with no background at rest. Keep the pinned status unboxed.
+- Use the same button-backed presentation for Options so its full hit target and
+  hover feedback match the other header actions.
+
+## [1.7.28-beta.1] - 2026-11-09
+
+### Fixed
+
+- Accept AppKit's declared clipboard text formats when copying whole bullet items from notes containing images.
+- Replace previous clipboard contents during projected copy while preserving rich and plain text during per-format writes.
+
+## [1.7.27-beta.1] - 2026-11-09
+
+### Fixed
+
+- Remove the native blue focus ring and halo border from controls across the app. Focus effects
+  are disabled at every product hosting root, including the menu-bar panel, the pinned notes
+  window, Settings, Dictation History, and the dictation capsule, and the font search field,
+  font list, font scroll view, clear button, editor scroll view, editor body, paste-options
+  button, and the editor's lazily created find and replace bar now draw no AppKit focus ring.
+  Keyboard navigation, actions, text insertion, selection, and the custom thin folder focus cue
+  are preserved.
+
+## [1.7.26-beta.1] - 2026-11-09
+
+### Changed
+
+- Avoid redundant editor presentation and selected-content mutation work while preserving canonical rich text, note value semantics, and editor identity.
+- Prepare independent agent journal transactions off the main actor and skip redundant write preflight persistence only for a known committed clean generation.
+- Reuse validated snapshot payloads within a load without weakening integrity checks or introducing a cross-load cache.
+- Preserve live and unavailable note-link presentation when caret-only formatting changes typing attributes without changing the note.
+- Retain the changes as provisional: historical integrated validation includes eleven inconclusive metrics and does not establish performance acceptance for this public source projection.
+
 ## [1.7.24-beta.1] - 2026-11-06
 
 ### Changed

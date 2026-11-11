@@ -472,6 +472,8 @@ private struct SettingsSidebarThemeTestHost: View {
   #expect(settingsSource.contains("SettingsPreferenceRow(\n          \"Appearance\""))
   #expect(settingsSource.contains("SettingsPreferenceRow(\n          \"Modifier key\""))
   #expect(settingsSource.contains("SettingsToggleRow(\n          title: \"Show status capsule\""))
+  #expect(settingsSource.contains("SettingsPreferenceRow(\n          \"Blur amount\""))
+  #expect(settingsSource.contains(".disabled(!appState.preferences.showScrollEdgeBlur)"))
   #expect(!settingsSource.contains("SettingsSectionCard(\"Behavior\")"))
   #expect(!settingsSource.contains("JSON workspace manifest"))
   #expect(agentSource.contains("SettingsPreferenceRow("))
@@ -2339,6 +2341,176 @@ private func settingsScrollViewAncestor(of view: NSView) -> NSScrollView? {
     current = candidate.superview
   }
   return nil
+}
+
+@MainActor
+private func settingsSearchProbe(
+  _ identifier: String,
+  in host: NSView
+) -> SettingsSearchProbe.ProbeView? {
+  settingsSidebarDescendants(of: host)
+    .compactMap { $0 as? SettingsSearchProbe.ProbeView }
+    .first { $0.probeIdentifier == identifier }
+}
+
+@MainActor
+private func settingsAccessibilityAttribute(_ element: NSObject, _ name: String) -> Any? {
+  let selector = NSSelectorFromString(name)
+  guard element.responds(to: selector) else { return nil }
+  return element.perform(selector)?.takeUnretainedValue()
+}
+
+@MainActor
+private func settingsAccessibilityPercent(
+  _ element: NSObject,
+  attribute: String = "accessibilityValue"
+) -> Double? {
+  switch settingsAccessibilityAttribute(element, attribute) {
+  case let number as NSNumber:
+    let value = number.doubleValue
+    return value <= 1 ? value * 100 : value
+  case let text as String:
+    let number = text
+      .replacingOccurrences(of: "\u{00A0}", with: " ")
+      .replacingOccurrences(of: "%", with: "")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return Double(number)
+  default:
+    return nil
+  }
+}
+
+@MainActor
+private func settingsAccessibilityEnabled(_ element: NSObject?) -> Bool? {
+  guard let element else { return nil }
+  if let accessibility = element as? NSAccessibilityProtocol {
+    return accessibility.isAccessibilityEnabled()
+  }
+  let selector = NSSelectorFromString("isAccessibilityEnabled")
+  guard element.responds(to: selector) else { return nil }
+  return (element.value(forKey: "accessibilityEnabled") as? NSNumber)?.boolValue
+}
+
+@MainActor
+private func settingsAccessibilitySlider(in host: NSView) -> NSObject? {
+  let identifier = "settings-scroll-edge-blur-amount"
+  let roots = [host, host.window?.contentView].compactMap { $0 }
+  for root in roots {
+    if let slider = settingsAccessibilityElements(in: root, identifier: identifier).first {
+      return slider
+    }
+  }
+  for root in roots {
+    let sliders = settingsAccessibilityElements(
+      in: root, identifier: "AXSlider", attribute: "accessibilityRole")
+    if let labelled = sliders.first(where: {
+      settingsAccessibilityAttribute($0, "accessibilityLabel") as? String == "Blur amount"
+    }) {
+      return labelled
+    }
+  }
+  return nil
+}
+
+@MainActor
+private func settingsAccessibilityIncrement(_ element: NSObject) -> Bool {
+  (element as? NSAccessibilityProtocol)?.accessibilityPerformIncrement() ?? false
+}
+
+@MainActor
+private func settingsAccessibilityRole(_ element: NSObject) -> String? {
+  if let role = (element as? NSAccessibilityProtocol)?.accessibilityRole()?.rawValue {
+    return role
+  }
+  return settingsAccessibilityAttribute(element, "accessibilityRole") as? String
+}
+
+@MainActor
+private func settingsAccessibilityWindow(_ element: NSObject) -> NSWindow? {
+  if let window = (element as? NSAccessibilityProtocol)?.accessibilityWindow() as? NSWindow {
+    return window
+  }
+  return settingsAccessibilityAttribute(element, "accessibilityWindow") as? NSWindow
+}
+
+@MainActor
+private func settingsAccessibilityFrame(_ element: NSObject) -> NSRect? {
+  if let accessibility = element as? NSAccessibilityProtocol {
+    let frame = accessibility.accessibilityFrame()
+    if !frame.isEmpty { return frame }
+  }
+  guard element.responds(to: NSSelectorFromString("accessibilityFrame")),
+    let value = element.value(forKey: "accessibilityFrame") as? NSValue
+  else { return nil }
+  let frame = value.rectValue
+  return frame.isEmpty ? nil : frame
+}
+
+@MainActor
+private func settingsAccessibilityChildren(of element: NSObject) -> [Any] {
+  if let accessibility = element as? NSAccessibilityProtocol,
+    let children = accessibility.accessibilityChildren()
+  {
+    return children
+  }
+  let selector = NSSelectorFromString("accessibilityChildren")
+  guard element.responds(to: selector) else { return [] }
+  return element.perform(selector)?.takeUnretainedValue() as? [Any] ?? []
+}
+
+@MainActor
+private func settingsAccessibilitySlider(
+  owningWindow window: NSWindow,
+  amountRow: NSView,
+  in host: NSView
+) -> NSObject? {
+  let rowScreenFrame = window.convertToScreen(amountRow.convert(amountRow.bounds, to: nil))
+  var visited: Set<ObjectIdentifier> = []
+  var matches: [NSObject] = []
+
+  func walk(_ element: NSObject) {
+    guard matches.count < 2, visited.insert(ObjectIdentifier(element)).inserted else { return }
+    if settingsAccessibilityRole(element) == "AXSlider",
+      settingsAccessibilityWindow(element) === window,
+      let frame = settingsAccessibilityFrame(element),
+      rowScreenFrame.contains(frame)
+    {
+      matches.append(element)
+    }
+    for child in NSAccessibility.unignoredChildren(
+      from: settingsAccessibilityChildren(of: element)
+    ) {
+      if let child = child as? NSObject {
+        walk(child)
+      }
+    }
+  }
+
+  walk(host)
+  return matches.count == 1 ? matches[0] : nil
+}
+
+@MainActor
+private func settingsScrollEdgeBlurReadinessWait(
+  in host: NSView,
+  until condition: () -> Bool
+) async {
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: .seconds(1))
+  while clock.now < deadline {
+    host.layoutSubtreeIfNeeded()
+    if condition() { return }
+    try? await Task.sleep(for: .milliseconds(20))
+  }
+}
+
+@MainActor
+private func settingsCapture(_ view: NSView, named name: String, in directory: String) throws {
+  let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+  view.cacheDisplay(in: view.bounds, to: bitmap)
+  try #require(bitmap.representation(using: .png, properties: [:])).write(
+    to: URL(fileURLWithPath: directory).appendingPathComponent(name)
+  )
 }
 
 private extension NSRect {
@@ -6345,6 +6517,162 @@ private final class RuntimeOffActorReleaseBox: @unchecked Sendable {
 
   func release() {
     runtime = nil
+  }
+}
+
+@Test(.enabled(if: ProcessInfo.processInfo.environment["FLECK_CONTROL_FOCUS_CAPTURE_DIR"] != nil))
+@MainActor
+func settingsScrollEdgeBlurRendersOffByDefaultWhenRequested() async throws {
+  let previousAccessibility = enableSettingsAccessibility()
+  defer { restoreSettingsAccessibility(previousAccessibility) }
+  let directory = try #require(
+    ProcessInfo.processInfo.environment["FLECK_CONTROL_FOCUS_CAPTURE_DIR"]
+  )
+  try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+  for (name, appearance, size) in [
+    ("light", NSAppearance.Name.aqua, DynamicTypeSize.large),
+    ("dark", NSAppearance.Name.darkAqua, .large),
+    ("larger-text", NSAppearance.Name.aqua, .accessibility5),
+  ] {
+    let fixture = try await RuntimeFixture(
+      finalText: nil,
+      monitorAccessGranted: false,
+      monitorRequestAccessResult: false,
+      permissionController: DictationPermissionController(
+        microphoneStatus: { .denied },
+        speechStatus: { .denied }
+      )
+    )
+    defer { fixture.releaseRuntime() }
+    let host = NSHostingView(
+      rootView: SettingsView(runtime: fixture.runtime)
+        .environmentObject(fixture.appState)
+        .environment(\.dynamicTypeSize, size)
+        .environment(\.colorScheme, appearance == .darkAqua ? .dark : .light)
+        .environment(\.fleckThemeSnapshot, .resolve(
+          colorTheme: .monochrome,
+          mode: appearance == .darkAqua ? .dark : .light,
+          systemAppearance: appearance == .darkAqua ? .dark : .light,
+          reduceTransparency: false,
+          increasedContrast: false
+        ))
+    )
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 840, height: 600),
+      styleMask: [.titled], backing: .buffered, defer: false
+    )
+    window.appearance = NSAppearance(named: appearance)
+    window.contentView = host
+    NSApp.activate(ignoringOtherApps: true)
+    window.makeKeyAndOrderFront(nil)
+    defer {
+      window.contentView = nil
+      window.orderOut(nil)
+    }
+    await settleSettingsHost(host)
+    let sidebar = try #require(settingsSidebarTableView(of: host) as? NSOutlineView)
+    let row = try #require(settingsSidebarRow(.appearance, in: sidebar))
+    sidebar.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+    NotificationCenter.default.post(name: NSTableView.selectionDidChangeNotification, object: sidebar)
+    await settleSettingsHost(host)
+    #expect(!fixture.appState.preferences.showScrollEdgeBlur)
+    #expect(
+      fixture.appState.preferences.scrollEdgeBlurAmount
+        == AppPreferences.defaultScrollEdgeBlurAmount
+    )
+    let toggleProbe = try #require(
+      settingsSearchProbe("settings-search-target-appearance-scroll-edge-blur", in: host)
+    )
+    let amountProbe = try #require(
+      settingsSearchProbe("settings-search-target-appearance-scroll-edge-blur-amount", in: host)
+    )
+    _ = amountProbe.scrollToVisible(amountProbe.bounds.insetBy(dx: 0, dy: -12))
+    await settleSettingsHost(host)
+    let sidebarScroll = try #require(settingsScrollViewAncestor(of: sidebar))
+    let detailScroll = try #require(
+      settingsHostedScrollViews(of: host).first { $0 !== sidebarScroll }
+    )
+    let detailFrame = detailScroll.convert(detailScroll.bounds, to: nil)
+    let toggleFrame = toggleProbe.convert(toggleProbe.bounds, to: nil)
+    let amountFrame = amountProbe.convert(amountProbe.bounds, to: nil)
+    #expect(!toggleFrame.isEmpty && !amountFrame.isEmpty)
+    #expect(detailFrame.contains(toggleFrame))
+    #expect(detailFrame.contains(amountFrame))
+    func currentSlider() -> NSObject? {
+      settingsAccessibilitySlider(owningWindow: window, amountRow: amountProbe, in: host)
+        ?? settingsAccessibilitySlider(in: host)
+    }
+    await settingsScrollEdgeBlurReadinessWait(in: host) {
+      window.isKeyWindow && window.isVisible && host.window === window
+        && currentSlider() != nil
+    }
+    let slider = try #require(currentSlider())
+    #expect(settingsAccessibilityAttribute(slider, "accessibilityRole") as? String == "AXSlider")
+    #expect(
+      settingsAccessibilityAttribute(slider, "accessibilityIdentifier") as? String
+        == "settings-scroll-edge-blur-amount"
+    )
+    #expect(
+      settingsAccessibilityAttribute(slider, "accessibilityLabel") as? String == "Blur amount"
+    )
+    let initialPercent = try #require(settingsAccessibilityPercent(slider))
+    #expect(abs(initialPercent - AppPreferences.defaultScrollEdgeBlurAmount * 100) < 0.5)
+    #expect(settingsAccessibilityEnabled(slider) == false)
+    let minimumPercent = try #require(
+      settingsAccessibilityPercent(slider, attribute: "accessibilityMinValue")
+    )
+    let maximumPercent = try #require(
+      settingsAccessibilityPercent(slider, attribute: "accessibilityMaxValue")
+    )
+    #expect(minimumPercent == 0)
+    #expect(maximumPercent == 100)
+    try settingsCapture(
+      host,
+      named: "scroll-edge-blur-settings-\(name)-disabled-default.png",
+      in: directory
+    )
+    fixture.appState.updatePreferences { $0.showScrollEdgeBlur = true }
+    await settingsScrollEdgeBlurReadinessWait(in: host) {
+      settingsAccessibilityEnabled(currentSlider()) == true
+    }
+    #expect(fixture.appState.preferences.showScrollEdgeBlur)
+    #expect(settingsAccessibilityEnabled(currentSlider()) == true)
+    var increments = 0
+    while abs(fixture.appState.preferences.scrollEdgeBlurAmount - 1) > 0.001
+      && increments < 200
+    {
+      guard let current = currentSlider(),
+        settingsAccessibilityIncrement(current)
+      else { break }
+      await settleSettingsHost(host)
+      increments += 1
+    }
+    if abs(fixture.appState.preferences.scrollEdgeBlurAmount - 1) > 0.001,
+      let current = currentSlider()
+    {
+      _ = current.perform(
+        NSSelectorFromString("setAccessibilityValue:"),
+        with: NSNumber(value: 1)
+      )
+      await settleSettingsHost(host)
+    }
+    #expect(abs(fixture.appState.preferences.scrollEdgeBlurAmount - 1) < 0.001)
+    let changedSlider = try #require(currentSlider())
+    #expect(settingsAccessibilityPercent(changedSlider) == 100)
+    #expect(settingsAccessibilityEnabled(changedSlider) == true)
+    let restored = try JSONDecoder().decode(
+      AppPreferences.self,
+      from: JSONEncoder().encode(fixture.appState.preferences)
+    )
+    #expect(abs(restored.scrollEdgeBlurAmount - 1) < 0.001)
+    #expect(restored.showScrollEdgeBlur)
+    try await Task.sleep(for: .milliseconds(250))
+    window.displayIfNeeded()
+    try settingsCapture(
+      host,
+      named: "scroll-edge-blur-settings-\(name)-enabled-changed.png",
+      in: directory
+    )
   }
 }
 

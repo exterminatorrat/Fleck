@@ -1334,6 +1334,17 @@
               },
               onActivate: { noteID in
                 guard activateNoteAndScope(noteID) else { return }
+                searchController.setActivationFocusRestore {
+                  guard self.visibleSelectedNote?.id == noteID,
+                    let textView = self.editorCommands.textView,
+                    let window = textView.window,
+                    let contentView = window.contentView,
+                    textView.isDescendant(of: contentView)
+                  else { return false }
+                  if window.firstResponder === textView { return true }
+                  _ = window.makeFirstResponder(textView)
+                  return window.firstResponder === textView
+                }
               },
               onDismiss: dismissWorkspaceSearch
             )
@@ -1468,7 +1479,7 @@
 
     private var header: some View {
       let backlinkEntries = backlinkController.incoming(to: appState.workspace.selectedNoteID)
-      return HStack(spacing: 10) {
+      return HStack(spacing: 4) {
         AgentActivityIndicator(
           presentation: appState.agentActivityIndicator
         ) {
@@ -1480,7 +1491,7 @@
           backlinkController.toggleDisclosure()
         } label: {
           Image(systemName: "link")
-            .frame(width: 22, height: 22)
+            .frame(width: 28, height: 28)
         }
         .accessibilityIdentifier("backlinks-toolbar-button")
         .accessibilityLabel("Backlinks")
@@ -1516,6 +1527,7 @@
           }
         } label: {
           Image(systemName: "magnifyingglass")
+            .frame(width: 28, height: 28)
             .opacity(searchController.isPresented ? 0 : 1)
             .accessibilityHidden(true)
         }
@@ -1534,13 +1546,14 @@
           appState.addNote(inFolderID: activeFolderID)
         } label: {
           Image(systemName: "plus")
+            .frame(width: 28, height: 28)
         }
         .keyboardShortcut("t", modifiers: .command)
         .help("New note")
 
         if isPinned {
           Image(systemName: "pin.fill")
-            .frame(width: 22, height: 22)
+            .frame(width: 28, height: 28)
             .foregroundStyle(.tint)
             .accessibilityLabel("Pinned")
             .help("This window stays open until you close it")
@@ -1551,6 +1564,7 @@
             }
           } label: {
             Image(systemName: "pin")
+              .frame(width: 28, height: 28)
           }
           .help("Pin notes on screen")
         }
@@ -1565,6 +1579,7 @@
           }
         } label: {
           Image(systemName: "chevron.up")
+            .frame(width: 28, height: 28)
             .rotationEffect(
               .degrees(appState.preferences.showFormattingBar ? 0 : 180)
             )
@@ -1616,7 +1631,10 @@
           }
         } label: {
           Image(systemName: "ellipsis.circle")
+            .frame(width: 28, height: 28)
         }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
         .accessibilityLabel("Options")
         .help("Options")
 
@@ -1626,11 +1644,12 @@
           }
         } label: {
           Image(systemName: "slider.horizontal.3")
+            .frame(width: 28, height: 28)
         }
         .accessibilityLabel("Customize")
         .help("Customize")
       }
-      .buttonStyle(FleckQuietButtonStyle())
+      .buttonStyle(FleckQuietButtonStyle(cornerRadius: 6))
       .padding(.horizontal, 14)
       .padding(.vertical, 11)
     }
@@ -1677,11 +1696,15 @@
       }
       do {
         try appState.deleteFolder(id: folderID, activeFolderID: currentFolderID)
+        appState.folderActionSucceeded(folderID: folderID)
       } catch {
         if currentFolderID == folderID {
           activeFolderID = folderID
         }
-        appState.saveError = "Could not update folder: \(String(describing: error))"
+        appState.folderActionFailed(
+          "Could not update folder: \(String(describing: error))",
+          folderID: folderID
+        )
       }
     }
 
@@ -2568,6 +2591,8 @@
             },
             fontFamily: appState.preferences.fontFamily,
             fontSize: appState.preferences.fontSize,
+            showScrollEdgeBlur: appState.preferences.showScrollEdgeBlur,
+            scrollEdgeBlurAmount: appState.preferences.scrollEdgeBlurAmount,
             reduceMotion: reduceMotion,
             automaticLists: appState.preferences.automaticLists,
             commands: editorCommands,
@@ -2846,7 +2871,7 @@
           .overlay(alignment: .trailing) {
             folderComposer
               .frame(
-                width: isCreatingFolder ? maskPresentation.composerWidth : 24,
+                width: isCreatingFolder ? maskPresentation.composerWidth : 28,
                 alignment: .leading
               )
           }
@@ -2922,9 +2947,10 @@
     }
 
     private var folderNavigationLayer: some View {
-      HStack(spacing: 4) {
+      HStack(spacing: 0) {
         rootRow
           .background(rowFrameReader(for: .unfiled))
+          .padding(.trailing, 4)
 
         ScrollViewReader { scrollProxy in
           HStack(spacing: 0) {
@@ -2980,7 +3006,7 @@
         }
         .frame(maxWidth: .infinity)
 
-        Color.clear.frame(width: 24, height: 24)
+        Color.clear.frame(width: 28, height: 28)
       }
     }
 
@@ -3023,7 +3049,8 @@
           beginNewFolder(source: currentInteractionSource)
         } label: {
           Image(systemName: "folder.badge.plus")
-            .frame(width: 24, height: 24)
+            .frame(width: 28, height: 28)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .fleckHoverFill(in: RoundedRectangle(cornerRadius: 5))
@@ -3266,6 +3293,8 @@
           isSelected: false,
           isEmpty: appState.trashedNotes.isEmpty
         )
+        .frame(minHeight: 28)
+        .contentShape(RoundedRectangle(cornerRadius: 6))
       }
       .fixedSize(horizontal: true, vertical: false)
       .buttonStyle(.plain)
@@ -3731,11 +3760,14 @@
         return
       }
       do {
+        var actionFolderID: UUID?
         if isCreatingFolder {
           _ = try appState.createFolder(named: folderNameDraft)
         } else if let editingFolderID {
           try appState.renameFolder(id: editingFolderID, name: folderNameDraft)
+          actionFolderID = editingFolderID
         }
+        appState.folderActionSucceeded(folderID: actionFolderID)
         if preservingFocus {
           editingFolderID = nil
           isRenamingFolderTextEditing = false
@@ -3744,7 +3776,10 @@
           cancelFolderEditing(source: source)
         }
       } catch {
-        appState.saveError = "Could not update folder: \(String(describing: error))"
+        appState.folderActionFailed(
+          "Could not update folder: \(String(describing: error))",
+          folderID: isCreatingFolder ? nil : editingFolderID
+        )
         if preservingFocus, editingFolderID != nil {
           focusedRow = nil
           renameFocusRequest &+= 1

@@ -33,7 +33,8 @@ Fleck lives in your menu bar. Click it to jot a note, hold a shortcut to dictate
 
 | | |
 | --- | --- |
-| **Status** | Public Developer Preview: `1.1.2-beta.2` on [GitHub Releases](https://github.com/exterminatorrat/Fleck/releases), published as a **Pre-release** |
+| **Status** | Public Developer Preview: `1.1.2-beta.2` on [GitHub Releases](https://github.com/exterminatorrat/Fleck/releases), published as a **Pre-release**. The newest development preview, `1.8.0-beta.1`, is a local test build and is **not** published |
+| **Performance** | Still slow: typing in long notes, note switching, panel presentation and animations need more work, and this build has no packaged-app measurement. See the [1.8.0-beta.1 preview notes](docs/release-notes/1.8.0-beta.1.md) |
 | **Platform** | macOS 14 declared minimum; validated on Apple silicon (native Intel and a full macOS 14 pass are not yet verified) |
 | **Stack** | Swift 6, SwiftUI shell, AppKit `NSTextView` editor, Apple on-device speech, [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) for the agent bridge |
 | **Storage** | Readable Markdown notes, optional RTF sidecars, and JSON settings in Application Support; atomic writes plus a recovery snapshot |
@@ -49,6 +50,14 @@ Fleck lives in your menu bar. Click it to jot a note, hold a shortcut to dictate
 > release notes teach the workspace, formatting, dictation, and agent setup in a few
 > minutes. Local development candidates and GitHub Actions artifacts remain unsupported
 > public installs.
+
+> **Newest source preview is a test build.** `1.8.0-beta.1` collects everything since
+> `1.1.2-beta.2` — inline image resize and rotation, image copy, hover targets, scroll
+> edge blur, line diffs in Agent Activity, native selection drags, and the accumulated
+> editor, folder, dictation and agent fixes. It is ad-hoc signed and not notarized, so it
+> is withheld from [GitHub Releases](https://github.com/exterminatorrat/Fleck/releases)
+> until it can be signed and notarized. Its notes, including why it is still laggy, are in
+> the [1.8.0-beta.1 preview notes](docs/release-notes/1.8.0-beta.1.md).
 
 ### Installing the app release
 
@@ -111,6 +120,13 @@ and automatically fits the displayed image proportionally to the available
 editor width with a 320-point height cap. Notes, RTF state, exports, and agent
 text retain absolute local-file Markdown references, so image content is not a
 portable or self-contained export.
+
+Copying a selection that mixes text and images puts real image data on the
+clipboard: rich HTML with embedded PNG images, an RTFD flavor with in-memory
+attachments, and sanitized plain and RTF fallbacks that describe images instead
+of exposing local file paths. Pasting that content back into Fleck restores the
+managed images and formatting through a private pasteboard payload, while raw
+PNG or TIFF bitmap payloads from other apps are still not imported.
 
 On macOS 26, Fleck can use Apple's on-device Foundation Models when the system
 reports them available. Failure or ambiguity falls back to the original text or
