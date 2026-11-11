@@ -232,6 +232,7 @@
       let restoresActivationFocus = activationRestore != nil
       focusRestoreTask = Task { @MainActor [weak self] in
         let deadline = ContinuousClock.now + .seconds(2)
+        let attachmentDeadline = ContinuousClock.now + .milliseconds(750)
         var attempts = 0
         while true {
           if restoresActivationFocus {
@@ -258,7 +259,10 @@
             return
           }
           attempts += 1
-          if restoresActivationFocus, self.attachedPresentationID == dismissedPresentationID {
+          if restoresActivationFocus,
+            self.attachedPresentationID == dismissedPresentationID,
+            ContinuousClock.now < attachmentDeadline
+          {
             continue
           }
           if self.focusRestoreAction?() == true {
