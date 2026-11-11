@@ -2702,8 +2702,8 @@ native_jobs = (
 )
 native_routing = (
     "runs-on: ${{ github.event_name == 'workflow_dispatch' && "
-    "inputs.native_runner_provider == 'namespace' && "
-    "'namespace-profile-fleck' || 'macos-26' }}"
+    "inputs.native_runner_provider == 'github-hosted' && "
+    "'macos-26' || 'namespace-profile-fleck' }}"
 )
 full_ci_job_names = {
     "detect-changes": "Detect documentation-only changes",
@@ -2790,7 +2790,7 @@ if provider_match is None:
 provider_block = provider_match.group(0)
 if current_workflow.count(provider_block) != 1:
     raise SystemExit("native_runner_provider input must occur exactly once")
-for required in ("required: false", "type: choice", "default: github-hosted"):
+for required in ("required: false", "type: choice", "default: namespace"):
     if required not in provider_block:
         raise SystemExit(f"native_runner_provider input omitted: {required}")
 if re.findall(r"^          - (\S+)$", provider_block, re.M) != [
@@ -2799,6 +2799,20 @@ if re.findall(r"^          - (\S+)$", provider_block, re.M) != [
 ]:
     raise SystemExit(
         "native_runner_provider must offer exactly GitHub-hosted and manual namespace"
+    )
+if (
+    native_routing.count("'macos-26'") != 1
+    or native_routing.count("'namespace-profile-fleck'") != 1
+    or native_routing.count("inputs.native_runner_provider == 'github-hosted'") != 1
+    or native_routing.find("github.event_name == 'workflow_dispatch'")
+    > native_routing.find("inputs.native_runner_provider == 'github-hosted'")
+    or native_routing.find("inputs.native_runner_provider == 'github-hosted'")
+    > native_routing.find("'macos-26'")
+    or not native_routing.endswith("'macos-26' || 'namespace-profile-fleck' }}")
+):
+    raise SystemExit(
+        "native runner routing must default to Namespace and keep GitHub-hosted "
+        "an explicit manual dispatch opt-in"
     )
 
 supplemental_jobs = (
