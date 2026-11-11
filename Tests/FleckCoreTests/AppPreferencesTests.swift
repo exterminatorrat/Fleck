@@ -208,6 +208,89 @@ import Testing
   }
 }
 
+@Test func scrollEdgeBlurPreferenceDefaultsOffAndRoundTrips() throws {
+  let defaults = AppPreferences()
+  #expect(!defaults.showScrollEdgeBlur)
+  #expect(defaults.scrollEdgeBlurAmount == AppPreferences.defaultScrollEdgeBlurAmount)
+
+  let legacy = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: Data(#"{"fontFamily":"Menlo","showFormattingBar":true}"#.utf8)
+  )
+  #expect(!legacy.showScrollEdgeBlur)
+  #expect(legacy.scrollEdgeBlurAmount == AppPreferences.defaultScrollEdgeBlurAmount)
+
+  for enabled in [true, false] {
+    let value = AppPreferences(showScrollEdgeBlur: enabled)
+    let encoded = try JSONEncoder().encode(value)
+    let json = try #require(
+      JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+    )
+    #expect(json["showScrollEdgeBlur"] as? Bool == enabled)
+    #expect(
+      (json["scrollEdgeBlurAmount"] as? NSNumber)?.doubleValue
+        == AppPreferences.defaultScrollEdgeBlurAmount
+    )
+    let decoded = try JSONDecoder().decode(AppPreferences.self, from: encoded)
+    #expect(decoded.showScrollEdgeBlur == enabled)
+    #expect(decoded.scrollEdgeBlurAmount == AppPreferences.defaultScrollEdgeBlurAmount)
+  }
+
+  #expect(throws: (any Error).self) {
+    try JSONDecoder().decode(
+      AppPreferences.self,
+      from: Data(#"{"showScrollEdgeBlur":"yes"}"#.utf8)
+    )
+  }
+}
+
+@Test func scrollEdgeBlurAmountIsBoundedAndRoundTrips() throws {
+  #expect(AppPreferences(scrollEdgeBlurAmount: -0.4).scrollEdgeBlurAmount == 0)
+  #expect(AppPreferences(scrollEdgeBlurAmount: 0).scrollEdgeBlurAmount == 0)
+  #expect(AppPreferences(scrollEdgeBlurAmount: 0.62).scrollEdgeBlurAmount == 0.62)
+  #expect(AppPreferences(scrollEdgeBlurAmount: 1).scrollEdgeBlurAmount == 1)
+  #expect(AppPreferences(scrollEdgeBlurAmount: 1.4).scrollEdgeBlurAmount == 1)
+  #expect(
+    AppPreferences(scrollEdgeBlurAmount: .nan).scrollEdgeBlurAmount
+      == AppPreferences.defaultScrollEdgeBlurAmount
+  )
+  #expect(
+    AppPreferences(scrollEdgeBlurAmount: .infinity).scrollEdgeBlurAmount
+      == AppPreferences.defaultScrollEdgeBlurAmount
+  )
+
+  let clampedHigh = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: Data(#"{"scrollEdgeBlurAmount":3.5}"#.utf8)
+  )
+  #expect(clampedHigh.scrollEdgeBlurAmount == 1)
+  let clampedLow = try JSONDecoder().decode(
+    AppPreferences.self,
+    from: Data(#"{"scrollEdgeBlurAmount":-2}"#.utf8)
+  )
+  #expect(clampedLow.scrollEdgeBlurAmount == 0)
+
+  for amount in [0.0, 0.62, 1.0] {
+    let value = AppPreferences(scrollEdgeBlurAmount: amount)
+    let encoded = try JSONEncoder().encode(value)
+    let json = try #require(
+      JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+    )
+    #expect((json["scrollEdgeBlurAmount"] as? NSNumber)?.doubleValue == amount)
+    #expect(
+      try JSONDecoder().decode(AppPreferences.self, from: encoded)
+        .scrollEdgeBlurAmount == amount
+    )
+  }
+
+  #expect(throws: (any Error).self) {
+    try JSONDecoder().decode(
+      AppPreferences.self,
+      from: Data(#"{"scrollEdgeBlurAmount":"high"}"#.utf8)
+    )
+  }
+}
+
 @Test func malformedUnfiledCompactPreferenceRejectsSnapshot() {
   #expect(throws: (any Error).self) {
     try JSONDecoder().decode(

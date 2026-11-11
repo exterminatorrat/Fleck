@@ -16,6 +16,8 @@ import Testing
   #expect(!changes.liveNoteIDsChanged)
   #expect(!changes.isEnabledChanged)
   #expect(!changes.reduceTransparencyChanged)
+  #expect(!changes.showScrollEdgeBlurChanged)
+  #expect(!changes.scrollEdgeBlurAmountChanged)
   #expect(!changes.reduceMotionChanged)
   #expect(!changes.automaticListsChanged)
   #expect(!changes.visibilityChanged)
@@ -115,6 +117,52 @@ import Testing
   )
   #expect(transparencyChanges.reduceTransparencyChanged)
 
+  let blurChanges = editorPresentationChanges(
+    from: inputs,
+    to: editorPresentationInputs(showScrollEdgeBlur: true)
+  )
+  #expect(blurChanges.showScrollEdgeBlurChanged)
+  #expect(!blurChanges.scrollEdgeBlurAmountChanged)
+  #expect(!blurChanges.contentReloaded)
+  #expect(!blurChanges.titleChanged)
+  #expect(!blurChanges.titleFontFamilyChanged)
+  #expect(!blurChanges.bodyFontChanged)
+  #expect(!blurChanges.paletteChanged)
+  #expect(!blurChanges.liveNoteIDsChanged)
+  #expect(!blurChanges.isEnabledChanged)
+  #expect(!blurChanges.reduceTransparencyChanged)
+  #expect(!blurChanges.reduceMotionChanged)
+  #expect(!blurChanges.automaticListsChanged)
+  #expect(!blurChanges.visibilityChanged)
+  #expect(!blurChanges.contentSizeChanged)
+  #expect(!blurChanges.shouldRefreshBaseAppearance)
+  #expect(!blurChanges.shouldRefreshNoteLinks)
+  #expect(!blurChanges.shouldUpdateTypingFont)
+  #expect(!blurChanges.shouldRelayoutDocument)
+
+  let blurAmountChanges = editorPresentationChanges(
+    from: inputs,
+    to: editorPresentationInputs(scrollEdgeBlurAmount: 0.8)
+  )
+  #expect(blurAmountChanges.scrollEdgeBlurAmountChanged)
+  #expect(!blurAmountChanges.showScrollEdgeBlurChanged)
+  #expect(!blurAmountChanges.contentReloaded)
+  #expect(!blurAmountChanges.titleChanged)
+  #expect(!blurAmountChanges.titleFontFamilyChanged)
+  #expect(!blurAmountChanges.bodyFontChanged)
+  #expect(!blurAmountChanges.paletteChanged)
+  #expect(!blurAmountChanges.liveNoteIDsChanged)
+  #expect(!blurAmountChanges.isEnabledChanged)
+  #expect(!blurAmountChanges.reduceTransparencyChanged)
+  #expect(!blurAmountChanges.reduceMotionChanged)
+  #expect(!blurAmountChanges.automaticListsChanged)
+  #expect(!blurAmountChanges.visibilityChanged)
+  #expect(!blurAmountChanges.contentSizeChanged)
+  #expect(!blurAmountChanges.shouldRefreshBaseAppearance)
+  #expect(!blurAmountChanges.shouldRefreshNoteLinks)
+  #expect(!blurAmountChanges.shouldUpdateTypingFont)
+  #expect(!blurAmountChanges.shouldRelayoutDocument)
+
   let motionChanges = editorPresentationChanges(
     from: inputs,
     to: editorPresentationInputs(reduceMotion: true)
@@ -209,6 +257,8 @@ private func editorPresentationInputs(
   liveNoteIDs: Set<UUID> = [],
   isEnabled: Bool = true,
   reduceTransparency: Bool = false,
+  showScrollEdgeBlur: Bool = false,
+  scrollEdgeBlurAmount: Double = AppPreferences.defaultScrollEdgeBlurAmount,
   reduceMotion: Bool = false,
   automaticLists: Bool = true,
   isVisible: Bool = true,
@@ -223,6 +273,8 @@ private func editorPresentationInputs(
     liveNoteIDs: liveNoteIDs,
     isEnabled: isEnabled,
     reduceTransparency: reduceTransparency,
+    showScrollEdgeBlur: showScrollEdgeBlur,
+    scrollEdgeBlurAmount: scrollEdgeBlurAmount,
     reduceMotion: reduceMotion,
     automaticLists: automaticLists,
     isVisible: isVisible,

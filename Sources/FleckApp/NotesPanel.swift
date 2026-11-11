@@ -2591,6 +2591,8 @@
             },
             fontFamily: appState.preferences.fontFamily,
             fontSize: appState.preferences.fontSize,
+            showScrollEdgeBlur: appState.preferences.showScrollEdgeBlur,
+            scrollEdgeBlurAmount: appState.preferences.scrollEdgeBlurAmount,
             reduceMotion: reduceMotion,
             automaticLists: appState.preferences.automaticLists,
             commands: editorCommands,

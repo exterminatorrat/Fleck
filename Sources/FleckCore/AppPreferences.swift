@@ -12,6 +12,7 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   public static let currentEditorTypographyVersion = 1
   public static let currentPanelSizingVersion = 2
   public static let defaultAccentHex = "#6B6B70"
+  public static let defaultScrollEdgeBlurAmount = 0.35
 
   public var fontFamily: String
   public var fontSize: Double
@@ -32,6 +33,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   public var pinnedPanelWidth: Double
   public var pinnedPanelHeight: Double
   public var showFormattingBar: Bool
+  public var showScrollEdgeBlur: Bool
+  public var scrollEdgeBlurAmount: Double
   public var showAgentUpdateBanners: Bool
   public var isUnfiledCompact: Bool
   public var confirmBeforeMovingNotesToTrash: Bool
@@ -70,7 +73,9 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     panelWidth: Double = 800, panelHeight: Double = 430,
     panelSizingVersion: Int = AppPreferences.currentPanelSizingVersion,
     pinnedPanelWidth: Double = 800, pinnedPanelHeight: Double = 430,
-    showFormattingBar: Bool = true, showAgentUpdateBanners: Bool = true,
+    showFormattingBar: Bool = true, showScrollEdgeBlur: Bool = false,
+    scrollEdgeBlurAmount: Double = AppPreferences.defaultScrollEdgeBlurAmount,
+    showAgentUpdateBanners: Bool = true,
     isUnfiledCompact: Bool = false,
     confirmBeforeMovingNotesToTrash: Bool = true, automaticLists: Bool = true,
     launchAtLogin: Bool = false,
@@ -105,6 +110,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
     self.pinnedPanelWidth = Self.clampedPanelDimension(pinnedPanelWidth, minimum: 480)
     self.pinnedPanelHeight = Self.clampedPanelDimension(pinnedPanelHeight, minimum: 320)
     self.showFormattingBar = showFormattingBar
+    self.showScrollEdgeBlur = showScrollEdgeBlur
+    self.scrollEdgeBlurAmount = Self.clampedScrollEdgeBlurAmount(scrollEdgeBlurAmount)
     self.showAgentUpdateBanners = showAgentUpdateBanners
     self.isUnfiledCompact = isUnfiledCompact
     self.confirmBeforeMovingNotesToTrash = confirmBeforeMovingNotesToTrash
@@ -131,7 +138,8 @@ public struct AppPreferences: Codable, Equatable, Sendable {
   private enum CodingKeys: String, CodingKey {
     case fontFamily, fontSize, uiFontFamily, editorTypographyVersion, accentHex, editorTextHex,
       editorBackgroundHex, panelOpacity, theme, colorTheme, chromeAppearance, panelWidth, panelHeight, panelSizingVersion,
-      pinnedPanelWidth, pinnedPanelHeight, showFormattingBar, showAgentUpdateBanners,
+      pinnedPanelWidth, pinnedPanelHeight, showFormattingBar, showScrollEdgeBlur,
+      scrollEdgeBlurAmount, showAgentUpdateBanners,
       isUnfiledCompact, confirmBeforeMovingNotesToTrash, automaticLists,
       launchAtLogin, shortcuts, dictationSpeechEngine,
       legacyDictationShortcut = "dictationShortcut", dictationModifierKey,
@@ -236,6 +244,11 @@ public struct AppPreferences: Codable, Equatable, Sendable {
       pinnedPanelWidth: migratesPreviousPinnedPanelDefault ? 800 : decodedPinnedPanelWidth,
       pinnedPanelHeight: decodedPinnedPanelHeight,
       showFormattingBar: try c.decodeIfPresent(Bool.self, forKey: .showFormattingBar) ?? true,
+      showScrollEdgeBlur: try c.decodeIfPresent(Bool.self, forKey: .showScrollEdgeBlur) ?? false,
+      scrollEdgeBlurAmount: try c.decodeIfPresent(
+        Double.self,
+        forKey: .scrollEdgeBlurAmount
+      ) ?? Self.defaultScrollEdgeBlurAmount,
       showAgentUpdateBanners: try c.decodeIfPresent(
         Bool.self,
         forKey: .showAgentUpdateBanners
@@ -284,6 +297,11 @@ public struct AppPreferences: Codable, Equatable, Sendable {
         OnboardingProgress.self,
         forKey: .onboardingProgress
       ))
+  }
+
+  public static func clampedScrollEdgeBlurAmount(_ value: Double) -> Double {
+    guard value.isFinite else { return defaultScrollEdgeBlurAmount }
+    return min(1, max(0, value))
   }
 
   private static func normalizedUIFontFamily(_ value: String?) -> String? {
