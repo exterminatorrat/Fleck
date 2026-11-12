@@ -7908,6 +7908,7 @@ private func hostedAccessibilityValue(_ element: NSObject) -> String? {
   )
   let textView = NSTextView()
   textView.string = "Previous note body"
+  textView.setSelectedRange(NSRange(location: 0, length: 0))
   let commands = EditorCommands()
   commands.textView = textView
 
@@ -7938,6 +7939,7 @@ private func hostedAccessibilityValue(_ element: NSObject) -> String? {
   display.append(NSAttributedString(string: " after"))
   let textView = NSTextView()
   textView.textStorage?.setAttributedString(display)
+  textView.setSelectedRange(NSRange(location: 0, length: 0))
   let commands = EditorCommands()
   commands.textView = textView
 
