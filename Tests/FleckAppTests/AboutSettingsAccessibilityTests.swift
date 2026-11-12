@@ -157,16 +157,24 @@ func aboutSettingsAccessibilitySurvivesNavigationAndMetadataExpansion(isPackaged
   }
 
   state.searchRequest = SettingsSearchRequest(target: .aboutMetadata)
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: .seconds(2))
+  var expandedElements: [AboutAccessibilityElement] = []
   var metadata: AboutAccessibilityElement?
-  for _ in 0..<60 {
+  while clock.now < deadline {
     host.layoutSubtreeIfNeeded()
-    await Task.yield()
-    metadata = try aboutAccessibilityElements(in: host).first {
+    expandedElements = try aboutAccessibilityElements(in: host)
+    metadata = expandedElements.first {
       $0.identifier == "settings-about-metadata-content"
     }
     if metadata != nil { break }
+    try await Task.sleep(for: .milliseconds(25))
   }
-  let content = try #require(metadata, "Search must expand and expose full build metadata")
+  let observed = expandedElements.map { "\($0.role): \($0.identifier) / \($0.label)" }
+    .joined(separator: "\n")
+  let content = try #require(
+    metadata, "Search must expand and expose full build metadata. Observed:\n\(observed)"
+  )
   #expect(content.label == "Full build metadata")
   #expect(content.value == identity.copyText)
   #expect(content.role == "AXStaticText")
