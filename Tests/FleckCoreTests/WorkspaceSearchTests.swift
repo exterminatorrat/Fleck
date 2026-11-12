@@ -222,3 +222,93 @@ private func searchNote(
     modifiedAt: modifiedAt
   )
 }
+
+@Test func WorkspaceSearchBodyMatchRangeLocatesTheFoldedMatchInTheNoteBody() async {
+  let body = "α 👩‍💻 first line\r\nsecond CAFÉ line"
+  let note = searchNote(
+    "00000000-0000-0000-0000-000000000030",
+    title: "Unrelated title",
+    body: body,
+    modifiedAt: 100
+  )
+
+  let results = await WorkspaceSearchEngine().search(query: "  cafe \n", in: [note])
+  let result = results.first
+
+  #expect(results.count == 1)
+  #expect(result?.match.field == .body)
+  #expect(
+    result?.bodyMatchRange(in: body, query: "  cafe \n")
+      == NSRange(
+        location: "α 👩‍💻 first line\r\nsecond ".utf16.count,
+        length: "CAFÉ".utf16.count
+      )
+  )
+}
+
+@Test func WorkspaceSearchBodyMatchRangeRejectsTitleStaleAndUnaddressableMatches() {
+  let titleResult = WorkspaceSearchResult(
+    noteID: UUID(),
+    displayTitle: "Café",
+    snippet: "Café",
+    match: WorkspaceSearchMatch(field: .title, location: 0, length: "Café".utf16.count),
+    score: 4
+  )
+  #expect(titleResult.bodyMatchRange(in: "Café", query: "cafe") == nil)
+
+  let bodyResult = WorkspaceSearchResult(
+    noteID: UUID(),
+    displayTitle: "Note",
+    snippet: "cafe",
+    match: WorkspaceSearchMatch(field: .body, location: 4, length: 4),
+    score: 1
+  )
+  #expect(
+    bodyResult.bodyMatchRange(in: "The cafe here", query: " cafe ")
+      == NSRange(location: 4, length: 4)
+  )
+  #expect(bodyResult.bodyMatchRange(in: "The tea here", query: "cafe") == nil)
+  #expect(bodyResult.bodyMatchRange(in: "caf", query: "cafe") == nil)
+  #expect(bodyResult.bodyMatchRange(in: "The cafe here", query: " \n\t ") == nil)
+
+  let clusterResult = WorkspaceSearchResult(
+    noteID: UUID(),
+    displayTitle: "Note",
+    snippet: "cafe",
+    match: WorkspaceSearchMatch(field: .body, location: 1, length: 4),
+    score: 1
+  )
+  #expect(clusterResult.bodyMatchRange(in: "👨‍👩‍👧cafe", query: "cafe") == nil)
+}
+
+@Test func WorkspaceSearchBodyMatchRangeKeepsFoldedExpansionSpansAndRejectsStaleSpans() async {
+  let body = "A ß line"
+  let note = searchNote(
+    "00000000-0000-0000-0000-000000000040",
+    title: "Unrelated title",
+    body: body,
+    modifiedAt: 100
+  )
+
+  let results = await WorkspaceSearchEngine().search(query: "s", in: [note])
+  let result = results.first
+
+  #expect(results.count == 1)
+  #expect(result?.match.field == .body)
+  #expect(result?.match.location == 2)
+  #expect(result?.match.length == "ß".utf16.count)
+  #expect(
+    result?.bodyMatchRange(in: body, query: "s") == NSRange(location: 2, length: 1)
+  )
+  #expect(result?.bodyMatchRange(in: "s A ß", query: "s") == nil)
+  #expect(result?.bodyMatchRange(in: "A ☕ line", query: "s") == nil)
+
+  let laterSpan = WorkspaceSearchResult(
+    noteID: note.id,
+    displayTitle: note.displayTitle,
+    snippet: "",
+    match: WorkspaceSearchMatch(field: .body, location: 5, length: 1),
+    score: 1
+  )
+  #expect(laterSpan.bodyMatchRange(in: body, query: "s") == nil)
+}

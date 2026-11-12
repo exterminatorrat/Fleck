@@ -200,24 +200,19 @@
       fixedSide: MenuPanelFixedSide
     ) -> MenuPanelResizeHandle? {
       guard bounds.contains(point) else { return nil }
-      let isBottomCorner = point.y <= bounds.minY + cornerExtent
-      let isNearCorner: Bool
+      let isBottomBand = point.y <= bounds.minY + cornerExtent
       let isFarCorner: Bool
       let isFarEdge: Bool
       switch fixedSide {
       case .left:
-        isNearCorner = point.x <= bounds.minX + cornerExtent
         isFarCorner = point.x >= bounds.maxX - cornerExtent
         isFarEdge = point.x >= bounds.maxX - edgeThickness
       case .right:
-        isNearCorner = point.x >= bounds.maxX - cornerExtent
         isFarCorner = point.x <= bounds.minX + cornerExtent
         isFarEdge = point.x <= bounds.minX + edgeThickness
       }
-      if isBottomCorner && isFarCorner { return .farBottomCorner }
-      if isBottomCorner && isNearCorner { return .nearBottomCorner }
-      if isFarEdge && point.y > bounds.minY + cornerExtent { return .farSide }
-      return nil
+      if isBottomBand { return isFarCorner ? .farBottomCorner : .nearBottomCorner }
+      return isFarEdge ? .farSide : nil
     }
 
     static func proposal(
@@ -1726,14 +1721,14 @@
         ),
         let handle = usableHandle(at: locationInWindow, in: window, fixedSide: fixedSide)
       else {
-        resetCursor()
+        resetCursor(in: window)
         return false
       }
       setCursor(cursor(for: handle, fixedSide: fixedSide))
       return true
     }
 
-    private func usableHandle(
+    func usableHandle(
       at locationInWindow: CGPoint,
       in window: NSWindow,
       fixedSide: MenuPanelFixedSide
@@ -1744,6 +1739,10 @@
       if let contentView = window.contentView {
         var hit = contentView.hitTest(contentView.convert(locationInWindow, from: nil))
         while let view = hit {
+          if let scroller = view as? NSScroller {
+            hit = scroller.superview
+            continue
+          }
           if let control = view as? NSControl, control.isEnabled { return nil }
           if let textView = view as? NSTextView,
             let manager = textView.layoutManager, let container = textView.textContainer
@@ -2173,6 +2172,14 @@
     private func setCursor(_ cursor: NSCursor) {
       self.cursor = cursor
       if NSCursor.current !== cursor { cursor.set() }
+    }
+
+    private func resetCursor(in window: NSWindow) {
+      guard cursor != nil else { return }
+      resetCursor()
+      if let contentView = window.contentView {
+        window.invalidateCursorRects(for: contentView)
+      }
     }
 
     private func resetCursor() {

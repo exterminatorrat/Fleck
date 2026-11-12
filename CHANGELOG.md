@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.3-beta.1] - 2026-11-12
+
+### Fixed
+
+- Menu-bar notes have more forgiving resize targets and reliable resize cursors.
+- Activating a search result reveals the matching text in its note.
+
 ## [1.8.2-beta.1] - 2026-11-12
 
 ### Fixed

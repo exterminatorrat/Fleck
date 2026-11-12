@@ -7839,3 +7839,126 @@ private func hostedAccessibilityValue(_ element: NSObject) -> String? {
   table.keyDown(with: escape)
   #expect(cancelled)
 }
+
+@Test @MainActor func editorCommandsRevealsNoteBodyRangeAndScrollsItIntoView() throws {
+  let body = (0..<200).map { "Synthetic line \($0)" }.joined(separator: "\n")
+  let textView = ListAwareTextView(frame: .zero)
+  textView.textStorage?.setAttributedString(NSAttributedString(string: body))
+  let documentView = NativeEditorDocumentView(titleField: NSTextField(), textView: textView)
+  let scrollView = NativeEditorScrollView(
+    frame: NSRect(x: 0, y: 0, width: 320, height: 180)
+  )
+  scrollView.documentView = documentView
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 320, height: 180),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = scrollView
+  documentView.updateLayout(width: 320, minimumHeight: 180)
+  scrollView.layoutSubtreeIfNeeded()
+  let initialOrigin = scrollView.contentView.bounds.origin.y
+
+  let commands = EditorCommands()
+  commands.textView = textView
+  let matchRange = try #require(
+    body.range(of: "Synthetic line 180").map { NSRange($0, in: body) }
+  )
+
+  #expect(commands.revealNoteBodyRange(matchRange, noteBody: body))
+  #expect(textView.selectedRange() == matchRange)
+  #expect(textView.string == body)
+  #expect(scrollView.contentView.bounds.origin.y > initialOrigin)
+  let revealedRect = try #require(
+    editorGlyphRect(for: matchRange, in: textView)
+  )
+  #expect(revealedRect.height > 0)
+  #expect(
+    scrollView.documentVisibleRect.contains(revealedRect.insetBy(dx: 0, dy: 1))
+  )
+
+  window.contentView = nil
+  window.orderOut(nil)
+}
+
+@MainActor private func editorGlyphRect(
+  for range: NSRange,
+  in textView: NSTextView
+) -> NSRect? {
+  guard let layoutManager = textView.layoutManager,
+    let textContainer = textView.textContainer
+  else { return nil }
+  let glyphRange = layoutManager.glyphRange(
+    forCharacterRange: range,
+    actualCharacterRange: nil
+  )
+  let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+  return rect.offsetBy(
+    dx: textView.frame.origin.x + textView.textContainerInset.width,
+    dy: textView.frame.origin.y + textView.textContainerInset.height
+  )
+}
+
+@Test @MainActor func editorCommandsWaitsForTheSelectedNotesBodyBeforeRevealing() {
+  let nextBody = "Selected note body with the matching line"
+  let matchRange = NSRange(
+    location: "Selected note body with the ".utf16.count,
+    length: "matching".utf16.count
+  )
+  let textView = NSTextView()
+  textView.string = "Previous note body"
+  textView.setSelectedRange(NSRange(location: 0, length: 0))
+  let commands = EditorCommands()
+  commands.textView = textView
+
+  #expect(!commands.isShowingNoteBody(nextBody))
+  #expect(!commands.revealNoteBodyRange(matchRange, noteBody: nextBody))
+  #expect(textView.selectedRange() == NSRange(location: 0, length: 0))
+
+  textView.textStorage?.setAttributedString(NSAttributedString(string: nextBody))
+
+  #expect(commands.isShowingNoteBody(nextBody))
+  #expect(commands.revealNoteBodyRange(matchRange, noteBody: nextBody))
+  #expect(textView.selectedRange() == matchRange)
+  #expect(!commands.revealNoteBodyRange(NSRange(location: 0, length: 400), noteBody: nextBody))
+  #expect(textView.selectedRange() == matchRange)
+}
+
+@Test @MainActor func editorCommandsMapsRevealThroughInlineImageReferences() {
+  let reference = "![Synthetic](fleck-image://synthetic)"
+  let body = "Before \(reference) after"
+  let attachment = InlineNoteImageAttachment(
+    sourceReference: reference,
+    image: NSImage(size: NSSize(width: 8, height: 8)),
+    originalPixelSize: NSSize(width: 8, height: 8),
+    accessibilityLabel: "Synthetic image"
+  )
+  let display = NSMutableAttributedString(string: "Before ")
+  display.append(NSAttributedString(attachment: attachment))
+  display.append(NSAttributedString(string: " after"))
+  let textView = NSTextView()
+  textView.textStorage?.setAttributedString(display)
+  textView.setSelectedRange(NSRange(location: 0, length: 0))
+  let commands = EditorCommands()
+  commands.textView = textView
+
+  #expect(commands.isShowingNoteBody(body))
+  #expect(
+    !commands.revealNoteBodyRange(
+      NSRange(location: "Before ".utf16.count, length: reference.utf16.count),
+      noteBody: body
+    )
+  )
+  #expect(textView.selectedRange() == NSRange(location: 0, length: 0))
+
+  let tailRange = NSRange(
+    location: "Before \(reference) ".utf16.count,
+    length: "after".utf16.count
+  )
+  #expect(commands.revealNoteBodyRange(tailRange, noteBody: body))
+  #expect(
+    textView.selectedRange()
+      == NSRange(location: "Before \u{FFFC} ".utf16.count, length: "after".utf16.count)
+  )
+}
