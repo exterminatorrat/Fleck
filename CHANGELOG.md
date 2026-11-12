@@ -3,6 +3,14 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.8-beta.1] - 2026-11-12
+
+### Changed
+
+- Briefly confirm Saved after 1.5 seconds of inactivity once the latest changes
+  have been saved, then hide the confirmation after one second. New typing
+  resets the confirmation without delaying the existing 350 ms autosave.
+
 ## [1.8.6-beta.1] - 2026-11-12
 
 ### Added

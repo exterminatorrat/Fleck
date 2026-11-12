@@ -33,32 +33,52 @@
     typealias RevealScheduler = (Duration, @escaping @MainActor () -> Void) -> Void
 
     static let revealDelay = Duration.milliseconds(800)
+    static let confirmationIdleDelay = Duration.milliseconds(1500)
+    static let confirmationDuration = Duration.seconds(1)
 
     @Published private(set) var state = SaveFeedbackState.saved
+    @Published private(set) var showsSavedConfirmation = false
     private let scheduleReveal: RevealScheduler
+    private let scheduleConfirmation: RevealScheduler
     private var activeWrites: Set<UUID> = []
     private var revealedWrites: Set<UUID> = []
+    private var confirmationGeneration = UUID()
+    private var isIdle = false
+    private var needsConfirmation = false
 
     init(
-      scheduleReveal: @escaping RevealScheduler = { delay, action in
+      scheduleReveal: RevealScheduler? = nil,
+      scheduleConfirmation: RevealScheduler? = nil
+    ) {
+      let scheduler: RevealScheduler = { delay, action in
         Task { @MainActor in
           try? await Task.sleep(for: delay)
           action()
         }
       }
-    ) {
-      self.scheduleReveal = scheduleReveal
+      self.scheduleReveal = scheduleReveal ?? scheduler
+      self.scheduleConfirmation = scheduleConfirmation ?? scheduler
     }
 
     func changesScheduled() {
-      guard state == .saved else { return }
-      state = .pending
+      confirmationGeneration = UUID()
+      let generation = confirmationGeneration
+      isIdle = false
+      needsConfirmation = true
+      if showsSavedConfirmation { showsSavedConfirmation = false }
+      if state == .saved { state = .pending }
+      scheduleConfirmation(Self.confirmationIdleDelay) { [weak self] in
+        guard let self, self.confirmationGeneration == generation else { return }
+        self.isIdle = true
+        self.showConfirmationIfReady()
+      }
     }
 
     @discardableResult
     func writeBegan() -> UUID {
       let id = UUID()
       activeWrites.insert(id)
+      if showsSavedConfirmation { showsSavedConfirmation = false }
       if revealedWrites.isEmpty { state = .pending }
       scheduleReveal(Self.revealDelay) { [weak self] in
         guard let self,
@@ -81,11 +101,32 @@
     func settle(_ outcome: SaveFeedbackState) {
       guard activeWrites.isEmpty, outcome != .saving else { return }
       state = outcome
+      if outcome == .saved {
+        showConfirmationIfReady()
+      } else {
+        if showsSavedConfirmation { showsSavedConfirmation = false }
+        if outcome == .failed { needsConfirmation = false }
+      }
+    }
+
+    private func showConfirmationIfReady() {
+      guard isIdle, needsConfirmation, state == .saved, activeWrites.isEmpty else { return }
+      needsConfirmation = false
+      showsSavedConfirmation = true
+      let generation = confirmationGeneration
+      scheduleConfirmation(Self.confirmationDuration) { [weak self] in
+        guard let self, self.confirmationGeneration == generation else { return }
+        self.showsSavedConfirmation = false
+      }
     }
 
     func reset() {
       activeWrites.removeAll()
       revealedWrites.removeAll()
+      confirmationGeneration = UUID()
+      isIdle = false
+      needsConfirmation = false
+      showsSavedConfirmation = false
       state = .saved
     }
   }
@@ -106,11 +147,16 @@
               .foregroundStyle(theme.color(.caption))
           }
           .transition(.opacity)
+        } else if presentation.showsSavedConfirmation {
+          Label("Saved", systemImage: "checkmark")
+            .foregroundStyle(theme.color(.caption))
+            .transition(.opacity)
         }
       }
       .fleckUIFont(.caption)
       .frame(width: 62, height: 22, alignment: .trailing)
       .animation(motion.reduceMotion ? nil : motion.quick, value: presentation.state)
+      .animation(motion.reduceMotion ? nil : motion.quick, value: presentation.showsSavedConfirmation)
       .accessibilityElement(children: .ignore)
       .accessibilityIdentifier("save-feedback")
       .accessibilityLabel("Save status")
