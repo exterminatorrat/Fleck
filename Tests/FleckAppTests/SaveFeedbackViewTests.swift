@@ -161,6 +161,7 @@ private final class HostedSaveFeedbackFixture {
         }
         .frame(width: width, height: 22)
         .environment(\.fleckThemeSnapshot, theme)
+        .background(theme.color(.window))
       )
     )
     window = NSWindow(
@@ -197,6 +198,7 @@ private final class HostedSaveFeedbackFixture {
   }
 
   func settle() async {
+    try? await Task.sleep(for: .seconds(AppMotion.quickDuration + 0.05))
     for _ in 0..<5 {
       host.layoutSubtreeIfNeeded()
       await Task.yield()
