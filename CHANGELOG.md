@@ -3,6 +3,14 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.2-beta.1] - 2026-11-12
+
+### Fixed
+
+- About Settings keeps build values selectable while exposing their labels and
+  complete values through a separate accessibility representation, preventing
+  recursive AppKit/SwiftUI label resolution during accessibility navigation.
+
 ## [1.8.1-beta.1] - 2026-11-11
 
 ### Fixed

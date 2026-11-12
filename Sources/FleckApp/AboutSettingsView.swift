@@ -25,35 +25,35 @@
             "Product version",
             detail: "The version of this Fleck build."
           ) {
-            Text(identity.productVersion ?? "Unavailable")
-              .textSelection(.enabled)
+            AboutSelectableText(
+              text: identity.productVersion ?? "Unavailable", label: "Product version"
+            )
           }
           .settingsSearchAnchor(.aboutProductVersion, request: searchRequest)
           SettingsPreferenceRow(
             "Build",
             detail: identity.readableBuildDate ?? identity.buildDate ?? "Date unavailable"
           ) {
-            Text("#\(identity.buildNumber ?? "Unavailable")")
+            AboutSelectableText(text: "#\(identity.buildNumber ?? "Unavailable")", label: "Build")
               .monospacedDigit()
-              .textSelection(.enabled)
           }
           .settingsSearchAnchor(.aboutBuild, request: searchRequest)
           SettingsPreferenceRow(
             "Source",
             detail: "Exact source revision captured before packaging."
           ) {
-            Text(identity.shortSourceCommit ?? "Unavailable")
+            AboutSelectableText(text: identity.shortSourceCommit ?? "Unavailable", label: "Source")
               .font(.system(.body, design: .monospaced))
-              .textSelection(.enabled)
           }
           .settingsSearchAnchor(.aboutSource, request: searchRequest)
           SettingsPreferenceRow(
             "Candidate status",
             detail: "Packaging identity is separate from acceptance."
           ) {
-            Text(identity.candidateStatus ?? "Unavailable")
+            AboutSelectableText(
+              text: identity.candidateStatus ?? "Unavailable", label: "Candidate status"
+            )
               .multilineTextAlignment(.trailing)
-              .textSelection(.enabled)
           }
           .settingsSearchAnchor(.aboutCandidateStatus, request: searchRequest)
         } else {
@@ -61,9 +61,8 @@
             "Build",
             detail: "This build has no packaged version information."
           ) {
-            Text("Unpackaged development build")
+            AboutSelectableText(text: "Unpackaged development build", label: "Build")
               .foregroundStyle(.secondary)
-              .textSelection(.enabled)
           }
           .settingsSearchAnchor(.aboutBuild, request: searchRequest)
         }
@@ -85,12 +84,10 @@
           .foregroundStyle(.secondary)
 
         DisclosureGroup("Full build metadata", isExpanded: $isMetadataExpanded) {
-          Text(identity.copyText)
+          AboutSelectableText(text: identity.copyText, label: "Full build metadata")
             .font(.caption.monospaced())
             .foregroundStyle(.secondary)
-            .textSelection(.enabled)
             .padding(.top, 6)
-            .accessibilityLabel("Full build metadata")
             .accessibilityIdentifier("settings-about-metadata-content")
             .background(SettingsSearchProbe(identifier: "settings-about-metadata-content"))
         }
@@ -126,6 +123,22 @@
       NSPasteboard.general.clearContents()
       NSPasteboard.general.setString(identity.copyText, forType: .string)
       copyConfirmation = "Build info copied"
+    }
+  }
+
+  private struct AboutSelectableText: View {
+    let text: String
+    let label: String
+
+    var body: some View {
+      Text(text)
+        .textSelection(.enabled)
+        .accessibilityRepresentation {
+          Text(text)
+            .textSelection(.disabled)
+            .accessibilityLabel(label)
+            .accessibilityValue(text)
+        }
     }
   }
 #endif
