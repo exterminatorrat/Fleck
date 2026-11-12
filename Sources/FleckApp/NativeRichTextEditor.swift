@@ -275,6 +275,34 @@
       }
     }
 
+    func isShowingNoteBody(_ noteBody: String) -> Bool {
+      guard let textView, let storage = textView.textStorage else { return false }
+      return InlineNoteImageProjection.expanded(storage).string == noteBody
+    }
+
+    @discardableResult
+    func revealNoteBodyRange(_ range: NSRange, noteBody: String) -> Bool {
+      guard isShowingNoteBody(noteBody),
+        let textView, let storage = textView.textStorage,
+        range.location != NSNotFound, range.location >= 0, range.length > 0,
+        let sourceRange = Range(range, in: noteBody)
+      else { return false }
+      let displayRange = InlineNoteImageProjection.displayRange(
+        forSourceRange: range,
+        in: storage
+      )
+      guard displayRange.location != NSNotFound,
+        displayRange.length > 0,
+        NSMaxRange(displayRange) <= storage.length,
+        (storage.string as NSString).substring(with: displayRange)
+          == String(noteBody[sourceRange])
+      else { return false }
+      textView.setSelectedRange(displayRange)
+      textView.enclosingScrollView?.layoutSubtreeIfNeeded()
+      textView.scrollRangeToVisible(displayRange)
+      return true
+    }
+
     func refreshFormattingState() {
       defer { refreshExpandedFormattingState() }
       guard let textView else {

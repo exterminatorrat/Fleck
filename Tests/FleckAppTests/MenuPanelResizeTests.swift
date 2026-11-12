@@ -1017,19 +1017,22 @@ import Testing
   #expect(!MenuPanelResizeController().begin(snapshot: snapshot, handle: .farBottomCorner))
 }
 
-@Test func resizeHitTestingExposesOnlyThreeMirroredRegionsWithCornerPriority() {
+@Test func resizeHitTestingExposesMirroredRegionsWithCornerPriority() {
   let bounds = CGRect(x: 0, y: 0, width: 600, height: 430)
 
   #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 599, y: 200), in: bounds, fixedSide: .left) == .farSide)
   #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 599, y: 1), in: bounds, fixedSide: .left) == .farBottomCorner)
   #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 1, y: 1), in: bounds, fixedSide: .left) == .nearBottomCorner)
   #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 1, y: 200), in: bounds, fixedSide: .left) == nil)
-  #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 300, y: 1), in: bounds, fixedSide: .left) == nil)
+  #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 300, y: 1), in: bounds, fixedSide: .left) == .nearBottomCorner)
+  #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 300, y: 18), in: bounds, fixedSide: .left) == .nearBottomCorner)
+  #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 300, y: 19), in: bounds, fixedSide: .left) == nil)
   #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 1, y: 1), in: bounds, fixedSide: .right) == .farBottomCorner)
   #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 599, y: 1), in: bounds, fixedSide: .right) == .nearBottomCorner)
+  #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 300, y: 1), in: bounds, fixedSide: .right) == .nearBottomCorner)
 }
 
-@Test func resizeHitTestingUsesContiguousBottomCornersAndSevenPointSideEdges() {
+@Test func resizeHitTestingUsesContiguousBottomBandAndSevenPointSideEdges() {
   let bounds = CGRect(x: 0, y: 0, width: 600, height: 430)
 
   for fixedSide in [MenuPanelFixedSide.left, .right] {
@@ -1062,21 +1065,21 @@ import Testing
           at: CGPoint(x: nearX(19), y: y),
           in: bounds,
           fixedSide: fixedSide
-        ) == nil
+        ) == .nearBottomCorner
       )
       #expect(
         MenuPanelResizeGeometry.handle(
           at: CGPoint(x: farX(19), y: y),
           in: bounds,
           fixedSide: fixedSide
-        ) == nil
+        ) == .nearBottomCorner
       )
       #expect(
         MenuPanelResizeGeometry.handle(
           at: CGPoint(x: bounds.midX, y: y),
           in: bounds,
           fixedSide: fixedSide
-        ) == nil
+        ) == .nearBottomCorner
       )
     }
 
@@ -1112,6 +1115,13 @@ import Testing
         ) == nil
       )
     }
+    #expect(
+      MenuPanelResizeGeometry.handle(
+        at: CGPoint(x: bounds.midX, y: 19),
+        in: bounds,
+        fixedSide: fixedSide
+      ) == nil
+    )
   }
 }
 
@@ -2181,6 +2191,101 @@ private final class MenuPanelNativeRoundingWindow: NSWindow {
   sendResizeMouseEvent(.leftMouseDown, at: CGPoint(x: 300, y: 200), to: window, number: 30)
   sendResizeMouseEvent(.leftMouseUp, at: CGPoint(x: 300, y: 200), to: window, number: 31)
   #expect(receiver.received == [.leftMouseDown, .leftMouseUp])
+}
+
+@Test @MainActor func menuPanelBottomBandResizesHeightOnlyAcrossItsWidth() async throws {
+  let screen = try #require(NSScreen.main)
+  let initialFrame = CGRect(
+    x: screen.visibleFrame.midX - 300,
+    y: (screen.visibleFrame.midY - 215).rounded(),
+    width: 600,
+    height: 430
+  )
+  let buttonFrame = CGRect(
+    x: initialFrame.maxX - 34,
+    y: initialFrame.maxY + 20,
+    width: 34,
+    height: 22
+  )
+  let window = NSWindow(
+    contentRect: initialFrame,
+    styleMask: .borderless,
+    backing: .buffered,
+    defer: false
+  )
+  let statusButton = PublicStatusButtonFixture(screenFrame: buttonFrame)
+  let geometryStore = MenuPanelGeometryStore(windows: { [statusButton.window] })
+  let controller = MenuPanelResizeController()
+  var commits: [CGSize] = []
+  let host = MenuPanelResizeHostView(controller: controller)
+  host.configure(
+    geometryStore: geometryStore,
+    preferredSize: initialFrame.size,
+    canResize: true,
+    onCommit: { commits.append($0) }
+  )
+  window.contentView = host
+  window.orderFront(nil)
+  defer {
+    host.uninstall()
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+  await settleResizeHost(host)
+
+  let start = CGPoint(x: 300, y: 8)
+  guard try await requireResizeBeginReadiness(host, at: start, in: window) else { return }
+  sendResizeMouseEvent(.leftMouseDown, at: start, to: window, number: 13_001)
+  try #require(controller.isTracking)
+  #expect(controller.currentHandle == .nearBottomCorner)
+  #expect(NSCursor.current == NSCursor.resizeUpDown)
+
+  let startOnScreen = window.convertPoint(toScreen: start)
+  let pointer = CGPoint(x: startOnScreen.x + 40, y: startOnScreen.y - 24)
+  sendResizeMouseEvent(.leftMouseDragged, atScreen: pointer, to: window, number: 13_002)
+  #expect(controller.isTracking)
+  #expect(window.frame.width == initialFrame.width)
+  #expect(window.frame.height == initialFrame.height + 24)
+  #expect(window.frame.maxY == initialFrame.maxY)
+
+  sendResizeMouseEvent(.leftMouseUp, atScreen: pointer, to: window, number: 13_003)
+  #expect(!controller.isTracking)
+  #expect(commits == [CGSize(width: initialFrame.width, height: initialFrame.height + 24)])
+}
+
+@Test @MainActor func resizeHandleCaptureSurvivesScrollbarButStillYieldsToEnabledControls() {
+  let frame = CGRect(x: 0, y: 0, width: 600, height: 430)
+  let window = NSWindow(
+    contentRect: frame,
+    styleMask: .borderless,
+    backing: .buffered,
+    defer: false
+  )
+  let root = NSView(frame: frame)
+  let host = MenuPanelResizeHostView(controller: MenuPanelResizeController())
+  host.frame = root.bounds
+  root.addSubview(host)
+  let scroller = NSScroller(
+    frame: CGRect(x: frame.maxX - 9, y: 0, width: 9, height: frame.height)
+  )
+  scroller.scrollerStyle = .overlay
+  scroller.controlSize = .mini
+  root.addSubview(scroller)
+  window.contentView = root
+  defer { window.contentView = nil }
+
+  let sidePoint = CGPoint(x: frame.maxX - 3, y: 200)
+  let cornerPoint = CGPoint(x: frame.maxX - 3, y: 9)
+  #expect(root.hitTest(root.convert(sidePoint, from: nil)) === scroller)
+  #expect(host.usableHandle(at: sidePoint, in: window, fixedSide: .left) == .farSide)
+  #expect(host.usableHandle(at: cornerPoint, in: window, fixedSide: .left) == .farBottomCorner)
+
+  let control = NSButton(frame: scroller.frame)
+  control.isEnabled = true
+  scroller.removeFromSuperview()
+  root.addSubview(control)
+  #expect(root.hitTest(root.convert(sidePoint, from: nil)) === control)
+  #expect(host.usableHandle(at: sidePoint, in: window, fixedSide: .left) == nil)
 }
 
 @Test @MainActor func resizeCommitRejectsChangedOrMissingAnchorAfterLastDragEvent() async throws {

@@ -1009,6 +1009,257 @@ func WorkspaceSearchHostingRestoresTheRealEditorStateAfterEscape() async throws 
 }
 
 @Test @MainActor
+func WorkspaceSearchHostingRevealsTheMatchingBodyTextAfterCrossNoteActivation()
+  async throws
+{
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-reveal-cross-note-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let origin = Note(title: "Origin note", body: "Origin body")
+  let longBody = (0..<200).map { "Synthetic line \($0)" }.joined(separator: "\n")
+  let target = Note(title: "Long note", body: longBody)
+  let expectedSelection = try #require(
+    longBody.range(of: "Synthetic line 180").map { NSRange($0, in: longBody) }
+  )
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in .committed }
+  )
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(notes: [origin, target], selectedNoteID: origin.id)
+
+  let commands = EditorCommands()
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      editorCommands: commands,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  let originEditor = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+      .first { $0.string == origin.body }
+  )
+  #expect(window.makeFirstResponder(originEditor))
+
+  searchController.present(for: origin.id)
+  await settleWorkspaceSearchHost(host)
+  searchController.setQuery("Synthetic line 180", in: state.workspace.notes)
+  try #require(
+    await waitForWorkspaceSearchHostState(host) {
+      searchController.resultsAreCurrent
+        && searchController.results.map(\.noteID) == [target.id]
+    },
+    "Timed out waiting for the body search result to publish"
+  )
+  #expect(searchController.results.first?.match.field == .body)
+
+  let queryField = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.placeholderString == "Search notes" }
+  )
+  #expect(window.makeFirstResponder(queryField))
+  sendWorkspaceSearchReturn(to: window)
+
+  try #require(
+    await waitForWorkspaceSearchHostState(host) {
+      guard state.workspace.selectedNoteID == target.id,
+        !searchController.isPresented,
+        let targetEditor = hostedWorkspaceSearchDescendants(
+          in: host,
+          as: ListAwareTextView.self
+        ).first(where: { $0.string == target.body })
+      else {
+        return false
+      }
+      return targetEditor.selectedRange() == expectedSelection
+        && window.firstResponder === targetEditor
+    },
+    "Timed out waiting for the activated note to reveal its matching body text"
+  )
+
+  let targetEditor = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+      .first { $0.string == target.body }
+  )
+  #expect(commands.textView === targetEditor)
+  #expect(window.firstResponder === targetEditor)
+  #expect(targetEditor.selectedRange() == expectedSelection)
+  #expect(targetEditor.string == target.body)
+  let targetScrollView = try #require(targetEditor.enclosingScrollView)
+  #expect(targetScrollView.contentView.bounds.origin.y > 0)
+  let revealedRect = try #require(
+    workspaceSearchGlyphRect(for: expectedSelection, in: targetEditor)
+  )
+  #expect(revealedRect.height > 0)
+  #expect(
+    targetScrollView.documentVisibleRect.contains(revealedRect.insetBy(dx: 0, dy: 1))
+  )
+
+  #expect(host.bounds.width == 640)
+  #expect(host.bounds.height == 430)
+  if let captureDirectory = ProcessInfo.processInfo.environment["FLECK_SEARCH_TEST_CAPTURE_DIR"] {
+    let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let previousAppearance = window.appearance
+    for (mode, appearanceName) in [
+      (AppTheme.light, NSAppearance.Name.aqua),
+      (AppTheme.dark, NSAppearance.Name.darkAqua),
+    ] {
+      state.updatePreferences { $0.theme = mode }
+      window.appearance = NSAppearance(named: appearanceName)
+      await settleWorkspaceSearchHost(host)
+      #expect(commands.textView === targetEditor)
+      #expect(window.firstResponder === targetEditor)
+      #expect(targetEditor.selectedRange() == expectedSelection)
+      let image = try workspaceSearchHostedCapture(in: host)
+      let suffix = mode == .light ? "light" : "dark"
+      try #require(image.representation(using: .png, properties: [:]))
+        .write(
+          to: directory.appendingPathComponent("workspace-search-reveal-\(suffix).png")
+        )
+    }
+    window.appearance = previousAppearance
+  }
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
+func WorkspaceSearchHostingRevealsTheMatchingBodyTextInTheCurrentNote()
+  async throws
+{
+  let root = FileManager.default.temporaryDirectory
+    .appendingPathComponent("workspace-search-reveal-same-note-" + UUID().uuidString, isDirectory: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+
+  let body = (0..<200).map { "Synthetic line \($0)" }.joined(separator: "\n")
+  let note = Note(title: "Current note", body: body)
+  let expectedSelection = try #require(
+    body.range(of: "Synthetic line 150").map { NSRange($0, in: body) }
+  )
+  let state = AppState(
+    store: LocalStore(rootURL: root),
+    saveOperation: { _, _, _, _ in .committed }
+  )
+  await state.waitUntilInitialLoad()
+  state.workspace = Workspace(notes: [note], selectedNoteID: note.id)
+
+  let commands = EditorCommands()
+  let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
+  let searchController = WorkspaceSearchController()
+  let host = NSHostingView(
+    rootView: NotesPanel(
+      dictationRuntime: runtime,
+      sizing: .container,
+      editorCommands: commands,
+      searchController: searchController
+    )
+    .environmentObject(state)
+  )
+  let window = NSWindow(
+    contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.makeKeyAndOrderFront(nil)
+  await settleWorkspaceSearchHost(host)
+
+  let editor = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: ListAwareTextView.self)
+      .first { $0.string == body }
+  )
+  #expect(window.makeFirstResponder(editor))
+  editor.setSelectedRange(NSRange(location: 0, length: 0))
+
+  searchController.present(for: note.id)
+  await settleWorkspaceSearchHost(host)
+  searchController.setQuery("Synthetic line 150", in: state.workspace.notes)
+  try #require(
+    await waitForWorkspaceSearchHostState(host) {
+      searchController.resultsAreCurrent
+        && searchController.results.map(\.noteID) == [note.id]
+    },
+    "Timed out waiting for the same-note body search result to publish"
+  )
+
+  let queryField = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.placeholderString == "Search notes" }
+  )
+  #expect(window.makeFirstResponder(queryField))
+  sendWorkspaceSearchReturn(to: window)
+
+  try #require(
+    await waitForWorkspaceSearchHostState(host) {
+      !searchController.isPresented
+        && editor.selectedRange() == expectedSelection
+        && window.firstResponder === editor
+    },
+    "Timed out waiting for the current note to reveal its matching body text"
+  )
+  #expect(commands.textView === editor)
+  #expect(editor.selectedRange() == expectedSelection)
+  let scrollView = try #require(editor.enclosingScrollView)
+  #expect(scrollView.contentView.bounds.origin.y > 0)
+  let revealedRect = try #require(
+    workspaceSearchGlyphRect(for: expectedSelection, in: editor)
+  )
+  #expect(
+    scrollView.documentVisibleRect.contains(revealedRect.insetBy(dx: 0, dy: 1))
+  )
+
+  let preservedSelection = NSRange(location: 2, length: 6)
+  editor.setSelectedRange(preservedSelection)
+  searchController.present(for: note.id)
+  await settleWorkspaceSearchHost(host)
+  searchController.setQuery("Current note", in: state.workspace.notes)
+  try #require(
+    await waitForWorkspaceSearchHostState(host) {
+      searchController.resultsAreCurrent
+        && searchController.results.first?.match.field == .title
+    },
+    "Timed out waiting for the title search result to publish"
+  )
+  let titleQueryField = try #require(
+    hostedWorkspaceSearchDescendants(in: host, as: NSTextField.self)
+      .first { $0.placeholderString == "Search notes" }
+  )
+  #expect(window.makeFirstResponder(titleQueryField))
+  sendWorkspaceSearchReturn(to: window)
+  try #require(
+    await waitForWorkspaceSearchHostState(host) {
+      !searchController.isPresented && window.firstResponder === editor
+    },
+    "Timed out waiting for the title activation to restore the editor"
+  )
+  #expect(editor.selectedRange() == preservedSelection)
+
+  window.contentView = nil
+  window.orderOut(nil)
+  await runtime.shutdown()
+}
+
+@Test @MainActor
 func WorkspaceSearchHostingRestoresTheTargetEditorAfterCrossNoteActivation()
   async throws
 {
@@ -2074,6 +2325,42 @@ private func sendWorkspaceSearchEscape(to window: NSWindow) {
     charactersIgnoringModifiers: "\u{1b}",
     isARepeat: false,
     keyCode: 53
+  ) else { return }
+  window.sendEvent(event)
+}
+
+@MainActor
+private func workspaceSearchGlyphRect(
+  for range: NSRange,
+  in textView: NSTextView
+) -> NSRect? {
+  guard let layoutManager = textView.layoutManager,
+    let textContainer = textView.textContainer
+  else { return nil }
+  let glyphRange = layoutManager.glyphRange(
+    forCharacterRange: range,
+    actualCharacterRange: nil
+  )
+  let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+  return rect.offsetBy(
+    dx: textView.frame.origin.x + textView.textContainerInset.width,
+    dy: textView.frame.origin.y + textView.textContainerInset.height
+  )
+}
+
+@MainActor
+private func sendWorkspaceSearchReturn(to window: NSWindow) {
+  guard let event = NSEvent.keyEvent(
+    with: .keyDown,
+    location: .zero,
+    modifierFlags: [],
+    timestamp: ProcessInfo.processInfo.systemUptime,
+    windowNumber: window.windowNumber,
+    context: nil,
+    characters: "\r",
+    charactersIgnoringModifiers: "\r",
+    isARepeat: false,
+    keyCode: 36
   ) else { return }
   window.sendEvent(event)
 }
