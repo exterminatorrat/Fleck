@@ -2266,12 +2266,16 @@ private final class MenuPanelNativeRoundingWindow: NSWindow {
   host.frame = root.bounds
   root.addSubview(host)
   let scroller = NSScroller(
-    frame: CGRect(x: frame.maxX - 9, y: 0, width: 9, height: frame.height)
+    frame: CGRect(x: frame.maxX - 15, y: 0, width: 15, height: frame.height)
   )
-  scroller.scrollerStyle = .overlay
-  scroller.controlSize = .mini
+  scroller.scrollerStyle = .legacy
+  scroller.controlSize = .regular
+  scroller.isEnabled = true
+  scroller.knobProportion = 0.5
+  scroller.doubleValue = 0.5
   root.addSubview(scroller)
   window.contentView = root
+  root.layoutSubtreeIfNeeded()
   defer { window.contentView = nil }
 
   let sidePoint = CGPoint(x: frame.maxX - 3, y: 200)
