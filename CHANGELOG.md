@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.4-beta.1] - 2026-11-12
+
+### Changed
+
+- Keep routine autosaves visually quiet without changing the 350 ms debounce.
+  Show Saving only when an actual write lasts more than 800 ms, expose save
+  status through hover and accessibility, and retain persistence errors with
+  a Retry action until saving succeeds.
+
 ## [1.8.2-beta.1] - 2026-11-12
 
 ### Fixed

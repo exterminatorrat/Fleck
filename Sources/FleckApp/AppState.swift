@@ -102,12 +102,18 @@
       increasedContrast: false
     )
     @Published var saveError: String? {
-      didSet { saveErrorGeneration = UUID() }
+      didSet {
+        saveErrorGeneration = UUID()
+        if saveError == nil {
+          saveFeedback.settle(persistenceFeedbackOutcome)
+        }
+      }
     }
     @Published private(set) var selectedNoteFileReferences: [NoteFileReferencePresentation] = []
     @Published private(set) var noteFileReferenceError: String?
     @Published private(set) var startupMigrationError: FleckProductMigrationError?
     @Published private(set) var saveStatus = SaveStatus.idle
+    let saveFeedback: SaveFeedbackPresentation
     @Published private(set) var initialSnapshotSource: LocalStoreSnapshotSource?
     @Published private(set) var trashedNotes: [TrashedNote] = []
     @Published private(set) var latestAgentFeedback: AgentChangeFeedback?
@@ -131,6 +137,7 @@
     private(set) var isAgentWorkspaceAvailable = false
     private(set) var agentCommitProofs: [AgentWorkspaceCommitProof] = []
     private var lastCommittedPersistenceGeneration: UInt64?
+    private var presentationPendingGeneration: UInt64?
     var isPersistenceBlocked: Bool { startupMigrationError != nil }
 
     private let store: LocalStore
@@ -215,6 +222,7 @@
     init(
       store: LocalStore? = nil,
       saveOperation: SaveOperation? = nil,
+      saveFeedback: SaveFeedbackPresentation? = nil,
       beforeSaveOperation: BeforeSaveOperation? = nil,
       loadTrashOperation: LoadTrashOperation? = nil,
       restoreOperation: RestoreOperation? = nil,
@@ -265,6 +273,7 @@
             generation: generation
           )
         }
+      self.saveFeedback = saveFeedback ?? SaveFeedbackPresentation()
       self.beforeSaveOperation = beforeSaveOperation
       self.loadTrashOperation =
         loadTrashOperation ?? {
@@ -544,6 +553,20 @@
     private func canClearSaveError(ownedBy owner: SaveErrorOwner) -> Bool {
       saveError == nil
         || (saveErrorOwner == owner && saveErrorOwnerGeneration == saveErrorGeneration)
+    }
+
+    var canRetryPersistenceSave: Bool {
+      saveError != nil && canClearSaveError(ownedBy: .persistence)
+    }
+
+    func retryPersistenceSave() {
+      guard canRetryPersistenceSave else { return }
+      _ = saveNow()
+    }
+
+    private var persistenceFeedbackOutcome: SaveFeedbackState {
+      if canRetryPersistenceSave { return .failed }
+      return presentationPendingGeneration == nil ? .saved : .pending
     }
 
     @discardableResult
@@ -2341,6 +2364,9 @@
       saveStatusResetTask = nil
       await waitForScheduledPersistenceTasks()
       saveStatus = .idle
+      presentationPendingGeneration = nil
+      saveFeedback.reset()
+      saveFeedback.settle(persistenceFeedbackOutcome)
     }
 
     private func finishScheduledPersistenceTask() {
@@ -2438,6 +2464,8 @@
               signpostState
             )
           }
+          saveFeedback.writeBegan()
+          defer { saveFeedback.writeEnded() }
           result = try await saveOperation(
             snapshot.workspace,
             snapshot.preferences,
@@ -2453,6 +2481,7 @@
         }
       } catch {
         if Task.isCancelled || error is CancellationError {
+          saveFeedback.writeCancelled()
           throw CancellationError()
         }
         recordSaveError(error.localizedDescription, owner: .persistence)
@@ -2464,17 +2493,26 @@
       for note in snapshot.trashedNotes {
         pendingTrashNotes.removeValue(forKey: note.id)
       }
-      guard !Task.isCancelled else { return }
+      guard !Task.isCancelled else {
+        saveFeedback.writeCancelled()
+        return
+      }
       var trashRefreshError: Error?
       if !snapshot.trashedNotes.isEmpty {
         do {
           trashedNotes = try await loadTrashOperation()
         } catch {
-          guard !Task.isCancelled else { return }
+          guard !Task.isCancelled else {
+            saveFeedback.writeCancelled()
+            return
+          }
           trashRefreshError = error
         }
       }
-      guard !Task.isCancelled else { return }
+      guard !Task.isCancelled else {
+        saveFeedback.writeCancelled()
+        return
+      }
       let succeededSaveError = trashRefreshError?.localizedDescription
       if saveErrorGeneration == saveErrorGenerationAtStart,
         succeededSaveError != nil || clearsSaveErrorAtStart
@@ -2491,6 +2529,11 @@
         return
       }
       lastCommittedPersistenceGeneration = generation
+      if let pendingGeneration = presentationPendingGeneration,
+        generation >= pendingGeneration
+      {
+        presentationPendingGeneration = nil
+      }
     }
 
     func flushPendingPersistenceForAgent() async throws {
@@ -2986,10 +3029,13 @@
     private func markSaveStarted() {
       saveStatusResetTask?.cancel()
       saveStatus = .saving
+      presentationPendingGeneration = persistenceGeneration
+      saveFeedback.changesScheduled()
     }
 
     private func markSaveSucceeded() {
       saveStatus = .saved
+      saveFeedback.settle(persistenceFeedbackOutcome)
       saveStatusResetTask?.cancel()
       scheduledPersistenceTaskCount += 1
       saveStatusResetTask = Task {
@@ -3002,6 +3048,7 @@
 
     private func markSaveFailed() {
       resetSaveStatus()
+      saveFeedback.settle(persistenceFeedbackOutcome)
     }
 
     private func resetSaveStatus() {
