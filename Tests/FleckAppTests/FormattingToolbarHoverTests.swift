@@ -5,10 +5,11 @@ import Testing
 struct FormattingToolbarHoverTests {
   @Test func sharedStyleOwnsPerButtonHoverWithoutChangingGeometry() throws {
     let source = try notesPanelSource()
-    let style = try #require(
-      source.components(separatedBy: "private struct CrispToolbarButtonStyle").last?
-        .components(separatedBy: "private struct SaveFeedbackView").first
-    )
+    let styleStart = try #require(source.range(of: "private struct CrispToolbarButtonStyle"))
+    let styleEnd = try #require(source.range(
+      of: "struct FluidTabReorder:", range: styleStart.upperBound..<source.endIndex
+    ))
+    let style = source[styleStart.lowerBound..<styleEnd.lowerBound]
 
     #expect(style.contains("CrispToolbarButtonBody(configuration: configuration, motion: motion)"))
     #expect(style.contains("@Environment(\\.isEnabled) private var isEnabled"))

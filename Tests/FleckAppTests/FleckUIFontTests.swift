@@ -97,7 +97,10 @@
     #expect(settings.contains(".font(uiFont.font(size: 13, weight: isSelected ? .semibold : .regular))"))
     #expect(settings.contains("Text(detail).fleckUIFont(.caption)"))
 
-    #expect(notes.contains("Text(\"Could not save: \\(error)\")\n                .fleckUIFont(.caption)"))
+    let notesWithoutIndentation = notes.split(separator: "\n").map {
+      $0.trimmingCharacters(in: .whitespaces)
+    }.joined(separator: "\n")
+    #expect(notesWithoutIndentation.contains("Text(\"Could not save: \\(error)\")\n.fleckUIFont(.caption)"))
     #expect(notes.contains("Text(error)\n                .fleckUIFont(.caption)"))
     #expect(notes.contains("Text(\"Fleck needs your help\")\n          .fleckUIFont(.headline)"))
     let composerStart = try #require(notes.range(of: "private var folderComposer: some View"))
