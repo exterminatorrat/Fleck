@@ -657,6 +657,10 @@ func staleLightWindowAppearanceCannotReplaceSystemDarkSnapshot() async throws {
     contentsOf: root.appendingPathComponent("Sources/FleckApp/NotesPanel.swift"),
     encoding: .utf8
   )
+  let saveFeedbackSource = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/SaveFeedbackView.swift"),
+    encoding: .utf8
+  )
   let agentActivitySource = try String(
     contentsOf: root.appendingPathComponent("Sources/FleckApp/AgentActivityView.swift"),
     encoding: .utf8
@@ -698,9 +702,9 @@ func staleLightWindowAppearanceCannotReplaceSystemDarkSnapshot() async throws {
     until: "private struct FormattingBar"
   )
   let saveFeedback = try component(
-    notesSource,
-    from: "private struct SaveFeedbackView: View",
-    until: "struct FluidTabReorder"
+    saveFeedbackSource,
+    from: "struct SaveFeedbackView: View",
+    until: "\n#endif"
   )
   let activityRow = try component(
     agentActivitySource,
