@@ -495,12 +495,7 @@
     }
 
     private func integrationRow(_ integration: AgentIntegrationKind) -> some View {
-      SettingsPreferenceRow(
-        integration == .genericCLI ? "Other agents & CLIs" : integration.displayName,
-        detail: integration == .genericCLI
-          ? "For Capy or another MCP-compatible agent running on this Mac."
-          : integration.description
-      ) {
+      SettingsPreferenceRow(integration.displayName, detail: integration.description) {
         VStack(alignment: .trailing, spacing: 6) {
           connectionPromptButton(for: integration)
           addButton(for: integration)
