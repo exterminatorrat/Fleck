@@ -1014,6 +1014,7 @@
     private weak var geometryStore: MenuPanelGeometryStore?
     private weak var installedWindow: NSWindow?
     private var monitor: Any?
+    private var cursorTrackingAreas: [NSTrackingArea] = []
     private var visibilityObservation: NSKeyValueObservation?
     private var previousAcceptsMouseMovedEvents: Bool?
     private var preferredSize = CGSize.zero
@@ -1063,6 +1064,44 @@
     required init?(coder: NSCoder) { nil }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func updateTrackingAreas() {
+      super.updateTrackingAreas()
+      removeCursorTracking()
+      guard isInstalled else { return }
+      cursorTrackingAreas = cursorTrackingRects().map { rect in
+        NSTrackingArea(
+          rect: rect,
+          options: [.mouseEnteredAndExited, .mouseMoved, .cursorUpdate, .activeInKeyWindow],
+          owner: self,
+          userInfo: nil
+        )
+      }
+      for area in cursorTrackingAreas {
+        addTrackingArea(area)
+      }
+    }
+
+    private func cursorTrackingRects() -> [CGRect] {
+      guard let fixedSide = alignedFixedSide, !bounds.isEmpty else { return [] }
+      let thickness = MenuPanelResizeGeometry.edgeThickness
+      let corner = MenuPanelResizeGeometry.cornerExtent
+      let farEdgeX = fixedSide == .left ? bounds.maxX - thickness : bounds.minX
+      return [
+        CGRect(x: farEdgeX, y: bounds.minY, width: thickness, height: bounds.height),
+        CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: corner),
+      ]
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+      super.mouseMoved(with: event)
+      updateHoverCursor(from: event)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+      super.cursorUpdate(with: event)
+      updateHoverCursor(from: event)
+    }
 
     override func viewDidMoveToWindow() {
       super.viewDidMoveToWindow()
@@ -1225,6 +1264,7 @@
           self.clearAlignment()
           self.presentationTop = nil
           self.invalidateQueuedWork()
+          self.removeCursorTracking()
           self.resetCursor()
         } else {
           NSCursor.arrow.set()
@@ -1376,6 +1416,7 @@
       visibilityObservation = nil
       removeWindowObservers(for: window)
       previousAcceptsMouseMovedEvents = nil
+      removeCursorTracking()
       cursor = nil
     }
 
@@ -1424,12 +1465,12 @@
         cancelAndRestore(in: window)
         return nil
       case .mouseMoved:
-        updateCursor(for: event, in: window)
+        updateHoverCursor(at: event.locationInWindow, in: window)
         return event
       case .cursorUpdate:
         return updateCursor(for: event, in: window) ? nil : event
       case .mouseExited:
-        resetCursor()
+        updateHoverCursor(at: event.locationInWindow, in: window)
         return event
       default:
         return event
@@ -1704,6 +1745,59 @@
       updateCursor(at: event.locationInWindow, in: window)
     }
 
+    private func updateHoverCursor(from event: NSEvent) {
+      guard let window = installedWindow, event.window === window,
+        let attachmentID, controller.isPresentationOwner(attachmentID),
+        !controller.isOwned(by: attachmentID), window.isVisible
+      else { return }
+      guard let resolved = hoverCursor(at: event.locationInWindow, in: window) else {
+        resetCursor(in: window)
+        return
+      }
+      setCursor(resolved)
+      reassertCursorAfterDispatch()
+    }
+
+    private func updateHoverCursor(at locationInWindow: CGPoint, in window: NSWindow) {
+      guard let attachmentID, installedWindow === window, self.window === window,
+        controller.isPresentationOwner(attachmentID)
+      else { return }
+      guard window.isVisible else {
+        resetCursor()
+        return
+      }
+      updateCursor(at: locationInWindow, in: window)
+      reassertCursorAfterDispatch()
+    }
+
+    private func reassertCursorAfterDispatch() {
+      guard let activeCursor = cursor, NSApplication.shared.isActive else { return }
+      let installation = installationRevision
+      DispatchQueue.main.async { [weak self] in
+        guard let self,
+          self.installationRevision == installation,
+          self.cursor === activeCursor,
+          NSCursor.current !== activeCursor,
+          NSApplication.shared.isActive,
+          let window = self.installedWindow,
+          self.window === window,
+          window.isVisible,
+          let attachmentID = self.attachmentID,
+          self.controller.isPresentationOwner(attachmentID),
+          !self.controller.isOwned(by: attachmentID)
+        else { return }
+        let location = window.mouseLocationOutsideOfEventStream
+        guard NSWindow.windowNumber(
+          at: window.convertPoint(toScreen: location),
+          belowWindowWithWindowNumber: 0
+        ) == window.windowNumber,
+          self.bounds.contains(self.convert(location, from: nil)),
+          self.hoverCursor(at: location, in: window) === activeCursor
+        else { return }
+        activeCursor.set()
+      }
+    }
+
     @discardableResult
     private func updateCursor(at locationInWindow: CGPoint, in window: NSWindow) -> Bool {
       if let attachmentID, controller.isOwned(by: attachmentID),
@@ -1713,6 +1807,15 @@
         setCursor(cursor(for: handle, fixedSide: fixedSide))
         return true
       }
+      guard let resolved = hoverCursor(at: locationInWindow, in: window) else {
+        resetCursor(in: window)
+        return false
+      }
+      setCursor(resolved)
+      return true
+    }
+
+    private func hoverCursor(at locationInWindow: CGPoint, in window: NSWindow) -> NSCursor? {
       guard isLiveResizeEligible(in: window),
         let statusLabelFrame = geometryStore?.cachedStatusButton?.screenFrame,
         let fixedSide = MenuPanelResizeGeometry.anchoredSide(
@@ -1720,12 +1823,8 @@
           statusLabelFrame: statusLabelFrame
         ),
         let handle = usableHandle(at: locationInWindow, in: window, fixedSide: fixedSide)
-      else {
-        resetCursor(in: window)
-        return false
-      }
-      setCursor(cursor(for: handle, fixedSide: fixedSide))
-      return true
+      else { return nil }
+      return cursor(for: handle, fixedSide: fixedSide)
     }
 
     func usableHandle(
@@ -1922,6 +2021,7 @@
       alignedVisibleFrame = screen.visibleFrame
       alignedFixedSide = placement.fixedSide
       alignedFrame = placement.frame
+      updateTrackingAreas()
     }
 
     private func restore(
@@ -2186,6 +2286,14 @@
       guard cursor != nil else { return }
       cursor = nil
       NSCursor.arrow.set()
+    }
+
+    private func removeCursorTracking() {
+      guard !cursorTrackingAreas.isEmpty else { return }
+      for area in cursorTrackingAreas {
+        removeTrackingArea(area)
+      }
+      cursorTrackingAreas = []
     }
   }
 #endif
