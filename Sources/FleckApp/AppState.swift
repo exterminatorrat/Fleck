@@ -119,6 +119,7 @@
     @Published private(set) var latestAgentFeedback: AgentChangeFeedback?
     @Published private(set) var agentProfiles: [AgentIntegrationProfile] = []
     @Published private(set) var cursorSetupStatus = CursorSetupStatus.idle
+    @Published private(set) var agentConnectionPromptStatus = AgentConnectionPromptStatus.idle
     @Published private(set) var agentActivity: [AgentActivityRecord] = []
     @Published private(set) var agentEventSubscriptions: [AgentEventOwnerSummary] = []
     @Published var agentEventMonitoringError: String?
@@ -177,6 +178,27 @@
       openURL: { NSWorkspace.shared.open($0) },
       statusChanged: { [weak self] status in
         self?.cursorSetupStatus = status
+      }
+    )
+    private lazy var agentConnectionPromptFlow = AgentConnectionPromptFlow(
+      prepareConnector: { [weak self] in
+        guard let self else { throw CursorSetupFlowError.unavailable }
+        return try await self.prepareCursorHelper()
+      },
+      loadProfiles: { [weak self] in
+        guard let self, await self.refreshAgentProfiles() else {
+          throw CursorSetupFlowError.unavailable
+        }
+        return self.agentProfiles
+      },
+      createProfile: { [weak self] integration in
+        guard let self,
+          let profile = await self.addAgentProfile(named: integration.displayName)
+        else { throw CursorSetupFlowError.unavailable }
+        return profile
+      },
+      statusChanged: { [weak self] status in
+        self?.agentConnectionPromptStatus = status
       }
     )
     private struct NoteAccessTransactionLock {
@@ -2676,6 +2698,7 @@
       profileID: UUID? = nil,
       expectedCapabilities: AgentProfileCapabilities? = nil
     ) async {
+      guard agentConnectionPromptStatus != .preparing else { return }
       guard isAgentWorkspaceAvailable else {
         if !cursorSetupStatus.isInProgress {
           cursorSetupStatus = .failure
@@ -2704,6 +2727,32 @@
       }
     }
 
+    func prepareAgentConnectionPrompt(
+      for integration: AgentIntegrationKind,
+      profileID: UUID? = nil,
+      expectedCapabilities: AgentProfileCapabilities? = nil
+    ) async -> String? {
+      guard isAgentWorkspaceAvailable, !cursorSetupStatus.isInProgress else {
+        return nil
+      }
+      return await agentConnectionPromptFlow.prepare(
+        for: integration,
+        profileID: profileID
+      ) { [weak self] profile, isNewProfile in
+        guard let self, self.isAgentWorkspaceAvailable,
+          self.agentProfiles.contains(where: { $0.id == profile.id && !$0.isRevoked }),
+          let current = self.capabilityProfile(profile.id)
+        else { return false }
+        if isNewProfile {
+          return current.grantRevision == 0
+            && current.allowedCapabilities.isEmpty
+            && current.grants.isEmpty
+            && !current.allowsEventObservation
+        }
+        return profileID == profile.id && expectedCapabilities == current
+      }
+    }
+
     private func prepareCursorHelper() async throws -> URL {
       await refreshAgentConnectorStatus()
       guard !Task.isCancelled else { throw CancellationError() }
@@ -2713,14 +2762,14 @@
       guard !Task.isCancelled else { throw CancellationError() }
       guard isAgentConnectorInstalled else {
         agentCleanupError =
-          "Could not prepare the local Agent Connector for Cursor. Use the manual setup below."
+          "Could not prepare the local Agent Connector. Use the manual setup below."
         throw CursorSetupFlowError.unavailable
       }
       do {
         return try AgentBridgeInstaller.live().installedHelperURL
       } catch {
         agentCleanupError =
-          "Could not prepare the local Agent Connector for Cursor. Use the manual setup below."
+          "Could not prepare the local Agent Connector. Use the manual setup below."
         throw CursorSetupFlowError.unavailable
       }
     }

@@ -3,6 +3,14 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.6-beta.1] - 2026-11-12
+
+### Added
+
+- Copy a ready-to-send local MCP setup prompt for Codex, Claude Code, Kimi,
+  Capy and other compatible agents. Fleck prepares its connector and profile
+  automatically while preserving existing access grants and manual setup.
+
 ## [1.8.5-beta.1] - 2026-11-12
 
 ### Fixed

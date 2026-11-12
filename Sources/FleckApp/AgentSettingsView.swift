@@ -247,6 +247,9 @@
     @State private var showsClearConfirmation = false
     @State private var showsAgentActivity = false
     @State private var cursorSetupTask: Task<Void, Never>?
+    @State private var promptSetupTask: Task<Void, Never>?
+    @State private var manualProfileTask: Task<Void, Never>?
+    @State private var promptCopyFeedback: String?
     @State private var profileForCapabilities: AgentIntegrationProfile?
     @State private var isActivityExpanded = false
     @State private var isAccessExpanded = false
@@ -336,6 +339,8 @@
       }
       .onDisappear {
         cancelCursorSetup()
+        promptSetupTask?.cancel()
+        manualProfileTask?.cancel()
       }
       .sheet(item: $profileForCapabilities) { profile in
         if let capabilities = appState.capabilityProfile(profile.id) {
@@ -434,9 +439,27 @@
       VStack(alignment: .leading, spacing: 8) {
         Text("Available Integrations")
           .font(.headline)
+        Text("Choose your agent. Copy a setup prompt and paste it into your AI, or open Cursor’s install prompt.")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
         cursorIntegrationRow
         ForEach(AgentIntegrationKind.allCases) { integration in
           integrationRow(integration)
+        }
+        if let message = appState.agentConnectionPromptStatus.message ?? promptCopyFeedback {
+          Text(message)
+            .font(.caption)
+            .foregroundStyle(
+              appState.agentConnectionPromptStatus.isError ? theme.color(.error) : Color.secondary
+            )
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        if promptSetupTask != nil {
+          Button("Cancel setup", role: .cancel) {
+            promptSetupTask?.cancel()
+          }
+          .controlSize(.small)
         }
       }
     }
@@ -472,6 +495,9 @@
 
     private var isCursorSetupBlocked: Bool {
       cursorSetupTask != nil
+        || promptSetupTask != nil
+        || manualProfileTask != nil
+        || appState.agentConnectionPromptStatus == .preparing
         || appState.cursorSetupStatus.isInProgress
         || !appState.isAgentWorkspaceAvailable
     }
@@ -495,18 +521,58 @@
     }
 
     private func integrationRow(_ integration: AgentIntegrationKind) -> some View {
-      SettingsPreferenceRow(integration.displayName, detail: integration.description) {
-        addButton(for: integration)
+      SettingsPreferenceRow(
+        integration == .genericCLI ? "Other agents & CLIs" : integration.displayName,
+        detail: integration == .genericCLI
+          ? "For Capy or another MCP-compatible agent running on this Mac."
+          : integration.description
+      ) {
+        VStack(alignment: .trailing, spacing: 6) {
+          connectionPromptButton(for: integration)
+          addButton(for: integration)
+        }
       }
       .settingsSearchAnchor(.agentIntegration(integration), request: searchRequest)
     }
 
+    private func connectionPromptButton(
+      for integration: AgentIntegrationKind,
+      profileID: UUID? = nil,
+      expectedCapabilities: AgentProfileCapabilities? = nil
+    ) -> some View {
+      Button("Copy setup prompt") {
+        guard !isCursorSetupBlocked else { return }
+        promptCopyFeedback = nil
+        promptSetupTask = Task {
+          defer { promptSetupTask = nil }
+          guard let prompt = await appState.prepareAgentConnectionPrompt(
+            for: integration,
+            profileID: profileID,
+            expectedCapabilities: expectedCapabilities
+          ), !Task.isCancelled else { return }
+          NSPasteboard.general.clearContents()
+          if NSPasteboard.general.setString(prompt, forType: .string) {
+            promptCopyFeedback = "Prompt copied. Paste it into your agent and approve its setup changes. New profiles have no note access; choose Edit Capabilities below to share notes."
+          } else {
+            promptCopyFeedback = "Could not copy the prompt. Try copying it again."
+          }
+        }
+      }
+      .disabled(isCursorSetupBlocked)
+      .accessibilityLabel("Copy \(integration == .genericCLI ? "other agent" : integration.displayName) setup prompt")
+      .accessibilityHint("Prepares the local connector if needed and copies instructions for your AI. Does not change the agent’s configuration or note access.")
+    }
+
     private func addButton(for integration: AgentIntegrationKind) -> some View {
       Button(integration.addButtonTitle) {
-        Task { await appState.addAgentProfile(named: integration.displayName) }
+        guard !isCursorSetupBlocked else { return }
+        manualProfileTask = Task {
+          defer { manualProfileTask = nil }
+          await appState.addAgentProfile(named: integration.displayName)
+        }
       }
       .disabled(
-        !AgentConnectorPresentation.canAddIntegration(
+        isCursorSetupBlocked || !AgentConnectorPresentation.canAddIntegration(
           workspaceAvailable: appState.isAgentWorkspaceAvailable,
           connectorInstalled: appState.isAgentConnectorInstalled
         )
@@ -525,7 +591,7 @@
         .fixedSize(horizontal: false, vertical: true)
         let profiles = AgentProfilesPresentation.active(appState.agentProfiles)
         if profiles.isEmpty {
-          Text("No integrations connected yet. Add one above when the local connector is ready.")
+          Text("Choose an agent above to get started. The local connector is prepared automatically.")
             .font(.caption)
             .foregroundStyle(.secondary)
         } else {
@@ -773,6 +839,13 @@
               }
               Button("Edit Capabilities…") {
                 profileForCapabilities = profile
+              }
+              if let integration = AgentIntegrationKind(rawValue: profile.displayName) {
+                connectionPromptButton(
+                  for: integration,
+                  profileID: profile.id,
+                  expectedCapabilities: capabilities
+                )
               }
             }
           }
