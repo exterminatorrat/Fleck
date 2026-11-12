@@ -36,8 +36,8 @@
 
     @Published private(set) var state = SaveFeedbackState.saved
     private let scheduleReveal: RevealScheduler
-    private var activeWriteCount = 0
-    private var generation: UInt64 = 0
+    private var activeWrites: Set<UUID> = []
+    private var revealedWrites: Set<UUID> = []
 
     init(
       scheduleReveal: @escaping RevealScheduler = { delay, action in
@@ -55,41 +55,37 @@
       state = .pending
     }
 
-    func writeBegan() {
-      activeWriteCount += 1
-      guard activeWriteCount == 1 else { return }
-      generation &+= 1
-      let revealGeneration = generation
-      state = .pending
+    @discardableResult
+    func writeBegan() -> UUID {
+      let id = UUID()
+      activeWrites.insert(id)
+      if revealedWrites.isEmpty { state = .pending }
       scheduleReveal(Self.revealDelay) { [weak self] in
         guard let self,
-          self.generation == revealGeneration,
-          self.activeWriteCount > 0
+          self.activeWrites.contains(id)
         else { return }
+        self.revealedWrites.insert(id)
         self.state = .saving
+      }
+      return id
+    }
+
+    func writeEnded(_ id: UUID) {
+      activeWrites.remove(id)
+      revealedWrites.remove(id)
+      if revealedWrites.isEmpty, state == .saving {
+        state = .pending
       }
     }
 
-    func writeEnded() {
-      activeWriteCount = max(0, activeWriteCount - 1)
-      guard activeWriteCount == 0 else { return }
-      generation &+= 1
-    }
-
-    func writeCancelled() {
-      guard activeWriteCount == 0, state == .saving else { return }
-      generation &+= 1
-      state = .pending
-    }
-
     func settle(_ outcome: SaveFeedbackState) {
-      guard activeWriteCount == 0, outcome != .saving else { return }
+      guard activeWrites.isEmpty, outcome != .saving else { return }
       state = outcome
     }
 
     func reset() {
-      activeWriteCount = 0
-      generation &+= 1
+      activeWrites.removeAll()
+      revealedWrites.removeAll()
       state = .saved
     }
   }

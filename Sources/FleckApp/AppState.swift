@@ -2464,8 +2464,8 @@
               signpostState
             )
           }
-          saveFeedback.writeBegan()
-          defer { saveFeedback.writeEnded() }
+          let feedbackWriteID = saveFeedback.writeBegan()
+          defer { saveFeedback.writeEnded(feedbackWriteID) }
           result = try await saveOperation(
             snapshot.workspace,
             snapshot.preferences,
@@ -2481,7 +2481,6 @@
         }
       } catch {
         if Task.isCancelled || error is CancellationError {
-          saveFeedback.writeCancelled()
           throw CancellationError()
         }
         recordSaveError(error.localizedDescription, owner: .persistence)
@@ -2493,26 +2492,17 @@
       for note in snapshot.trashedNotes {
         pendingTrashNotes.removeValue(forKey: note.id)
       }
-      guard !Task.isCancelled else {
-        saveFeedback.writeCancelled()
-        return
-      }
+      guard !Task.isCancelled else { return }
       var trashRefreshError: Error?
       if !snapshot.trashedNotes.isEmpty {
         do {
           trashedNotes = try await loadTrashOperation()
         } catch {
-          guard !Task.isCancelled else {
-            saveFeedback.writeCancelled()
-            return
-          }
+          guard !Task.isCancelled else { return }
           trashRefreshError = error
         }
       }
-      guard !Task.isCancelled else {
-        saveFeedback.writeCancelled()
-        return
-      }
+      guard !Task.isCancelled else { return }
       let succeededSaveError = trashRefreshError?.localizedDescription
       if saveErrorGeneration == saveErrorGenerationAtStart,
         succeededSaveError != nil || clearsSaveErrorAtStart

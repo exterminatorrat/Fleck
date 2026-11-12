@@ -29,11 +29,11 @@ struct SaveFeedbackPresentationTests {
     #expect(feedback.state == .pending)
     #expect(scheduler.delays.isEmpty)
 
-    feedback.writeBegan()
+    let write = feedback.writeBegan()
     #expect(feedback.state == .pending)
     #expect(scheduler.delays == [SaveFeedbackPresentation.revealDelay])
 
-    feedback.writeEnded()
+    feedback.writeEnded(write)
     feedback.settle(.saved)
     #expect(feedback.state == .saved)
 
@@ -47,13 +47,13 @@ struct SaveFeedbackPresentationTests {
     let feedback = SaveFeedbackPresentation(scheduleReveal: scheduler.schedule)
 
     feedback.changesScheduled()
-    feedback.writeBegan()
+    let write = feedback.writeBegan()
     #expect(feedback.state == .pending)
 
     scheduler.fireAll()
     #expect(feedback.state == .saving)
 
-    feedback.writeEnded()
+    feedback.writeEnded(write)
     feedback.settle(.saved)
     #expect(feedback.state == .saved)
   }
@@ -64,9 +64,8 @@ struct SaveFeedbackPresentationTests {
     let feedback = SaveFeedbackPresentation(scheduleReveal: scheduler.schedule)
 
     feedback.changesScheduled()
-    feedback.writeBegan()
-    feedback.writeEnded()
-    feedback.writeCancelled()
+    let write = feedback.writeBegan()
+    feedback.writeEnded(write)
     #expect(feedback.state == .pending)
 
     scheduler.fireAll()
@@ -79,12 +78,11 @@ struct SaveFeedbackPresentationTests {
     let feedback = SaveFeedbackPresentation(scheduleReveal: scheduler.schedule)
 
     feedback.changesScheduled()
-    feedback.writeBegan()
+    let write = feedback.writeBegan()
     scheduler.fireAll()
     #expect(feedback.state == .saving)
 
-    feedback.writeEnded()
-    feedback.writeCancelled()
+    feedback.writeEnded(write)
     #expect(feedback.state == .pending)
   }
 
@@ -94,20 +92,84 @@ struct SaveFeedbackPresentationTests {
     let feedback = SaveFeedbackPresentation(scheduleReveal: scheduler.schedule)
 
     feedback.changesScheduled()
-    feedback.writeBegan()
-    feedback.writeBegan()
-    #expect(scheduler.delays.count == 1)
+    let first = feedback.writeBegan()
+    let second = feedback.writeBegan()
+    #expect(scheduler.delays.count == 2)
 
     scheduler.fireAll()
     #expect(feedback.state == .saving)
 
-    feedback.writeEnded()
+    feedback.writeEnded(first)
     feedback.settle(.saved)
     #expect(feedback.state == .saving)
 
-    feedback.writeEnded()
+    feedback.writeEnded(second)
     feedback.settle(.saved)
     #expect(feedback.state == .saved)
+  }
+
+  @Test
+  func staggeredWritesCannotBorrowTheFinishedWritesRevealDelay() {
+    let scheduler = RevealScheduler()
+    let feedback = SaveFeedbackPresentation(scheduleReveal: scheduler.schedule)
+    let first = feedback.writeBegan()
+    let second = feedback.writeBegan()
+
+    feedback.writeEnded(first)
+    scheduler.fireNext()
+    #expect(feedback.state == .pending)
+
+    scheduler.fireNext()
+    #expect(feedback.state == .saving)
+    feedback.writeEnded(second)
+    #expect(feedback.state == .pending)
+    feedback.settle(.saved)
+    #expect(feedback.state == .saved)
+  }
+
+  @Test
+  func endingTheOnlyRevealedWriteHidesSavingWhileAShortWriteContinues() {
+    let scheduler = RevealScheduler()
+    let feedback = SaveFeedbackPresentation(scheduleReveal: scheduler.schedule)
+    let first = feedback.writeBegan()
+    scheduler.fireNext()
+    #expect(feedback.state == .saving)
+
+    let second = feedback.writeBegan()
+    feedback.writeEnded(first)
+    #expect(feedback.state == .pending)
+    scheduler.fireNext()
+    #expect(feedback.state == .saving)
+    feedback.writeEnded(second)
+    #expect(feedback.state == .pending)
+  }
+
+  @Test
+  func heldTrashRefreshDoesNotKeepTheFinishedWriteVisible() async throws {
+    let scheduler = RevealScheduler()
+    let feedback = SaveFeedbackPresentation(scheduleReveal: scheduler.schedule)
+    let write = PersistenceWriteGate()
+    let trash = TrashRefreshGate()
+    let fixture = try await SaveFeedbackFixture(
+      feedback: feedback,
+      loadTrashOperation: { await trash.load() }
+    ) { _, _, _, _ in
+      await write.save()
+    }
+    defer { fixture.remove() }
+    await trash.arm()
+    let noteID = try #require(fixture.state.workspace.selectedNoteID)
+    #expect(fixture.state.moveToTrash(noteID))
+    await write.waitUntilStarted(1)
+    scheduler.fireAll()
+    #expect(feedback.state == .saving)
+
+    await write.releaseNext()
+    await trash.waitUntilStarted()
+    #expect(feedback.state == .pending)
+    #expect(fixture.state.saveStatus == .saving)
+    await trash.release()
+    try await waitForFeedback(feedback, toEqual: .saved)
   }
 
   @Test
@@ -116,18 +178,18 @@ struct SaveFeedbackPresentationTests {
     let feedback = SaveFeedbackPresentation(scheduleReveal: scheduler.schedule)
 
     feedback.changesScheduled()
-    feedback.writeBegan()
-    feedback.writeEnded()
+    let first = feedback.writeBegan()
+    feedback.writeEnded(first)
     feedback.settle(.failed)
     #expect(feedback.state == .failed)
 
     feedback.changesScheduled()
     #expect(feedback.state == .failed)
 
-    feedback.writeBegan()
+    let retry = feedback.writeBegan()
     #expect(feedback.state == .pending)
 
-    feedback.writeEnded()
+    feedback.writeEnded(retry)
     feedback.settle(.saved)
     #expect(feedback.state == .saved)
   }
@@ -205,7 +267,7 @@ struct SaveFeedbackPresentationTests {
     fixture.state.saveNow()
     fixture.state.saveNow()
     await gate.waitUntilStarted(2)
-    #expect(scheduler.delays.count == 1)
+    #expect(scheduler.delays.count == 2)
 
     scheduler.fireAll()
     #expect(feedback.state == .saving)
@@ -358,6 +420,7 @@ private struct SaveFeedbackFixture {
 
   init(
     feedback: SaveFeedbackPresentation = SaveFeedbackPresentation(),
+    loadTrashOperation: AppState.LoadTrashOperation? = nil,
     saveOperation: @escaping AppState.SaveOperation
   ) async throws {
     root = FileManager.default.temporaryDirectory
@@ -371,7 +434,8 @@ private struct SaveFeedbackFixture {
     state = AppState(
       store: store,
       saveOperation: saveOperation,
-      saveFeedback: feedback
+      saveFeedback: feedback,
+      loadTrashOperation: loadTrashOperation
     )
     await state.waitUntilInitialLoad()
     #expect(state.workspace.selectedNoteID == note.id)
@@ -452,6 +516,34 @@ private actor PersistenceWriteGate {
   func startCount() -> Int { started }
 }
 
+private actor TrashRefreshGate {
+  private var armed = false
+  private var started = false
+  private var startedContinuation: CheckedContinuation<Void, Never>?
+  private var held: CheckedContinuation<Void, Never>?
+
+  func arm() { armed = true }
+
+  func load() async -> [TrashedNote] {
+    guard armed else { return [] }
+    started = true
+    startedContinuation?.resume()
+    startedContinuation = nil
+    await withCheckedContinuation { held = $0 }
+    return []
+  }
+
+  func waitUntilStarted() async {
+    guard !started else { return }
+    await withCheckedContinuation { startedContinuation = $0 }
+  }
+
+  func release() {
+    held?.resume()
+    held = nil
+  }
+}
+
 private actor FailingThenHeldSaveGate {
   private var attempts = 0
   private var startedContinuation: CheckedContinuation<Void, Never>?
@@ -511,5 +603,10 @@ private final class RevealScheduler {
     let pending = actions
     actions.removeAll()
     for action in pending { action() }
+  }
+
+  func fireNext() {
+    guard !actions.isEmpty else { return }
+    actions.removeFirst()()
   }
 }

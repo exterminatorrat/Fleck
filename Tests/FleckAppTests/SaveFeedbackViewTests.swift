@@ -190,8 +190,8 @@ private final class HostedSaveFeedbackFixture {
       scheduler.fireAll()
     case .failed:
       presentation.changesScheduled()
-      presentation.writeBegan()
-      presentation.writeEnded()
+      let write = presentation.writeBegan()
+      presentation.writeEnded(write)
       presentation.settle(.failed)
     }
   }
