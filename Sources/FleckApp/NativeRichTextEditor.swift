@@ -2850,7 +2850,9 @@
     override func draw(_ dirtyRect: NSRect) {
       if checklistPresentationNeedsRefresh { refreshChecklistPresentation() }
 
-      var selectedBulletPrefixes: [(range: NSRange, glyphs: NSRange, rect: NSRect)] = []
+      var selectedBulletPrefixes: [
+        (range: NSRange, glyphs: NSRange, rect: NSRect, selectionRect: NSRect)
+      ] = []
       if let layoutManager, let textContainer {
         for prefixRange in selectedBulletPrefixRanges() {
           let glyphRange = layoutManager.glyphRange(
@@ -2862,8 +2864,22 @@
             forGlyphRange: glyphRange,
             in: textContainer
           ).offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
-          guard prefixRect.intersects(dirtyRect) else { continue }
-          selectedBulletPrefixes.append((prefixRange, glyphRange, prefixRect))
+          let firstLine = layoutManager.lineFragmentRect(
+            forGlyphAt: glyphRange.location,
+            effectiveRange: nil
+          )
+          let lastLine = layoutManager.lineFragmentRect(
+            forGlyphAt: NSMaxRange(glyphRange) - 1,
+            effectiveRange: nil
+          )
+          let selectionRect = NSRect(
+            x: prefixRect.minX,
+            y: firstLine.minY + textContainerOrigin.y,
+            width: prefixRect.width,
+            height: lastLine.maxY - firstLine.minY
+          )
+          guard selectionRect.intersects(dirtyRect) else { continue }
+          selectedBulletPrefixes.append((prefixRange, glyphRange, prefixRect, selectionRect))
         }
       }
 
@@ -2872,7 +2888,7 @@
         let clippingPath = NSBezierPath(rect: dirtyRect)
         clippingPath.windingRule = .evenOdd
         for prefix in selectedBulletPrefixes {
-          clippingPath.append(NSBezierPath(rect: prefix.rect.intersection(dirtyRect)))
+          clippingPath.append(NSBezierPath(rect: prefix.selectionRect.intersection(dirtyRect)))
         }
         clippingPath.addClip()
       }
@@ -2883,7 +2899,7 @@
         for prefix in selectedBulletPrefixes {
           if drawsBackground {
             backgroundColor.setFill()
-            NSBezierPath(rect: prefix.rect).fill()
+            NSBezierPath(rect: prefix.selectionRect).fill()
           }
           if let background = storage.attribute(
             .backgroundColor,

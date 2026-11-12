@@ -3,6 +3,14 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.5-beta.1] - 2026-11-12
+
+### Fixed
+
+- Bullet selection excludes the marker gutter across the full line height,
+  preventing accent-colored slivers above and below bullets when paragraph
+  spacing is selected.
+
 ## [1.8.4-beta.1] - 2026-11-12
 
 ### Changed
