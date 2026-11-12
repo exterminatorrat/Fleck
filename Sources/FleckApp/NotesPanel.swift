@@ -1110,11 +1110,22 @@
               .frame(minHeight: 80)
               .layoutPriority(1)
             if let error = appState.saveError {
-              Text("Could not save: \(error)")
-                .fleckUIFont(.caption)
-                .foregroundStyle(theme.color(.error))
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
+              HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Could not save: \(error)")
+                  .fleckUIFont(.caption)
+                  .foregroundStyle(theme.color(.error))
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                if appState.canRetryPersistenceSave {
+                  Button("Retry") {
+                    appState.retryPersistenceSave()
+                  }
+                  .buttonStyle(.link)
+                  .controlSize(.small)
+                  .accessibilityIdentifier("save-error-retry-button")
+                  .help("Try saving these changes again")
+                }
+              }
+              .padding(8)
             }
             if let error = appState.noteFileReferenceError {
               Text(error)
@@ -1473,7 +1484,7 @@
           isShowingAgentActivity = true
         }
         Spacer()
-        SaveFeedbackView(status: appState.saveStatus, motion: motion)
+        SaveFeedbackView(presentation: appState.saveFeedback, motion: motion)
         Button {
           backlinkController.toggleDisclosure()
         } label: {
@@ -5458,39 +5469,6 @@
         .scaleEffect(configuration.isPressed ? motion.pressScale : 1)
         .animation(motion.quick, value: configuration.isPressed)
         .onHover { isHovered = $0 }
-    }
-  }
-
-  private struct SaveFeedbackView: View {
-    @Environment(\.fleckThemeSnapshot) private var theme
-    let status: AppState.SaveStatus
-    let motion: AppMotion
-
-    var body: some View {
-      ZStack(alignment: .trailing) {
-        switch status {
-        case .idle:
-          Color.clear
-        case .saving:
-          HStack(spacing: 5) {
-            ProgressView()
-              .controlSize(.mini)
-            Text("Saving")
-              .foregroundStyle(theme.color(.caption))
-          }
-          .id(status)
-          .transition(.opacity)
-        case .saved:
-          Label("Saved", systemImage: "checkmark")
-            .foregroundStyle(theme.color(.caption))
-            .id(status)
-            .transition(.opacity)
-        }
-      }
-      .fleckUIFont(.caption)
-      .frame(width: 62, height: 22, alignment: .trailing)
-      .animation(motion.quick, value: status)
-      .accessibilityElement(children: .combine)
     }
   }
 
