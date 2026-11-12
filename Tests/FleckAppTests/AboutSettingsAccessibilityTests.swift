@@ -105,8 +105,19 @@ func aboutSettingsAccessibilitySurvivesNavigationAndMetadataExpansion(isPackaged
     return nil
   }
   let state = AboutAccessibilityState()
+  let theme = FleckThemeSnapshot.resolve(
+    colorTheme: .monochrome,
+    mode: .light,
+    systemAppearance: .light,
+    reduceTransparency: false,
+    increasedContrast: false
+  )
   let host = NSHostingView(
     rootView: AboutAccessibilityFixture(state: state, identity: identity, updates: updates)
+      .environment(\.fleckThemeSnapshot, theme)
+      .environment(\.colorScheme, theme.colorScheme)
+      .frame(width: 620, height: 700)
+      .background(theme.color(.window))
   )
   let window = NSWindow(
     contentRect: NSRect(x: 0, y: 0, width: 620, height: 700),
@@ -115,6 +126,7 @@ func aboutSettingsAccessibilitySurvivesNavigationAndMetadataExpansion(isPackaged
     defer: false
   )
   window.title = "Synthetic About accessibility fixture"
+  window.appearance = NSAppearance(named: .aqua)
   window.contentView = host
   window.orderFrontRegardless()
   let attribute = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
@@ -141,7 +153,7 @@ func aboutSettingsAccessibilitySurvivesNavigationAndMetadataExpansion(isPackaged
   #expect(collapsed.contains {
     $0.identifier == SettingsSearchTarget.aboutCopyBuildInfo.accessibilityIdentifier
   })
-  #expect(!collapsed.contains { $0.identifier == "settings-about-metadata-content" })
+  #expect(!collapsed.contains { $0.value == identity.copyText })
   let expectedValues: [(String, String)] = isPackaged
     ? [
       ("Product version", "1.0.0-beta.1"),
@@ -165,12 +177,15 @@ func aboutSettingsAccessibilitySurvivesNavigationAndMetadataExpansion(isPackaged
     host.layoutSubtreeIfNeeded()
     expandedElements = try aboutAccessibilityElements(in: host)
     metadata = expandedElements.first {
-      $0.identifier == "settings-about-metadata-content"
+      $0.identifier == SettingsSearchTarget.aboutMetadata.accessibilityIdentifier
+        && $0.role == "AXStaticText"
+        && $0.label == "Full build metadata"
+        && $0.value == identity.copyText
     }
     if metadata != nil { break }
     try await Task.sleep(for: .milliseconds(25))
   }
-  let observed = expandedElements.map { "\($0.role): \($0.identifier) / \($0.label)" }
+  let observed = expandedElements.map { "\($0.role): \($0.identifier) / \($0.label) / \($0.value)" }
     .joined(separator: "\n")
   let content = try #require(
     metadata, "Search must expand and expose full build metadata. Observed:\n\(observed)"
