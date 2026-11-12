@@ -104,7 +104,11 @@ private func agentSetupButtons(in root: NSObject) throws -> [String: Bool] {
     if value("accessibilityRole") as? String == "AXButton",
       let label = value("accessibilityLabel") as? String
     {
-      buttons[label] = (object as? NSAccessibilityProtocol)?.isAccessibilityEnabled() ?? false
+      if let accessibility = object as? NSAccessibilityProtocol {
+        buttons[label] = accessibility.isAccessibilityEnabled()
+      } else if object.responds(to: NSSelectorFromString("isAccessibilityEnabled")) {
+        buttons[label] = (object.value(forKey: "accessibilityEnabled") as? NSNumber)?.boolValue
+      }
     }
     if let children = value("accessibilityChildren") as? [Any] {
       pending.append(contentsOf: NSAccessibility.unignoredChildren(from: children).compactMap {

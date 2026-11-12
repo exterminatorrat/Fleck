@@ -506,6 +506,7 @@
           addButton(for: integration)
         }
       }
+      .accessibilityElement(children: .contain)
       .settingsSearchAnchor(.agentIntegration(integration), request: searchRequest)
     }
 
