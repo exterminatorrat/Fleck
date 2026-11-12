@@ -1343,20 +1343,7 @@
               currentNoteIDs: {
                 Set(appState.workspace.notes.map(\.id))
               },
-              onActivate: { noteID in
-                guard activateNoteAndScope(noteID) else { return }
-                searchController.setActivationFocusRestore {
-                  guard self.visibleSelectedNote?.id == noteID,
-                    let textView = self.editorCommands.textView,
-                    let window = textView.window,
-                    let contentView = window.contentView,
-                    textView.isDescendant(of: contentView)
-                  else { return false }
-                  if window.firstResponder === textView { return true }
-                  _ = window.makeFirstResponder(textView)
-                  return window.firstResponder === textView
-                }
-              },
+              onActivate: activateWorkspaceSearchResult,
               onDismiss: dismissWorkspaceSearch
             )
             .id(searchController.presentationID)
@@ -2023,6 +2010,35 @@
       ) {
         searchController.dismiss()
       }
+    }
+
+    private func activateWorkspaceSearchResult(_ noteID: UUID) {
+      guard activateNoteAndScope(noteID) else { return }
+      let result = searchController.results.first { $0.noteID == noteID }
+      let query = searchController.query
+      searchController.setActivationFocusRestore {
+        self.revealWorkspaceSearchMatch(result, query: query, noteID: noteID)
+      }
+    }
+
+    private func revealWorkspaceSearchMatch(
+      _ result: WorkspaceSearchResult?,
+      query: String,
+      noteID: UUID
+    ) -> Bool {
+      guard let note = visibleSelectedNote, note.id == noteID,
+        let textView = editorCommands.textView,
+        let window = textView.window,
+        let contentView = window.contentView,
+        textView.isDescendant(of: contentView)
+      else { return false }
+      if let range = result?.bodyMatchRange(in: note.body, query: query) {
+        guard editorCommands.isShowingNoteBody(note.body) else { return false }
+        editorCommands.revealNoteBodyRange(range, noteBody: note.body)
+      }
+      if window.firstResponder === textView { return true }
+      _ = window.makeFirstResponder(textView)
+      return window.firstResponder === textView
     }
 
     private var backlinksPopoverPresentation: Binding<Bool> {

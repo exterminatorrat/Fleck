@@ -41,6 +41,27 @@ public struct WorkspaceSearchResult: Equatable, Identifiable, Sendable {
   }
 }
 
+extension WorkspaceSearchResult {
+  public func bodyMatchRange(in body: String, query: String) -> NSRange? {
+    guard match.field == .body,
+      match.location != NSNotFound,
+      match.location >= 0,
+      match.length > 0
+    else { return nil }
+    let foldedQuery = WorkspaceSearchEngine.fold(
+      query.trimmingCharacters(in: .whitespacesAndNewlines)
+    )
+    guard !foldedQuery.isEmpty,
+      let resolved = WorkspaceSearchEngine.FoldedText(body).firstMatch(of: foldedQuery),
+      resolved.location == match.location,
+      resolved.length == match.length
+    else { return nil }
+    let range = NSRange(location: match.location, length: match.length)
+    guard Range(range, in: body) != nil else { return nil }
+    return range
+  }
+}
+
 public struct WorkspaceSearchEngine: Sendable {
   public init() {}
 
@@ -102,13 +123,13 @@ public struct WorkspaceSearchEngine: Sendable {
     let inputIndex: Int
   }
 
-  private struct OriginalMatch {
+  fileprivate struct OriginalMatch {
     let location: Int
     let length: Int
     let characterRange: Range<Int>
   }
 
-  private struct FoldedText {
+  fileprivate struct FoldedText {
     let characters: [Character]
     let utf16Offsets: [Int]
     let folded: String
@@ -261,7 +282,7 @@ public struct WorkspaceSearchEngine: Sendable {
     )
   }
 
-  private static func fold(_ value: String) -> String {
+  fileprivate static func fold(_ value: String) -> String {
     value.folding(
       options: [.caseInsensitive, .diacriticInsensitive],
       locale: Locale(identifier: "en_US_POSIX")
