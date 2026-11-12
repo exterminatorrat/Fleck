@@ -11,6 +11,14 @@ public release log. Packaging unchanged source does not add a changelog entry.
   have been saved, then hide the confirmation after one second. New typing
   resets the confirmation without delaying the existing 350 ms autosave.
 
+## [1.8.7-beta.1] - 2026-11-12
+
+### Fixed
+
+- Menu-bar resize hitboxes keep their directional cursors during native cursor
+  updates and movement between child views, restoring the content cursor when
+  the pointer leaves the resize area.
+
 ## [1.8.6-beta.1] - 2026-11-12
 
 ### Added
