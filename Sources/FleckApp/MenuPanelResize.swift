@@ -1099,7 +1099,6 @@
     }
 
     override func cursorUpdate(with event: NSEvent) {
-      super.cursorUpdate(with: event)
       updateHoverCursor(from: event)
     }
 
@@ -2283,8 +2282,9 @@
     }
 
     private func resetCursor() {
-      guard cursor != nil else { return }
+      guard let ownedCursor = cursor else { return }
       cursor = nil
+      guard NSCursor.current === ownedCursor else { return }
       NSCursor.arrow.set()
     }
 
