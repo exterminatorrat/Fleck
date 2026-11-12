@@ -148,7 +148,8 @@ private final class HostedSaveFeedbackFixture {
   ) {
     let scheduler = SaveFeedbackRevealScheduler()
     self.scheduler = scheduler
-    presentation = SaveFeedbackPresentation(scheduleReveal: scheduler.schedule)
+    let presentation = SaveFeedbackPresentation(scheduleReveal: scheduler.schedule)
+    self.presentation = presentation
     host = NSHostingView(
       rootView: AnyView(
         HStack(spacing: 0) {
