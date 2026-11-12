@@ -125,6 +125,28 @@ struct SavedConfirmationTests {
     #expect(feedback.showsSavedConfirmation)
   }
 
+  @Test func anOlderFailurePreservesTheNewerEditsConfirmation() {
+    let scheduler = ConfirmationScheduler()
+    let feedback = SaveFeedbackPresentation(scheduleConfirmation: scheduler.schedule)
+    feedback.changesScheduled()
+    let older = feedback.writeBegan()
+    feedback.changesScheduled()
+    feedback.writeEnded(older)
+    feedback.settle(.failed)
+
+    scheduler.fire(0)
+    scheduler.fire(1)
+    #expect(feedback.state == .failed)
+    #expect(!feedback.showsSavedConfirmation)
+
+    let newer = feedback.writeBegan()
+    #expect(!feedback.showsSavedConfirmation)
+    feedback.writeEnded(newer)
+    feedback.settle(.saved)
+    #expect(feedback.showsSavedConfirmation)
+    #expect(scheduler.delays == [.milliseconds(1500), .milliseconds(1500), .seconds(1)])
+  }
+
   @Test func aSlowActualWriteTakesPriorityAndConfirmsOnlyWhenItEnds() {
     let reveal = ConfirmationScheduler()
     let confirmation = ConfirmationScheduler()

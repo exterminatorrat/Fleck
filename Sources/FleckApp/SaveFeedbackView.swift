@@ -105,7 +105,6 @@
         showConfirmationIfReady()
       } else {
         if showsSavedConfirmation { showsSavedConfirmation = false }
-        if outcome == .failed { needsConfirmation = false }
       }
     }
 
