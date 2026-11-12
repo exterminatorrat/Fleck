@@ -74,7 +74,7 @@
       return """
         This is a setup request for the Fleck MCP server on the user's Mac. Work only on this Mac, under the same macOS user account as Fleck: the server is a local stdio process started from a local file path, so an agent running in the cloud or on another machine cannot start or reach it.
 
-        Fleck must be running for the server to answer. Fleck manages authentication locally: do not add environment values, authentication headers, or credential files to the client configuration.
+        Fleck must be running for the server to answer. Fleck manages authentication locally. Do not add private authentication data to client configuration, environment variables, headers, or files.
 
         Server name: \(connectionServerName)
         Command: \(ShellArgument.encode(helperPath))
