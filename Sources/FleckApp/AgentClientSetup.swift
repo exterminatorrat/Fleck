@@ -1,6 +1,32 @@
 #if os(macOS)
   import Foundation
 
+  enum AgentIntegrationKind: String, CaseIterable, Identifiable {
+    case codex = "Codex"
+    case claudeCode = "Claude Code"
+    case kimi = "Kimi"
+    case genericCLI = "Generic CLI"
+
+    var id: Self { self }
+
+    var displayName: String { rawValue }
+
+    var description: String {
+      switch self {
+      case .codex:
+        "Connect Codex to explicitly shared notes."
+      case .claudeCode:
+        "Connect Claude Code to explicitly shared notes."
+      case .kimi:
+        "Connect Kimi to explicitly shared notes."
+      case .genericCLI:
+        "Connect another local CLI to explicitly shared notes."
+      }
+    }
+
+    var addButtonTitle: String { "Add \(displayName)" }
+  }
+
   struct AgentClientSetup {
     let installedHelperURL: URL
     let profileID: UUID
