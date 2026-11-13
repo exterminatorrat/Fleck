@@ -200,19 +200,31 @@
       fixedSide: MenuPanelFixedSide
     ) -> MenuPanelResizeHandle? {
       guard bounds.contains(point) else { return nil }
-      let isBottomBand = point.y <= bounds.minY + cornerExtent
-      let isFarCorner: Bool
-      let isFarEdge: Bool
-      switch fixedSide {
-      case .left:
-        isFarCorner = point.x >= bounds.maxX - cornerExtent
-        isFarEdge = point.x >= bounds.maxX - edgeThickness
-      case .right:
-        isFarCorner = point.x <= bounds.minX + cornerExtent
-        isFarEdge = point.x <= bounds.minX + edgeThickness
+      let farEdgeX = fixedSide == .left ? bounds.maxX : bounds.minX
+      let isBottomStrip = point.y <= bounds.minY + edgeThickness
+      let isFarStrip =
+        fixedSide == .left
+        ? point.x >= bounds.maxX - edgeThickness
+        : point.x <= bounds.minX + edgeThickness
+      if isBottomStrip {
+        return abs(point.x - farEdgeX) <= cornerExtent ? .farBottomCorner : .nearBottomCorner
       }
-      if isBottomBand { return isFarCorner ? .farBottomCorner : .nearBottomCorner }
-      return isFarEdge ? .farSide : nil
+      if isFarStrip {
+        return point.y - bounds.minY <= cornerExtent ? .farBottomCorner : .farSide
+      }
+      return nil
+    }
+
+    static func edgeRects(
+      in bounds: CGRect,
+      fixedSide: MenuPanelFixedSide
+    ) -> [CGRect] {
+      guard !bounds.isEmpty else { return [] }
+      let farEdgeX = fixedSide == .left ? bounds.maxX - edgeThickness : bounds.minX
+      return [
+        CGRect(x: farEdgeX, y: bounds.minY, width: edgeThickness, height: bounds.height),
+        CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: edgeThickness),
+      ]
     }
 
     static func proposal(
@@ -1022,12 +1034,8 @@
     private var canResize = false
     private var onCommit: (CGSize) -> Void = { _ in }
     private var cursor: NSCursor?
-    private lazy var leftFixedCornerCursor = diagonalCursor(
-      systemSymbolName: "arrow.up.left.and.arrow.down.right"
-    )
-    private lazy var rightFixedCornerCursor = diagonalCursor(
-      systemSymbolName: "arrow.up.right.and.arrow.down.left"
-    )
+    private lazy var leftFixedCornerCursor = diagonalCursor(rotatedClockwise: true)
+    private lazy var rightFixedCornerCursor = diagonalCursor(rotatedClockwise: false)
     private var activeStatusButtonSource: MenuPanelStatusButtonSourceIdentity?
     private var alignedStatusButtonSource: MenuPanelStatusButtonSourceIdentity?
     private var alignedStatusButtonFrame: CGRect?
@@ -1083,14 +1091,8 @@
     }
 
     private func cursorTrackingRects() -> [CGRect] {
-      guard let fixedSide = alignedFixedSide, !bounds.isEmpty else { return [] }
-      let thickness = MenuPanelResizeGeometry.edgeThickness
-      let corner = MenuPanelResizeGeometry.cornerExtent
-      let farEdgeX = fixedSide == .left ? bounds.maxX - thickness : bounds.minX
-      return [
-        CGRect(x: farEdgeX, y: bounds.minY, width: thickness, height: bounds.height),
-        CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: corner),
-      ]
+      guard let fixedSide = alignedFixedSide else { return [] }
+      return MenuPanelResizeGeometry.edgeRects(in: bounds, fixedSide: fixedSide)
     }
 
     override func mouseMoved(with event: NSEvent) {
@@ -2257,15 +2259,45 @@
       }
     }
 
-    private func diagonalCursor(systemSymbolName: String) -> NSCursor {
-      guard let image = NSImage(
-        systemSymbolName: systemSymbolName,
-        accessibilityDescription: nil
-      ) else { return .crosshair }
-      return NSCursor(
-        image: image,
-        hotSpot: NSPoint(x: image.size.width / 2, y: image.size.height / 2)
+    private func diagonalCursor(rotatedClockwise: Bool) -> NSCursor {
+      let source = NSCursor.resizeLeftRight.image
+      let sourceSize = source.size
+      guard sourceSize.width > 0, sourceSize.height > 0 else { return .resizeLeftRight }
+      let scale: CGFloat = 2
+      let side = (hypot(sourceSize.width, sourceSize.height) + 4).rounded(.up)
+      let pixels = Int(side * scale)
+      guard let representation = NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: pixels,
+        pixelsHigh: pixels,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+      ), let context = NSGraphicsContext(bitmapImageRep: representation)
+      else { return .resizeLeftRight }
+      representation.size = NSSize(width: side, height: side)
+      NSGraphicsContext.saveGraphicsState()
+      NSGraphicsContext.current = context
+      context.cgContext.scaleBy(x: scale, y: scale)
+      context.cgContext.translateBy(x: side / 2, y: side / 2)
+      context.cgContext.rotate(by: (rotatedClockwise ? -45 : 45) * .pi / 180)
+      context.cgContext.translateBy(x: -sourceSize.width / 2, y: -sourceSize.height / 2)
+      source.draw(
+        in: NSRect(origin: .zero, size: sourceSize),
+        from: .zero,
+        operation: .sourceOver,
+        fraction: 1
       )
+      context.flushGraphics()
+      NSGraphicsContext.restoreGraphicsState()
+      let image = NSImage(size: NSSize(width: side, height: side))
+      image.addRepresentation(representation)
+      image.isTemplate = false
+      return NSCursor(image: image, hotSpot: NSPoint(x: side / 2, y: side / 2))
     }
 
     private func setCursor(_ cursor: NSCursor) {
