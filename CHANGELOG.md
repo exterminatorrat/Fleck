@@ -10,6 +10,14 @@ public release log. Packaging unchanged source does not add a changelog entry.
 - Use native double-headed diagonal resize arrows and keep bottom-edge and
   corner resizing within a narrow border strip instead of the note interior.
 
+## [1.8.8-beta.1] - 2026-11-12
+
+### Changed
+
+- Briefly confirm Saved after 1.5 seconds of inactivity once the latest changes
+  have been saved, then hide the confirmation after one second. New typing
+  resets the confirmation without delaying the existing 350 ms autosave.
+
 ## [1.8.7-beta.1] - 2026-11-12
 
 ### Fixed
