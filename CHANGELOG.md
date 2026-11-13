@@ -3,6 +3,31 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.6-beta.1] - 2026-11-12
+
+### Added
+
+- Copy a ready-to-send local MCP setup prompt for Codex, Claude Code, Kimi,
+  Capy and other compatible agents. Fleck prepares its connector and profile
+  automatically while preserving existing access grants and manual setup.
+
+## [1.8.5-beta.1] - 2026-11-12
+
+### Fixed
+
+- Bullet selection excludes the marker gutter across the full line height,
+  preventing accent-colored slivers above and below bullets when paragraph
+  spacing is selected.
+
+## [1.8.4-beta.1] - 2026-11-12
+
+### Changed
+
+- Keep routine autosaves visually quiet without changing the 350 ms debounce.
+  Show Saving only when an actual write lasts more than 800 ms, expose save
+  status through hover and accessibility, and retain persistence errors with
+  a Retry action until saving succeeds.
+
 ## [1.8.3-beta.1] - 2026-11-12
 
 ### Fixed

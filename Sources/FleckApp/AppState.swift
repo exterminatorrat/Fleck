@@ -102,17 +102,24 @@
       increasedContrast: false
     )
     @Published var saveError: String? {
-      didSet { saveErrorGeneration = UUID() }
+      didSet {
+        saveErrorGeneration = UUID()
+        if saveError == nil {
+          saveFeedback.settle(persistenceFeedbackOutcome)
+        }
+      }
     }
     @Published private(set) var selectedNoteFileReferences: [NoteFileReferencePresentation] = []
     @Published private(set) var noteFileReferenceError: String?
     @Published private(set) var startupMigrationError: FleckProductMigrationError?
     @Published private(set) var saveStatus = SaveStatus.idle
+    let saveFeedback: SaveFeedbackPresentation
     @Published private(set) var initialSnapshotSource: LocalStoreSnapshotSource?
     @Published private(set) var trashedNotes: [TrashedNote] = []
     @Published private(set) var latestAgentFeedback: AgentChangeFeedback?
     @Published private(set) var agentProfiles: [AgentIntegrationProfile] = []
     @Published private(set) var cursorSetupStatus = CursorSetupStatus.idle
+    @Published private(set) var agentConnectionPromptStatus = AgentConnectionPromptStatus.idle
     @Published private(set) var agentActivity: [AgentActivityRecord] = []
     @Published private(set) var agentEventSubscriptions: [AgentEventOwnerSummary] = []
     @Published var agentEventMonitoringError: String?
@@ -131,6 +138,7 @@
     private(set) var isAgentWorkspaceAvailable = false
     private(set) var agentCommitProofs: [AgentWorkspaceCommitProof] = []
     private var lastCommittedPersistenceGeneration: UInt64?
+    private var presentationPendingGeneration: UInt64?
     var isPersistenceBlocked: Bool { startupMigrationError != nil }
 
     private let store: LocalStore
@@ -170,6 +178,27 @@
       openURL: { NSWorkspace.shared.open($0) },
       statusChanged: { [weak self] status in
         self?.cursorSetupStatus = status
+      }
+    )
+    private lazy var agentConnectionPromptFlow = AgentConnectionPromptFlow(
+      prepareConnector: { [weak self] in
+        guard let self else { throw CursorSetupFlowError.unavailable }
+        return try await self.prepareCursorHelper()
+      },
+      loadProfiles: { [weak self] in
+        guard let self, await self.refreshAgentProfiles() else {
+          throw CursorSetupFlowError.unavailable
+        }
+        return self.agentProfiles
+      },
+      createProfile: { [weak self] integration in
+        guard let self,
+          let profile = await self.addAgentProfile(named: integration.displayName)
+        else { throw CursorSetupFlowError.unavailable }
+        return profile
+      },
+      statusChanged: { [weak self] status in
+        self?.agentConnectionPromptStatus = status
       }
     )
     private struct NoteAccessTransactionLock {
@@ -215,6 +244,7 @@
     init(
       store: LocalStore? = nil,
       saveOperation: SaveOperation? = nil,
+      saveFeedback: SaveFeedbackPresentation? = nil,
       beforeSaveOperation: BeforeSaveOperation? = nil,
       loadTrashOperation: LoadTrashOperation? = nil,
       restoreOperation: RestoreOperation? = nil,
@@ -265,6 +295,7 @@
             generation: generation
           )
         }
+      self.saveFeedback = saveFeedback ?? SaveFeedbackPresentation()
       self.beforeSaveOperation = beforeSaveOperation
       self.loadTrashOperation =
         loadTrashOperation ?? {
@@ -544,6 +575,20 @@
     private func canClearSaveError(ownedBy owner: SaveErrorOwner) -> Bool {
       saveError == nil
         || (saveErrorOwner == owner && saveErrorOwnerGeneration == saveErrorGeneration)
+    }
+
+    var canRetryPersistenceSave: Bool {
+      saveError != nil && canClearSaveError(ownedBy: .persistence)
+    }
+
+    func retryPersistenceSave() {
+      guard canRetryPersistenceSave else { return }
+      _ = saveNow()
+    }
+
+    private var persistenceFeedbackOutcome: SaveFeedbackState {
+      if canRetryPersistenceSave { return .failed }
+      return presentationPendingGeneration == nil ? .saved : .pending
     }
 
     @discardableResult
@@ -2341,6 +2386,9 @@
       saveStatusResetTask = nil
       await waitForScheduledPersistenceTasks()
       saveStatus = .idle
+      presentationPendingGeneration = nil
+      saveFeedback.reset()
+      saveFeedback.settle(persistenceFeedbackOutcome)
     }
 
     private func finishScheduledPersistenceTask() {
@@ -2438,6 +2486,8 @@
               signpostState
             )
           }
+          let feedbackWriteID = saveFeedback.writeBegan()
+          defer { saveFeedback.writeEnded(feedbackWriteID) }
           result = try await saveOperation(
             snapshot.workspace,
             snapshot.preferences,
@@ -2491,6 +2541,11 @@
         return
       }
       lastCommittedPersistenceGeneration = generation
+      if let pendingGeneration = presentationPendingGeneration,
+        generation >= pendingGeneration
+      {
+        presentationPendingGeneration = nil
+      }
     }
 
     func flushPendingPersistenceForAgent() async throws {
@@ -2643,6 +2698,7 @@
       profileID: UUID? = nil,
       expectedCapabilities: AgentProfileCapabilities? = nil
     ) async {
+      guard agentConnectionPromptStatus != .preparing else { return }
       guard isAgentWorkspaceAvailable else {
         if !cursorSetupStatus.isInProgress {
           cursorSetupStatus = .failure
@@ -2671,6 +2727,32 @@
       }
     }
 
+    func prepareAgentConnectionPrompt(
+      for integration: AgentIntegrationKind,
+      profileID: UUID? = nil,
+      expectedCapabilities: AgentProfileCapabilities? = nil
+    ) async -> String? {
+      guard isAgentWorkspaceAvailable, !cursorSetupStatus.isInProgress else {
+        return nil
+      }
+      return await agentConnectionPromptFlow.prepare(
+        for: integration,
+        profileID: profileID
+      ) { [weak self] profile, isNewProfile in
+        guard let self, self.isAgentWorkspaceAvailable,
+          self.agentProfiles.contains(where: { $0.id == profile.id && !$0.isRevoked }),
+          let current = self.capabilityProfile(profile.id)
+        else { return false }
+        if isNewProfile {
+          return current.grantRevision == 0
+            && current.allowedCapabilities.isEmpty
+            && current.grants.isEmpty
+            && !current.allowsEventObservation
+        }
+        return profileID == profile.id && expectedCapabilities == current
+      }
+    }
+
     private func prepareCursorHelper() async throws -> URL {
       await refreshAgentConnectorStatus()
       guard !Task.isCancelled else { throw CancellationError() }
@@ -2680,14 +2762,14 @@
       guard !Task.isCancelled else { throw CancellationError() }
       guard isAgentConnectorInstalled else {
         agentCleanupError =
-          "Could not prepare the local Agent Connector for Cursor. Use the manual setup below."
+          "Could not prepare the local Agent Connector. Use the manual setup below."
         throw CursorSetupFlowError.unavailable
       }
       do {
         return try AgentBridgeInstaller.live().installedHelperURL
       } catch {
         agentCleanupError =
-          "Could not prepare the local Agent Connector for Cursor. Use the manual setup below."
+          "Could not prepare the local Agent Connector. Use the manual setup below."
         throw CursorSetupFlowError.unavailable
       }
     }
@@ -2986,10 +3068,13 @@
     private func markSaveStarted() {
       saveStatusResetTask?.cancel()
       saveStatus = .saving
+      presentationPendingGeneration = persistenceGeneration
+      saveFeedback.changesScheduled()
     }
 
     private func markSaveSucceeded() {
       saveStatus = .saved
+      saveFeedback.settle(persistenceFeedbackOutcome)
       saveStatusResetTask?.cancel()
       scheduledPersistenceTaskCount += 1
       saveStatusResetTask = Task {
@@ -3002,6 +3087,7 @@
 
     private func markSaveFailed() {
       resetSaveStatus()
+      saveFeedback.settle(persistenceFeedbackOutcome)
     }
 
     private func resetSaveStatus() {
