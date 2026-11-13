@@ -1025,8 +1025,9 @@ import Testing
   #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 1, y: 1), in: bounds, fixedSide: .left) == .nearBottomCorner)
   #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 1, y: 200), in: bounds, fixedSide: .left) == nil)
   #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 300, y: 1), in: bounds, fixedSide: .left) == .nearBottomCorner)
-  #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 300, y: 18), in: bounds, fixedSide: .left) == .nearBottomCorner)
-  #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 300, y: 19), in: bounds, fixedSide: .left) == nil)
+  #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 300, y: 7), in: bounds, fixedSide: .left) == .nearBottomCorner)
+  #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 300, y: 8), in: bounds, fixedSide: .left) == nil)
+  #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 300, y: 18), in: bounds, fixedSide: .left) == nil)
   #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 1, y: 1), in: bounds, fixedSide: .right) == .farBottomCorner)
   #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 599, y: 1), in: bounds, fixedSide: .right) == .nearBottomCorner)
   #expect(MenuPanelResizeGeometry.handle(at: CGPoint(x: 300, y: 1), in: bounds, fixedSide: .right) == .nearBottomCorner)
@@ -1034,6 +1035,11 @@ import Testing
 
 @Test func resizeHitTestingUsesContiguousBottomBandAndSevenPointSideEdges() {
   let bounds = CGRect(x: 0, y: 0, width: 600, height: 430)
+
+  #expect(!MenuPanelResizeHandle.nearBottomCorner.changesWidth)
+  #expect(MenuPanelResizeHandle.nearBottomCorner.changesHeight)
+  #expect(MenuPanelResizeHandle.farBottomCorner.changesWidth)
+  #expect(MenuPanelResizeHandle.farBottomCorner.changesHeight)
 
   for fixedSide in [MenuPanelFixedSide.left, .right] {
     func nearX(_ distance: CGFloat) -> CGFloat {
@@ -1043,81 +1049,101 @@ import Testing
       fixedSide == .left ? bounds.maxX - distance : bounds.minX + distance
     }
 
-    for y in [CGFloat(7), 8, 18] {
-      for distance in [CGFloat(7), 8, 18] {
-        #expect(
-          MenuPanelResizeGeometry.handle(
-            at: CGPoint(x: nearX(distance), y: y),
-            in: bounds,
-            fixedSide: fixedSide
-          ) == .nearBottomCorner
-        )
-        #expect(
-          MenuPanelResizeGeometry.handle(
-            at: CGPoint(x: farX(distance), y: y),
-            in: bounds,
-            fixedSide: fixedSide
-          ) == .farBottomCorner
-        )
-      }
-      #expect(
-        MenuPanelResizeGeometry.handle(
-          at: CGPoint(x: nearX(19), y: y),
-          in: bounds,
-          fixedSide: fixedSide
-        ) == .nearBottomCorner
-      )
-      #expect(
-        MenuPanelResizeGeometry.handle(
-          at: CGPoint(x: farX(19), y: y),
-          in: bounds,
-          fixedSide: fixedSide
-        ) == .nearBottomCorner
-      )
-      #expect(
-        MenuPanelResizeGeometry.handle(
-          at: CGPoint(x: bounds.midX, y: y),
-          in: bounds,
-          fixedSide: fixedSide
-        ) == .nearBottomCorner
-      )
-    }
-
     #expect(
       MenuPanelResizeGeometry.handle(
-        at: CGPoint(x: farX(7), y: 18),
+        at: CGPoint(x: bounds.midX, y: bounds.minY + 7),
+        in: bounds,
+        fixedSide: fixedSide
+      ) == .nearBottomCorner
+    )
+    #expect(
+      MenuPanelResizeGeometry.handle(
+        at: CGPoint(x: nearX(3), y: bounds.minY + 7),
+        in: bounds,
+        fixedSide: fixedSide
+      ) == .nearBottomCorner
+    )
+    #expect(
+      MenuPanelResizeGeometry.handle(
+        at: CGPoint(x: farX(3), y: bounds.minY + 7),
         in: bounds,
         fixedSide: fixedSide
       ) == .farBottomCorner
     )
     #expect(
       MenuPanelResizeGeometry.handle(
-        at: CGPoint(x: farX(7), y: 19),
+        at: CGPoint(x: farX(18), y: bounds.minY + 7),
+        in: bounds,
+        fixedSide: fixedSide
+      ) == .farBottomCorner
+    )
+    #expect(
+      MenuPanelResizeGeometry.handle(
+        at: CGPoint(x: farX(19), y: bounds.minY + 7),
+        in: bounds,
+        fixedSide: fixedSide
+      ) == .nearBottomCorner
+    )
+
+    #expect(
+      MenuPanelResizeGeometry.handle(
+        at: CGPoint(x: bounds.midX, y: bounds.minY + 8),
+        in: bounds,
+        fixedSide: fixedSide
+      ) == nil
+    )
+    #expect(
+      MenuPanelResizeGeometry.handle(
+        at: CGPoint(x: nearX(3), y: bounds.minY + 8),
+        in: bounds,
+        fixedSide: fixedSide
+      ) == nil
+    )
+    #expect(
+      MenuPanelResizeGeometry.handle(
+        at: CGPoint(x: farX(3), y: bounds.minY + 18),
+        in: bounds,
+        fixedSide: fixedSide
+      ) == .farBottomCorner
+    )
+    #expect(
+      MenuPanelResizeGeometry.handle(
+        at: CGPoint(x: farX(3), y: bounds.minY + 19),
         in: bounds,
         fixedSide: fixedSide
       ) == .farSide
     )
-    for distance in [CGFloat(8), 18, 19] {
-      #expect(
-        MenuPanelResizeGeometry.handle(
-          at: CGPoint(x: farX(distance), y: 19),
-          in: bounds,
-          fixedSide: fixedSide
-        ) == nil
-      )
-    }
-    for distance in [CGFloat(7), 8, 18, 19] {
-      #expect(
-        MenuPanelResizeGeometry.handle(
-          at: CGPoint(x: nearX(distance), y: 19),
-          in: bounds,
-          fixedSide: fixedSide
-        ) == nil
-      )
-    }
     #expect(
       MenuPanelResizeGeometry.handle(
-        at: CGPoint(x: bounds.midX, y: 19),
+        at: CGPoint(x: farX(8), y: bounds.minY + 18),
+        in: bounds,
+        fixedSide: fixedSide
+      ) == nil
+    )
+    #expect(
+      MenuPanelResizeGeometry.handle(
+        at: CGPoint(x: farX(10), y: bounds.minY + 10),
+        in: bounds,
+        fixedSide: fixedSide
+      ) == nil
+    )
+    #expect(
+      MenuPanelResizeGeometry.handle(
+        at: CGPoint(x: nearX(10), y: bounds.minY + 10),
+        in: bounds,
+        fixedSide: fixedSide
+      ) == nil
+    )
+    #expect(
+      MenuPanelResizeGeometry.handle(
+        at: CGPoint(x: farX(7), y: bounds.midY),
+        in: bounds,
+        fixedSide: fixedSide
+      ) == .farSide
+    )
+    #expect(
+      MenuPanelResizeGeometry.handle(
+        at: CGPoint(x: nearX(7), y: bounds.midY),
         in: bounds,
         fixedSide: fixedSide
       ) == nil
@@ -2233,7 +2259,7 @@ private final class MenuPanelNativeRoundingWindow: NSWindow {
   }
   await settleResizeHost(host)
 
-  let start = CGPoint(x: 300, y: 8)
+  let start = CGPoint(x: 300, y: 6)
   guard try await requireResizeBeginReadiness(host, at: start, in: window) else { return }
   sendResizeMouseEvent(.leftMouseDown, at: start, to: window, number: 13_001)
   try #require(controller.isTracking)
@@ -3792,6 +3818,382 @@ private final class MenuPanelNativeRoundingWindow: NSWindow {
   #expect(host.cursor(for: .nearBottomCorner, fixedSide: .right) === NSCursor.resizeUpDown)
 }
 
+@Test @MainActor func menuPanelHoverResizeCursorFollowsEdgeOrientationAndFixedSide() async throws {
+  let screen = try #require(NSScreen.main)
+  for requestedSide in [MenuPanelFixedSide.left, .right] {
+    let fixture = await makeResizeCursorHoverFixture(requestedSide: requestedSide, screen: screen)
+    defer { fixture.tearDown() }
+    #expect(fixture.fixedSide == requestedSide)
+    for expectation in fixture.hoverExpectations {
+      #expect(
+        fixture.host.usableHandle(
+          at: expectation.point,
+          in: fixture.window,
+          fixedSide: requestedSide
+        ) == expectation.handle
+      )
+      NSCursor.arrow.set()
+      fixture.hover(at: expectation.point)
+      #expect(
+        NSCursor.current === expectation.cursor,
+        "\(expectation.handle) hover on \(requestedSide)"
+      )
+    }
+  }
+}
+
+@Test @MainActor func menuPanelDescendantTrackingExitInsideBandKeepsResizeCursor() async throws {
+  let screen = try #require(NSScreen.main)
+  let fixture = await makeResizeCursorHoverFixture(requestedSide: .right, screen: screen)
+  defer { fixture.tearDown() }
+
+  NSCursor.arrow.set()
+  fixture.hover(at: fixture.sidePoint)
+  try #require(NSCursor.current === NSCursor.resizeLeftRight)
+
+  fixture.exit(at: fixture.sidePoint)
+  #expect(NSCursor.current === NSCursor.resizeLeftRight)
+
+  fixture.exit(at: fixture.contentPoint)
+  #expect(NSCursor.current === NSCursor.arrow)
+}
+
+@Test @MainActor func menuPanelCursorUpdateThroughAppKitLifecycleSetsBandCursorOnly() async throws {
+  let screen = try #require(NSScreen.main)
+  let fixture = await makeResizeCursorHoverFixture(requestedSide: .left, screen: screen)
+  defer { fixture.tearDown() }
+
+  let bandEvent = try #require(fixture.cursorUpdateEvent(at: fixture.sidePoint))
+  NSCursor.arrow.set()
+  fixture.host.cursorUpdate(with: bandEvent)
+  #expect(NSCursor.current === NSCursor.resizeLeftRight)
+
+  let contentEvent = try #require(fixture.cursorUpdateEvent(at: fixture.contentPoint))
+  fixture.host.cursorUpdate(with: contentEvent)
+  #expect(NSCursor.current === NSCursor.arrow)
+
+  NSCursor.iBeam.set()
+  fixture.host.cursorUpdate(with: contentEvent)
+  #expect(NSCursor.current === NSCursor.iBeam)
+}
+
+@Test @MainActor func menuPanelHostRegistersCursorUpdateTrackingForTheBand() async throws {
+  let screen = try #require(NSScreen.main)
+  let fixture = await makeResizeCursorHoverFixture(requestedSide: .right, screen: screen)
+  defer { fixture.tearDown() }
+
+  fixture.host.updateTrackingAreas()
+  #expect(
+    fixture.host.trackingAreas.contains { area in
+      area.options.contains(.cursorUpdate) && area.options.contains(.mouseEnteredAndExited)
+        && area.options.contains(.activeInKeyWindow)
+    }
+  )
+}
+
+@Test @MainActor func menuPanelHoverCursorRestoresForDisabledBandAndUninstall() async throws {
+  let screen = try #require(NSScreen.main)
+  let fixture = await makeResizeCursorHoverFixture(requestedSide: .left, screen: screen)
+  defer { fixture.tearDown() }
+
+  NSCursor.arrow.set()
+  fixture.hover(at: fixture.sidePoint)
+  try #require(NSCursor.current === NSCursor.resizeLeftRight)
+
+  fixture.setCanResize(false)
+  fixture.hover(at: fixture.sidePoint)
+  #expect(NSCursor.current === NSCursor.arrow)
+
+  fixture.setCanResize(true)
+  fixture.hover(at: fixture.sidePoint)
+  #expect(NSCursor.current === NSCursor.resizeLeftRight)
+
+  fixture.hover(at: fixture.contentPoint)
+  #expect(NSCursor.current === NSCursor.arrow)
+
+  fixture.hover(at: fixture.sidePoint)
+  try #require(NSCursor.current === NSCursor.resizeLeftRight)
+
+  fixture.host.uninstall()
+  #expect(NSCursor.current === NSCursor.arrow)
+}
+
+@Test @MainActor func menuPanelHoverYieldsToEnabledControlsButKeepsDisabledBands() async throws {
+  let screen = try #require(NSScreen.main)
+  let fixture = await makeResizeCursorHoverFixture(requestedSide: .left, screen: screen)
+  defer { fixture.tearDown() }
+
+  let control = NSButton(
+    frame: CGRect(
+      x: fixture.bounds.maxX - 20,
+      y: fixture.bounds.midY - 20,
+      width: 20,
+      height: 40
+    )
+  )
+  control.isEnabled = true
+  fixture.root.addSubview(control)
+
+  NSCursor.arrow.set()
+  fixture.hover(at: fixture.sidePoint)
+  #expect(NSCursor.current === NSCursor.arrow)
+
+  control.isEnabled = false
+  fixture.hover(at: fixture.sidePoint)
+  #expect(NSCursor.current === NSCursor.resizeLeftRight)
+}
+
+@Test @MainActor func menuPanelHoverCursorMatchesTheSevenPointRimBoundaries() async throws {
+  let screen = try #require(NSScreen.main)
+  for requestedSide in [MenuPanelFixedSide.left, .right] {
+    let fixture = await makeResizeCursorHoverFixture(requestedSide: requestedSide, screen: screen)
+    defer { fixture.tearDown() }
+    let bounds = fixture.bounds
+    let inward: (CGFloat) -> CGFloat = { distance in
+      requestedSide == .left ? bounds.maxX - distance : bounds.minX + distance
+    }
+    let cases: [(point: CGPoint, handle: MenuPanelResizeHandle?)] = [
+      (CGPoint(x: bounds.midX, y: bounds.minY + 6), .nearBottomCorner),
+      (CGPoint(x: bounds.midX, y: bounds.minY + 9), nil),
+      (CGPoint(x: inward(3), y: bounds.minY + 6), .farBottomCorner),
+      (CGPoint(x: inward(3), y: bounds.minY + 10), .farBottomCorner),
+      (CGPoint(x: inward(3), y: bounds.minY + 20), .farSide),
+      (CGPoint(x: inward(10), y: bounds.minY + 10), nil),
+      (CGPoint(x: inward(3), y: bounds.midY), .farSide),
+    ]
+    for entry in cases {
+      #expect(
+        MenuPanelResizeGeometry.handle(
+          at: entry.point,
+          in: bounds,
+          fixedSide: requestedSide
+        ) == entry.handle
+      )
+      #expect(
+        fixture.host.usableHandle(
+          at: entry.point,
+          in: fixture.window,
+          fixedSide: requestedSide
+        ) == entry.handle
+      )
+      NSCursor.arrow.set()
+      fixture.hover(at: entry.point)
+      if let handle = entry.handle {
+        #expect(
+          NSCursor.current === fixture.host.cursor(for: handle, fixedSide: requestedSide)
+        )
+      } else {
+        #expect(NSCursor.current === NSCursor.arrow)
+      }
+    }
+  }
+}
+
+@Test @MainActor func menuPanelDiagonalCornerCursorsRotateNativeArtwork() throws {
+  let host = MenuPanelResizeHostView(controller: MenuPanelResizeController())
+  let left = host.cursor(for: .farBottomCorner, fixedSide: .left)
+  let right = host.cursor(for: .farBottomCorner, fixedSide: .right)
+  let native = NSCursor.resizeLeftRight.image
+
+  #expect(left !== right)
+  #expect(left.image !== right.image)
+  for cursor in [left, right] {
+    #expect(!cursor.image.isTemplate)
+    #expect(cursor.image.size.width == cursor.image.size.height)
+    #expect(cursor.image.size.width >= hypot(native.size.width, native.size.height))
+    #expect(
+      cursor.hotSpot
+        == CGPoint(
+          x: cursor.image.size.width / 2,
+          y: cursor.image.size.height / 2
+        )
+    )
+  }
+
+  let leftArtwork = try #require(cornerCursorArtwork(left))
+  let rightArtwork = try #require(cornerCursorArtwork(right))
+  for artwork in [leftArtwork, rightArtwork] {
+    #expect(artwork.dark > 0)
+    #expect(artwork.light > 0)
+  }
+  #expect(leftArtwork.covariance > 0)
+  #expect(rightArtwork.covariance < 0)
+  #expect(cornerCursorMismatch(leftArtwork.pixels, rightArtwork.pixels) > 0.05)
+  #expect(cornerCursorMirrorMismatch(leftArtwork.pixels, rightArtwork.pixels) < 0.2)
+
+  if let captureDirectory = ProcessInfo.processInfo.environment["FLECK_SEARCH_TEST_CAPTURE_DIR"] {
+    let directory = URL(fileURLWithPath: captureDirectory, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    for (side, cursor) in [("left", left), ("right", right)] {
+      for (appearance, background) in [("light", NSColor.white), ("dark", NSColor.black)] {
+        let data = try #require(cornerCursorPreviewPNG(cursor, background: background))
+        try data.write(
+          to: directory.appendingPathComponent(
+            "menu-panel-resize-corner-\(side)-\(appearance).png"
+          )
+        )
+      }
+    }
+  }
+}
+
+@Test(
+  .enabled(if: ProcessInfo.processInfo.environment["FLECK_SEARCH_TEST_CAPTURE_DIR"] != nil)
+)
+@MainActor
+func menuPanelResizeCursorProbeTracksTheRealPointer() async throws {
+  let capturePath = try #require(
+    ProcessInfo.processInfo.environment["FLECK_SEARCH_TEST_CAPTURE_DIR"]
+  )
+  let screen = try #require(NSScreen.main)
+  try #require(
+    NSApplication.shared.activationPolicy() == .regular,
+    "probe requires the AppKit test host's regular activation policy"
+  )
+  for (requestedSide, eventNumber) in [
+    (MenuPanelFixedSide.left, 40_000), (.right, 50_000),
+  ] {
+    try await runMenuPanelResizeCursorProbe(
+      requestedSide: requestedSide,
+      capturePath: capturePath,
+      screen: screen,
+      eventNumber: eventNumber
+    )
+  }
+}
+
+@MainActor
+private func runMenuPanelResizeCursorProbe(
+  requestedSide: MenuPanelFixedSide,
+  capturePath: String,
+  screen: NSScreen,
+  eventNumber: Int
+) async throws {
+  let fixture = await makeResizeCursorHoverFixture(
+    requestedSide: requestedSide,
+    screen: screen,
+    eventNumber: eventNumber
+  )
+  defer { fixture.tearDown() }
+
+  let sideName = requestedSide == .left ? "left" : "right"
+  let directory = URL(fileURLWithPath: capturePath, isDirectory: true)
+  try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+  let readyURL = directory.appendingPathComponent(
+    "menu-panel-resize-cursor-probe-\(sideName)-ready.json"
+  )
+  let doneURL = directory.appendingPathComponent(
+    "menu-panel-resize-cursor-probe-\(sideName)-done.json"
+  )
+  let resultURL = directory.appendingPathComponent(
+    "menu-panel-resize-cursor-probe-\(sideName)-result.json"
+  )
+
+  let activationDeadline = ContinuousClock.now + .seconds(2)
+  while ContinuousClock.now < activationDeadline,
+    !(NSApplication.shared.isActive && fixture.window.isKeyWindow)
+  {
+    NSApplication.shared.activate(ignoringOtherApps: true)
+    fixture.window.makeKeyAndOrderFront(nil)
+    try await Task.sleep(for: .milliseconds(50))
+  }
+  try #require(NSApplication.shared.isActive, "probe host never became the active app")
+  try #require(fixture.window.isKeyWindow, "probe window never became key")
+  await settleResizeHost(fixture.host)
+
+  let bounds = fixture.bounds
+  let primaryHeight = NSScreen.screens.first?.frame.maxY ?? screen.frame.maxY
+  let hostPoints = [
+    ("side", fixture.sidePoint, fixture.host.cursor(for: .farSide, fixedSide: requestedSide)),
+    (
+      "bottom",
+      CGPoint(x: bounds.midX, y: bounds.minY + 2),
+      fixture.host.cursor(for: .nearBottomCorner, fixedSide: requestedSide)
+    ),
+    (
+      "corner",
+      CGPoint(x: fixture.sidePoint.x, y: bounds.minY + 2),
+      fixture.host.cursor(for: .farBottomCorner, fixedSide: requestedSide)
+    ),
+    ("belowStrip", CGPoint(x: bounds.midX, y: bounds.minY + 9), NSCursor.arrow),
+  ]
+  let probes = hostPoints.map { entry in
+    (
+      id: entry.0,
+      screenPoint: fixture.window.convertPoint(
+        toScreen: fixture.host.convert(entry.1, to: nil)
+      ),
+      cursor: entry.2
+    )
+  }
+  let ready: [String: Any] = [
+    "windowNumber": fixture.window.windowNumber,
+    "windowFrame": resizeProbeRect(fixture.window.frame),
+    "fixedSide": sideName,
+    "coordinateSpace": "cocoaScreenBottomLeft",
+    "applicationIsActive": NSApplication.shared.isActive,
+    "windowIsKey": fixture.window.isKeyWindow,
+    "doneFile": doneURL.path,
+    "resultFile": resultURL.path,
+    "points": probes.map { probe -> [String: Any] in
+      [
+        "id": probe.id,
+        "x": probe.screenPoint.x,
+        "y": probe.screenPoint.y,
+        "topLeftY": primaryHeight - probe.screenPoint.y,
+        "expectedCursor": resizeProbeCursorName(probe.cursor, in: fixture),
+      ]
+    },
+  ]
+  try JSONSerialization.data(withJSONObject: ready, options: [.prettyPrinted, .sortedKeys])
+    .write(to: readyURL)
+
+  var observed: [String: NSCursor] = [:]
+  var doneSince: ContinuousClock.Instant?
+  let deadline = ContinuousClock.now + .seconds(60)
+  while ContinuousClock.now < deadline {
+    let location = NSEvent.mouseLocation
+    for probe in probes {
+      let dx = location.x - probe.screenPoint.x
+      let dy = location.y - probe.screenPoint.y
+      if dx * dx + dy * dy <= 1 {
+        observed[probe.id] = NSCursor.current
+      }
+    }
+    if FileManager.default.fileExists(atPath: doneURL.path) {
+      if let firstSeen = doneSince {
+        if ContinuousClock.now - firstSeen > .seconds(1) { break }
+      } else {
+        doneSince = ContinuousClock.now
+      }
+    }
+    try await Task.sleep(for: .milliseconds(50))
+  }
+
+  let result: [String: Any] = [
+    "fixedSide": sideName,
+    "samples": probes.map { probe -> [String: Any] in
+      [
+        "id": probe.id,
+        "expectedCursor": resizeProbeCursorName(probe.cursor, in: fixture),
+        "observedCursor": observed[probe.id].map {
+          resizeProbeCursorName($0, in: fixture)
+        } ?? "unsampled",
+      ]
+    },
+  ]
+  try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys])
+    .write(to: resultURL)
+
+  for probe in probes {
+    let cursor = try #require(observed[probe.id], "no real pointer sample at \(probe.id)")
+    #expect(
+      cursor === probe.cursor,
+      "\(sideName) \(probe.id) resolved \(resizeProbeCursorName(cursor, in: fixture))"
+    )
+  }
+}
+
 @Test @MainActor func menuPanelHostedLiveDragDefersDisplayButReleaseAndCancelDoNot() async throws {
   let screen = try #require(NSScreen.main)
   let buttonFrame = CGRect(
@@ -4065,6 +4467,296 @@ private final class CountingSubviewReadsView: NSView {
 }
 
 @MainActor
+private final class MenuPanelKeyCapableWindow: NSWindow {
+  override var canBecomeKey: Bool { true }
+}
+
+@MainActor
+private final class ResizeCursorHoverFixture {
+  let root: NSView
+  let window: NSWindow
+  let host: MenuPanelResizeHostView
+  let controller: MenuPanelResizeController
+  let geometryStore: MenuPanelGeometryStore
+  let statusButton: PublicStatusButtonFixture
+  let fixedSide: MenuPanelFixedSide
+  let preferredSize: CGSize
+  private var eventNumber: Int
+  private var isTornDown = false
+
+  init(
+    root: NSView,
+    window: NSWindow,
+    host: MenuPanelResizeHostView,
+    controller: MenuPanelResizeController,
+    geometryStore: MenuPanelGeometryStore,
+    statusButton: PublicStatusButtonFixture,
+    fixedSide: MenuPanelFixedSide,
+    preferredSize: CGSize,
+    eventNumber: Int
+  ) {
+    self.root = root
+    self.window = window
+    self.host = host
+    self.controller = controller
+    self.geometryStore = geometryStore
+    self.statusButton = statusButton
+    self.fixedSide = fixedSide
+    self.preferredSize = preferredSize
+    self.eventNumber = eventNumber
+  }
+
+  var bounds: CGRect { host.bounds }
+
+  var sidePoint: CGPoint {
+    CGPoint(x: fixedSide == .left ? bounds.maxX - 2 : bounds.minX + 2, y: bounds.midY)
+  }
+
+  var contentPoint: CGPoint {
+    CGPoint(x: bounds.midX, y: bounds.midY)
+  }
+
+  var hoverExpectations: [(point: CGPoint, handle: MenuPanelResizeHandle, cursor: NSCursor)] {
+    [
+      (CGPoint(x: sidePoint.x, y: bounds.midY), .farSide, NSCursor.resizeLeftRight),
+      (CGPoint(x: bounds.midX, y: bounds.minY + 2), .nearBottomCorner, NSCursor.resizeUpDown),
+      (
+        CGPoint(x: sidePoint.x, y: bounds.minY + 2),
+        .farBottomCorner,
+        host.cursor(for: .farBottomCorner, fixedSide: fixedSide)
+      ),
+    ]
+  }
+
+  func hover(at point: CGPoint) {
+    eventNumber += 1
+    sendResizeMouseEvent(.mouseMoved, at: windowPoint(point), to: window, number: eventNumber)
+  }
+
+  func exit(at point: CGPoint) {
+    eventNumber += 1
+    sendResizeMouseEvent(.mouseExited, at: windowPoint(point), to: window, number: eventNumber)
+  }
+
+  func cursorUpdateEvent(at point: CGPoint) -> NSEvent? {
+    eventNumber += 1
+    return makeResizeMouseEvent(
+      .mouseMoved,
+      at: windowPoint(point),
+      to: window,
+      number: eventNumber
+    )
+  }
+
+  func setCanResize(_ canResize: Bool) {
+    host.configure(
+      geometryStore: geometryStore,
+      preferredSize: preferredSize,
+      canResize: canResize,
+      onCommit: { _ in }
+    )
+  }
+
+  func tearDown() {
+    guard !isTornDown else { return }
+    isTornDown = true
+    host.uninstall()
+    window.contentView = nil
+    window.orderOut(nil)
+    NSCursor.arrow.set()
+  }
+
+  private func windowPoint(_ point: CGPoint) -> CGPoint {
+    host.convert(point, to: nil)
+  }
+}
+
+@MainActor
+private func makeResizeCursorHoverFixture(
+  requestedSide: MenuPanelFixedSide,
+  screen: NSScreen,
+  eventNumber: Int = 30_000
+) async -> ResizeCursorHoverFixture {
+  let initialFrame = CGRect(
+    x: (screen.visibleFrame.midX - 300).rounded(),
+    y: (screen.visibleFrame.midY - 215).rounded(),
+    width: 600,
+    height: 430
+  )
+  let buttonFrame = CGRect(
+    x: requestedSide == .left ? initialFrame.minX : initialFrame.maxX - 34,
+    y: initialFrame.maxY + 20,
+    width: 34,
+    height: 22
+  )
+  let statusButton = PublicStatusButtonFixture(screenFrame: buttonFrame)
+  let geometryStore = MenuPanelGeometryStore(windows: { [statusButton.window] })
+  let controller = MenuPanelResizeController()
+  let host = MenuPanelResizeHostView(controller: controller)
+  host.frame = CGRect(origin: .zero, size: initialFrame.size)
+  host.autoresizingMask = [.width, .height]
+  host.configure(
+    geometryStore: geometryStore,
+    preferredSize: initialFrame.size,
+    canResize: true,
+    onCommit: { _ in }
+  )
+  let root = NSView(frame: CGRect(origin: .zero, size: initialFrame.size))
+  root.addSubview(host)
+  let window = MenuPanelKeyCapableWindow(
+    contentRect: initialFrame,
+    styleMask: .borderless,
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = root
+  window.orderFront(nil)
+  host.installIfNeeded()
+  await settleResizeHost(host)
+  let statusLabelFrame = geometryStore.cachedStatusButton?.screenFrame ?? buttonFrame
+  let fixedSide =
+    MenuPanelResizeGeometry.anchoredSide(
+      panelFrame: window.frame,
+      statusLabelFrame: statusLabelFrame
+    ) ?? requestedSide
+  return ResizeCursorHoverFixture(
+    root: root,
+    window: window,
+    host: host,
+    controller: controller,
+    geometryStore: geometryStore,
+    statusButton: statusButton,
+    fixedSide: fixedSide,
+    preferredSize: initialFrame.size,
+    eventNumber: eventNumber
+  )
+}
+
+private struct CornerCursorArtwork {
+  let pixels: [[Bool]]
+  let dark: Int
+  let light: Int
+  let covariance: Double
+}
+
+@MainActor
+private func cornerCursorArtwork(_ cursor: NSCursor) -> CornerCursorArtwork? {
+  guard let tiff = cursor.image.tiffRepresentation,
+    let bitmap = NSBitmapImageRep(data: tiff)
+  else { return nil }
+  let width = bitmap.pixelsWide
+  let height = bitmap.pixelsHigh
+  guard width > 1, height > 1 else { return nil }
+  var pixels: [[Bool]] = []
+  var dark = 0
+  var light = 0
+  var count = 0.0
+  var sumX = 0.0
+  var sumY = 0.0
+  var sumXY = 0.0
+  for y in 0..<height {
+    var row: [Bool] = []
+    for x in 0..<width {
+      let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+      let alpha = color?.alphaComponent ?? 0
+      let luminance =
+        color.map {
+          0.2126 * $0.redComponent + 0.7152 * $0.greenComponent + 0.0722 * $0.blueComponent
+        } ?? 1
+      let isDark = alpha > 0.5 && luminance < 0.3
+      if isDark { dark += 1 }
+      if alpha > 0.5 && luminance > 0.8 { light += 1 }
+      if isDark {
+        count += 1
+        let px = Double(x)
+        let py = Double(y)
+        sumX += px
+        sumY += py
+        sumXY += px * py
+      }
+      row.append(isDark)
+    }
+    pixels.append(row)
+  }
+  guard count > 2 else { return nil }
+  return CornerCursorArtwork(
+    pixels: pixels,
+    dark: dark,
+    light: light,
+    covariance: sumXY / count - (sumX / count) * (sumY / count)
+  )
+}
+
+private func cornerCursorMismatch(_ first: [[Bool]], _ second: [[Bool]]) -> Double {
+  guard first.count == second.count, let width = first.first?.count,
+    second.allSatisfy({ $0.count == width }), width > 0
+  else { return 1 }
+  var mismatched = 0
+  var total = 0
+  for y in 0..<first.count {
+    for x in 0..<width {
+      guard first[y][x] || second[y][x] else { continue }
+      total += 1
+      if first[y][x] != second[y][x] { mismatched += 1 }
+    }
+  }
+  return total > 0 ? Double(mismatched) / Double(total) : 1
+}
+
+private func cornerCursorMirrorMismatch(_ first: [[Bool]], _ second: [[Bool]]) -> Double {
+  guard first.count == second.count, let width = first.first?.count,
+    second.allSatisfy({ $0.count == width }), width > 0
+  else { return 1 }
+  var mismatched = 0
+  var total = 0
+  for y in 0..<first.count {
+    for x in 0..<width {
+      guard first[y][x] || second[y][width - 1 - x] else { continue }
+      total += 1
+      if first[y][x] != second[y][width - 1 - x] { mismatched += 1 }
+    }
+  }
+  return total > 0 ? Double(mismatched) / Double(total) : 1
+}
+
+@MainActor
+private func cornerCursorPreviewPNG(_ cursor: NSCursor, background: NSColor) -> Data? {
+  let image = cursor.image
+  let scale: CGFloat = 8
+  let size = NSSize(width: image.size.width * scale, height: image.size.height * scale)
+  guard size.width > 0, size.height > 0 else { return nil }
+  let preview = NSImage(size: size, flipped: false) { rect in
+    background.setFill()
+    NSBezierPath(rect: rect).fill()
+    image.draw(in: rect)
+    return true
+  }
+  guard let tiff = preview.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else {
+    return nil
+  }
+  return bitmap.representation(using: .png, properties: [:])
+}
+
+private func resizeProbeRect(_ rect: CGRect) -> [String: CGFloat] {
+  ["x": rect.origin.x, "y": rect.origin.y, "width": rect.width, "height": rect.height]
+}
+
+@MainActor
+private func resizeProbeCursorName(
+  _ cursor: NSCursor,
+  in fixture: ResizeCursorHoverFixture
+) -> String {
+  if cursor === NSCursor.resizeLeftRight { return "resizeLeftRight" }
+  if cursor === NSCursor.resizeUpDown { return "resizeUpDown" }
+  if cursor === NSCursor.arrow { return "arrow" }
+  if cursor === NSCursor.iBeam { return "iBeam" }
+  if cursor === fixture.host.cursor(for: .farBottomCorner, fixedSide: fixture.fixedSide) {
+    return "diagonalCorner"
+  }
+  return "other"
+}
+
+@MainActor
 private final class StatusWindowProvider {
   var windows: [NSWindow]
 
@@ -4102,13 +4794,26 @@ private final class WeakStatusButtonReference {
 }
 
 @MainActor
-private func sendResizeMouseEvent(
+private func makeResizeMouseEvent(
   _ type: NSEvent.EventType,
   at location: CGPoint,
   to window: NSWindow,
   number: Int
-) {
-  guard let event = NSEvent.mouseEvent(
+) -> NSEvent? {
+  if type == .mouseEntered || type == .mouseExited {
+    return NSEvent.enterExitEvent(
+      with: type,
+      location: location,
+      modifierFlags: [],
+      timestamp: TimeInterval(number) / 100,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: number,
+      trackingNumber: 0,
+      userData: nil
+    )
+  }
+  return NSEvent.mouseEvent(
     with: type,
     location: location,
     modifierFlags: [],
@@ -4118,7 +4823,17 @@ private func sendResizeMouseEvent(
     eventNumber: number,
     clickCount: 1,
     pressure: type == .leftMouseUp ? 0 : 1
-  ) else {
+  )
+}
+
+@MainActor
+private func sendResizeMouseEvent(
+  _ type: NSEvent.EventType,
+  at location: CGPoint,
+  to window: NSWindow,
+  number: Int
+) {
+  guard let event = makeResizeMouseEvent(type, at: location, to: window, number: number) else {
     Issue.record("Could not create \(type) event")
     return
   }

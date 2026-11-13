@@ -3,6 +3,21 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.9-beta.1] - 2026-11-13
+
+### Fixed
+
+- Use native double-headed diagonal resize arrows and keep bottom-edge and
+  corner resizing within a narrow border strip instead of the note interior.
+
+## [1.8.7-beta.1] - 2026-11-12
+
+### Fixed
+
+- Menu-bar resize hitboxes keep their directional cursors during native cursor
+  updates and movement between child views, restoring the content cursor when
+  the pointer leaves the resize area.
+
 ## [1.8.6-beta.1] - 2026-11-12
 
 ### Added

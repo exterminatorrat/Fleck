@@ -200,19 +200,31 @@
       fixedSide: MenuPanelFixedSide
     ) -> MenuPanelResizeHandle? {
       guard bounds.contains(point) else { return nil }
-      let isBottomBand = point.y <= bounds.minY + cornerExtent
-      let isFarCorner: Bool
-      let isFarEdge: Bool
-      switch fixedSide {
-      case .left:
-        isFarCorner = point.x >= bounds.maxX - cornerExtent
-        isFarEdge = point.x >= bounds.maxX - edgeThickness
-      case .right:
-        isFarCorner = point.x <= bounds.minX + cornerExtent
-        isFarEdge = point.x <= bounds.minX + edgeThickness
+      let farEdgeX = fixedSide == .left ? bounds.maxX : bounds.minX
+      let isBottomStrip = point.y <= bounds.minY + edgeThickness
+      let isFarStrip =
+        fixedSide == .left
+        ? point.x >= bounds.maxX - edgeThickness
+        : point.x <= bounds.minX + edgeThickness
+      if isBottomStrip {
+        return abs(point.x - farEdgeX) <= cornerExtent ? .farBottomCorner : .nearBottomCorner
       }
-      if isBottomBand { return isFarCorner ? .farBottomCorner : .nearBottomCorner }
-      return isFarEdge ? .farSide : nil
+      if isFarStrip {
+        return point.y - bounds.minY <= cornerExtent ? .farBottomCorner : .farSide
+      }
+      return nil
+    }
+
+    static func edgeRects(
+      in bounds: CGRect,
+      fixedSide: MenuPanelFixedSide
+    ) -> [CGRect] {
+      guard !bounds.isEmpty else { return [] }
+      let farEdgeX = fixedSide == .left ? bounds.maxX - edgeThickness : bounds.minX
+      return [
+        CGRect(x: farEdgeX, y: bounds.minY, width: edgeThickness, height: bounds.height),
+        CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: edgeThickness),
+      ]
     }
 
     static func proposal(
@@ -1014,6 +1026,7 @@
     private weak var geometryStore: MenuPanelGeometryStore?
     private weak var installedWindow: NSWindow?
     private var monitor: Any?
+    private var cursorTrackingAreas: [NSTrackingArea] = []
     private var visibilityObservation: NSKeyValueObservation?
     private var previousAcceptsMouseMovedEvents: Bool?
     private var preferredSize = CGSize.zero
@@ -1021,12 +1034,8 @@
     private var canResize = false
     private var onCommit: (CGSize) -> Void = { _ in }
     private var cursor: NSCursor?
-    private lazy var leftFixedCornerCursor = diagonalCursor(
-      systemSymbolName: "arrow.up.left.and.arrow.down.right"
-    )
-    private lazy var rightFixedCornerCursor = diagonalCursor(
-      systemSymbolName: "arrow.up.right.and.arrow.down.left"
-    )
+    private lazy var leftFixedCornerCursor = diagonalCursor(rotatedClockwise: true)
+    private lazy var rightFixedCornerCursor = diagonalCursor(rotatedClockwise: false)
     private var activeStatusButtonSource: MenuPanelStatusButtonSourceIdentity?
     private var alignedStatusButtonSource: MenuPanelStatusButtonSourceIdentity?
     private var alignedStatusButtonFrame: CGRect?
@@ -1063,6 +1072,37 @@
     required init?(coder: NSCoder) { nil }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func updateTrackingAreas() {
+      super.updateTrackingAreas()
+      removeCursorTracking()
+      guard isInstalled else { return }
+      cursorTrackingAreas = cursorTrackingRects().map { rect in
+        NSTrackingArea(
+          rect: rect,
+          options: [.mouseEnteredAndExited, .mouseMoved, .cursorUpdate, .activeInKeyWindow],
+          owner: self,
+          userInfo: nil
+        )
+      }
+      for area in cursorTrackingAreas {
+        addTrackingArea(area)
+      }
+    }
+
+    private func cursorTrackingRects() -> [CGRect] {
+      guard let fixedSide = alignedFixedSide else { return [] }
+      return MenuPanelResizeGeometry.edgeRects(in: bounds, fixedSide: fixedSide)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+      super.mouseMoved(with: event)
+      updateHoverCursor(from: event)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+      updateHoverCursor(from: event)
+    }
 
     override func viewDidMoveToWindow() {
       super.viewDidMoveToWindow()
@@ -1225,6 +1265,7 @@
           self.clearAlignment()
           self.presentationTop = nil
           self.invalidateQueuedWork()
+          self.removeCursorTracking()
           self.resetCursor()
         } else {
           NSCursor.arrow.set()
@@ -1376,6 +1417,7 @@
       visibilityObservation = nil
       removeWindowObservers(for: window)
       previousAcceptsMouseMovedEvents = nil
+      removeCursorTracking()
       cursor = nil
     }
 
@@ -1424,12 +1466,12 @@
         cancelAndRestore(in: window)
         return nil
       case .mouseMoved:
-        updateCursor(for: event, in: window)
+        updateHoverCursor(at: event.locationInWindow, in: window)
         return event
       case .cursorUpdate:
         return updateCursor(for: event, in: window) ? nil : event
       case .mouseExited:
-        resetCursor()
+        updateHoverCursor(at: event.locationInWindow, in: window)
         return event
       default:
         return event
@@ -1704,6 +1746,59 @@
       updateCursor(at: event.locationInWindow, in: window)
     }
 
+    private func updateHoverCursor(from event: NSEvent) {
+      guard let window = installedWindow, event.window === window,
+        let attachmentID, controller.isPresentationOwner(attachmentID),
+        !controller.isOwned(by: attachmentID), window.isVisible
+      else { return }
+      guard let resolved = hoverCursor(at: event.locationInWindow, in: window) else {
+        resetCursor(in: window)
+        return
+      }
+      setCursor(resolved)
+      reassertCursorAfterDispatch()
+    }
+
+    private func updateHoverCursor(at locationInWindow: CGPoint, in window: NSWindow) {
+      guard let attachmentID, installedWindow === window, self.window === window,
+        controller.isPresentationOwner(attachmentID)
+      else { return }
+      guard window.isVisible else {
+        resetCursor()
+        return
+      }
+      updateCursor(at: locationInWindow, in: window)
+      reassertCursorAfterDispatch()
+    }
+
+    private func reassertCursorAfterDispatch() {
+      guard let activeCursor = cursor, NSApplication.shared.isActive else { return }
+      let installation = installationRevision
+      DispatchQueue.main.async { [weak self] in
+        guard let self,
+          self.installationRevision == installation,
+          self.cursor === activeCursor,
+          NSCursor.current !== activeCursor,
+          NSApplication.shared.isActive,
+          let window = self.installedWindow,
+          self.window === window,
+          window.isVisible,
+          let attachmentID = self.attachmentID,
+          self.controller.isPresentationOwner(attachmentID),
+          !self.controller.isOwned(by: attachmentID)
+        else { return }
+        let location = window.mouseLocationOutsideOfEventStream
+        guard NSWindow.windowNumber(
+          at: window.convertPoint(toScreen: location),
+          belowWindowWithWindowNumber: 0
+        ) == window.windowNumber,
+          self.bounds.contains(self.convert(location, from: nil)),
+          self.hoverCursor(at: location, in: window) === activeCursor
+        else { return }
+        activeCursor.set()
+      }
+    }
+
     @discardableResult
     private func updateCursor(at locationInWindow: CGPoint, in window: NSWindow) -> Bool {
       if let attachmentID, controller.isOwned(by: attachmentID),
@@ -1713,6 +1808,15 @@
         setCursor(cursor(for: handle, fixedSide: fixedSide))
         return true
       }
+      guard let resolved = hoverCursor(at: locationInWindow, in: window) else {
+        resetCursor(in: window)
+        return false
+      }
+      setCursor(resolved)
+      return true
+    }
+
+    private func hoverCursor(at locationInWindow: CGPoint, in window: NSWindow) -> NSCursor? {
       guard isLiveResizeEligible(in: window),
         let statusLabelFrame = geometryStore?.cachedStatusButton?.screenFrame,
         let fixedSide = MenuPanelResizeGeometry.anchoredSide(
@@ -1720,12 +1824,8 @@
           statusLabelFrame: statusLabelFrame
         ),
         let handle = usableHandle(at: locationInWindow, in: window, fixedSide: fixedSide)
-      else {
-        resetCursor(in: window)
-        return false
-      }
-      setCursor(cursor(for: handle, fixedSide: fixedSide))
-      return true
+      else { return nil }
+      return cursor(for: handle, fixedSide: fixedSide)
     }
 
     func usableHandle(
@@ -1922,6 +2022,7 @@
       alignedVisibleFrame = screen.visibleFrame
       alignedFixedSide = placement.fixedSide
       alignedFrame = placement.frame
+      updateTrackingAreas()
     }
 
     private func restore(
@@ -2158,15 +2259,45 @@
       }
     }
 
-    private func diagonalCursor(systemSymbolName: String) -> NSCursor {
-      guard let image = NSImage(
-        systemSymbolName: systemSymbolName,
-        accessibilityDescription: nil
-      ) else { return .crosshair }
-      return NSCursor(
-        image: image,
-        hotSpot: NSPoint(x: image.size.width / 2, y: image.size.height / 2)
+    private func diagonalCursor(rotatedClockwise: Bool) -> NSCursor {
+      let source = NSCursor.resizeLeftRight.image
+      let sourceSize = source.size
+      guard sourceSize.width > 0, sourceSize.height > 0 else { return .resizeLeftRight }
+      let scale: CGFloat = 2
+      let side = (hypot(sourceSize.width, sourceSize.height) + 4).rounded(.up)
+      let pixels = Int(side * scale)
+      guard let representation = NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: pixels,
+        pixelsHigh: pixels,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+      ), let context = NSGraphicsContext(bitmapImageRep: representation)
+      else { return .resizeLeftRight }
+      representation.size = NSSize(width: side, height: side)
+      NSGraphicsContext.saveGraphicsState()
+      NSGraphicsContext.current = context
+      context.cgContext.scaleBy(x: scale, y: scale)
+      context.cgContext.translateBy(x: side / 2, y: side / 2)
+      context.cgContext.rotate(by: (rotatedClockwise ? -45 : 45) * .pi / 180)
+      context.cgContext.translateBy(x: -sourceSize.width / 2, y: -sourceSize.height / 2)
+      source.draw(
+        in: NSRect(origin: .zero, size: sourceSize),
+        from: .zero,
+        operation: .sourceOver,
+        fraction: 1
       )
+      context.flushGraphics()
+      NSGraphicsContext.restoreGraphicsState()
+      let image = NSImage(size: NSSize(width: side, height: side))
+      image.addRepresentation(representation)
+      image.isTemplate = false
+      return NSCursor(image: image, hotSpot: NSPoint(x: side / 2, y: side / 2))
     }
 
     private func setCursor(_ cursor: NSCursor) {
@@ -2183,9 +2314,18 @@
     }
 
     private func resetCursor() {
-      guard cursor != nil else { return }
+      guard let ownedCursor = cursor else { return }
       cursor = nil
+      guard NSCursor.current === ownedCursor else { return }
       NSCursor.arrow.set()
+    }
+
+    private func removeCursorTracking() {
+      guard !cursorTrackingAreas.isEmpty else { return }
+      for area in cursorTrackingAreas {
+        removeTrackingArea(area)
+      }
+      cursorTrackingAreas = []
     }
   }
 #endif
