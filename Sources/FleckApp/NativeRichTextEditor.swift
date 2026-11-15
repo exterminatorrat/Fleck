@@ -3195,13 +3195,7 @@
       clearInlineImageTypingAttributes()
       let selection = selectedRange()
       let ns = string as NSString
-      if selection.length == 0,
-        selection.location != NSNotFound,
-        selection.location >= 0,
-        selection.location <= ns.length,
-        ns.substring(with: ns.paragraphRange(for: selection))
-          .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      {
+      if caretTakesTabStop(at: selection, string: ns) {
         breakUndoCoalescing()
         performUndoGroup {
           registerSelectionUndo(selection)
@@ -3278,7 +3272,67 @@
       }
       indentSelectedLines(removing: false)
     }
-    override func insertBacktab(_ sender: Any?) { indentSelectedLines(removing: true) }
+    /// A caret takes a tab stop where it sits whenever its paragraph is not a
+    /// list item. A list item keeps the nesting behaviour, and a range
+    /// selection keeps indenting whole lines.
+    private func caretTakesTabStop(at selection: NSRange, string ns: NSString) -> Bool {
+      guard
+        selection.length == 0,
+        selection.location != NSNotFound,
+        selection.location >= 0,
+        selection.location <= ns.length
+      else { return false }
+      return parsedListItem(
+        in: ns.paragraphRange(for: selection),
+        string: ns
+      ) == nil
+    }
+
+    override func insertBacktab(_ sender: Any?) {
+      guard isEditable else { return }
+      if hasMarkedText() {
+        super.insertBacktab(sender)
+        return
+      }
+      let selection = selectedRange()
+      let ns = string as NSString
+      guard caretTakesTabStop(at: selection, string: ns) else {
+        indentSelectedLines(removing: true)
+        return
+      }
+      removeTabStopBeforeCaret(at: selection, string: ns)
+    }
+
+    /// Removes one tab stop, a literal tab or up to one indent of spaces,
+    /// immediately before the caret. The command is consumed either way, so
+    /// Shift+Tab after a caret tab never re-indents the line as a side effect.
+    private func removeTabStopBeforeCaret(at selection: NSRange, string ns: NSString) {
+      let cursor = min(selection.location, ns.length)
+      let lineStart = ns.lineRange(for: NSRange(location: cursor, length: 0)).location
+      var start = cursor
+      if start > lineStart, ns.character(at: start - 1) == 9 {
+        start -= 1
+      } else {
+        while start > lineStart,
+          cursor - start < EditorListEngine.indentation.utf16.count,
+          ns.character(at: start - 1) == 32
+        {
+          start -= 1
+        }
+      }
+      guard start < cursor else { return }
+      breakUndoCoalescing()
+      performUndoGroup {
+        registerSelectionUndo(selection)
+        _ = replaceText(
+          in: NSRange(location: start, length: cursor - start),
+          with: "",
+          selecting: NSRange(location: start, length: 0)
+        )
+        registerSelectionUndo(selectedRange())
+      }
+      breakUndoCoalescing()
+    }
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
       clearInlineImageTypingAttributes()
