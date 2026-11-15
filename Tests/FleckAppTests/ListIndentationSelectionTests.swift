@@ -75,7 +75,7 @@ import Testing
 @Test @MainActor func nonListTabRetainsExistingSelectionBehavior() {
   let textView = makeListIndentationEditor(
     "Plain",
-    selection: NSRange(location: 2, length: 0)
+    selection: NSRange(location: 0, length: "Plain".utf16.count)
   )
 
   textView.insertTab(nil)
