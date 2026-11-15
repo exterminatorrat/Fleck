@@ -210,6 +210,27 @@ struct SaveFeedbackPresentationTests {
   }
 
   @Test
+  func successfulEditConfirmsOnlyAfterIdle() async throws {
+    let scheduler = RevealScheduler()
+    let feedback = SaveFeedbackPresentation(scheduleConfirmation: scheduler.schedule)
+    let fixture = try await SaveFeedbackFixture(feedback: feedback) { _, _, _, _ in
+      .committed
+    }
+    defer { fixture.remove() }
+
+    fixture.state.updateSelected(body: "Confirm this edit")
+    #expect(scheduler.delays == [.milliseconds(1500)])
+    #expect(!feedback.showsSavedConfirmation)
+    try await waitForFeedback(feedback, toEqual: .saved)
+    #expect(!feedback.showsSavedConfirmation)
+    scheduler.fireAll()
+    #expect(feedback.showsSavedConfirmation)
+    #expect(scheduler.delays == [.milliseconds(1500), .seconds(1)])
+    scheduler.fireAll()
+    #expect(!feedback.showsSavedConfirmation)
+  }
+
+  @Test
   func quickDebouncedSaveStaysQuiet() async throws {
     let scheduler = RevealScheduler()
     let feedback = SaveFeedbackPresentation(scheduleReveal: scheduler.schedule)

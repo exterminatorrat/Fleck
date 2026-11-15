@@ -23,6 +23,43 @@
     }
   }
 
+  struct MenuPanelResizeLayout: Equatable {
+    struct Region: Equatable {
+      let rect: CGRect
+      let handle: MenuPanelResizeHandle
+    }
+
+    let outerBounds: CGRect
+    let bodyBounds: CGRect
+    let fixedSide: MenuPanelFixedSide
+    let marginRegions: [Region]
+
+    func handle(at point: CGPoint) -> MenuPanelResizeHandle? {
+      guard outerBounds.contains(point) else { return nil }
+      return marginRegions.first { $0.rect.contains(point) }?.handle
+    }
+
+    var swiftUIBodyInsets: EdgeInsets {
+      EdgeInsets(
+        top: outerBounds.maxY - bodyBounds.maxY,
+        leading: bodyBounds.minX - outerBounds.minX,
+        bottom: bodyBounds.minY - outerBounds.minY,
+        trailing: outerBounds.maxX - bodyBounds.maxX
+      )
+    }
+  }
+
+  enum MenuPanelResizeBodyPolicy: Equatable {
+    case unready
+    case inset(MenuPanelResizeLayout)
+  }
+
+  struct MenuPanelResizeCursorRegistration: Equatable {
+    let rect: CGRect
+    let handle: MenuPanelResizeHandle
+    let fixedSide: MenuPanelFixedSide
+  }
+
   struct MenuPanelFrameInsets: Equatable {
     var top: CGFloat
     var left: CGFloat
@@ -200,19 +237,188 @@
       fixedSide: MenuPanelFixedSide
     ) -> MenuPanelResizeHandle? {
       guard bounds.contains(point) else { return nil }
-      let isBottomBand = point.y <= bounds.minY + cornerExtent
-      let isFarCorner: Bool
-      let isFarEdge: Bool
+      let farEdgeX = fixedSide == .left ? bounds.maxX : bounds.minX
+      let isBottomStrip = point.y <= bounds.minY + edgeThickness
+      let isFarStrip =
+        fixedSide == .left
+        ? point.x >= bounds.maxX - edgeThickness
+        : point.x <= bounds.minX + edgeThickness
+      if isBottomStrip {
+        return abs(point.x - farEdgeX) <= cornerExtent ? .farBottomCorner : .nearBottomCorner
+      }
+      if isFarStrip {
+        return point.y - bounds.minY <= cornerExtent ? .farBottomCorner : .farSide
+      }
+      return nil
+    }
+
+    static let bodyMargin: CGFloat = 3
+
+    static func layout(
+      in bounds: CGRect,
+      fixedSide: MenuPanelFixedSide
+    ) -> MenuPanelResizeLayout? {
+      guard isValid(bounds), bounds.minX.isFinite, bounds.minY.isFinite,
+        bounds.maxX.isFinite, bounds.maxY.isFinite,
+        bounds.size.width > bodyMargin, bounds.size.height > bodyMargin
+      else { return nil }
+
+      let bodyBounds: CGRect
       switch fixedSide {
       case .left:
-        isFarCorner = point.x >= bounds.maxX - cornerExtent
-        isFarEdge = point.x >= bounds.maxX - edgeThickness
+        bodyBounds = CGRect(
+          x: bounds.minX,
+          y: bounds.minY + bodyMargin,
+          width: bounds.width - bodyMargin,
+          height: bounds.height - bodyMargin
+        )
       case .right:
-        isFarCorner = point.x <= bounds.minX + cornerExtent
-        isFarEdge = point.x <= bounds.minX + edgeThickness
+        bodyBounds = CGRect(
+          x: bounds.minX + bodyMargin,
+          y: bounds.minY + bodyMargin,
+          width: bounds.width - bodyMargin,
+          height: bounds.height - bodyMargin
+        )
       }
-      if isBottomBand { return isFarCorner ? .farBottomCorner : .nearBottomCorner }
-      return isFarEdge ? .farSide : nil
+
+      return MenuPanelResizeLayout(
+        outerBounds: bounds,
+        bodyBounds: bodyBounds,
+        fixedSide: fixedSide,
+        marginRegions: partitionedRegions(
+          in: bounds,
+          fixedSide: fixedSide,
+          bottomThickness: bodyMargin,
+          farThickness: bodyMargin,
+          farStart: fixedSide == .left ? bounds.maxX - bodyMargin : bounds.minX
+        )
+      )
+    }
+
+    static func cursorRegions(
+      in bounds: CGRect,
+      fixedSide: MenuPanelFixedSide
+    ) -> [MenuPanelResizeLayout.Region] {
+      guard isValid(bounds), bounds.minX.isFinite, bounds.minY.isFinite,
+        bounds.maxX.isFinite, bounds.maxY.isFinite,
+        bounds.size.width > 0, bounds.size.height > 0
+      else { return [] }
+      let bottomThickness =
+        min((bounds.minY + edgeThickness).nextUp, bounds.maxY) - bounds.minY
+      let farStart = fixedSide == .left
+        ? max(bounds.minX, bounds.maxX - edgeThickness)
+        : bounds.minX
+      let farThickness: CGFloat
+      switch fixedSide {
+      case .left:
+        farThickness = bounds.maxX - farStart
+      case .right:
+        farThickness = min((bounds.minX + edgeThickness).nextUp, bounds.maxX) - bounds.minX
+      }
+      guard bottomThickness > 0, farThickness > 0 else { return [] }
+      return partitionedRegions(
+        in: bounds,
+        fixedSide: fixedSide,
+        bottomThickness: bottomThickness,
+        farThickness: farThickness,
+        farStart: farStart
+      )
+    }
+
+    private static func partitionedRegions(
+      in bounds: CGRect,
+      fixedSide: MenuPanelFixedSide,
+      bottomThickness: CGFloat,
+      farThickness: CGFloat,
+      farStart: CGFloat
+    ) -> [MenuPanelResizeLayout.Region] {
+      let cornerWidth = min(cornerExtent, bounds.width)
+      let cornerMinX: CGFloat
+      let cornerMaxX: CGFloat
+      let nearMinX: CGFloat
+      let nearMaxX: CGFloat
+      switch fixedSide {
+      case .left:
+        cornerMaxX = bounds.maxX
+        cornerMinX = bounds.maxX - cornerWidth
+        nearMinX = bounds.minX
+        nearMaxX = cornerMinX
+      case .right:
+        cornerMinX = bounds.minX
+        cornerMaxX = min((bounds.minX + cornerWidth).nextUp, bounds.maxX)
+        nearMinX = cornerMaxX
+        nearMaxX = bounds.maxX
+      }
+
+      var regions: [MenuPanelResizeLayout.Region] = []
+      if nearMaxX > nearMinX {
+        regions.append(
+          MenuPanelResizeLayout.Region(
+            rect: CGRect(
+              x: nearMinX,
+              y: bounds.minY,
+              width: nearMaxX - nearMinX,
+              height: bottomThickness
+            ),
+            handle: .nearBottomCorner
+          )
+        )
+      }
+      regions.append(
+        MenuPanelResizeLayout.Region(
+          rect: CGRect(
+            x: cornerMinX,
+            y: bounds.minY,
+            width: cornerMaxX - cornerMinX,
+            height: bottomThickness
+          ),
+          handle: .farBottomCorner
+        )
+      )
+
+      let sideBottom = bounds.minY + bottomThickness
+      let cornerSideTop = min((bounds.minY + cornerExtent).nextUp, bounds.maxY)
+      let cornerSideHeight = cornerSideTop - sideBottom
+      if cornerSideHeight > 0 {
+        regions.append(
+          MenuPanelResizeLayout.Region(
+            rect: CGRect(
+              x: farStart,
+              y: sideBottom,
+              width: farThickness,
+              height: cornerSideHeight
+            ),
+            handle: .farBottomCorner
+          )
+        )
+      }
+      let farSideBottom = sideBottom + max(cornerSideHeight, 0)
+      if bounds.maxY > farSideBottom {
+        regions.append(
+          MenuPanelResizeLayout.Region(
+            rect: CGRect(
+              x: farStart,
+              y: farSideBottom,
+              width: farThickness,
+              height: bounds.maxY - farSideBottom
+            ),
+            handle: .farSide
+          )
+        )
+      }
+      return regions
+    }
+
+    static func edgeRects(
+      in bounds: CGRect,
+      fixedSide: MenuPanelFixedSide
+    ) -> [CGRect] {
+      guard !bounds.isEmpty else { return [] }
+      let farEdgeX = fixedSide == .left ? bounds.maxX - edgeThickness : bounds.minX
+      return [
+        CGRect(x: farEdgeX, y: bounds.minY, width: edgeThickness, height: bounds.height),
+        CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: edgeThickness),
+      ]
     }
 
     static func proposal(
@@ -305,8 +511,8 @@
       if handle.changesWidth {
         let button = snapshot.statusLabelFrame
         let grabDistance = snapshot.fixedSide == .left
-          ? max(0, snapshot.initialFrame.maxX - snapshot.initialPointer.x)
-          : max(0, snapshot.initialPointer.x - snapshot.initialFrame.minX)
+          ? snapshot.initialFrame.maxX - snapshot.initialPointer.x
+          : snapshot.initialPointer.x - snapshot.initialFrame.minX
         let distanceFromButton = max(button.minX - pointer.x, pointer.x - button.maxX, 0)
         let effectiveGrab = min(grabDistance, distanceFromButton)
         let requestedFrameWidth = fixedSide == .left
@@ -456,7 +662,9 @@
   @MainActor
   final class MenuPanelResizeController: ObservableObject {
     @Published private(set) var effectiveContentSize: CGSize?
+    @Published private(set) var publishedBodyPolicy = MenuPanelResizeBodyPolicy.unready
     private var desiredEffectiveContentSize: CGSize?
+    private var desiredBodyPolicy = MenuPanelResizeBodyPolicy.unready
     private(set) var completedPreferenceSize: CGSize?
     private(set) var isTracking = false
     private var snapshot: MenuPanelResizeSnapshot?
@@ -466,9 +674,16 @@
     private var interactionRevision = 0
     private var isPublishingContentSize = false
     private var needsContentSizePublication = false
+    private var isPublishingBodyPolicy = false
+    private var needsBodyPolicyPublication = false
     private var presentationOwnerID: UUID?
     private var relinquishPresentation: (@MainActor () -> Void)?
     private(set) var currentFixedSide: MenuPanelFixedSide?
+
+    var publishedLayout: MenuPanelResizeLayout? {
+      guard case let .inset(layout) = publishedBodyPolicy else { return nil }
+      return layout
+    }
 
     var initialFrame: CGRect? { snapshot?.initialFrame }
     var initialContentSize: CGSize? { snapshot?.initialContentSize }
@@ -697,6 +912,8 @@
       presentationOwnerID == ownerID
     }
 
+    var currentPresentationOwnerID: UUID? { presentationOwnerID }
+
     func interactionIdentity(ownerID: UUID) -> MenuPanelResizeInteractionIdentity? {
       guard presentationOwnerID == ownerID else { return nil }
       return MenuPanelResizeInteractionIdentity(ownerID: ownerID, revision: interactionRevision)
@@ -728,6 +945,37 @@
       let revision = interactionRevision
       publishDesiredContentSize()
       return presentationOwnerID == ownerID && interactionRevision == revision
+    }
+
+    @discardableResult
+    func setPresentationLayout(
+      _ layout: MenuPanelResizeLayout?,
+      ownerID: UUID? = nil,
+      publication: MenuPanelResizePublicationTiming = .immediate
+    ) -> Bool {
+      setPresentationBodyPolicy(
+        layout.map(MenuPanelResizeBodyPolicy.inset) ?? .unready,
+        ownerID: ownerID,
+        publication: publication
+      )
+    }
+
+    @discardableResult
+    func setPresentationBodyPolicy(
+      _ policy: MenuPanelResizeBodyPolicy,
+      ownerID: UUID? = nil,
+      publication: MenuPanelResizePublicationTiming = .immediate
+    ) -> Bool {
+      guard presentationOwnerID == ownerID else { return false }
+      setDesiredBodyPolicy(policy, publication: publication)
+      return presentationOwnerID == ownerID
+    }
+
+    @discardableResult
+    func publishPresentationLayout(ownerID: UUID? = nil) -> Bool {
+      guard presentationOwnerID == ownerID else { return false }
+      publishDesiredBodyPolicy()
+      return presentationOwnerID == ownerID
     }
 
     @discardableResult
@@ -778,7 +1026,43 @@
       lastPointer = nil
       currentFixedSide = nil
       completedPreferenceSize = nil
-      setDesiredContentSize(nil, publication: publication)
+      desiredEffectiveContentSize = nil
+      desiredBodyPolicy = .unready
+      switch publication {
+      case .immediate:
+        publishDesiredContentSize()
+        publishDesiredBodyPolicy()
+      case .deferred:
+        needsContentSizePublication = false
+        needsBodyPolicyPublication = false
+      }
+    }
+
+    private func setDesiredBodyPolicy(
+      _ policy: MenuPanelResizeBodyPolicy,
+      publication: MenuPanelResizePublicationTiming
+    ) {
+      desiredBodyPolicy = policy
+      if publication == .immediate {
+        publishDesiredBodyPolicy()
+      } else {
+        needsBodyPolicyPublication = false
+      }
+    }
+
+    private func publishDesiredBodyPolicy() {
+      guard !isPublishingBodyPolicy else {
+        needsBodyPolicyPublication = true
+        return
+      }
+      isPublishingBodyPolicy = true
+      defer { isPublishingBodyPolicy = false }
+      repeat {
+        needsBodyPolicyPublication = false
+        if publishedBodyPolicy != desiredBodyPolicy {
+          publishedBodyPolicy = desiredBodyPolicy
+        }
+      } while needsBodyPolicyPublication
     }
 
     private func setDesiredContentSize(
@@ -941,6 +1225,242 @@
     }
   }
 
+  @MainActor
+  final class MenuPanelResizeInstallationView: NSView {
+    struct Configuration {
+      let geometryStore: MenuPanelGeometryStore?
+      let preferredSize: CGSize
+      let canResize: Bool
+      let onCommit: (CGSize) -> Void
+    }
+
+    let host: MenuPanelResizeHostView
+    private let authority: MenuPanelResizeInstallationAuthority
+    private(set) var isDismantled = false
+    private var configuration: Configuration?
+    private var reconciliationRevision = 0
+    private var isReconciling = false
+    private var hasQueuedReconciliation = false
+
+    init(controller: MenuPanelResizeController) {
+      host = MenuPanelResizeHostView(controller: controller)
+      let authority = MenuPanelResizeInstallationAuthority()
+      self.authority = authority
+      super.init(frame: .zero)
+      authority.anchor = self
+      host.adoptInstallationAuthority(authority)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func configure(
+      geometryStore: MenuPanelGeometryStore?,
+      preferredSize: CGSize,
+      canResize: Bool,
+      onCommit: @escaping (CGSize) -> Void
+    ) {
+      guard !isDismantled else { return }
+      configuration = Configuration(
+        geometryStore: geometryStore,
+        preferredSize: preferredSize,
+        canResize: canResize,
+        onCommit: onCommit
+      )
+      reconciliationRevision &+= 1
+      reconcileAttachment()
+    }
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      reconciliationRevision &+= 1
+      reconcileAttachment()
+    }
+
+    override func layout() {
+      super.layout()
+      reconciliationRevision &+= 1
+      reconcileAttachment()
+    }
+
+    override func viewDidHide() {
+      super.viewDidHide()
+      reconciliationRevision &+= 1
+      reconcileAttachment()
+    }
+
+    override func viewDidUnhide() {
+      super.viewDidUnhide()
+      reconciliationRevision &+= 1
+      reconcileAttachment()
+    }
+
+    func attachmentRevoked() {
+      reconciliationRevision &+= 1
+      queueReconciliation()
+    }
+
+    func dismantle() {
+      guard !isDismantled else { return }
+      isDismantled = true
+      authority.revoke()
+      detachHost()
+      host.abandonInstallationAuthority()
+    }
+
+    private func reconcileAttachment() {
+      guard !isDismantled else {
+        detachHost()
+        return
+      }
+      guard !isReconciling else {
+        reconciliationRevision &+= 1
+        queueReconciliation()
+        return
+      }
+      isReconciling = true
+      defer { isReconciling = false }
+      let revision = reconciliationRevision
+      guard !isHiddenOrHasHiddenAncestor, let target = authority.authorizesAnchor() else {
+        detachHost()
+        return
+      }
+      applyConfiguration()
+      guard isCurrentTarget(target, revision: revision) else {
+        queueReconciliation()
+        return
+      }
+      attachHost(in: target, revision: revision)
+      guard isCurrentTarget(target, revision: revision) else {
+        queueReconciliation()
+        return
+      }
+    }
+
+    private func isCurrentTarget(
+      _ target: (window: NSWindow, root: NSView),
+      revision: Int
+    ) -> Bool {
+      guard revision == reconciliationRevision, !isDismantled,
+        !isHiddenOrHasHiddenAncestor, let current = authority.authorizesAnchor()
+      else { return false }
+      return current.window === target.window && current.root === target.root
+    }
+
+    private func queueReconciliation() {
+      guard !hasQueuedReconciliation, !isDismantled else { return }
+      hasQueuedReconciliation = true
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        self.hasQueuedReconciliation = false
+        self.reconcileAttachment()
+      }
+    }
+
+    private func applyConfiguration() {
+      guard let configuration else { return }
+      host.configure(
+        geometryStore: configuration.geometryStore,
+        preferredSize: configuration.preferredSize,
+        canResize: configuration.canResize,
+        onCommit: configuration.onCommit
+      )
+    }
+
+    private func attachHost(
+      in target: (window: NSWindow, root: NSView),
+      revision: Int
+    ) {
+      let root = target.root
+      host.isHidden = isHiddenOrHasHiddenAncestor
+      guard isCurrentTarget(target, revision: revision) else { return }
+      if host.superview === root {
+        if host.frame != root.bounds {
+          host.frame = root.bounds
+          guard isCurrentTarget(target, revision: revision) else { return }
+        }
+        if root.subviews.last !== host {
+          root.addSubview(host, positioned: .above, relativeTo: nil)
+          guard isCurrentTarget(target, revision: revision) else { return }
+        }
+        if !host.isInstalled, isCurrentTarget(target, revision: revision) {
+          host.installIfNeeded()
+        }
+        return
+      }
+      host.uninstall()
+      guard isCurrentTarget(target, revision: revision) else { return }
+      host.completeNativeDetachment()
+      guard isCurrentTarget(target, revision: revision) else { return }
+      if host.superview != nil {
+        host.removeFromSuperview()
+        guard isCurrentTarget(target, revision: revision) else { return }
+      }
+      host.frame = root.bounds
+      guard isCurrentTarget(target, revision: revision) else { return }
+      host.autoresizingMask = [.width, .height]
+      root.addSubview(host, positioned: .above, relativeTo: nil)
+      guard isCurrentTarget(target, revision: revision) else { return }
+      if !host.isInstalled {
+        host.installIfNeeded()
+      }
+    }
+
+    private func detachHost() {
+      host.isHidden = false
+      host.uninstall()
+      host.completeNativeDetachment()
+      if host.superview != nil {
+        host.removeFromSuperview()
+      }
+    }
+  }
+
+  @MainActor
+  final class MenuPanelResizeInstallationAuthority {
+    weak var anchor: MenuPanelResizeInstallationView?
+    private(set) var capturedOwnerID: UUID?
+    private(set) weak var capturedWindow: NSWindow?
+    private(set) var isRevoked = false
+
+    func capture(ownerID: UUID, window: NSWindow) {
+      capturedOwnerID = ownerID
+      capturedWindow = window
+    }
+
+    func revoke() {
+      guard !isRevoked else { return }
+      isRevoked = true
+      anchor?.attachmentRevoked()
+    }
+
+    func revoke(ownerID: UUID) {
+      guard capturedOwnerID == ownerID else { return }
+      revoke()
+    }
+
+    func captured(ownerID: UUID, window: NSWindow?) -> Bool {
+      capturedOwnerID == ownerID && capturedWindow === window
+    }
+
+    func authorizesAnchor() -> (window: NSWindow, root: NSView)? {
+      guard !isRevoked, let anchor, !anchor.isDismantled,
+        !anchor.isHiddenOrHasHiddenAncestor,
+        let window = anchor.window, let root = window.contentView,
+        root !== anchor, anchor.isDescendant(of: root), !root.isDescendant(of: anchor)
+      else { return nil }
+      return (window, root)
+    }
+
+    func authorizes(_ host: MenuPanelResizeHostView) -> (window: NSWindow, root: NSView)? {
+      guard let target = authorizesAnchor(), host.superview === target.root,
+        host !== anchor, !target.root.isDescendant(of: host)
+      else { return nil }
+      return target
+    }
+  }
+
   struct MenuPanelResizeInstaller: NSViewRepresentable {
     let controller: MenuPanelResizeController
     let geometryStore: MenuPanelGeometryStore?
@@ -948,8 +1468,8 @@
     let canResize: Bool
     let onCommit: (CGSize) -> Void
 
-    func makeNSView(context: Context) -> MenuPanelResizeHostView {
-      let view = MenuPanelResizeHostView(controller: controller)
+    func makeNSView(context: Context) -> MenuPanelResizeInstallationView {
+      let view = MenuPanelResizeInstallationView(controller: controller)
       view.configure(
         geometryStore: geometryStore,
         preferredSize: preferredSize,
@@ -959,18 +1479,17 @@
       return view
     }
 
-    func updateNSView(_ view: MenuPanelResizeHostView, context: Context) {
+    func updateNSView(_ view: MenuPanelResizeInstallationView, context: Context) {
       view.configure(
         geometryStore: geometryStore,
         preferredSize: preferredSize,
         canResize: canResize,
         onCommit: onCommit
       )
-      view.installIfNeeded()
     }
 
-    static func dismantleNSView(_ view: MenuPanelResizeHostView, coordinator: ()) {
-      view.uninstall()
+    static func dismantleNSView(_ view: MenuPanelResizeInstallationView, coordinator: ()) {
+      view.dismantle()
     }
   }
 
@@ -1014,19 +1533,18 @@
     private weak var geometryStore: MenuPanelGeometryStore?
     private weak var installedWindow: NSWindow?
     private var monitor: Any?
+    private var cursorTrackingAreas: [NSTrackingArea] = []
     private var visibilityObservation: NSKeyValueObservation?
+    private var foreignChildrenObservation: NSObjectProtocol?
+    private var knownForeignChildren: Set<ObjectIdentifier> = []
     private var previousAcceptsMouseMovedEvents: Bool?
     private var preferredSize = CGSize.zero
     private var hasPreferredSize = false
     private var canResize = false
     private var onCommit: (CGSize) -> Void = { _ in }
     private var cursor: NSCursor?
-    private lazy var leftFixedCornerCursor = diagonalCursor(
-      systemSymbolName: "arrow.up.left.and.arrow.down.right"
-    )
-    private lazy var rightFixedCornerCursor = diagonalCursor(
-      systemSymbolName: "arrow.up.right.and.arrow.down.left"
-    )
+    private lazy var leftFixedCornerCursor = diagonalCursor(rotatedClockwise: true)
+    private lazy var rightFixedCornerCursor = diagonalCursor(rotatedClockwise: false)
     private var activeStatusButtonSource: MenuPanelStatusButtonSourceIdentity?
     private var alignedStatusButtonSource: MenuPanelStatusButtonSourceIdentity?
     private var alignedStatusButtonFrame: CGRect?
@@ -1040,6 +1558,19 @@
     private var installationRevision = 0
     private var stateRevision = 0
     private var queuedRevision: Int?
+    private var queuedCursorRefreshInstallation: Int?
+    private var queuedLayoutPublication: Int?
+    private var cachedHoverCursorRegistrations: [MenuPanelResizeCursorRegistration]?
+    private weak var installationAuthority: MenuPanelResizeInstallationAuthority?
+    private var hasRequiredInstallationAuthority = false
+    private var isInstallationAbandoned = false
+    private var pendingNativeReleaseOwner: UUID?
+    private var suppressedRevocationOwners: Set<UUID> = []
+    private var installedCursorAreaSpecs: [MenuPanelResizeCursorRegistration] = []
+    private var cursorAreaRevision = 0
+    private var cursorAreaRefreshInstallation: Int?
+    private var isReconcilingCursorAreas = false
+    private var isProbingContent = false
 
     var isInstalled: Bool { monitor != nil && installedWindow != nil }
     private var ownsTracking: Bool {
@@ -1062,7 +1593,283 @@
 
     required init?(coder: NSCoder) { nil }
 
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+      guard !isProbingContent, isInstalled, ownsPresentation,
+        let window = installedWindow, self.window === window, window.isVisible,
+        !isHiddenOrHasHiddenAncestor, isLiveResizeEligible(in: window),
+        let fixedSide = alignedFixedSide, let superview
+      else { return nil }
+      let location = convert(point, from: superview)
+      guard bounds.contains(location),
+        usableHandle(at: convert(location, to: nil), in: window, fixedSide: fixedSide) != nil
+      else { return nil }
+      return self
+    }
+
+    override func viewDidHide() {
+      super.viewDidHide()
+      invalidateResizeCursorRegions()
+    }
+
+    override func viewDidUnhide() {
+      super.viewDidUnhide()
+      invalidateResizeCursorRegions()
+    }
+
+    override func resetCursorRects() {
+      super.resetCursorRects()
+    }
+
+    func cursorRegistrations(fresh: Bool = false) -> [MenuPanelResizeCursorRegistration] {
+      guard let window = installedWindow, self.window === window,
+        structurallyCursorEligible(in: window)
+      else { return [] }
+      if ownsTracking, let handle = controller.currentHandle,
+        let fixedSide = controller.currentFixedSide
+      {
+        let clip = bounds.intersection(visibleRect)
+        guard !clip.isNull, clip.width > 0, clip.height > 0 else { return [] }
+        return [
+          MenuPanelResizeCursorRegistration(
+            rect: clip,
+            handle: handle,
+            fixedSide: fixedSide
+          )
+        ]
+      }
+      return hoverCursorRegistrations(in: window, fresh: fresh)
+    }
+
+    private func hoverCursorRegistrations(
+      in window: NSWindow,
+      fresh: Bool = false
+    ) -> [MenuPanelResizeCursorRegistration] {
+      if !fresh, let cachedHoverCursorRegistrations {
+        return cachedHoverCursorRegistrations
+      }
+      let clip = bounds.intersection(visibleRect)
+      guard let fixedSide = controller.currentFixedSide ?? alignedFixedSide, !clip.isEmpty
+      else {
+        cachedHoverCursorRegistrations = []
+        return []
+      }
+      let regions = MenuPanelResizeGeometry.cursorRegions(in: bounds, fixedSide: fixedSide)
+      let marginRects = regions.map { $0.rect.intersection(clip) }
+        .filter { !$0.isNull && $0.width > 0 && $0.height > 0 }
+      let obstructions = obstructingResizeRects(in: window, clippedTo: marginRects)
+      let registrations = regions.flatMap {
+        region -> [MenuPanelResizeCursorRegistration] in
+        let clipped = region.rect.intersection(clip)
+        guard !clipped.isNull, clipped.width > 0, clipped.height > 0 else { return [] }
+        var pieces = [clipped]
+        for obstruction in obstructions {
+          pieces = pieces.flatMap { subtracting(obstruction, from: $0) }
+        }
+        return pieces.map {
+          MenuPanelResizeCursorRegistration(
+            rect: $0,
+            handle: region.handle,
+            fixedSide: fixedSide
+          )
+        }
+      }
+      cachedHoverCursorRegistrations = registrations
+      return registrations
+    }
+
+    private func obstructingResizeRects(in window: NSWindow, clippedTo clips: [CGRect]) -> [CGRect] {
+      guard let contentView = window.contentView else { return [] }
+      var rects: [CGRect] = []
+      var pending: [NSView] = [contentView]
+      while let view = pending.popLast() {
+        guard !view.isHiddenOrHasHiddenAncestor else { continue }
+        pending.append(contentsOf: view.subviews)
+        if let control = view as? NSControl, !(control is NSScroller), control.isEnabled {
+          for clip in clips {
+            if let rect = hostRect(control.bounds, of: control, clippedTo: clip, in: window) {
+              rects.append(rect)
+            }
+          }
+          continue
+        }
+        if let textView = view as? NSTextView {
+          for clip in clips {
+            rects.append(contentsOf: glyphRects(in: textView, clippedTo: clip, in: window))
+          }
+        }
+      }
+      return rects
+    }
+
+    private func glyphRects(
+      in textView: NSTextView,
+      clippedTo clip: CGRect,
+      in window: NSWindow
+    ) -> [CGRect] {
+      guard let manager = textView.layoutManager, let container = textView.textContainer,
+        let visibleClip = hostRect(textView.bounds, of: textView, clippedTo: clip, in: window)
+      else { return [] }
+      let containerClip = textView.convert(convert(visibleClip, to: nil), from: nil).offsetBy(
+        dx: -textView.textContainerOrigin.x,
+        dy: -textView.textContainerOrigin.y
+      )
+      let glyphRange = manager.glyphRange(forBoundingRect: containerClip, in: container)
+      guard glyphRange.length > 0 else { return [] }
+      var rects: [CGRect] = []
+      for index in glyphRange.location..<NSMaxRange(glyphRange) {
+        let glyphBounds = manager.boundingRect(
+          forGlyphRange: NSRange(location: index, length: 1),
+          in: container
+        )
+        guard glyphBounds.width > 0, glyphBounds.height > 0 else { continue }
+        let containerRect = glyphBounds.offsetBy(
+          dx: textView.textContainerOrigin.x,
+          dy: textView.textContainerOrigin.y
+        )
+        guard let rect = hostRect(containerRect, of: textView, clippedTo: clip, in: window) else {
+          continue
+        }
+        rects.append(rect)
+      }
+      return rects
+    }
+
+    private func hostRect(
+      _ rect: CGRect,
+      of view: NSView,
+      clippedTo clip: CGRect,
+      in window: NSWindow
+    ) -> CGRect? {
+      guard view.window === window else { return nil }
+      let visible = rect.intersection(view.visibleRect)
+      guard !visible.isNull, visible.width > 0, visible.height > 0 else { return nil }
+      let clipped = convert(view.convert(visible, to: nil), from: nil).intersection(clip)
+      guard !clipped.isNull, clipped.width > 0, clipped.height > 0 else { return nil }
+      return clipped
+    }
+
+    private func subtracting(_ cut: CGRect, from rect: CGRect) -> [CGRect] {
+      let overlap = rect.intersection(cut)
+      guard !overlap.isNull, overlap.width > 0, overlap.height > 0 else { return [rect] }
+      return [
+        CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: overlap.minY - rect.minY),
+        CGRect(x: rect.minX, y: overlap.maxY, width: rect.width, height: rect.maxY - overlap.maxY),
+        CGRect(
+          x: rect.minX,
+          y: overlap.minY,
+          width: overlap.minX - rect.minX,
+          height: overlap.height
+        ),
+        CGRect(
+          x: overlap.maxX,
+          y: overlap.minY,
+          width: rect.maxX - overlap.maxX,
+          height: overlap.height
+        ),
+      ].filter { $0.width > 0 && $0.height > 0 }
+    }
+
+    private func structurallyCursorEligible(in window: NSWindow) -> Bool {
+      isInstalled && ownsPresentation && installedWindow === window && self.window === window
+        && window.isVisible && !isHiddenOrHasHiddenAncestor
+        && isLiveResizeEligible(in: window)
+    }
+
+    private func nativeCursorOwnerEligible(in window: NSWindow) -> Bool {
+      structurallyCursorEligible(in: window) && window.isKeyWindow
+        && NSApplication.shared.isActive
+    }
+
+    override func updateTrackingAreas() {
+      super.updateTrackingAreas()
+      reconcileCursorTrackingAreas()
+    }
+
+    private func reconcileCursorTrackingAreas() {
+      guard !isReconcilingCursorAreas else {
+        cursorAreaRevision &+= 1
+        requestCursorAreaRefresh()
+        return
+      }
+      isReconcilingCursorAreas = true
+      defer { isReconcilingCursorAreas = false }
+      let installation = installationRevision
+      guard let attachment = attachmentID, let window = installedWindow,
+        isInstalled, controller.isPresentationOwner(attachment),
+        installedWindow === window, self.window === window
+      else {
+        removeCursorTracking()
+        return
+      }
+      let revision = cursorAreaRevision
+      let specs = cursorRegistrations(fresh: true)
+      guard revision == cursorAreaRevision, installation == installationRevision,
+        controller.isPresentationOwner(attachment),
+        installedWindow === window, self.window === window
+      else {
+        requestCursorAreaRefresh()
+        return
+      }
+      installCursorTrackingAreas(specs)
+    }
+
+    private func requestCursorAreaRefresh() {
+      let installation = installationRevision
+      guard cursorAreaRefreshInstallation != installation else { return }
+      cursorAreaRefreshInstallation = installation
+      DispatchQueue.main.async { [weak self] in
+        guard let self, self.cursorAreaRefreshInstallation == installation,
+          self.installationRevision == installation
+        else { return }
+        self.cursorAreaRefreshInstallation = nil
+        self.reconcileCursorTrackingAreas()
+      }
+    }
+
+    private func installCursorTrackingAreas(
+      _ specs: [MenuPanelResizeCursorRegistration]
+    ) {
+      let stillAttached = cursorTrackingAreas.allSatisfy { area in
+        trackingAreas.contains { $0 === area }
+      }
+      if stillAttached, installedCursorAreaSpecs == specs {
+        return
+      }
+      removeCursorTracking()
+      cursorTrackingAreas = specs.map {
+        NSTrackingArea(
+          rect: $0.rect,
+          options: [.mouseEnteredAndExited, .mouseMoved, .cursorUpdate, .activeInKeyWindow],
+          owner: self,
+          userInfo: nil
+        )
+      }
+      installedCursorAreaSpecs = specs
+      for area in cursorTrackingAreas {
+        addTrackingArea(area)
+      }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+      super.mouseMoved(with: event)
+      updateHoverCursor(from: event)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+      guard let attachmentID, let window = installedWindow,
+        controller.isPresentationOwner(attachmentID), event.window === window,
+        nativeCursorOwnerEligible(in: window)
+      else {
+        if cursor != nil { resetCursor() }
+        super.cursorUpdate(with: event)
+        return
+      }
+      guard updateCursor(for: event, in: window) else {
+        super.cursorUpdate(with: event)
+        return
+      }
+      scheduleCursorRefresh()
+    }
 
     override func viewDidMoveToWindow() {
       super.viewDidMoveToWindow()
@@ -1072,6 +1879,15 @@
     override func layout() {
       super.layout()
       reconcileNativePresentation()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+      let geometryChanged = frame.size != newSize
+      super.setFrameSize(newSize)
+      if geometryChanged {
+        refreshResizeLayout()
+        scheduleCursorRefresh()
+      }
     }
 
     func configure(
@@ -1096,7 +1912,78 @@
       reconcileNativePresentation()
     }
 
+    func adoptInstallationAuthority(_ authority: MenuPanelResizeInstallationAuthority) {
+      hasRequiredInstallationAuthority = true
+      installationAuthority = authority
+    }
+
+    func abandonInstallationAuthority() {
+      isInstallationAbandoned = true
+      installationAuthority = nil
+    }
+
+    func completeNativeDetachment() {
+      guard let token = pendingNativeReleaseOwner else { return }
+      releasePendingNativeDetachment(matching: token)
+    }
+
+    private func releasePendingNativeDetachment(matching token: UUID) {
+      guard pendingNativeReleaseOwner == token else { return }
+      pendingNativeReleaseOwner = nil
+      guard controller.isPresentationOwner(token) else { return }
+      let released = suppressNativeRevocation(ownerID: token) {
+        controller.releasePresentation(ownerID: token, publication: .deferred)
+      }
+      guard released else { return }
+      deferObservablePublication()
+    }
+
+    private func deferObservablePublication() {
+      DispatchQueue.main.async { [weak self, controller] in
+        guard controller.currentPresentationOwnerID == nil else { return }
+        withExtendedLifetime(self) {}
+        _ = controller.publishPresentationContentSize()
+        _ = controller.publishPresentationLayout()
+      }
+    }
+
+    private func signalExternalHandoff(
+      ownerID: UUID,
+      window: NSWindow?,
+      authority: MenuPanelResizeInstallationAuthority?
+    ) {
+      guard let authority, authority.captured(ownerID: ownerID, window: window) else {
+        return
+      }
+      authority.revoke(ownerID: ownerID)
+      if pendingNativeReleaseOwner == ownerID {
+        pendingNativeReleaseOwner = nil
+      }
+    }
+
+    private func suppressNativeRevocation<Result>(
+      ownerID: UUID,
+      _ operation: () -> Result
+    ) -> Result {
+      let inserted = suppressedRevocationOwners.insert(ownerID).inserted
+      defer {
+        if inserted { suppressedRevocationOwners.remove(ownerID) }
+      }
+      return operation()
+    }
+
+    private func isAuthorizedForInstallation() -> Bool {
+      guard !isInstallationAbandoned else { return false }
+      guard hasRequiredInstallationAuthority else { return true }
+      guard let installationAuthority else { return false }
+      return installationAuthority.authorizes(self) != nil
+    }
+
     func installIfNeeded() {
+      guard isAuthorizedForInstallation() else {
+        uninstall()
+        return
+      }
       guard installedWindow !== window else {
         if let window, window.isVisible, !isPresented {
           isPresented = true
@@ -1107,6 +1994,10 @@
         return
       }
       uninstall()
+      if hasRequiredInstallationAuthority {
+        completeNativeDetachment()
+        guard isAuthorizedForInstallation() else { return }
+      }
       guard let window else { return }
       installedWindow = window
       let attachmentID = UUID()
@@ -1123,7 +2014,9 @@
       let controller = controller
       let wasPresentationOwner = oldAttachmentID.map(controller.isPresentationOwner) ?? false
       if let oldAttachmentID, wasPresentationOwner {
-        makeOwnedNativeCleanup(ownerID: oldAttachmentID, window: oldWindow)()
+        suppressNativeRevocation(ownerID: oldAttachmentID) {
+          makeOwnedNativeCleanup(ownerID: oldAttachmentID, window: oldWindow)()
+        }
         _ = controller.setPresentationRelinquish(
           ownerID: oldAttachmentID,
           makeDeferredRelinquishHandler(
@@ -1133,6 +2026,7 @@
             fallbackVisibleFrameProvider: fallbackVisibleFrameProvider
           )
         )
+        pendingNativeReleaseOwner = oldAttachmentID
       }
       installationRevision &+= 1
       invalidateQueuedWork()
@@ -1144,14 +2038,8 @@
       isPresented = false
       guard let oldAttachmentID else { return }
       if wasPresentationOwner {
-        DispatchQueue.main.async { [self, controller] in
-          if controller.releasePresentation(
-            ownerID: oldAttachmentID,
-            publication: .deferred
-          ) {
-            _ = controller.publishPresentationContentSize()
-          }
-          withExtendedLifetime(self) {}
+        DispatchQueue.main.async { [self] in
+          self.releasePendingNativeDetachment(matching: oldAttachmentID)
         }
       } else {
         removeNativeHooksWithoutRestoringWindow(oldWindow)
@@ -1159,9 +2047,15 @@
     }
 
     private func acquirePresentation(ownerID: UUID, window: NSWindow) {
+      guard isAuthorizedForInstallation() else { return }
       guard controller.claimPresentation(ownerID: ownerID, publication: .deferred),
         attachmentID == ownerID, installedWindow === window, self.window === window
       else { return }
+      installationAuthority?.capture(ownerID: ownerID, window: window)
+      guard isAuthorizedForInstallation() else {
+        uninstall()
+        return
+      }
 
       isPresented = window.isVisible
       if !isPresented { presentationTop = nil }
@@ -1180,6 +2074,7 @@
       self.monitor = monitor
       installWindowObservers(for: window)
       installVisibilityObservation(for: window, ownerID: ownerID)
+      installForeignChildObservation(for: window)
       _ = controller.setPresentationRelinquish(
         ownerID: ownerID,
         makeRelinquishHandler(ownerID: ownerID, window: window)
@@ -1212,12 +2107,17 @@
       let monitor = monitor
       let visibilityObservation = visibilityObservation
       let previousAcceptsMouseMovedEvents = previousAcceptsMouseMovedEvents
+      let authority = installationAuthority
       return { [weak self, weak controller, weak window] in
         guard controller?.isPresentationOwner(ownerID) == true else { return }
+        if let self, !self.suppressedRevocationOwners.contains(ownerID) {
+          self.signalExternalHandoff(ownerID: ownerID, window: window, authority: authority)
+        }
         if let monitor { NSEvent.removeMonitor(monitor) }
         visibilityObservation?.invalidate()
         if let self {
           self.removeWindowObservers(for: window)
+          self.removeForeignChildObservation()
           self.monitor = nil
           self.visibilityObservation = nil
           self.previousAcceptsMouseMovedEvents = nil
@@ -1225,7 +2125,9 @@
           self.clearAlignment()
           self.presentationTop = nil
           self.invalidateQueuedWork()
+          self.removeCursorTracking()
           self.resetCursor()
+          self.invalidateResizeCursorRegions()
         } else {
           NSCursor.arrow.set()
         }
@@ -1244,7 +2146,11 @@
       geometryStore: MenuPanelGeometryStore?,
       fallbackVisibleFrameProvider: @escaping FallbackVisibleFrameProvider
     ) -> @MainActor () -> Void {
-      return { [weak controller, weak window, weak geometryStore] in
+      let authority = installationAuthority
+      return { [weak self, weak controller, weak window, weak geometryStore] in
+        if let self, !self.suppressedRevocationOwners.contains(ownerID) {
+          self.signalExternalHandoff(ownerID: ownerID, window: window, authority: authority)
+        }
         let snapshot = controller?.cancelSnapshot(
           ownerID: ownerID,
           publication: .deferred
@@ -1304,6 +2210,46 @@
         name: NSApplication.didChangeScreenParametersNotification,
         object: nil
       )
+    }
+
+    private func installForeignChildObservation(for window: NSWindow) {
+      knownForeignChildren = visibleForeignChildren(of: window)
+      foreignChildrenObservation = NotificationCenter.default.addObserver(
+        forName: NSApplication.didUpdateNotification,
+        object: nil,
+        queue: .main
+      ) { [weak self] _ in
+        MainActor.assumeIsolated {
+          self?.reconcileForeignChildrenBoundary()
+        }
+      }
+    }
+
+    private func visibleForeignChildren(of window: NSWindow) -> Set<ObjectIdentifier> {
+      Set(
+        (window.childWindows ?? [])
+          .filter { $0.isVisible }
+          .map(ObjectIdentifier.init)
+      )
+    }
+
+    private func reconcileForeignChildrenBoundary() {
+      guard let window = installedWindow, self.window === window else {
+        knownForeignChildren = []
+        return
+      }
+      let current = visibleForeignChildren(of: window)
+      guard current != knownForeignChildren else { return }
+      knownForeignChildren = current
+      refreshResizeLayout()
+    }
+
+    private func removeForeignChildObservation() {
+      if let foreignChildrenObservation {
+        NotificationCenter.default.removeObserver(foreignChildrenObservation)
+      }
+      foreignChildrenObservation = nil
+      knownForeignChildren = []
     }
 
     private func installVisibilityObservation(for window: NSWindow, ownerID: UUID) {
@@ -1370,18 +2316,23 @@
     }
 
     private func removeNativeHooksWithoutRestoringWindow(_ window: NSWindow?) {
+      removeForeignChildObservation()
+      invalidateResizeCursorRegions()
       if let monitor { NSEvent.removeMonitor(monitor) }
       monitor = nil
       visibilityObservation?.invalidate()
       visibilityObservation = nil
       removeWindowObservers(for: window)
       previousAcceptsMouseMovedEvents = nil
+      removeCursorTracking()
       cursor = nil
     }
 
     private func handle(_ event: NSEvent) -> NSEvent? {
+      reconcileForeignChildrenBoundary()
       guard let attachmentID, controller.isPresentationOwner(attachmentID),
-        let window = installedWindow, event.window === window
+        let window = installedWindow,
+        event.window === window
       else { return event }
       guard window.isVisible else {
         resetCursor()
@@ -1423,13 +2374,14 @@
       case .keyDown where event.keyCode == 53 && ownsTracking:
         cancelAndRestore(in: window)
         return nil
-      case .mouseMoved:
-        updateCursor(for: event, in: window)
-        return event
       case .cursorUpdate:
-        return updateCursor(for: event, in: window) ? nil : event
+        guard ownsTracking else { return event }
+        let handled = updateCursor(for: event, in: window)
+        guard handled else { return event }
+        scheduleCursorRefresh()
+        return nil
       case .mouseExited:
-        resetCursor()
+        prepareHoverCursorRelease(in: window)
         return event
       default:
         return event
@@ -1481,11 +2433,16 @@
       )
     }
 
-    private func begin(pointer: CGPoint, in window: NSWindow) -> Bool {
-      guard case let .ready(initialSnapshot, handle, ownerID, statusButtonSource) = beginReadiness(
+    private func begin(
+      pointer: CGPoint,
+      in window: NSWindow
+    ) -> Bool {
+      let readiness = beginReadiness(
         at: window.convertPoint(fromScreen: pointer),
         in: window
-      ) else { return false }
+      )
+      guard case let .ready(initialSnapshot, handle, ownerID, statusButtonSource) = readiness
+      else { return false }
       var snapshot = initialSnapshot
       snapshot.initialPointer = pointer
       guard controller.begin(snapshot: snapshot, handle: handle, ownerID: ownerID) else {
@@ -1494,6 +2451,7 @@
       invalidateQueuedWork()
       activeStatusButtonSource = statusButtonSource
       setCursor(cursor(for: handle, fixedSide: snapshot.fixedSide))
+      invalidateResizeCursorRegions()
       return true
     }
 
@@ -1536,6 +2494,7 @@
       {
         setCursor(cursor(for: handle, fixedSide: fixedSide))
       }
+      refreshResizeLayout()
     }
 
     private func finish(pointer: CGPoint, in window: NSWindow) {
@@ -1613,13 +2572,30 @@
       alignedFixedSide = final.fixedSide
       alignedFrame = final.frame
       onCommit(final.contentSize)
-      guard isCurrentInteraction(completedInteraction, in: window),
-        controller.clearCompletion(preferredSize: preferredSize, ownerID: attachmentID),
-        isCurrentInteraction(completedInteraction.successor, in: window)
-      else { return }
+      refreshResizeLayout()
+      let interactionAfterCommit = isCurrentInteraction(completedInteraction, in: window)
+      let clearedCompletion =
+        interactionAfterCommit
+        && controller.clearCompletion(preferredSize: preferredSize, ownerID: attachmentID)
+      let interactionAfterClear =
+        clearedCompletion && isCurrentInteraction(completedInteraction.successor, in: window)
+      guard interactionAfterCommit, clearedCompletion, interactionAfterClear else { return }
       invalidateQueuedWork()
       scheduleReconcile()
-      updateCursor(at: window.convertPoint(fromScreen: pointer), in: window)
+      updateCursorAfterFinish(pointer: pointer, in: window)
+      scheduleCursorRefresh()
+      invalidateResizeCursorRegions()
+    }
+
+    private func updateCursorAfterFinish(pointer: CGPoint, in window: NSWindow) {
+      let locationInWindow = window.convertPoint(fromScreen: pointer)
+      let insideHost = bounds.contains(convert(locationInWindow, from: nil))
+      let insideWindow = window.frame.contains(pointer)
+      let laggingStrip = !insideHost && insideWindow
+      if laggingStrip, !contentObstructsResize(at: locationInWindow, in: window) {
+        return
+      }
+      updateCursor(at: locationInWindow, in: window)
     }
 
     private func cancelAndRestore(
@@ -1649,6 +2625,7 @@
       guard isCurrentInteraction(rollbackInteraction, in: window) else { return }
       activeStatusButtonSource = nil
       resetCursor()
+      invalidateResizeCursorRegions()
     }
 
     private func isLiveResizeEligible(in window: NSWindow) -> Bool {
@@ -1657,6 +2634,7 @@
     }
 
     @objc private func windowWillClose() {
+      invalidateResizeCursorRegions()
       guard ownsPresentation else { return }
       isPresented = false
       presentationTop = nil
@@ -1668,6 +2646,7 @@
     }
 
     @objc private func windowResignedKey() {
+      invalidateResizeCursorRegions()
       guard ownsPresentation else { return }
       isPresented = false
       presentationTop = nil
@@ -1704,6 +2683,145 @@
       updateCursor(at: event.locationInWindow, in: window)
     }
 
+    private func updateHoverCursor(from event: NSEvent) {
+      guard let window = installedWindow, event.window === window,
+        let attachmentID, controller.isPresentationOwner(attachmentID), window.isVisible
+      else { return }
+      if controller.isOwned(by: attachmentID) {
+        updateCursor(at: event.locationInWindow, in: window)
+        return
+      }
+      guard let resolved = hoverCursor(at: event.locationInWindow, in: window) else {
+        resetCursor(in: window)
+        return
+      }
+      setCursor(resolved)
+      scheduleCursorRefresh()
+    }
+
+    private func prepareHoverCursorRelease(in window: NSWindow) {
+      guard let attachmentID, installedWindow === window, self.window === window,
+        controller.isPresentationOwner(attachmentID)
+      else { return }
+      guard window.isVisible else {
+        resetCursor()
+        return
+      }
+      let liveLocation = window.mouseLocationOutsideOfEventStream
+      let livePointer = window.convertPoint(toScreen: liveLocation)
+      guard window.frame.contains(livePointer) else {
+        if controller.isOwned(by: attachmentID) {
+          updateCursor(at: liveLocation, in: window)
+          return
+        }
+        resetCursor(in: window)
+        return
+      }
+      scheduleCursorRefresh()
+    }
+
+    private func resolvedLayout() -> MenuPanelResizeLayout? {
+      guard let fixedSide = controller.currentFixedSide ?? alignedFixedSide else { return nil }
+      return MenuPanelResizeGeometry.layout(in: bounds, fixedSide: fixedSide)
+    }
+
+    private func refreshResizeLayout() {
+      guard isInstalled, ownsPresentation, isPresented,
+        let window = installedWindow, self.window === window,
+        let attachmentID, controller.isPresentationOwner(attachmentID)
+      else {
+        invalidateResizeCursorRegions()
+        return
+      }
+      publishResizeLayout(ownerID: attachmentID)
+      invalidateResizeCursorRegions()
+      if !isLiveResizeEligible(in: window), ownsTracking {
+        cancelAndRestore(in: window)
+      }
+    }
+
+    private func publishResizeLayout(ownerID: UUID) {
+      guard controller.setPresentationBodyPolicy(
+        resolvedBodyPolicy(),
+        ownerID: ownerID,
+        publication: .deferred
+      ) else { return }
+      let installation = installationRevision
+      guard queuedLayoutPublication != installation else { return }
+      queuedLayoutPublication = installation
+      DispatchQueue.main.async { [weak self] in
+        guard let self, self.installationRevision == installation else { return }
+        self.queuedLayoutPublication = nil
+        guard let attachmentID = self.attachmentID,
+          self.controller.isPresentationOwner(attachmentID)
+        else {
+          _ = self.controller.publishPresentationLayout()
+          return
+        }
+        _ = self.controller.publishPresentationLayout(ownerID: attachmentID)
+      }
+    }
+
+    private func resolvedBodyPolicy() -> MenuPanelResizeBodyPolicy {
+      guard let layout = resolvedLayout() else { return .unready }
+      return .inset(layout)
+    }
+
+    func invalidateResizeCursorRegions() {
+      cachedHoverCursorRegistrations = nil
+      cursorAreaRevision &+= 1
+      requestCursorAreaRefresh()
+    }
+
+    private func scheduleCursorRefresh() {
+      let installation = installationRevision
+      guard queuedCursorRefreshInstallation != installation else { return }
+      queuedCursorRefreshInstallation = installation
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        self.applyQueuedCursorRefresh(installation: installation)
+      }
+    }
+
+    private func applyQueuedCursorRefresh(installation: Int) {
+      guard queuedCursorRefreshInstallation == installation else {
+        return
+      }
+      queuedCursorRefreshInstallation = nil
+      guard installationRevision == installation else {
+        return
+      }
+      guard NSApplication.shared.isActive else {
+        return
+      }
+      guard let window = installedWindow, self.window === window, window.isVisible else {
+        return
+      }
+      guard let attachmentID,
+        controller.isPresentationOwner(attachmentID),
+        !controller.isOwned(by: attachmentID)
+      else {
+        return
+      }
+      let location = window.mouseLocationOutsideOfEventStream
+      let pointer = window.convertPoint(toScreen: location)
+      let topmostWindowNumber = NSWindow.windowNumber(
+        at: pointer,
+        belowWindowWithWindowNumber: 0
+      )
+      guard topmostWindowNumber == window.windowNumber else {
+        return
+      }
+      guard bounds.contains(convert(location, from: nil)) else {
+        return
+      }
+      guard let resolved = hoverCursor(at: location, in: window) else {
+        resetCursor(in: window)
+        return
+      }
+      setCursor(resolved)
+    }
+
     @discardableResult
     private func updateCursor(at locationInWindow: CGPoint, in window: NSWindow) -> Bool {
       if let attachmentID, controller.isOwned(by: attachmentID),
@@ -1713,6 +2831,15 @@
         setCursor(cursor(for: handle, fixedSide: fixedSide))
         return true
       }
+      guard let resolved = hoverCursor(at: locationInWindow, in: window) else {
+        resetCursor(in: window)
+        return false
+      }
+      setCursor(resolved)
+      return true
+    }
+
+    private func hoverCursor(at locationInWindow: CGPoint, in window: NSWindow) -> NSCursor? {
       guard isLiveResizeEligible(in: window),
         let statusLabelFrame = geometryStore?.cachedStatusButton?.screenFrame,
         let fixedSide = MenuPanelResizeGeometry.anchoredSide(
@@ -1720,12 +2847,8 @@
           statusLabelFrame: statusLabelFrame
         ),
         let handle = usableHandle(at: locationInWindow, in: window, fixedSide: fixedSide)
-      else {
-        resetCursor(in: window)
-        return false
-      }
-      setCursor(cursor(for: handle, fixedSide: fixedSide))
-      return true
+      else { return nil }
+      return cursor(for: handle, fixedSide: fixedSide)
     }
 
     func usableHandle(
@@ -1734,37 +2857,60 @@
       fixedSide: MenuPanelFixedSide
     ) -> MenuPanelResizeHandle? {
       guard let handle = MenuPanelResizeGeometry.handle(
-        at: convert(locationInWindow, from: nil), in: bounds, fixedSide: fixedSide
+        at: convert(locationInWindow, from: nil),
+        in: bounds,
+        fixedSide: fixedSide
       ) else { return nil }
-      if let contentView = window.contentView {
-        var hit = contentView.hitTest(contentView.convert(locationInWindow, from: nil))
-        while let view = hit {
-          if let scroller = view as? NSScroller {
-            hit = scroller.superview
-            continue
-          }
-          if let control = view as? NSControl, control.isEnabled { return nil }
-          if let textView = view as? NSTextView,
-            let manager = textView.layoutManager, let container = textView.textContainer
-          {
-            let point = textView.convert(locationInWindow, from: nil)
-            let textPoint = CGPoint(
-              x: point.x - textView.textContainerOrigin.x,
-              y: point.y - textView.textContainerOrigin.y
-            )
-            if textPoint.x >= 0, point.x < textView.bounds.maxX - textView.textContainerOrigin.x {
-              let glyph = manager.glyphIndex(for: textPoint, in: container)
-              if glyph < manager.numberOfGlyphs,
-                manager.boundingRect(
-                  forGlyphRange: NSRange(location: glyph, length: 1), in: container
-                ).contains(textPoint)
-              { return nil }
-            }
-          }
-          hit = view.superview
-        }
-      }
+      guard !contentObstructsResize(at: locationInWindow, in: window) else { return nil }
       return handle
+    }
+
+    func routesCursorToNativeOwner(
+      at locationInWindow: CGPoint,
+      in window: NSWindow
+    ) -> Bool {
+      guard !ownsTracking, installedWindow === window, self.window === window else { return false }
+      let location = convert(locationInWindow, from: nil)
+      return cursorRegistrations().contains { $0.rect.contains(location) }
+    }
+
+    private func contentObstructsResize(
+      at locationInWindow: CGPoint,
+      in window: NSWindow
+    ) -> Bool {
+      guard let contentView = window.contentView else { return false }
+      isProbingContent = true
+      defer { isProbingContent = false }
+      let contentPoint =
+        contentView.superview.map { $0.convert(locationInWindow, from: nil) }
+        ?? contentView.convert(locationInWindow, from: nil)
+      var hit = contentView.hitTest(contentPoint)
+      while let view = hit {
+        if let scroller = view as? NSScroller {
+          hit = scroller.superview
+          continue
+        }
+        if let control = view as? NSControl, control.isEnabled { return true }
+        if let textView = view as? NSTextView,
+          let manager = textView.layoutManager, let container = textView.textContainer
+        {
+          let point = textView.convert(locationInWindow, from: nil)
+          let textPoint = CGPoint(
+            x: point.x - textView.textContainerOrigin.x,
+            y: point.y - textView.textContainerOrigin.y
+          )
+          if textPoint.x >= 0, point.x < textView.bounds.maxX - textView.textContainerOrigin.x {
+            let glyph = manager.glyphIndex(for: textPoint, in: container)
+            if glyph < manager.numberOfGlyphs,
+              manager.boundingRect(
+                forGlyphRange: NSRange(location: glyph, length: 1), in: container
+              ).contains(textPoint)
+            { return true }
+          }
+        }
+        hit = view.superview
+      }
+      return false
     }
 
     private func activeStatusButtonFrame() -> CGRect? {
@@ -1809,6 +2955,12 @@
       publication: MenuPanelResizePublicationTiming,
       preparesHiddenWindow: Bool
     ) {
+      defer {
+        if let attachmentID, controller.isPresentationOwner(attachmentID) {
+          publishResizeLayout(ownerID: attachmentID)
+        }
+        invalidateResizeCursorRegions()
+      }
       guard let window = installedWindow, let attachmentID else {
         if pendingExternalPreference, controller.isUnownedTracking {
           controller.cancelSnapshot(publication: publication)
@@ -1922,6 +3074,8 @@
       alignedVisibleFrame = screen.visibleFrame
       alignedFixedSide = placement.fixedSide
       alignedFrame = placement.frame
+      updateTrackingAreas()
+      invalidateResizeCursorRegions()
     }
 
     private func restore(
@@ -2133,6 +3287,7 @@
       isApplyingFrame = true
       window.setFrame(frame, display: displayImmediately, animate: false)
       isApplyingFrame = false
+      refreshResizeLayout()
       return window.frame == frame
     }
 
@@ -2158,20 +3313,50 @@
       }
     }
 
-    private func diagonalCursor(systemSymbolName: String) -> NSCursor {
-      guard let image = NSImage(
-        systemSymbolName: systemSymbolName,
-        accessibilityDescription: nil
-      ) else { return .crosshair }
-      return NSCursor(
-        image: image,
-        hotSpot: NSPoint(x: image.size.width / 2, y: image.size.height / 2)
+    private func diagonalCursor(rotatedClockwise: Bool) -> NSCursor {
+      let source = NSCursor.resizeLeftRight.image
+      let sourceSize = source.size
+      guard sourceSize.width > 0, sourceSize.height > 0 else { return .resizeLeftRight }
+      let scale: CGFloat = 2
+      let side = (hypot(sourceSize.width, sourceSize.height) + 4).rounded(.up)
+      let pixels = Int(side * scale)
+      guard let representation = NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: pixels,
+        pixelsHigh: pixels,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+      ), let context = NSGraphicsContext(bitmapImageRep: representation)
+      else { return .resizeLeftRight }
+      representation.size = NSSize(width: side, height: side)
+      NSGraphicsContext.saveGraphicsState()
+      NSGraphicsContext.current = context
+      context.cgContext.scaleBy(x: scale, y: scale)
+      context.cgContext.translateBy(x: side / 2, y: side / 2)
+      context.cgContext.rotate(by: (rotatedClockwise ? -45 : 45) * .pi / 180)
+      context.cgContext.translateBy(x: -sourceSize.width / 2, y: -sourceSize.height / 2)
+      source.draw(
+        in: NSRect(origin: .zero, size: sourceSize),
+        from: .zero,
+        operation: .sourceOver,
+        fraction: 1
       )
+      context.flushGraphics()
+      NSGraphicsContext.restoreGraphicsState()
+      let image = NSImage(size: NSSize(width: side, height: side))
+      image.addRepresentation(representation)
+      image.isTemplate = false
+      return NSCursor(image: image, hotSpot: NSPoint(x: side / 2, y: side / 2))
     }
 
     private func setCursor(_ cursor: NSCursor) {
       self.cursor = cursor
-      if NSCursor.current !== cursor { cursor.set() }
+      cursor.set()
     }
 
     private func resetCursor(in window: NSWindow) {
@@ -2183,9 +3368,19 @@
     }
 
     private func resetCursor() {
-      guard cursor != nil else { return }
+      guard let ownedCursor = cursor else { return }
       cursor = nil
+      guard NSCursor.current === ownedCursor else { return }
       NSCursor.arrow.set()
+    }
+
+    private func removeCursorTracking() {
+      guard !cursorTrackingAreas.isEmpty else { return }
+      for area in cursorTrackingAreas {
+        removeTrackingArea(area)
+      }
+      cursorTrackingAreas = []
+      installedCursorAreaSpecs = []
     }
   }
 #endif

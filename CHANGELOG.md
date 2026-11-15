@@ -3,6 +3,41 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.12-beta.1] - 2026-11-15
+
+### Fixed
+
+- Native key-window resize ownership keeps the resize cursor on the menu panel
+  instead of the note interior, with a three-point reserved geometry band and a
+  seven-point cursor admission region for the border handles.
+- Paint one continuous panel background across the reserved resize margin,
+  while keeping the body hidden until its native layout is resolved.
+
+Native cursor artwork is unchanged.
+
+## [1.8.9-beta.1] - 2026-11-13
+
+### Fixed
+
+- Use native double-headed diagonal resize arrows and keep bottom-edge and
+  corner resizing within a narrow border strip instead of the note interior.
+
+## [1.8.8-beta.1] - 2026-11-12
+
+### Changed
+
+- Briefly confirm Saved after 1.5 seconds of inactivity once the latest changes
+  have been saved, then hide the confirmation after one second. New typing
+  resets the confirmation without delaying the existing 350 ms autosave.
+
+## [1.8.7-beta.1] - 2026-11-12
+
+### Fixed
+
+- Menu-bar resize hitboxes keep their directional cursors during native cursor
+  updates and movement between child views, restoring the content cursor when
+  the pointer leaves the resize area.
+
 ## [1.8.6-beta.1] - 2026-11-12
 
 ### Added

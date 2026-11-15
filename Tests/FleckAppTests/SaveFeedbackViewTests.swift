@@ -8,6 +8,62 @@ import Testing
 @Suite("SaveFeedbackView")
 @MainActor
 struct SaveFeedbackViewTests {
+  @Test(arguments: [false, true])
+  func savedConfirmationRendersAfterIdleAndHides(reduceMotion: Bool) async throws {
+    let previousAXEnhancedUserInterface = enableHostedAccessibility()
+    defer { restoreHostedAccessibility(previousAXEnhancedUserInterface) }
+    let theme = FleckThemeSnapshot.resolve(
+      colorTheme: .monochrome,
+      mode: reduceMotion ? .dark : .light,
+      systemAppearance: reduceMotion ? .dark : .light,
+      reduceTransparency: false,
+      increasedContrast: reduceMotion
+    )
+
+    for width in [CGFloat(320), CGFloat(900)] {
+      let fixture = HostedSaveFeedbackFixture(
+        width: width,
+        theme: theme,
+        appearance: reduceMotion ? .accessibilityHighContrastDarkAqua : .aqua,
+        reduceMotion: reduceMotion
+      )
+      defer { fixture.close() }
+      let started = ContinuousClock.now
+      fixture.presentation.changesScheduled()
+      let write = fixture.presentation.writeBegan()
+      fixture.presentation.writeEnded(write)
+      fixture.presentation.settle(.saved)
+      #expect(!fixture.presentation.showsSavedConfirmation)
+
+      let revealDeadline = started + .seconds(4)
+      while !fixture.presentation.showsSavedConfirmation, ContinuousClock.now < revealDeadline {
+        try await Task.sleep(for: .milliseconds(10))
+      }
+      try #require(fixture.presentation.showsSavedConfirmation)
+      #expect(ContinuousClock.now - started >= .milliseconds(1500))
+      let element = try #require(
+        try await fixture.waitForAccessibilityElement(value: "All changes saved")
+      )
+      let frame = try #require(fixture.accessibilityFrame(element))
+      #expect(abs(frame.width - 62) < 1)
+      #expect(abs(frame.height - 22) < 1)
+      try fixture.capture(
+        state: .saved,
+        theme: reduceMotion ? "dark-high-contrast" : "light",
+        width: width == 320 ? "narrow" : "wide",
+        reduceMotion: reduceMotion,
+        prefix: "saved-confirmation"
+      )
+
+      let hideDeadline = ContinuousClock.now + .seconds(3)
+      while fixture.presentation.showsSavedConfirmation, ContinuousClock.now < hideDeadline {
+        try await Task.sleep(for: .milliseconds(10))
+      }
+      #expect(!fixture.presentation.showsSavedConfirmation)
+      #expect(fixture.presentation.state == .saved)
+    }
+  }
+
   @Test
   func hostedFeedbackKeepsQuietChromeGeometryAndApprovedAccessibility() async throws {
     let previousAXEnhancedUserInterface = enableHostedAccessibility()
@@ -238,7 +294,8 @@ private final class HostedSaveFeedbackFixture {
     state: SaveFeedbackState,
     theme: String,
     width: String,
-    reduceMotion: Bool
+    reduceMotion: Bool,
+    prefix: String = "save-feedback"
   ) throws {
     guard
       let directoryPath = ProcessInfo.processInfo.environment["FLECK_LAYOUT_EVIDENCE_DIR"]
@@ -253,7 +310,7 @@ private final class HostedSaveFeedbackFixture {
     host.cacheDisplay(in: host.bounds, to: image)
     let png = try #require(image.representation(using: .png, properties: [:]))
     let name =
-      "save-feedback-\(stateName(state))-\(theme)-\(width)-rm\(reduceMotion ? 1 : 0).png"
+      "\(prefix)-\(stateName(state))-\(theme)-\(width)-rm\(reduceMotion ? 1 : 0).png"
     try png.write(to: directory.appendingPathComponent(name), options: .atomic)
   }
 

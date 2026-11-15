@@ -381,7 +381,9 @@ struct AgentEventCallbackVerificationTests {
     let store = fixture.verificationStore
     var candidates: [(profileID: UUID, url: String, reference: String, key: String)] = []
     for index in 0..<129 {
-      let profileID = UUID()
+      let profileID = try #require(
+        UUID(uuidString: String(format: "00000000-0000-0000-0000-%012x", 129 - index))
+      )
       let url = "https://example.com/cache/\(index)"
       let reference = UUID().uuidString.lowercased()
       let digest = try #require(
@@ -419,10 +421,15 @@ struct AgentEventCallbackVerificationTests {
       }
       return "\(profile.lowercased())\u{0}\(digest)"
     })
-    let oldest = try #require(candidates.min { $0.key < $1.key })
+    let existing = candidates.dropLast()
+    let oldest = try #require(existing.min { $0.key < $1.key })
     let newest = try #require(candidates.last)
+    var expectedKeys = Set(existing.map { $0.key })
+    expectedKeys.remove(oldest.key)
+    expectedKeys.insert(newest.key)
 
     #expect(entries.count == 128)
+    #expect(cacheKeys == expectedKeys)
     #expect(!cacheKeys.contains(oldest.key))
     #expect(
       try store.endpointCacheEntry(
