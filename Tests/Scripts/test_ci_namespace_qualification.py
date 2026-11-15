@@ -42,18 +42,35 @@ NORMAL_JOB_NAMES = {
     "macos-enhanced": "macOS Enhanced Local candidate gates",
 }
 
+RUNNER_FALLBACK_JOBS = ("namespace-probe", "select-runner")
+PROBE_JOB_NAME = "Namespace capacity probe"
 NATIVE_PROVIDER_RUNS_ON = (
     "${{ github.event_name == 'workflow_dispatch' && "
     "inputs.native_runner_provider == 'github-hosted' && "
     "'macos-26' || 'namespace-profile-fleck' }}"
 )
+DETECTOR_RUNS_ON = (
+    "${{ needs.select-runner.outputs.runner || 'namespace-profile-fleck' }}"
+)
+SELECTED_RUNS_ON = (
+    "${{ needs.detect-changes.outputs.runner || 'namespace-profile-fleck' }}"
+)
+SELECTED_RUNNER_JOBS = (
+    "macos-build",
+    "macos-validation",
+    "macos-enhanced",
+    "docs-validation",
+    "macos",
+)
 EXPECTED_RUNS_ON = {
-    "detect-changes": "namespace-profile-fleck",
-    "macos-build": NATIVE_PROVIDER_RUNS_ON,
-    "macos-validation": NATIVE_PROVIDER_RUNS_ON,
-    "docs-validation": "namespace-profile-fleck",
-    "macos": "namespace-profile-fleck",
-    "macos-enhanced": NATIVE_PROVIDER_RUNS_ON,
+    "namespace-probe": "namespace-profile-fleck",
+    "select-runner": "ubuntu-latest",
+    "detect-changes": DETECTOR_RUNS_ON,
+    "macos-build": SELECTED_RUNS_ON,
+    "macos-validation": SELECTED_RUNS_ON,
+    "docs-validation": SELECTED_RUNS_ON,
+    "macos": SELECTED_RUNS_ON,
+    "macos-enhanced": SELECTED_RUNS_ON,
     "own-window-capture-probe": "macos-26",
     "folder-navigator-diagnostic": "macos-26",
     "folder-navigator-diagnostic-enhanced": "macos-26",
@@ -202,66 +219,104 @@ class NamespaceQualificationWorkflowTest(unittest.TestCase):
         options = re.findall(r"^          - (\S+)$", block, re.M)
         self.assertEqual(options, ["github-hosted", "namespace"])
 
-    def test_native_runner_provider_maps_three_heavy_and_one_focused_job(self):
-        for job_id in (
-            "macos-build",
-            "macos-validation",
-            "macos-enhanced",
-            "ordinary-test-diagnostic",
-        ):
-            with self.subTest(job=job_id):
-                runs_on = job_runs_on(self.contents, job_id)
-                self.assertEqual(runs_on, NATIVE_PROVIDER_RUNS_ON)
-                self.assertIn(
-                    "github.event_name == 'workflow_dispatch'", runs_on
-                )
-                self.assertIn(
-                    "inputs.native_runner_provider == 'github-hosted'", runs_on
-                )
-                self.assertIn("'namespace-profile-fleck'", runs_on)
-                self.assertIn("&& 'macos-26'", runs_on)
-        namespace_jobs = [
+    def test_manual_provider_maps_only_the_focused_diagnostic_job(self):
+        runs_on = job_runs_on(self.contents, "ordinary-test-diagnostic")
+        self.assertEqual(runs_on, NATIVE_PROVIDER_RUNS_ON)
+        self.assertIn("github.event_name == 'workflow_dispatch'", runs_on)
+        self.assertIn("inputs.native_runner_provider == 'github-hosted'", runs_on)
+        self.assertIn("'namespace-profile-fleck'", runs_on)
+        self.assertIn("&& 'macos-26'", runs_on)
+        manual_jobs = [
             job_id
             for job_id in ORIGINAL_JOBS
             if job_runs_on(self.contents, job_id) == NATIVE_PROVIDER_RUNS_ON
         ]
-        self.assertEqual(
-            namespace_jobs,
-            [
-                "macos-build",
-                "macos-validation",
-                "macos-enhanced",
-                "ordinary-test-diagnostic",
-            ],
-        )
-        for job_id in ORIGINAL_JOBS:
+        self.assertEqual(manual_jobs, ["ordinary-test-diagnostic"])
+        for job_id in ORIGINAL_JOBS + RUNNER_FALLBACK_JOBS:
             with self.subTest(job=job_id):
                 self.assertNotIn(
                     "namespace-profile-exterminatorrat",
                     job_runs_on(self.contents, job_id),
                 )
 
-    def test_native_jobs_use_namespace_except_explicit_github_dispatch(self):
-        for job_id in (
-            "macos-build",
-            "macos-validation",
-            "macos-enhanced",
-            "ordinary-test-diagnostic",
-        ):
+    def test_focused_diagnostic_uses_namespace_except_explicit_github_dispatch(self):
+        expression = normalized_expression(
+            job_runs_on(self.contents, "ordinary-test-diagnostic")
+        )
+        for event in ("pull_request", "push", "workflow_dispatch"):
+            for provider in ("", "namespace", "github-hosted"):
+                with self.subTest(event=event, provider=provider):
+                    evaluated = expression.replace("github.event_name", repr(event))
+                    evaluated = evaluated.replace(
+                        "inputs.native_runner_provider", repr(provider)
+                    ).replace("&&", "and").replace("||", "or")
+                    expected = (
+                        "macos-26"
+                        if event == "workflow_dispatch" and provider == "github-hosted"
+                        else "namespace-profile-fleck"
+                    )
+                    self.assertEqual(eval(evaluated, {"__builtins__": {}}), expected)
+
+    def test_full_graph_jobs_follow_the_selected_runner_with_namespace_default(self):
+        for job_id in SELECTED_RUNNER_JOBS:
             expression = normalized_expression(job_runs_on(self.contents, job_id))
-            for event in ("pull_request", "push", "workflow_dispatch"):
-                for provider in ("", "namespace", "github-hosted"):
-                    with self.subTest(job=job_id, event=event, provider=provider):
-                        evaluated = expression.replace("github.event_name", repr(event))
-                        evaluated = evaluated.replace(
-                            "inputs.native_runner_provider", repr(provider)
-                        ).replace("&&", "and").replace("||", "or")
-                        expected = (
-                            "macos-26"
-                            if event == "workflow_dispatch" and provider == "github-hosted"
-                            else "namespace-profile-fleck"
-                        )
-                        self.assertEqual(eval(evaluated, {"__builtins__": {}}), expected)
+            for selected, expected in (
+                ("macos-26", "macos-26"),
+                ("namespace-profile-fleck", "namespace-profile-fleck"),
+                ("", "namespace-profile-fleck"),
+            ):
+                with self.subTest(job=job_id, selected=selected):
+                    evaluated = expression.replace(
+                        "needs.detect-changes.outputs.runner", repr(selected)
+                    ).replace("||", "or")
+                    self.assertEqual(eval(evaluated, {"__builtins__": {}}), expected)
+        detector = normalized_expression(job_runs_on(self.contents, "detect-changes"))
+        for selected, expected in (
+            ("macos-26", "macos-26"),
+            ("", "namespace-profile-fleck"),
+        ):
+            with self.subTest(job="detect-changes", selected=selected):
+                evaluated = detector.replace(
+                    "needs.select-runner.outputs.runner", repr(selected)
+                ).replace("||", "or")
+                self.assertEqual(eval(evaluated, {"__builtins__": {}}), expected)
+
+    def test_runner_selection_flows_through_detect_changes(self):
+        detector = job_block(self.contents, "detect-changes")
+        self.assertRegex(detector, r"(?m)^    needs: select-runner$")
+        self.assertIn(
+            "      runner: ${{ needs.select-runner.outputs.runner }}\n", detector
+        )
+        for job_id in SELECTED_RUNNER_JOBS:
+            with self.subTest(job=job_id):
+                self.assertRegex(
+                    job_block(self.contents, job_id),
+                    r"(?m)^    needs: (detect-changes|\[detect-changes, .*\])$",
+                )
+
+    def test_probe_runs_on_namespace_only_outside_manual_dispatch(self):
+        probe = job_block(self.contents, "namespace-probe")
+        self.assertEqual(
+            job_if(self.contents, "namespace-probe"),
+            "${{ !inputs.namespace_qualification_only && "
+            "github.event_name != 'workflow_dispatch' }}",
+        )
+        self.assertIn(f"name: {PROBE_JOB_NAME}\n", probe)
+        self.assertNotIn("actions/checkout", probe)
+        self.assertNotRegex(probe, r"(?m)^    needs:")
+        self.assertEqual(re.findall(r"^    timeout-minutes: (\d+)$", probe, re.M), ["2"])
+
+    def test_selector_is_read_only_linux_and_names_the_probe(self):
+        selector = job_block(self.contents, "select-runner")
+        self.assertNotRegex(selector, r"(?m)^    needs:")
+        self.assertIn("permissions:\n      actions: read\n      contents: read\n", selector)
+        self.assertNotIn("write", selector)
+        self.assertIn(f'--probe-job-name "{PROBE_JOB_NAME}"', selector)
+        self.assertIn("persist-credentials: false", selector)
+        self.assertIn("runner: ${{ steps.select.outputs.runner }}", selector)
+        timeouts = re.findall(r"^    timeout-minutes: (\d+)$", selector, re.M)
+        probe_window = int(re.search(r"--timeout-seconds (\d+)", selector).group(1))
+        self.assertLess(probe_window, int(timeouts[0]) * 60)
 
     def test_all_other_runs_on_values_are_unchanged(self):
         for job_id, expected in EXPECTED_RUNS_ON.items():
@@ -319,17 +374,19 @@ class NamespaceQualificationWorkflowTest(unittest.TestCase):
 
     def test_job_inventory_preserves_existing_jobs(self):
         self.assertEqual(
-            set(self.job_ids), set(ORIGINAL_JOBS) | {QUALIFICATION_JOB}
+            set(self.job_ids),
+            set(ORIGINAL_JOBS) | set(RUNNER_FALLBACK_JOBS) | {QUALIFICATION_JOB},
         )
         self.assertEqual(len(self.job_ids), len(set(self.job_ids)))
 
     def test_every_original_job_skips_qualification_runs(self):
-        for job_id in ORIGINAL_JOBS:
+        for job_id in ORIGINAL_JOBS + RUNNER_FALLBACK_JOBS:
             with self.subTest(job=job_id):
                 condition = job_if(self.contents, job_id)
                 self.assertIn("!inputs.namespace_qualification_only", condition)
                 self.assertTrue(
-                    condition.startswith(
+                    condition == "${{ !inputs.namespace_qualification_only }}"
+                    or condition.startswith(
                         "${{ !inputs.namespace_qualification_only && "
                     )
                     or condition.endswith(

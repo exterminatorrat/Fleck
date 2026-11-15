@@ -2697,9 +2697,21 @@ current_workflow = workflow_path.read_text()
 
 qualification_guard = "!inputs.namespace_qualification_only"
 qualification_job = "namespace-qualification"
-native_jobs = (
-    "macos-build", "macos-validation", "macos-enhanced", "ordinary-test-diagnostic",
+native_jobs = ("ordinary-test-diagnostic",)
+fallback_jobs = ("namespace-probe", "select-runner")
+detector_routing = (
+    "runs-on: ${{ needs.select-runner.outputs.runner || 'namespace-profile-fleck' }}"
 )
+selected_routing = (
+    "runs-on: ${{ needs.detect-changes.outputs.runner || 'namespace-profile-fleck' }}"
+)
+selected_job_baselines = {
+    "macos-build": "runs-on: macos-26",
+    "macos-validation": "runs-on: macos-26",
+    "macos-enhanced": "runs-on: macos-26",
+    "docs-validation": "runs-on: namespace-profile-fleck",
+    "macos": "runs-on: namespace-profile-fleck",
+}
 native_routing = (
     "runs-on: ${{ github.event_name == 'workflow_dispatch' && "
     "inputs.native_runner_provider == 'github-hosted' && "
@@ -2881,14 +2893,14 @@ for job_id, block, required_values in (
         (
             diagnostic_only_name("macOS ordinary graph and package"),
             "needs: detect-changes",
-            full_graph_condition, native_routing, "timeout-minutes: 90",
+            full_graph_condition, selected_routing, "timeout-minutes: 90",
             "python3 -B -m unittest discover -s Tests/Scripts -p test_ci_docs_path.py",
         ),
     ),
     (
         "macos-validation", validation,
         (
-            "needs: detect-changes", full_graph_condition, native_routing,
+            "needs: detect-changes", full_graph_condition, selected_routing,
             "timeout-minutes: 90",
             'FLECK_NATIVE_CAPTURE_QA: "0"', "unset FLECK_ENHANCED_CANDIDATE FLECK_APP",
             "bash Tests/Scripts/validate-macos-no-launch.test.sh", "Scripts/validate-macos.sh",
@@ -2901,7 +2913,7 @@ for job_id, block, required_values in (
             diagnostic_only_name("macOS build and tests"),
             aggregate_condition,
             "needs: [detect-changes, docs-validation, macos-build, macos-validation, macos-enhanced]",
-            "runs-on: namespace-profile-fleck",
+            selected_routing,
         ),
     ),
 ):
@@ -2942,8 +2954,21 @@ if jobs_section is None:
 job_ids = re.findall(
     r"^  ([a-z0-9-]+):\n", current_workflow[jobs_section.end():], re.M
 )
-existing_jobs = tuple(job_id for job_id in job_ids if job_id != qualification_job)
+existing_jobs = tuple(
+    job_id
+    for job_id in job_ids
+    if job_id != qualification_job and job_id not in fallback_jobs
+)
 native_expression = native_routing.removeprefix("runs-on: ")
+expected_runners = {
+    "detect-changes": detector_routing.removeprefix("runs-on: "),
+    "namespace-probe": "namespace-profile-fleck",
+    "select-runner": "ubuntu-latest",
+    **{
+        job_id: selected_routing.removeprefix("runs-on: ")
+        for job_id in selected_job_baselines
+    },
+}
 for job_id in job_ids:
     _, _, block = job_block(current_workflow, job_id)
     condition = re.search(r"^    if: (.+)$", block, re.M)
@@ -2954,8 +2979,10 @@ for job_id in job_ids:
         raise SystemExit(f"CI job {job_id} has no runner selection")
     if (runner.group(1) == native_expression) != (job_id in native_jobs):
         raise SystemExit(
-            f"CI job {job_id} must be one of the four manual Namespace provider jobs"
+            f"CI job {job_id} must be the one manual Namespace provider job"
         )
+    if job_id in expected_runners and runner.group(1) != expected_runners[job_id]:
+        raise SystemExit(f"CI job {job_id} must use its declared runner selection")
     if job_id == qualification_job:
         if condition.group(1) != (
             "${{ github.event_name == 'workflow_dispatch' && "
@@ -3043,6 +3070,30 @@ start, end, _ = job_block(normalized_workflow, qualification_job)
 if start >= 2 and normalized_workflow[start - 2:start] == "\n\n":
     start -= 1
 normalized_workflow = normalized_workflow[:start] + normalized_workflow[end:]
+for job_id in fallback_jobs:
+    start, end, _ = job_block(normalized_workflow, job_id)
+    if start >= 2 and normalized_workflow[start - 2:start] == "\n\n":
+        start -= 1
+    normalized_workflow = normalized_workflow[:start] + normalized_workflow[end:]
+
+
+def replace_in_job(contents, job_id, old, new):
+    start, end, block = job_block(contents, job_id)
+    if block.count(old) != 1:
+        raise SystemExit(f"CI job {job_id} must contain exactly one: {old.strip()}")
+    return contents[:start] + block.replace(old, new, 1) + contents[end:]
+
+
+for job_id, old, new in (
+    ("detect-changes", "    needs: select-runner\n", ""),
+    ("detect-changes", "      runner: ${{ needs.select-runner.outputs.runner }}\n", ""),
+    ("detect-changes", detector_routing, "runs-on: namespace-profile-fleck"),
+    *(
+        (job_id, selected_routing, baseline)
+        for job_id, baseline in selected_job_baselines.items()
+    ),
+):
+    normalized_workflow = replace_in_job(normalized_workflow, job_id, old, new)
 normalized_workflow, guarded_prefixes = re.subn(
     r"^(    if: \$\{\{ )" + re.escape(qualification_guard) + r" && ",
     r"\1",
@@ -3086,7 +3137,7 @@ for name in (ordinary_name, candidate_name):
         + normalized_workflow[end:]
     )
 if normalized_workflow.count(native_routing) != len(native_jobs):
-    raise SystemExit("declared native runner routing must select exactly four jobs")
+    raise SystemExit("declared manual runner routing must select exactly one job")
 normalized_workflow = normalized_workflow.replace(native_routing, "runs-on: macos-26")
 for job_id, original in full_ci_job_names.items():
     dynamic_name = diagnostic_only_name(original)

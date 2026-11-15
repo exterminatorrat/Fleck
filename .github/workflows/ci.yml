@@ -62,10 +62,65 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  namespace-probe:
+    name: Namespace capacity probe
+    if: ${{ !inputs.namespace_qualification_only && github.event_name != 'workflow_dispatch' }}
+    runs-on: namespace-profile-fleck
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - name: Confirm Namespace started this job
+        run: printf 'Namespace runner started: %s\n' "$RUNNER_NAME"
+
+  select-runner:
+    name: Select CI runner
+    if: ${{ !inputs.namespace_qualification_only }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      runner: ${{ steps.select.outputs.runner }}
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Check out the runner selector (actions/checkout v6.0.2, without credentials)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          sparse-checkout: Scripts/ci-select-runner.py
+          sparse-checkout-cone-mode: false
+      - name: Choose Namespace or GitHub-hosted macOS
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_PROVIDER: ${{ inputs.native_runner_provider }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: >-
+          python3 -B Scripts/ci-select-runner.py
+          --event-name "$EVENT_NAME"
+          --manual-provider "$MANUAL_PROVIDER"
+          --repository "$REPOSITORY"
+          --run-id "$RUN_ID"
+          --run-attempt "$RUN_ATTEMPT"
+          --probe-job-name "Namespace capacity probe"
+          --timeout-seconds 120
+          --interval-seconds 5
+          --output "$GITHUB_OUTPUT"
+          --summary "$GITHUB_STEP_SUMMARY"
+
   detect-changes:
     name: ${{ (github.event_name == 'workflow_dispatch' && (inputs.namespace_qualification_only || inputs.ordinary_test_diagnostic_selector != '')) && 'Diagnostic-only / Detect documentation-only changes' || 'Detect documentation-only changes' }}
     if: ${{ !inputs.namespace_qualification_only && (github.event_name != 'workflow_dispatch' || inputs.ordinary_test_diagnostic_selector == '') }}
-    runs-on: namespace-profile-fleck
+    needs: select-runner
+    runs-on: ${{ needs.select-runner.outputs.runner || 'namespace-profile-fleck' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -75,6 +130,7 @@ jobs:
       source_tree: ${{ steps.detect.outputs.source_tree }}
       product_version: ${{ steps.detect.outputs.product_version }}
       workflow_sha256: ${{ steps.detect.outputs.workflow_sha256 }}
+      runner: ${{ needs.select-runner.outputs.runner }}
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
@@ -101,7 +157,7 @@ jobs:
     name: ${{ (github.event_name == 'workflow_dispatch' && (inputs.namespace_qualification_only || inputs.ordinary_test_diagnostic_selector != '')) && 'Diagnostic-only / macOS ordinary graph and package' || 'macOS ordinary graph and package' }}
     needs: detect-changes
     if: ${{ !inputs.namespace_qualification_only && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.native_runner_provider == 'github-hosted' && 'macos-26' || 'namespace-profile-fleck' }}
+    runs-on: ${{ needs.detect-changes.outputs.runner || 'namespace-profile-fleck' }}
     timeout-minutes: 90
     outputs:
       source_commit: ${{ steps.source.outputs.commit }}
@@ -215,7 +271,7 @@ jobs:
     name: ${{ (github.event_name == 'workflow_dispatch' && (inputs.namespace_qualification_only || inputs.ordinary_test_diagnostic_selector != '')) && 'Diagnostic-only / macOS ordinary repeat and bundle validation' || 'macOS ordinary repeat and bundle validation' }}
     needs: detect-changes
     if: ${{ !inputs.namespace_qualification_only && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.native_runner_provider == 'github-hosted' && 'macos-26' || 'namespace-profile-fleck' }}
+    runs-on: ${{ needs.detect-changes.outputs.runner || 'namespace-profile-fleck' }}
     timeout-minutes: 90
     outputs:
       source_commit: ${{ steps.source.outputs.commit }}
@@ -297,7 +353,7 @@ jobs:
     name: ${{ (github.event_name == 'workflow_dispatch' && (inputs.namespace_qualification_only || inputs.ordinary_test_diagnostic_selector != '')) && 'Diagnostic-only / Validate README-only change' || 'Validate README-only change' }}
     needs: detect-changes
     if: ${{ !inputs.namespace_qualification_only && needs.detect-changes.outputs.route == 'docs' }}
-    runs-on: namespace-profile-fleck
+    runs-on: ${{ needs.detect-changes.outputs.runner || 'namespace-profile-fleck' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -337,7 +393,7 @@ jobs:
     name: ${{ (github.event_name == 'workflow_dispatch' && (inputs.namespace_qualification_only || inputs.ordinary_test_diagnostic_selector != '')) && 'Diagnostic-only / macOS build and tests' || 'macOS build and tests' }}
     if: ${{ !inputs.namespace_qualification_only && always() && (github.event_name != 'workflow_dispatch' || inputs.ordinary_test_diagnostic_selector == '') }}
     needs: [detect-changes, docs-validation, macos-build, macos-validation, macos-enhanced]
-    runs-on: namespace-profile-fleck
+    runs-on: ${{ needs.detect-changes.outputs.runner || 'namespace-profile-fleck' }}
     timeout-minutes: 90
     env:
       DETECTOR_RESULT: ${{ needs.detect-changes.result }}
@@ -408,7 +464,7 @@ jobs:
     name: ${{ (github.event_name == 'workflow_dispatch' && (inputs.namespace_qualification_only || inputs.ordinary_test_diagnostic_selector != '')) && 'Diagnostic-only / macOS Enhanced Local candidate gates' || 'macOS Enhanced Local candidate gates' }}
     needs: detect-changes
     if: ${{ !inputs.namespace_qualification_only && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.route == 'full' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.native_runner_provider == 'github-hosted' && 'macos-26' || 'namespace-profile-fleck' }}
+    runs-on: ${{ needs.detect-changes.outputs.runner || 'namespace-profile-fleck' }}
     timeout-minutes: 90
     env:
       FLECK_TEST_APPKIT_WATCHDOG_SECONDS: "4800"
