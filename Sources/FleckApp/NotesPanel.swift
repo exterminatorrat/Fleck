@@ -1143,6 +1143,99 @@
         .accessibilityHidden(searchController.isPresented)
         .accessibilityHidden(isBlockingOverlayPresented)
       }
+      .overlay {
+        ZStack {
+          if isShowingTrash {
+            TrashPanelOverlay(
+              onDone: { isShowingTrash = false }
+            )
+            .transition(
+              .opacity.combined(
+                with: .scale(scale: reduceMotion ? 1 : 0.985)
+              )
+            )
+          }
+
+          if !isPinned && isShowingAgentActivity {
+            agentActivityOverlay
+          }
+
+          if let folderPendingDeletion {
+            FolderDeleteConfirmationOverlay(
+              folder: folderPendingDeletion,
+              onCancel: { self.folderPendingDeletion = nil },
+              onConfirm: { confirmFolderDeletion(folderPendingDeletion) }
+            )
+            .transition(
+              .opacity.combined(
+                with: .scale(scale: reduceMotion ? 1 : 0.985)
+              )
+            )
+          }
+
+          if let notePendingDeletion {
+            DeleteConfirmationOverlay(
+              note: notePendingDeletion,
+              dontAskAgain: $dontAskAgainForDeletion,
+              onCancel: {
+                self.notePendingDeletion = nil
+                self.dontAskAgainForDeletion = false
+              },
+              onConfirm: { confirmDeletion(notePendingDeletion) }
+            )
+            .transition(
+              .opacity.combined(
+                with: .scale(scale: reduceMotion ? 1 : 0.985)
+              )
+            )
+          }
+        }
+        .animation(motion.standard, value: isShowingTrash)
+        .animation(motion.standard, value: folderPendingDeletion?.id)
+        .animation(motion.standard, value: notePendingDeletion?.id)
+      }
+      .overlay {
+        ZStack {
+          if searchController.isPresented && !noteLinkPickerController.isPresented {
+            WorkspaceSearchView(
+              controller: searchController,
+              notes: appState.workspace.notes,
+              accent: theme.color(.accent),
+              presentationID: searchController.presentationID,
+              reduceMotion: reduceMotion,
+              currentNoteIDs: {
+                Set(appState.workspace.notes.map(\.id))
+              },
+              onActivate: activateWorkspaceSearchResult,
+              onDismiss: dismissWorkspaceSearch
+            )
+            .id(searchController.presentationID)
+            .zIndex(2)
+            .transition(workspaceSearchPresentationTransition)
+          }
+        }
+      }
+      .overlay {
+        if noteLinkPickerController.isPresented {
+          NoteLinkPickerView(
+            controller: noteLinkPickerController,
+            notes: appState.workspace.notes,
+            foldersByID: folderNamesByID,
+            accent: theme.color(.accent),
+            currentNoteIDs: { Set(appState.workspace.notes.map(\.id)) },
+            currentSource: {
+              guard let source = visibleSelectedNote else { return nil }
+              return (source.id, source.revision)
+            },
+            onChoose: insertNoteLink
+          )
+          .zIndex(3)
+        }
+      }
+      .clipped()
+      .contentShape(Rectangle())
+      .opacity(menuPanelBodyIsPainted ? 1 : 0)
+      .padding(menuPanelResizePaintInsets)
       .frame(
         minWidth: storedPanelSize?.width,
         maxWidth: sizing == .container ? .infinity : storedPanelSize?.width,
@@ -1150,6 +1243,25 @@
         maxHeight: sizing == .container ? .infinity : storedPanelSize?.height
       )
       .background {
+        if !isPinned {
+          Group {
+            switch chromeMaterialPolicy {
+            case .liquidGlass:
+              Rectangle()
+                .fill(.regularMaterial)
+                .opacity(appState.preferences.panelOpacity)
+            case .legacyMaterial:
+              Rectangle()
+                .fill(.ultraThinMaterial)
+                .opacity(appState.preferences.panelOpacity)
+            case .opaque:
+              Rectangle().fill(theme.color(.window))
+            }
+          }
+          .opacity(menuPanelBodyIsPainted ? 1 : 0)
+        }
+      }
+      .overlay {
         if !isPinned, sizing == .storedPreferences {
           if let reorderDragSession {
             ReorderAwareMenuPanelResizeInstaller(
@@ -1171,25 +1283,12 @@
           }
         }
       }
-      .background {
-        if !isPinned {
-          switch chromeMaterialPolicy {
-          case .liquidGlass:
-            Rectangle()
-              .fill(.regularMaterial)
-              .opacity(appState.preferences.panelOpacity)
-          case .legacyMaterial:
-            Rectangle()
-              .fill(.ultraThinMaterial)
-              .opacity(appState.preferences.panelOpacity)
-          case .opaque:
-            Rectangle().fill(theme.color(.window))
-          }
-        }
-      }
       .background(
-        FleckWindowTheme(usesOpaqueBackground: isPinned || chromeMaterialPolicy == .opaque)
-          .frame(width: 0, height: 0)
+        FleckWindowTheme(
+          usesOpaqueBackground: isPinned
+            || (sizing == .container && chromeMaterialPolicy == .opaque)
+        )
+        .frame(width: 0, height: 0)
       )
       .tint(theme.color(.accent))
       .foregroundStyle(theme.color(.textPrimary))
@@ -1279,95 +1378,6 @@
         }
         noteDropSource = nil
         dictationRuntime.unregisterEditor(editorCommands)
-      }
-      .overlay {
-        ZStack {
-          if isShowingTrash {
-            TrashPanelOverlay(
-              onDone: { isShowingTrash = false }
-            )
-            .transition(
-              .opacity.combined(
-                with: .scale(scale: reduceMotion ? 1 : 0.985)
-              )
-            )
-          }
-
-          if !isPinned && isShowingAgentActivity {
-            agentActivityOverlay
-          }
-
-          if let folderPendingDeletion {
-            FolderDeleteConfirmationOverlay(
-              folder: folderPendingDeletion,
-              onCancel: { self.folderPendingDeletion = nil },
-              onConfirm: { confirmFolderDeletion(folderPendingDeletion) }
-            )
-            .transition(
-              .opacity.combined(
-                with: .scale(scale: reduceMotion ? 1 : 0.985)
-              )
-            )
-          }
-
-          if let notePendingDeletion {
-            DeleteConfirmationOverlay(
-              note: notePendingDeletion,
-              dontAskAgain: $dontAskAgainForDeletion,
-              onCancel: {
-                self.notePendingDeletion = nil
-                self.dontAskAgainForDeletion = false
-              },
-              onConfirm: { confirmDeletion(notePendingDeletion) }
-            )
-            .transition(
-              .opacity.combined(
-                with: .scale(scale: reduceMotion ? 1 : 0.985)
-              )
-            )
-          }
-        }
-        .animation(motion.standard, value: isShowingTrash)
-        .animation(motion.standard, value: folderPendingDeletion?.id)
-        .animation(motion.standard, value: notePendingDeletion?.id)
-      }
-      .overlay {
-        ZStack {
-          if searchController.isPresented && !noteLinkPickerController.isPresented {
-            WorkspaceSearchView(
-              controller: searchController,
-              notes: appState.workspace.notes,
-              accent: theme.color(.accent),
-              presentationID: searchController.presentationID,
-              reduceMotion: reduceMotion,
-              currentNoteIDs: {
-                Set(appState.workspace.notes.map(\.id))
-              },
-              onActivate: activateWorkspaceSearchResult,
-              onDismiss: dismissWorkspaceSearch
-            )
-            .id(searchController.presentationID)
-            .zIndex(2)
-            .transition(workspaceSearchPresentationTransition)
-          }
-        }
-      }
-      .overlay {
-        if noteLinkPickerController.isPresented {
-          NoteLinkPickerView(
-            controller: noteLinkPickerController,
-            notes: appState.workspace.notes,
-            foldersByID: folderNamesByID,
-            accent: theme.color(.accent),
-            currentNoteIDs: { Set(appState.workspace.notes.map(\.id)) },
-            currentSource: {
-              guard let source = visibleSelectedNote else { return nil }
-              return (source.id, source.revision)
-            },
-            onChoose: insertNoteLink
-          )
-          .zIndex(3)
-        }
       }
       .task {
         await appState.waitUntilInitialLoad()
@@ -2509,6 +2519,23 @@
       editorCommands.areBodyCommandsBlocked = isBlockingOverlayPresented
         || !isEditorVisible
       editorCommands.isBodyCommandContextBlocked = editorFocus == .title
+    }
+
+    private var menuPanelResizeAppliesMargin: Bool {
+      !isPinned && sizing == .storedPreferences
+    }
+
+    private var menuPanelResizePaintInsets: EdgeInsets {
+      guard menuPanelResizeAppliesMargin,
+        case let .inset(layout) = menuPanelResize.publishedBodyPolicy
+      else { return EdgeInsets() }
+      return layout.swiftUIBodyInsets
+    }
+
+    private var menuPanelBodyIsPainted: Bool {
+      guard menuPanelResizeAppliesMargin else { return true }
+      if case .inset = menuPanelResize.publishedBodyPolicy { return true }
+      return false
     }
 
     private var storedPanelSize: CGSize? {
