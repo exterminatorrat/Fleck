@@ -760,6 +760,61 @@ private final class EditorDelegateProbe: NSObject, NSTextViewDelegate {}
   #expect(textView.string == "5. Unchanged")
 }
 
+@Test @MainActor func tabInPlainTextInsertsATabStopAtTheCaret() {
+  let textView = ListAwareTextView(frame: .zero)
+  textView.string = "Blah"
+  textView.setSelectedRange(NSRange(location: 4, length: 0))
+
+  textView.insertTab(nil)
+
+  #expect(textView.string == "Blah\t")
+  #expect(textView.selectedRange() == NSRange(location: 5, length: 0))
+}
+
+@Test @MainActor func tabInPlainTextLeavesTheStartOfTheLineAlone() {
+  let textView = ListAwareTextView(frame: .zero)
+  textView.string = "Blah more"
+  textView.setSelectedRange(NSRange(location: 4, length: 0))
+
+  textView.insertTab(nil)
+
+  #expect(textView.string == "Blah\t more")
+  #expect(textView.selectedRange() == NSRange(location: 5, length: 0))
+}
+
+@Test @MainActor func backtabInPlainTextRemovesTheTabStopBeforeTheCaret() {
+  let textView = ListAwareTextView(frame: .zero)
+  textView.string = "Blah\t"
+  textView.setSelectedRange(NSRange(location: 5, length: 0))
+
+  textView.insertBacktab(nil)
+
+  #expect(textView.string == "Blah")
+  #expect(textView.selectedRange() == NSRange(location: 4, length: 0))
+}
+
+@Test @MainActor func backtabInPlainTextRemovesOneIndentOfSpaces() {
+  let textView = ListAwareTextView(frame: .zero)
+  textView.string = "Blah    "
+  textView.setSelectedRange(NSRange(location: 8, length: 0))
+
+  textView.insertBacktab(nil)
+
+  #expect(textView.string == "Blah")
+  #expect(textView.selectedRange() == NSRange(location: 4, length: 0))
+}
+
+@Test @MainActor func backtabInPlainTextNeverOutdentsTheWholeLine() {
+  let textView = ListAwareTextView(frame: .zero)
+  textView.string = "    Blah"
+  textView.setSelectedRange(NSRange(location: 8, length: 0))
+
+  textView.insertBacktab(nil)
+
+  #expect(textView.string == "    Blah")
+  #expect(textView.selectedRange() == NSRange(location: 8, length: 0))
+}
+
 @Test @MainActor func renumberingDoesNotRewriteUnrelatedLists() {
   let textView = ListAwareTextView(frame: .zero)
   textView.string = "1. A\n2. B\nPlain\n8. Separate\n9. List"
