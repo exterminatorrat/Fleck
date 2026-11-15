@@ -34,7 +34,7 @@
   }
 
   enum EditorListEngine {
-    private static let indentation = "    "
+    static let indentation = "    "
 
     static func automaticBullet(depth: Int) -> EditorBulletStyle {
       [.disc, .circle, .square][max(0, depth) % 3]

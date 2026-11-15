@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.13-beta.1] - 2026-11-15
+
+### Fixed
+
+- Tab with a caret in ordinary text inserts a tab stop at the caret instead of
+  indenting the whole line, and Shift+Tab removes that tab stop without
+  re-indenting the line. List items keep their nesting behaviour, and a range
+  selection keeps indenting every selected line.
+
 ## [1.8.12-beta.1] - 2026-11-15
 
 ### Fixed
