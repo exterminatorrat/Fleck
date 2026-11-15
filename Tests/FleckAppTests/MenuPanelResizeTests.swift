@@ -6,6 +6,157 @@ import Testing
 
 @testable import FleckApp
 
+@Test func menuPanelBodyInsetsKeepTheCocoaBottomAndFreeSideMargins() throws {
+  let outer = CGRect(x: 100, y: 200, width: 420, height: 430)
+  for fixedSide in [MenuPanelFixedSide.left, .right] {
+    let layout = try #require(
+      MenuPanelResizeGeometry.layout(in: outer, fixedSide: fixedSide)
+    )
+    let insets = layout.swiftUIBodyInsets
+    #expect(insets.top == 0, "a Cocoa-bottom margin became a SwiftUI top inset")
+    #expect(insets.bottom == 3, "the SwiftUI body did not give up the Cocoa-bottom margin")
+    #expect(insets.top + insets.bottom == 3)
+    #expect(insets.leading + insets.trailing == 3)
+    switch fixedSide {
+    case .left:
+      #expect(insets.leading == 0, "the anchored left edge is painted")
+      #expect(insets.trailing == 3, "the left-anchored body kept its free right edge")
+    case .right:
+      #expect(insets.leading == 3, "the right-anchored body kept its free left edge")
+      #expect(insets.trailing == 0, "the anchored right edge is painted")
+    }
+  }
+}
+
+@Test @MainActor func menuPanelOwnershipTransferKeepsTheNewOwnersBodyPolicy() throws {
+  let controller = MenuPanelResizeController()
+  let first = UUID()
+  let second = UUID()
+  let firstLayout = try #require(
+    MenuPanelResizeGeometry.layout(
+      in: CGRect(x: 100, y: 200, width: 420, height: 430),
+      fixedSide: .right
+    )
+  )
+  let secondLayout = try #require(
+    MenuPanelResizeGeometry.layout(
+      in: CGRect(x: 100, y: 200, width: 500, height: 460),
+      fixedSide: .left
+    )
+  )
+  #expect(controller.claimPresentation(ownerID: first))
+  #expect(controller.setPresentationLayout(firstLayout, ownerID: first))
+  #expect(controller.publishedLayout == firstLayout)
+  #expect(
+    controller.setPresentationContentSize(CGSize(width: 500, height: 430), ownerID: first)
+  )
+  #expect(controller.effectiveContentSize == CGSize(width: 500, height: 430))
+
+  var didTransfer = false
+  let observation = controller.$effectiveContentSize.dropFirst().sink { _ in
+    guard !didTransfer else { return }
+    didTransfer = true
+    #expect(controller.claimPresentation(ownerID: second))
+    #expect(controller.setPresentationLayout(secondLayout, ownerID: second, publication: .deferred))
+  }
+  defer { observation.cancel() }
+
+  #expect(!controller.releasePresentation(ownerID: first))
+  #expect(didTransfer)
+  #expect(controller.isPresentationOwner(second))
+  #expect(controller.effectiveContentSize == nil)
+  #expect(
+    controller.publishedLayout == secondLayout,
+    "the released owner erased the layout the new owner adopted mid-publication"
+  )
+  #expect(controller.publishPresentationLayout(ownerID: second))
+  #expect(controller.publishedLayout == secondLayout)
+}
+
+@Test @MainActor func menuPanelNilPresentationLayoutKeepsTheBodyUnready() throws {
+  let controller = MenuPanelResizeController()
+  let owner = UUID()
+  let layout = try #require(
+    MenuPanelResizeGeometry.layout(
+      in: CGRect(x: 100, y: 200, width: 420, height: 430),
+      fixedSide: .right
+    )
+  )
+  #expect(controller.claimPresentation(ownerID: owner))
+  #expect(controller.publishedBodyPolicy == .unready)
+  #expect(controller.setPresentationLayout(layout, ownerID: owner))
+  #expect(controller.publishedBodyPolicy == .inset(layout))
+
+  #expect(controller.setPresentationLayout(nil, ownerID: owner))
+  #expect(
+    controller.publishedBodyPolicy == .unready,
+    "an unresolved layout published a painted body"
+  )
+  #expect(controller.publishedLayout == nil)
+
+  #expect(controller.setPresentationLayout(layout, ownerID: owner, publication: .deferred))
+  #expect(controller.publishPresentationLayout(ownerID: owner))
+  #expect(controller.publishedBodyPolicy == .inset(layout))
+  #expect(controller.setPresentationLayout(nil, ownerID: owner, publication: .deferred))
+  #expect(controller.publishedBodyPolicy == .inset(layout))
+  #expect(controller.publishPresentationLayout(ownerID: owner))
+  #expect(
+    controller.publishedBodyPolicy == .unready,
+    "a deferred unresolved layout published a painted body"
+  )
+  #expect(controller.publishedLayout == nil)
+}
+
+@Test @MainActor func menuPanelUnresolvedAnchorKeepsTheBodyUnready() async throws {
+  let screen = try #require(NSScreen.main)
+  let frame = CGRect(
+    x: (screen.visibleFrame.midX - 300).rounded(),
+    y: (screen.visibleFrame.midY - 215).rounded(),
+    width: 600,
+    height: 430
+  )
+  let controller = MenuPanelResizeController()
+  let host = MenuPanelResizeHostView(controller: controller)
+  host.frame = CGRect(origin: .zero, size: frame.size)
+  host.configure(
+    geometryStore: nil,
+    preferredSize: frame.size,
+    canResize: true,
+    onCommit: { _ in }
+  )
+  let window = MenuPanelKeyCapableWindow(
+    contentRect: frame,
+    styleMask: .borderless,
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = host
+  window.orderFront(nil)
+  defer {
+    host.uninstall()
+    window.contentView = nil
+    window.orderOut(nil)
+  }
+  host.installIfNeeded()
+  await settleResizeHost(host)
+  await withCheckedContinuation { continuation in
+    DispatchQueue.main.async {
+      continuation.resume()
+    }
+  }
+
+  #expect(host.isInstalled)
+  #expect(
+    controller.publishedBodyPolicy == .unready,
+    "an unresolved anchor published a painted body"
+  )
+  #expect(controller.publishedLayout == nil)
+  #expect(
+    MenuPanelResizeGeometry.layout(in: host.bounds, fixedSide: .right) != nil,
+    "the unready premise needs usable host bounds"
+  )
+}
+
 @Test func menuPanelAnchorUsesNearestIconSideAndBreaksTiesToTheRight() {
   let panel = CGRect(x: 100, y: 100, width: 600, height: 430)
 
@@ -3823,6 +3974,7 @@ private final class MenuPanelNativeRoundingWindow: NSWindow {
   for requestedSide in [MenuPanelFixedSide.left, .right] {
     let fixture = await makeResizeCursorHoverFixture(requestedSide: requestedSide, screen: screen)
     defer { fixture.tearDown() }
+    try await activateResizeCursorFixture(fixture)
     #expect(fixture.fixedSide == requestedSide)
     for expectation in fixture.hoverExpectations {
       #expect(
@@ -3847,14 +3999,31 @@ private final class MenuPanelNativeRoundingWindow: NSWindow {
   let fixture = await makeResizeCursorHoverFixture(requestedSide: .right, screen: screen)
   defer { fixture.tearDown() }
 
+  let activationDeadline = ContinuousClock.now + .seconds(2)
+  while !(NSApplication.shared.isActive && fixture.window.isKeyWindow),
+    ContinuousClock.now < activationDeadline
+  {
+    NSApplication.shared.activate(ignoringOtherApps: true)
+    fixture.window.makeKeyAndOrderFront(nil)
+    try? await Task.sleep(for: .milliseconds(50))
+  }
+  try #require(
+    NSApplication.shared.isActive && fixture.window.isKeyWindow,
+    "exit resolution needs the fixture window to be the active key window"
+  )
+
   NSCursor.arrow.set()
   fixture.hover(at: fixture.sidePoint)
   try #require(NSCursor.current === NSCursor.resizeLeftRight)
 
+  fixture.setSyntheticLivePointer(at: fixture.sidePoint)
   fixture.exit(at: fixture.sidePoint)
+  await fixture.settleCursorRefresh()
   #expect(NSCursor.current === NSCursor.resizeLeftRight)
 
+  fixture.setSyntheticLivePointer(at: fixture.contentPoint)
   fixture.exit(at: fixture.contentPoint)
+  await fixture.settleCursorRefresh()
   #expect(NSCursor.current === NSCursor.arrow)
 }
 
@@ -3862,6 +4031,27 @@ private final class MenuPanelNativeRoundingWindow: NSWindow {
   let screen = try #require(NSScreen.main)
   let fixture = await makeResizeCursorHoverFixture(requestedSide: .left, screen: screen)
   defer { fixture.tearDown() }
+  try await activateResizeCursorFixture(fixture)
+  try #require(
+    NSApplication.shared.isActive && fixture.window.isKeyWindow,
+    "the callback premise needs the fixture application active in its key window"
+  )
+  try #require(
+    fixture.geometryStore.cachedStatusButton != nil,
+    "the callback premise needs the anchored status button geometry"
+  )
+
+  let contentOwner = MenuPanelCursorContentOwnerView(frame: fixture.host.frame)
+  fixture.host.removeFromSuperview()
+  fixture.window.contentView = contentOwner
+  contentOwner.addSubview(fixture.host)
+  fixture.host.frame = contentOwner.bounds
+  fixture.host.installIfNeeded()
+  fixture.window.invalidateCursorRects(for: contentOwner)
+  try #require(
+    fixture.host.superview === contentOwner && contentOwner.window === fixture.window,
+    "the callback premise needs a real native content owner holding the host"
+  )
 
   let bandEvent = try #require(fixture.cursorUpdateEvent(at: fixture.sidePoint))
   NSCursor.arrow.set()
@@ -3871,6 +4061,20 @@ private final class MenuPanelNativeRoundingWindow: NSWindow {
   let contentEvent = try #require(fixture.cursorUpdateEvent(at: fixture.contentPoint))
   fixture.host.cursorUpdate(with: contentEvent)
   #expect(NSCursor.current === NSCursor.arrow)
+
+  try #require(
+    contentOwner.bodyCursorRect.contains(
+      fixture.host.convert(fixture.contentPoint, to: contentOwner)
+    ),
+    "the native content owner premise needs the body point inside its own policy"
+  )
+  contentOwner.bodyCursor = .iBeam
+  fixture.window.resetCursorRects()
+  contentOwner.cursorUpdate(with: contentEvent)
+  #expect(
+    NSCursor.current === NSCursor.iBeam,
+    "the native content owner never applied its own body cursor policy"
+  )
 
   NSCursor.iBeam.set()
   fixture.host.cursorUpdate(with: contentEvent)
@@ -3895,6 +4099,7 @@ private final class MenuPanelNativeRoundingWindow: NSWindow {
   let screen = try #require(NSScreen.main)
   let fixture = await makeResizeCursorHoverFixture(requestedSide: .left, screen: screen)
   defer { fixture.tearDown() }
+  try await activateResizeCursorFixture(fixture)
 
   NSCursor.arrow.set()
   fixture.hover(at: fixture.sidePoint)
@@ -3922,6 +4127,7 @@ private final class MenuPanelNativeRoundingWindow: NSWindow {
   let screen = try #require(NSScreen.main)
   let fixture = await makeResizeCursorHoverFixture(requestedSide: .left, screen: screen)
   defer { fixture.tearDown() }
+  try await activateResizeCursorFixture(fixture)
 
   let control = NSButton(
     frame: CGRect(
@@ -3933,14 +4139,188 @@ private final class MenuPanelNativeRoundingWindow: NSWindow {
   )
   control.isEnabled = true
   fixture.root.addSubview(control)
+  fixture.host.invalidateResizeCursorRegions()
+  let advertisedAtControl = fixture.host.cursorRegistrations().contains {
+    $0.rect.contains(fixture.sidePoint)
+  }
+  #expect(!advertisedAtControl, "the native margin map advertised an enabled control")
 
   NSCursor.arrow.set()
   fixture.hover(at: fixture.sidePoint)
   #expect(NSCursor.current === NSCursor.arrow)
 
   control.isEnabled = false
+  fixture.host.invalidateResizeCursorRegions()
+  let advertisedAtDisabledControl = fixture.host.cursorRegistrations().contains {
+    $0.rect.contains(fixture.sidePoint)
+  }
+  #expect(advertisedAtDisabledControl, "the native margin map dropped a disabled control")
+
   fixture.hover(at: fixture.sidePoint)
   #expect(NSCursor.current === NSCursor.resizeLeftRight)
+}
+
+@Test @MainActor func menuPanelHoverCursorMatchesThePaintedBorderMargin() async throws {
+  let screen = try #require(NSScreen.main)
+  for requestedSide in [MenuPanelFixedSide.left, .right] {
+    let fixture = await makeResizeCursorHoverFixture(requestedSide: requestedSide, screen: screen)
+    defer { fixture.tearDown() }
+    try await activateResizeCursorFixture(fixture)
+    let bounds = fixture.bounds
+    let inward: (CGFloat) -> CGFloat = { distance in
+      requestedSide == .left ? bounds.maxX - distance : bounds.minX + distance
+    }
+    let cases: [(point: CGPoint, handle: MenuPanelResizeHandle?)] = [
+      (CGPoint(x: bounds.midX, y: bounds.minY + 1.5), .nearBottomCorner),
+      (CGPoint(x: bounds.midX, y: bounds.minY + 9), nil),
+      (CGPoint(x: inward(1.5), y: bounds.minY + 1.5), .farBottomCorner),
+      (CGPoint(x: inward(1.5), y: bounds.minY + 10), .farBottomCorner),
+      (CGPoint(x: inward(1.5), y: bounds.minY + 20), .farSide),
+      (CGPoint(x: inward(10), y: bounds.minY + 10), nil),
+      (CGPoint(x: inward(1.5), y: bounds.midY), .farSide),
+    ]
+    for entry in cases {
+      #expect(
+        MenuPanelResizeGeometry.handle(
+          at: entry.point,
+          in: bounds,
+          fixedSide: requestedSide
+        ) == entry.handle
+      )
+      #expect(
+        fixture.host.usableHandle(
+          at: entry.point,
+          in: fixture.window,
+          fixedSide: requestedSide
+        ) == entry.handle
+      )
+      NSCursor.arrow.set()
+      fixture.hover(at: entry.point)
+      if let handle = entry.handle {
+        #expect(
+          NSCursor.current === fixture.host.cursor(for: handle, fixedSide: requestedSide)
+        )
+      } else {
+        #expect(NSCursor.current === NSCursor.arrow)
+      }
+    }
+  }
+}
+
+@Test @MainActor func menuPanelNativeCursorMapSubtractsControlsAndGlyphs() async throws {
+  let screen = try #require(NSScreen.main)
+  let fixture = await makeResizeCursorHoverFixture(requestedSide: .right, screen: screen)
+  defer { fixture.tearDown() }
+  try await activateResizeCursorFixture(fixture)
+
+  #expect(fixture.fixedSide == .right, "the native map premise needs the right-anchored side")
+  let bounds = fixture.bounds
+  let layout = try #require(
+    MenuPanelResizeGeometry.layout(in: bounds, fixedSide: fixture.fixedSide)
+  )
+  let admittedRegions = MenuPanelResizeGeometry.cursorRegions(
+    in: bounds,
+    fixedSide: fixture.fixedSide
+  )
+  let baseline = fixture.host.cursorRegistrations()
+  #expect(baseline.count == admittedRegions.count)
+  #expect(baseline.map(\.rect) == admittedRegions.map(\.rect))
+  #expect(
+    abs(layout.bodyBounds.minY - layout.outerBounds.minY - 3) <= 0.0001,
+    "the painted bottom margin stopped being three points"
+  )
+
+  let bottomPoint = CGPoint(x: layout.bodyBounds.midX, y: layout.bodyBounds.minY - 2)
+  #expect(layout.handle(at: bottomPoint) == .nearBottomCorner)
+
+  let control = NSButton(
+    frame: CGRect(x: bottomPoint.x - 30, y: bottomPoint.y - 10, width: 60, height: 20)
+  )
+  control.isEnabled = true
+  fixture.root.addSubview(control)
+  defer { control.removeFromSuperview() }
+  fixture.host.invalidateResizeCursorRegions()
+
+  let withControl = fixture.host.cursorRegistrations()
+  let advertisedAtControl = withControl.contains { $0.rect.contains(bottomPoint) }
+  #expect(!advertisedAtControl, "the native margin map advertised an enabled control")
+  #expect(
+    withControl.count == baseline.count + 1,
+    "the covered margin region was not split into disjoint pieces"
+  )
+  for registration in withControl {
+    #expect(registration.rect.width > 0 && registration.rect.height > 0)
+  }
+  for first in withControl.indices {
+    for second in withControl.indices where second > first {
+      #expect(
+        withControl[first].rect.intersection(withControl[second].rect).isEmpty,
+        "the native margin map kept overlapping pieces"
+      )
+    }
+  }
+
+  control.isEnabled = false
+  fixture.host.invalidateResizeCursorRegions()
+  #expect(
+    fixture.host.cursorRegistrations().map(\.rect) == baseline.map(\.rect),
+    "a disabled control still cut the native margin"
+  )
+  control.removeFromSuperview()
+  fixture.host.invalidateResizeCursorRegions()
+
+  let sidePoint = CGPoint(x: bounds.minX + 1.5, y: bounds.midY)
+  #expect(layout.handle(at: sidePoint) == .farSide)
+
+  let textView = NSTextView(frame: CGRect(x: 0, y: bounds.midY - 12, width: 160, height: 24))
+  textView.isEditable = false
+  textView.isSelectable = false
+  textView.drawsBackground = false
+  textView.textContainerInset = .zero
+  textView.textContainer?.lineFragmentPadding = 0
+  textView.string = "MMMM"
+  textView.font = .systemFont(ofSize: 12)
+  fixture.root.addSubview(textView)
+  defer { textView.removeFromSuperview() }
+  let manager = try #require(textView.layoutManager)
+  let container = try #require(textView.textContainer)
+  manager.ensureLayout(for: container)
+  fixture.host.invalidateResizeCursorRegions()
+
+  let glyphRect = manager.boundingRect(
+    forGlyphRange: NSRange(location: 0, length: 1),
+    in: container
+  ).offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
+  let glyphInHost = fixture.host.convert(textView.convert(glyphRect, to: nil), from: nil)
+  #expect(
+    glyphInHost.minX < bounds.minX + 3,
+    "the glyph premise needs ink inside the side margin"
+  )
+  let glyphProbe = CGPoint(x: bounds.minX + 1.5, y: glyphInHost.midY)
+  let glyphMap = fixture.host.cursorRegistrations()
+  let advertisedAtGlyph = glyphMap.contains { $0.rect.contains(glyphProbe) }
+  #expect(!advertisedAtGlyph, "the native margin map advertised a text glyph")
+  let blankProbe = CGPoint(x: bounds.minX + 1.5, y: bounds.midY + 90)
+  let advertisedAtBlank = glyphMap.contains { $0.rect.contains(blankProbe) }
+  #expect(advertisedAtBlank, "the native margin map dropped blank margin beside a glyph")
+
+  textView.removeFromSuperview()
+  let scroller = NSScroller(frame: CGRect(x: 0, y: bounds.midY - 40, width: 15, height: 80))
+  scroller.scrollerStyle = .legacy
+  scroller.controlSize = .regular
+  scroller.isEnabled = true
+  scroller.knobProportion = 0.5
+  scroller.doubleValue = 0.5
+  fixture.root.addSubview(scroller)
+  defer { scroller.removeFromSuperview() }
+  fixture.host.invalidateResizeCursorRegions()
+  let advertisedOverScroller = fixture.host.cursorRegistrations().contains {
+    $0.rect.contains(sidePoint)
+  }
+  #expect(
+    advertisedOverScroller,
+    "the native margin map treated a scroller as an obstruction"
+  )
 }
 
 @Test @MainActor func menuPanelHoverCursorMatchesTheSevenPointRimBoundaries() async throws {
@@ -3948,6 +4328,7 @@ private final class MenuPanelNativeRoundingWindow: NSWindow {
   for requestedSide in [MenuPanelFixedSide.left, .right] {
     let fixture = await makeResizeCursorHoverFixture(requestedSide: requestedSide, screen: screen)
     defer { fixture.tearDown() }
+    try await activateResizeCursorFixture(fixture)
     let bounds = fixture.bounds
     let inward: (CGFloat) -> CGFloat = { distance in
       requestedSide == .left ? bounds.maxX - distance : bounds.minX + distance
@@ -4468,7 +4849,13 @@ private final class CountingSubviewReadsView: NSView {
 
 @MainActor
 private final class MenuPanelKeyCapableWindow: NSWindow {
+  var syntheticMouseLocation: CGPoint?
+
   override var canBecomeKey: Bool { true }
+
+  override var mouseLocationOutsideOfEventStream: NSPoint {
+    syntheticMouseLocation ?? super.mouseLocationOutsideOfEventStream
+  }
 }
 
 @MainActor
@@ -4482,6 +4869,7 @@ private final class ResizeCursorHoverFixture {
   let fixedSide: MenuPanelFixedSide
   let preferredSize: CGSize
   private var eventNumber: Int
+  private var lastHoveredCursorArea: NSTrackingArea?
   private var isTornDown = false
 
   init(
@@ -4529,8 +4917,22 @@ private final class ResizeCursorHoverFixture {
   }
 
   func hover(at point: CGPoint) {
+    setSyntheticLivePointer(at: point)
     eventNumber += 1
     sendResizeMouseEvent(.mouseMoved, at: windowPoint(point), to: window, number: eventNumber)
+    nativeCursorUpdate(at: point)
+  }
+
+  func setSyntheticLivePointer(at point: CGPoint?) {
+    (window as? MenuPanelKeyCapableWindow)?.syntheticMouseLocation =
+      point.map { host.convert($0, to: nil) }
+  }
+
+  func settleCursorRefresh() async {
+    for _ in 0..<4 {
+      host.layoutSubtreeIfNeeded()
+      await Task.yield()
+    }
   }
 
   func exit(at point: CGPoint) {
@@ -4540,12 +4942,33 @@ private final class ResizeCursorHoverFixture {
 
   func cursorUpdateEvent(at point: CGPoint) -> NSEvent? {
     eventNumber += 1
-    return makeResizeMouseEvent(
-      .mouseMoved,
-      at: windowPoint(point),
-      to: window,
-      number: eventNumber
+    return NSEvent.enterExitEvent(
+      with: .cursorUpdate,
+      location: windowPoint(point),
+      modifierFlags: [],
+      timestamp: TimeInterval(eventNumber) / 100,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: eventNumber,
+      trackingNumber: 0,
+      userData: nil
     )
+  }
+
+  func nativeCursorUpdate(at point: CGPoint) {
+    host.updateTrackingAreas()
+    let previousArea = lastHoveredCursorArea
+    let area = host.trackingAreas.first {
+      $0.options.contains(.cursorUpdate) && $0.rect.contains(point)
+        && ($0.owner as? MenuPanelResizeHostView) === host
+    }
+    lastHoveredCursorArea = area
+    guard
+      host.window === window,
+      area != nil || previousArea != nil,
+      let event = cursorUpdateEvent(at: point)
+    else { return }
+    host.cursorUpdate(with: event)
   }
 
   func setCanResize(_ canResize: Bool) {
@@ -4569,6 +4992,21 @@ private final class ResizeCursorHoverFixture {
   private func windowPoint(_ point: CGPoint) -> CGPoint {
     host.convert(point, to: nil)
   }
+}
+
+@MainActor
+private func activateResizeCursorFixture(_ fixture: ResizeCursorHoverFixture) async throws {
+  try #require(NSApplication.shared.isActive, "the fixture application lost activation")
+  fixture.window.makeKeyAndOrderFront(nil)
+  let deadline = ContinuousClock.now + .seconds(2)
+  while !fixture.window.isKeyWindow, ContinuousClock.now < deadline {
+    try #require(NSApplication.shared.isActive, "the fixture application lost activation")
+    try await Task.sleep(for: .milliseconds(50))
+  }
+  try #require(
+    NSApplication.shared.isActive && fixture.window.isKeyWindow,
+    "the native cursor map needs the fixture window to be the active key window"
+  )
 }
 
 @MainActor
