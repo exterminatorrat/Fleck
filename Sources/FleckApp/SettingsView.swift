@@ -1532,6 +1532,10 @@
       }
       .buttonStyle(.bordered)
       .controlSize(.small)
+      .accessibilityLabel("Dictation readiness")
+      .accessibilityValue(isReady ? "Ready" : "Needs attention")
+      .accessibilityHint("Show dictation readiness and recovery actions.")
+      .accessibilityIdentifier("settings-dictation-readiness-button")
       .popover(isPresented: $isReadinessPopoverPresented, arrowEdge: .top) {
         dictationReadinessPopover
           .fleckPopoverTheme(theme)
@@ -1567,10 +1571,6 @@
         readinessReturnAttachment
       }
       .environment(\.settingsKeyboardFocusReturnRequest, $readinessKeyboardReturnRequest)
-      .accessibilityLabel("Dictation readiness")
-      .accessibilityValue(isReady ? "Ready" : "Needs attention")
-      .accessibilityHint("Show dictation readiness and recovery actions.")
-      .accessibilityIdentifier("settings-dictation-readiness-button")
     }
 
     @ViewBuilder
