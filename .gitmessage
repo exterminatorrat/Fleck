@@ -1,0 +1,11 @@
+# <type>(<scope>): <summary>   (72 characters or fewer, imperative, no period)
+# Types: feat fix perf refactor docs test build ci chore revert
+# Add ! after type or scope for a breaking change.
+
+# Why: the problem, and what was wrong before.
+# What: the approach and any rejected alternative.
+# Impact: user-visible, accessibility, privacy, performance, data effects.
+
+# Refs: FLEC-000
+# Fixes: #000
+# BREAKING CHANGE: what breaks and how to migrate
