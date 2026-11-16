@@ -10,6 +10,7 @@ readonly canonical_app_icon="$repo_root/Assets/FleckAppIcon.icns"
 readonly canonical_dark_app_icon="$repo_root/Assets/FleckAppIconDark.icns"
 readonly identity_tool="$script_dir/fleck-build-identity.py"
 readonly inputs_tool="$script_dir/fleck-build-inputs.py"
+readonly publish_tool="$script_dir/fleck-publish.py"
 readonly identity_mode="${FLECK_BUILD_IDENTITY_MODE:-local}"
 
 usage() {
@@ -77,7 +78,9 @@ if [[ -n "$result_file" ]]; then
 fi
 readonly identity_capture="$build_root/.fleck-app-build-identity.$$.json"
 staging_root=""
+prebuilt_parent=""
 prebuilt_stage=""
+staged_receipt=""
 prebuilt_app_executable=''
 prebuilt_helper_executable=''
 prebuilt_sparkle_framework=''
@@ -98,10 +101,12 @@ cleanup() {
         ;;
     esac
   fi
-  if [[ -n "$prebuilt_stage" ]]; then
-    case "$prebuilt_stage" in
-      "$build_root/.fleck-inputs."*)
-        /bin/rm -rf -- "$prebuilt_stage" || exit_code=1
+  if [[ -n "$prebuilt_parent" ]]; then
+    case "$prebuilt_parent" in
+      "$build_root"/.fleck-inputs.??????)
+        if [[ -d "$prebuilt_parent" && ! -L "$prebuilt_parent" ]]; then
+          /bin/rm -rf -- "$prebuilt_parent" || exit_code=1
+        fi
         ;;
     esac
   fi
@@ -154,7 +159,8 @@ verify_linker_identity() {
   fi
 }
 if [[ -n "$prebuilt_inputs" ]]; then
-  prebuilt_stage="$build_root/.fleck-inputs.$$"
+  prebuilt_parent="$(/usr/bin/mktemp -d "$build_root/.fleck-inputs.XXXXXX")"
+  prebuilt_stage="$prebuilt_parent/inputs"
   "$inputs_tool" verify \
     --receipt "$prebuilt_inputs" \
     --receipt-sha256 "$prebuilt_inputs_sha256" \
@@ -165,9 +171,16 @@ if [[ -n "$prebuilt_inputs" ]]; then
   if [[ -d "$prebuilt_stage/Sparkle.framework" ]]; then
     prebuilt_sparkle_framework="$prebuilt_stage/Sparkle.framework"
   fi
-  input_receipt_id="$(/usr/bin/plutil -extract receiptID raw -o - "$prebuilt_inputs")"
+  staged_receipt="$prebuilt_stage/receipt.json"
+  if [[ ! -f "$staged_receipt" || -L "$staged_receipt" ]] \
+    || [[ "$(/usr/bin/shasum -a 256 "$staged_receipt" | /usr/bin/awk '{print $1}')" \
+      != "$prebuilt_inputs_sha256" ]]; then
+    printf 'error: staged compile input receipt does not match the trusted transfer digest\n' >&2
+    exit 1
+  fi
+  input_receipt_id="$(/usr/bin/plutil -extract receiptID raw -o - "$staged_receipt")"
   expected_linker_sdk="$(
-    /usr/bin/plutil -extract toolchain.sdkVersion raw -o - "$prebuilt_inputs"
+    /usr/bin/plutil -extract toolchain.sdkVersion raw -o - "$staged_receipt"
   )"
   case "$expected_linker_sdk" in
     '' | *[!0-9.]*)
@@ -233,7 +246,7 @@ readonly staged_app="$staging_root/Fleck.app"
 /bin/cp "$canonical_dark_app_icon" "$staged_app/Contents/Resources/FleckAppIconDark.icns"
 /usr/bin/plutil -insert FleckDevelopmentAccess -bool true "$staged_app/Contents/Info.plist"
 if [[ -n "$prebuilt_inputs" ]]; then
-  /bin/cp "$prebuilt_inputs" "$staged_app/Contents/Resources/FleckBuildInputs.json"
+  /bin/cp "$staged_receipt" "$staged_app/Contents/Resources/FleckBuildInputs.json"
   /usr/bin/plutil -insert FleckInputReceiptID -string "$input_receipt_id" \
     "$staged_app/Contents/Info.plist"
   /usr/bin/plutil -insert FleckInputReceiptSHA256 -string "$prebuilt_inputs_sha256" \
@@ -309,7 +322,7 @@ fi
 published_device="$(/usr/bin/stat -f '%d' "$staged_app")"
 published_inode="$(/usr/bin/stat -f '%i' "$staged_app")"
 if [[ -n "$prebuilt_inputs" ]]; then
-  /bin/mv -n "$staged_app" "$app_destination"
+  "$publish_tool" --source "$staged_app" --destination "$app_destination"
   if [[ -e "$staged_app" || -L "$staged_app" || ! -d "$app_destination" \
     || -L "$app_destination" ]]; then
     printf 'error: could not publish the staged app atomically without overwriting %s\n' \

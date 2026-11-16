@@ -447,6 +447,8 @@ eval_sentinel="$test_root/swift-eval-called"
 /bin/cp "$repo_root/Scripts/fleck-build-inputs.py" \
   "$fixture_root/Scripts/fleck-build-inputs.py"
 /bin/chmod 755 "$fixture_root/Scripts/fleck-build-inputs.py"
+/bin/cp "$repo_root/Scripts/fleck-publish.py" "$fixture_root/Scripts/fleck-publish.py"
+/bin/chmod 755 "$fixture_root/Scripts/fleck-publish.py"
 cat > "$fixture_root/Package.resolved" <<'RESOLVED'
 {
   "originHash": "0000000000000000000000000000000000000000000000000000000000000000",

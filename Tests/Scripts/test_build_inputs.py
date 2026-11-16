@@ -1,6 +1,7 @@
 import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -42,6 +43,18 @@ def load_inputs():
 
 
 inputs = load_inputs()
+
+
+def load_publish():
+    spec = importlib.util.spec_from_file_location(
+        "fleck_publish", ROOT / "Scripts/fleck-publish.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+publish = load_publish()
 
 
 def digest(path):
@@ -274,7 +287,8 @@ class CompileInputTests(unittest.TestCase):
             self.assertNotIn(claimed, receipt)
         staged = self.fixture.verify()
         self.assertEqual(
-            {path.name for path in staged.iterdir()}, set(inputs.PRODUCTS)
+            {path.name for path in staged.iterdir()},
+            set(inputs.PRODUCTS) | {inputs.RECEIPT_NAME},
         )
         self.assertEqual((staged / "Fleck").read_bytes(),
                          (self.fixture.output / "Fleck").read_bytes())
@@ -370,6 +384,55 @@ class CompileInputTests(unittest.TestCase):
         with self.assertRaisesRegex(inputs.InputError, "unexpected dependency checkout"):
             self.fixture.build()
 
+    def test_verify_parses_only_the_authenticated_receipt_bytes(self):
+        self.fixture.build()
+        path = self.fixture.receipt_path()
+        authentic = path.read_bytes()
+        substituted = json.loads(authentic)
+        substituted["productVersion"] = "9.9.9-beta.1"
+        substituted_bytes = (
+            json.dumps(substituted, indent=2, sort_keys=True) + "\n"
+        ).encode()
+        original = inputs.Path.read_bytes
+        replacement = {"armed": True, "receipt_reads": 0}
+
+        def swap_after_the_authenticated_read(target):
+            data = original(target)
+            if Path(target) != path:
+                return data
+            replacement["receipt_reads"] += 1
+            if replacement["receipt_reads"] > 1 and replacement["armed"]:
+                replacement["armed"] = False
+                path.chmod(0o644)
+                path.write_bytes(substituted_bytes)
+                path.chmod(0o444)
+                return substituted_bytes
+            return data
+
+        read_json_file = inputs.read_json_file
+
+        def refuse_a_second_receipt_read(target, label):
+            self.assertNotEqual(label, "input receipt")
+            return read_json_file(target, label)
+
+        trusted = digest(path)
+        with mock.patch.object(
+            inputs.Path, "read_bytes", autospec=True, side_effect=swap_after_the_authenticated_read
+        ), mock.patch.object(
+            inputs, "read_json_file", side_effect=refuse_a_second_receipt_read
+        ), contextlib.redirect_stdout(io.StringIO()) as output:
+            staged = self.fixture.verify(sha=trusted)
+            self.assertEqual(replacement["receipt_reads"], 1)
+            self.assertEqual(
+                inputs.Path(path).read_bytes(), substituted_bytes
+            )
+            self.assertEqual(
+                (staged / inputs.RECEIPT_NAME).read_bytes(), authentic
+            )
+        self.assertIn(
+            f"STAGED_RECEIPT={staged / inputs.RECEIPT_NAME}", output.getvalue()
+        )
+
     def test_receipt_digest_must_match_the_trusted_transfer_hash(self):
         self.fixture.build()
         with self.assertRaisesRegex(inputs.InputError, "transfer digest"):
@@ -457,7 +520,8 @@ class CompileInputTests(unittest.TestCase):
             build_version=linked_version(PRODUCER_TOOLCHAIN),
         )
         self.assertEqual(
-            {path.name for path in staged.iterdir()}, set(inputs.PRODUCTS)
+            {path.name for path in staged.iterdir()},
+            set(inputs.PRODUCTS) | {inputs.RECEIPT_NAME},
         )
 
     def test_malformed_producer_metadata_is_rejected(self):
@@ -663,9 +727,170 @@ class CompileInputTests(unittest.TestCase):
         self.assertFalse(staged.exists())
 
 
+class PublishTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="fleck-publish-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.staged = self.root / "Staged.app"
+        (self.staged / "Contents").mkdir(parents=True)
+        (self.staged / "Contents/marker").write_text("staged\n", encoding="utf-8")
+
+    def expect_refusal(self, destination):
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            with self.assertRaises(SystemExit) as raised:
+                publish.publish(str(self.staged), str(destination))
+        self.assertEqual(raised.exception.code, 1)
+        return errors.getvalue()
+
+    def test_rename_uses_the_no_replace_flag(self):
+        self.assertEqual(publish.RENAME_EXCL, 0x4)
+
+    def test_existing_destination_directory_is_not_treated_as_a_container(self):
+        destination = self.root / "Fleck 1.0.3-beta.1 Build 7.app"
+        destination.mkdir()
+        (destination / "sentinel").write_text("keep\n", encoding="utf-8")
+        message = self.expect_refusal(destination)
+        self.assertIn("refusing to overwrite an existing destination", message)
+        self.assertTrue((self.staged / "Contents/marker").is_file())
+        self.assertTrue((destination / "sentinel").is_file())
+        self.assertFalse((destination / "Staged.app").exists())
+
+    def test_existing_destination_file_is_rejected(self):
+        destination = self.root / "Fleck 1.0.3-beta.1 Build 7.app"
+        destination.write_text("existing\n", encoding="utf-8")
+        message = self.expect_refusal(destination)
+        self.assertIn("refusing to overwrite an existing destination", message)
+        self.assertEqual(destination.read_text(encoding="utf-8"), "existing\n")
+        self.assertTrue((self.staged / "Contents/marker").is_file())
+
+    def test_absent_destination_receives_the_staged_app(self):
+        destination = self.root / "Fleck 1.0.3-beta.1 Build 7.app"
+        publish.publish(str(self.staged), str(destination))
+        self.assertTrue((destination / "Contents/marker").is_file())
+        self.assertFalse(self.staged.exists())
+
+    def test_missing_staged_app_is_rejected(self):
+        destination = self.root / "Fleck 1.0.3-beta.1 Build 7.app"
+        self.staged.rename(self.root / "elsewhere.app")
+        message = self.expect_refusal(destination)
+        self.assertIn("staged app must be a real directory", message)
+        self.assertFalse(destination.exists())
+
+    def test_prebuilt_publication_never_uses_a_container_move(self):
+        script = (ROOT / "Scripts/build-fleck-app.sh").read_text(encoding="utf-8")
+        self.assertNotIn("/bin/mv -n", script)
+        self.assertIn(
+            '"$publish_tool" --source "$staged_app" --destination "$app_destination"',
+            script,
+        )
+
+    def test_prebuilt_metadata_comes_from_the_staged_receipt(self):
+        script = (ROOT / "Scripts/build-fleck-app.sh").read_text(encoding="utf-8")
+        self.assertNotIn('plutil -extract receiptID raw -o - "$prebuilt_inputs"', script)
+        self.assertNotIn(
+            'plutil -extract toolchain.sdkVersion raw -o - "$prebuilt_inputs"', script
+        )
+        self.assertNotIn('/bin/cp "$prebuilt_inputs"', script)
+        self.assertIn('/bin/cp "$staged_receipt"', script)
+
+
+class PrebuiltStageTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="fleck-prebuilt-stage-")
+        self.addCleanup(self.temporary.cleanup)
+        root = Path(self.temporary.name).resolve()
+        self.repo = root / "repository"
+        (self.repo / "Scripts").mkdir(parents=True)
+        for name in (
+            "build-fleck-app.sh",
+            "fleck-build-identity.py",
+            "fleck-build-inputs.py",
+            "fleck-publish.py",
+        ):
+            target = self.repo / "Scripts" / name
+            target.write_bytes((ROOT / "Scripts" / name).read_bytes())
+            target.chmod(0o755)
+        (self.repo / "VERSION").write_text("1.0.3-beta.1\n", encoding="utf-8")
+        (self.repo / "Package.resolved").write_text(
+            '{"pins": [], "version": 3}\n', encoding="utf-8"
+        )
+        self.fake_bin = root / "bin"
+        self.fake_bin.mkdir()
+        for name, body in (
+            ("uname", "#!/bin/sh\nprintf 'Darwin\\n'\n"),
+            (
+                "xcode-select",
+                "#!/bin/sh\nprintf '/fixture/Xcode.app/Contents/Developer\\n'\n",
+            ),
+            ("xcodebuild", "#!/bin/sh\nprintf 'Xcode fixture\\n'\n"),
+            (
+                "xcrun",
+                "#!/bin/sh\n"
+                "if [[ \"$1\" == '--sdk' && \"$2\" == 'macosx' "
+                "&& \"$3\" == '--show-sdk-version' ]]; then\n"
+                "  printf '27.0\\n'\n  exit 0\nfi\nexit 2\n",
+            ),
+        ):
+            path = self.fake_bin / name
+            path.write_text(body, encoding="utf-8")
+            path.chmod(0o755)
+        self.build_root = self.repo / ".build"
+        self.build_root.mkdir()
+        self.sentinel = self.build_root / ".fleck-inputs.sentinel"
+        self.sentinel.mkdir()
+        (self.sentinel / "keep").write_text("keep\n", encoding="utf-8")
+        self.receipt = root / "receipt.json"
+
+    def run_packager(self, receipt, receipt_sha):
+        environment = dict(os.environ)
+        environment["PATH"] = f"{self.fake_bin}:/usr/bin:/bin"
+        environment["FLECK_BUILD_IDENTITY_MODE"] = "ci-unverified"
+        return subprocess.run(
+            [
+                "bash",
+                str(self.repo / "Scripts/build-fleck-app.sh"),
+                "--prebuilt-inputs",
+                str(receipt),
+                "--input-receipt-sha256",
+                receipt_sha,
+            ],
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+
+    def assert_nothing_owned_or_published(self):
+        self.assertTrue((self.sentinel / "keep").is_file())
+        leftovers = [
+            path
+            for path in self.build_root.glob(".fleck-inputs.*")
+            if path != self.sentinel
+        ]
+        self.assertEqual(leftovers, [])
+        self.assertEqual(list(self.build_root.glob("Fleck *.app")), [])
+
+    def test_refused_transfer_digest_leaves_unrelated_directories(self):
+        self.receipt.write_text('{"receiptID": "not-a-receipt"}\n', encoding="utf-8")
+        result = self.run_packager(self.receipt, "0" * 64)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("does not match the supplied transfer digest", result.stderr)
+        self.assert_nothing_owned_or_published()
+
+    def test_malformed_receipt_is_refused_without_deleting_siblings(self):
+        self.receipt.write_text('{"receiptID": "not-a-receipt"}\n', encoding="utf-8")
+        result = self.run_packager(
+            self.receipt, digest(self.receipt)
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("input receipt has an unexpected schema", result.stderr)
+        self.assert_nothing_owned_or_published()
+
+
 class PackagerParserTests(unittest.TestCase):
     def test_receipt_helper_is_executable_for_direct_packager_invocation(self):
         self.assertTrue(os.access(ROOT / "Scripts/fleck-build-inputs.py", os.X_OK))
+        self.assertTrue(os.access(ROOT / "Scripts/fleck-publish.py", os.X_OK))
 
     def packager(self):
         return ROOT / "Scripts/build-fleck-app.sh"

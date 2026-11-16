@@ -136,7 +136,11 @@ version records the receipt's SDK and minimum OS. Both packaged executables are
 re-checked against the receipted SDK after signing, so a locally installed SDK
 never has to match. It records `FleckInputReceiptID` and `FleckInputReceiptSHA256`
 in the bundle before signing and keeps the receipt at
-`Contents/Resources/FleckBuildInputs.json`. The prebuilt path never invokes
+`Contents/Resources/FleckBuildInputs.json`; metadata and the bundled copy come
+from the staged authenticated receipt, never the mutable transfer file. Staging
+lives under a uniquely owned temporary directory that cleanup removes by exact
+path, and publication uses an exclusive rename that refuses an existing
+destination instead of moving the app inside it. The prebuilt path never invokes
 `swift`; identity allocation, signing, result writing, and publication stay the
 normal canonical steps.
 

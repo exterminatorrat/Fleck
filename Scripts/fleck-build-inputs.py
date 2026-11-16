@@ -3,7 +3,8 @@
 
 `build` compiles the Release products on a build machine and exports them with
 an immutable JSON receipt. `verify` re-checks that receipt on the packaging
-machine and stages a private copy of every input.
+machine and stages a private copy of every input, including the authenticated
+receipt bytes it parsed.
 
 Neither command reads or writes the accepted-build registry or the build
 identity allocator. A receipt never claims an allocated build identity; the
@@ -145,11 +146,19 @@ def run_streaming(arguments, cwd, environment=None):
         )
 
 
+def parse_json_bytes(data, label):
+    try:
+        return json.loads(data)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        fail(f"could not read {label}: {error}")
+
+
 def read_json_file(path, label):
     try:
-        return json.loads(Path(path).read_bytes())
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        data = Path(path).read_bytes()
+    except OSError as error:
         fail(f"could not read {label}: {error}")
+    return parse_json_bytes(data, label)
 
 
 def require_plain_directory(path, label):
@@ -831,13 +840,22 @@ def command_verify(args):
         fail(f"could not read the input receipt: {error}")
     if sha256_bytes(data) != args.receipt_sha256:
         fail("input receipt does not match the supplied transfer digest")
-    receipt = read_json_file(receipt_path, "input receipt")
+    receipt = parse_json_bytes(data, "input receipt")
     root = receipt_path.parent
     entries, framework_paths = validate_receipt(receipt, Path(args.repo), root)
     staging = stage_inputs(entries, root, Path(args.staging))
+    staged_receipt = staging / RECEIPT_NAME
+    with staged_receipt.open("xb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(staged_receipt, 0o444)
+    if sha256_file(staged_receipt) != args.receipt_sha256:
+        fail("staged input receipt does not match the supplied transfer digest")
     validate_inventory(staging, entries, framework_paths)
     print(f"Verified compile inputs {receipt['receiptID']} for Fleck {receipt['productVersion']}")
     print(f"STAGED_INPUT_ROOT={staging}")
+    print(f"STAGED_RECEIPT={staged_receipt}")
     for framework in receipt["frameworks"]:
         print(f"STAGED_FRAMEWORK={staging / framework['path']}")
 
