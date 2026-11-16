@@ -1237,12 +1237,21 @@ import Testing
     toScreen: fixture.host.convert(startPoint, to: nil)
   )
   let targetScreen = CGPoint(x: statusFrame.midX + 6, y: startScreen.y)
+  let hostScreenBefore = fixture.window.convertToScreen(
+    fixture.host.convert(fixture.host.bounds, to: nil)
+  )
+  print(
+    "DIAG before screen=\(screen.frame) visible=\(screen.visibleFrame) "
+      + "window=\(fixture.window.frame) hostScreen=\(hostScreenBefore) "
+      + "outer=\(startLayout.outerBounds) body=\(startLayout.bodyBounds) "
+      + "startHost=\(startPoint) startScreen=\(startScreen) status=\(statusFrame) "
+      + "target=\(targetScreen) bands=\(fixture.bandExpectations.count)"
+  )
   fixture.drag(toScreenPoint: targetScreen)
   print(
-    "DIAG flip screen=\(screen.frame) visible=\(screen.visibleFrame) "
-      + "window=\(fixture.window.frame) status=\(statusFrame) "
-      + "startHost=\(startPoint) startScreen=\(startScreen) target=\(targetScreen) "
-      + "sideAfterDrag=\(String(describing: fixture.controller.currentFixedSide)) "
+    "DIAG after window=\(fixture.window.frame) "
+      + "hostScreen=\(fixture.window.convertToScreen(fixture.host.convert(fixture.host.bounds, to: nil))) "
+      + "side=\(String(describing: fixture.controller.currentFixedSide)) "
       + "isTracking=\(fixture.controller.isTracking) commits=\(fixture.commits)"
   )
   let flippedSide = fixture.controller.currentFixedSide
