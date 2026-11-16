@@ -242,6 +242,7 @@
               from: nil
             )
           }
+          .keyboardShortcut("k", modifiers: .command)
           Button("Open Note Link") {
             NSApp.sendAction(
               #selector(ListAwareTextView.openNoteLinkFromMenu(_:)),
@@ -1252,6 +1253,10 @@
       await terminalSynchronizationTask?.value
     }
 
+    func capsuleReturnTaskForTesting() -> Task<Void, Never>? {
+      capsuleReturnTask
+    }
+
     func permissionRecoveryActions() -> [DictationSystemSettingsAction] {
       availability.openSystemSettings
     }
@@ -1568,6 +1573,7 @@
             action: nil,
             coordinatorEvent: event
           )
+          scheduleIdle(after: Self.failureCapsuleDuration, owner: .dictation)
         case .cancelled:
           showIdleCapsule()
         }

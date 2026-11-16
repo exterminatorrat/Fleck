@@ -129,6 +129,8 @@ func NotesPanelDoubleBracketPickerInsertsAndDerivesBacklink() async throws {
     editor.insertText("[[", replacementRange: editor.selectedRange())
     await settleBacklinksHost(host)
     #expect(picker.isPresented)
+    #expect(picker.isShowingRecentNotes)
+    #expect(picker.results.map(\.noteID) == [target.id])
 
     picker.setQuery(target.title, in: state.workspace.notes)
     try await requireBacklinksPickerReady(
