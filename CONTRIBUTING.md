@@ -73,6 +73,13 @@ use a synthetic AppKit host and can create windows or change focus in the
 disposable test session. Do not run an Enhanced candidate graph for an
 ordinary-only change.
 
+A pull request that only adds or modifies documentation skips the macOS build
+jobs and runs the documentation gate instead. The allowed files are
+`README.md`, `CONTRIBUTING.md`, `.gitmessage`, the pull request and issue
+templates, and Markdown under `docs/` except `docs/performance/`,
+`docs/themes/` and `docs/release-notes/`. Any other file, rename or deletion
+runs the full CI graph. The rule is in `Scripts/ci-docs-path.py`.
+
 Before committing, inspect what will be shared:
 
 ```sh

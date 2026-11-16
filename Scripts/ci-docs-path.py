@@ -63,6 +63,29 @@ def repository_identity(repository, source_commit):
     }
 
 
+DOCUMENTATION_FILES = frozenset(
+    {
+        b"README.md",
+        b"CONTRIBUTING.md",
+        b".gitmessage",
+        b".github/pull_request_template.md",
+    }
+)
+CONTRACT_LINKED_TREES = (b"docs/performance/", b"docs/themes/", b"docs/release-notes/")
+
+
+def is_documentation_path(path):
+    if path in DOCUMENTATION_FILES:
+        return True
+    if any(part in {b"", b".", b".."} for part in path.split(b"/")):
+        return False
+    if path.startswith(CONTRACT_LINKED_TREES):
+        return False
+    if path.startswith(b"docs/"):
+        return path.endswith(b".md")
+    return path.startswith(b".github/ISSUE_TEMPLATE/")
+
+
 def classify_name_status(output):
     if not output or not output.endswith(b"\0"):
         return "full"
@@ -88,7 +111,7 @@ def classify_name_status(output):
         records.append((status, paths))
     if not records:
         return "full"
-    if len(records) == 1 and records[0][0] in {"A", "M"} and records[0][1] == (b"README.md",):
+    if all(status in {"A", "M"} and is_documentation_path(paths[0]) for status, paths in records):
         return "docs"
     return "full"
 
