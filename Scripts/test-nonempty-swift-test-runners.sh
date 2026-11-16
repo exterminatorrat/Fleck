@@ -3094,7 +3094,7 @@ for job_id, original in full_ci_job_names.items():
         raise SystemExit(f"CI diagnostic-only name fixture changed for {job_id}")
     normalized_workflow = normalized_workflow.replace(dynamic_name, original, 1)
 if hashlib.sha256(normalized_workflow.encode()).hexdigest() != (
-    "5b46bfd97b09c8cd12cc03541a127a095a73936abaf3a84fab8a6e278e34eb85"
+    "233bed77d0ba5836d08b9d0b1eb24e8e2ad6cbae258040d06bf24045fc9028a1"
 ):
     raise SystemExit(
         "CI changed outside the declared qualification, native routing, split, "
