@@ -285,11 +285,84 @@ class CIDocsPathTests(unittest.TestCase):
             b"Z\0README.md\0",
             b"R100\0README.md\0",
             b"M\0README.md\0M\0",
-            b"M\0README.md\0M\0README.md\0",
+            b"M\0README.md\0M\0Sources/App.swift\0",
         ):
             with self.subTest(output=output):
                 self.assertEqual(CI_DOCS_PATH.classify_name_status(output), "full")
         self.assertEqual(CI_DOCS_PATH.classify_name_status(b"M\0README.md\0"), "docs")
+
+    def test_documentation_allowlist_routes_only_inert_documentation(self):
+        docs_only = (
+            (b"M", b"README.md"),
+            (b"M", b"CONTRIBUTING.md"),
+            (b"A", b"docs/commit-and-pr-standards.md"),
+            (b"M", b"docs/design/notes/overview.md"),
+            (b"A", b".gitmessage"),
+            (b"M", b".github/pull_request_template.md"),
+            (b"A", b".github/ISSUE_TEMPLATE/bug_report.yml"),
+        )
+        output = b"".join(status + b"\0" + path + b"\0" for status, path in docs_only)
+        self.assertEqual(CI_DOCS_PATH.classify_name_status(output), "docs")
+        for status, path in docs_only:
+            with self.subTest(path=path):
+                self.assertEqual(
+                    CI_DOCS_PATH.classify_name_status(status + b"\0" + path + b"\0"),
+                    "docs",
+                )
+
+    def test_contract_linked_and_non_documentation_paths_require_full(self):
+        for path in (
+            b"TESTING.md",
+            b"IMPLEMENTATION_STATUS.md",
+            b"CHANGELOG.md",
+            b"VERSION",
+            b"docs/performance/fleck-baseline-template.md",
+            b"docs/themes/glass/design.md",
+            b"docs/release-notes/1.8.12-beta.1.md",
+            b"docs/images/screenshot.png",
+            b"docs/script.sh",
+            b"docs/../Sources/App.swift",
+            b"docs//double.md",
+            b".github/workflows/ci.yml",
+            b".github/CODEOWNERS",
+            b"Sources/App.swift",
+            b"Scripts/ci-docs-path.py",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    CI_DOCS_PATH.classify_name_status(b"M\0" + path + b"\0"), "full"
+                )
+
+    def test_one_non_documentation_path_makes_a_mixed_change_full(self):
+        output = b"M\0README.md\0A\0docs/new.md\0M\0Sources/App.swift\0"
+        self.assertEqual(CI_DOCS_PATH.classify_name_status(output), "full")
+
+    def test_documentation_renames_deletions_and_type_changes_require_full(self):
+        for output in (
+            b"D\0docs/old.md\0",
+            b"R100\0docs/old.md\0docs/new.md\0",
+            b"C100\0docs/old.md\0docs/copy.md\0",
+            b"T\0docs/old.md\0",
+            b"M\0README.md\0D\0docs/old.md\0",
+        ):
+            with self.subTest(output=output):
+                self.assertEqual(CI_DOCS_PATH.classify_name_status(output), "full")
+
+    def test_multi_file_documentation_pull_request_uses_docs_gate_locally(self):
+        fixture = self.fixture()
+        fixture.merge(
+            changes={
+                "docs/commit-and-pr-standards.md": "# Standards\n",
+                "CONTRIBUTING.md": "# Contributing\n",
+                ".gitmessage": "# template\n",
+            }
+        )
+        route, identity = fixture.classify()
+        self.assertEqual(route, "docs")
+        CI_DOCS_PATH.validate_documentation(
+            fixture.repository, identity["source_commit"], identity
+        )
+        self.assertEqual(self.gate(identity, route).returncode, 0)
 
     def test_unknown_events_missing_history_and_empty_changes_default_to_full(self):
         fixture = self.fixture()
