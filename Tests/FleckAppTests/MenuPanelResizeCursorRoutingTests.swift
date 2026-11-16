@@ -1226,21 +1226,17 @@ import Testing
   let startPoint = fixture.bandExpectations[0].point
   fixture.mouseDown(atHostPoint: startPoint)
   try #require(fixture.controller.isTracking, "the flip drag never began")
-  try #require(
-    fixture.statusButton.window != nil,
+  let statusWindow = try #require(
+    fixture.statusButton.window,
     "the flip premise needs the status button in its own window"
+  )
+  let statusFrame = statusWindow.convertToScreen(
+    fixture.statusButton.convert(fixture.statusButton.bounds, to: nil)
   )
   let startScreen = fixture.window.convertPoint(
     toScreen: fixture.host.convert(startPoint, to: nil)
   )
-  let hostScreen = fixture.window.convertToScreen(
-    fixture.host.convert(fixture.host.bounds, to: nil)
-  )
-  try #require(
-    startScreen.x < hostScreen.maxX,
-    "the flip premise needs the captured free edge inside the panel"
-  )
-  fixture.drag(toScreenPoint: CGPoint(x: hostScreen.maxX + 6, y: startScreen.y))
+  fixture.drag(toScreenPoint: CGPoint(x: statusFrame.midX + 6, y: startScreen.y))
   let flippedSide = fixture.controller.currentFixedSide
   try #require(
     flippedSide == .left,
@@ -1683,7 +1679,8 @@ private final class CursorRoutingFixture {
     canResize: Bool = true
   ) async {
     let frame = CGRect(
-      x: (screen.visibleFrame.midX - contentSize.width / 2).rounded(),
+      x: (screen.visibleFrame.minX + (screen.visibleFrame.width - contentSize.width) / 4)
+        .rounded(),
       y: (screen.visibleFrame.midY - contentSize.height / 2).rounded(),
       width: contentSize.width,
       height: contentSize.height
