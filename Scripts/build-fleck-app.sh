@@ -9,15 +9,43 @@ readonly canonical_mark="$repo_root/Assets/fleck-mark.png"
 readonly canonical_app_icon="$repo_root/Assets/FleckAppIcon.icns"
 readonly canonical_dark_app_icon="$repo_root/Assets/FleckAppIconDark.icns"
 readonly identity_tool="$script_dir/fleck-build-identity.py"
+readonly inputs_tool="$script_dir/fleck-build-inputs.py"
 readonly identity_mode="${FLECK_BUILD_IDENTITY_MODE:-local}"
 
+usage() {
+  printf 'usage: %s [--result-file ABSOLUTE_PATH] [--prebuilt-inputs ABSOLUTE_RECEIPT --input-receipt-sha256 SHA256]\n' \
+    "${0##*/}" >&2
+  exit 2
+}
+
 result_file=''
-if [[ $# -gt 0 ]]; then
-  if [[ $# -ne 2 || "$1" != '--result-file' || -z "$2" ]]; then
-    printf 'usage: %s [--result-file ABSOLUTE_PATH]\n' "${0##*/}" >&2
-    exit 2
-  fi
-  result_file="$2"
+prebuilt_inputs=''
+prebuilt_inputs_sha256=''
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --result-file)
+      [[ -z "$result_file" && $# -ge 2 && -n "$2" ]] || usage
+      result_file="$2"
+      shift 2
+      ;;
+    --prebuilt-inputs)
+      [[ -z "$prebuilt_inputs" && $# -ge 2 && -n "$2" ]] || usage
+      prebuilt_inputs="$2"
+      shift 2
+      ;;
+    --input-receipt-sha256)
+      [[ -z "$prebuilt_inputs_sha256" && $# -ge 2 && -n "$2" ]] || usage
+      prebuilt_inputs_sha256="$2"
+      shift 2
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
+if [[ -n "$prebuilt_inputs" && -z "$prebuilt_inputs_sha256" ]] \
+  || [[ -z "$prebuilt_inputs" && -n "$prebuilt_inputs_sha256" ]]; then
+  usage
 fi
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -40,6 +68,7 @@ case "$active_sdk_version" in
     ;;
 esac
 readonly active_sdk_version
+expected_linker_sdk="$active_sdk_version"
 
 cd "$repo_root"
 /bin/mkdir -p "$build_root"
@@ -48,6 +77,11 @@ if [[ -n "$result_file" ]]; then
 fi
 readonly identity_capture="$build_root/.fleck-app-build-identity.$$.json"
 staging_root=""
+prebuilt_stage=""
+prebuilt_app_executable=''
+prebuilt_helper_executable=''
+prebuilt_sparkle_framework=''
+input_receipt_id=''
 app_destination=""
 publication_created=0
 published_device=""
@@ -61,6 +95,13 @@ cleanup() {
     case "$staging_root" in
       "$build_root/.fleck-app."*)
         /bin/rm -rf -- "$staging_root" || exit_code=1
+        ;;
+    esac
+  fi
+  if [[ -n "$prebuilt_stage" ]]; then
+    case "$prebuilt_stage" in
+      "$build_root/.fleck-inputs."*)
+        /bin/rm -rf -- "$prebuilt_stage" || exit_code=1
         ;;
     esac
   fi
@@ -106,12 +147,36 @@ verify_linker_identity() {
       }
     }
   ')"
-  if [[ "$identity" != "$deployment_target $active_sdk_version" ]]; then
+  if [[ "$identity" != "$deployment_target $expected_linker_sdk" ]]; then
     printf 'error: packaged executable SDK/minOS identity does not match: %s (found %s, expected %s %s)\n' \
-      "$executable" "${identity:-missing}" "$deployment_target" "$active_sdk_version" >&2
+      "$executable" "${identity:-missing}" "$deployment_target" "$expected_linker_sdk" >&2
     exit 1
   fi
 }
+if [[ -n "$prebuilt_inputs" ]]; then
+  prebuilt_stage="$build_root/.fleck-inputs.$$"
+  "$inputs_tool" verify \
+    --receipt "$prebuilt_inputs" \
+    --receipt-sha256 "$prebuilt_inputs_sha256" \
+    --repo "$repo_root" \
+    --staging "$prebuilt_stage"
+  prebuilt_app_executable="$prebuilt_stage/Fleck"
+  prebuilt_helper_executable="$prebuilt_stage/fleck-agent"
+  if [[ -d "$prebuilt_stage/Sparkle.framework" ]]; then
+    prebuilt_sparkle_framework="$prebuilt_stage/Sparkle.framework"
+  fi
+  input_receipt_id="$(/usr/bin/plutil -extract receiptID raw -o - "$prebuilt_inputs")"
+  expected_linker_sdk="$(
+    /usr/bin/plutil -extract toolchain.sdkVersion raw -o - "$prebuilt_inputs"
+  )"
+  case "$expected_linker_sdk" in
+    '' | *[!0-9.]*)
+      printf 'error: compile input receipt records no usable SDK version\n' >&2
+      exit 1
+      ;;
+  esac
+fi
+
 "$identity_tool" begin \
   --repo "$repo_root" \
   --flavor development \
@@ -126,16 +191,20 @@ if [[ -e "$app_destination" || -L "$app_destination" ]]; then
   exit 1
 fi
 
-swift build -c release --product Fleck --disable-automatic-resolution \
-  -Xlinker -platform_version -Xlinker macos \
-  -Xlinker "$deployment_target" -Xlinker "$active_sdk_version"
-swift build -c release --product fleck-agent --disable-automatic-resolution \
-  -Xlinker -platform_version -Xlinker macos \
-  -Xlinker "$deployment_target" -Xlinker "$active_sdk_version"
-
 readonly release_directory="$repo_root/.build/release"
-readonly app_executable="$release_directory/Fleck"
-readonly helper_executable="$release_directory/fleck-agent"
+if [[ -z "$prebuilt_inputs" ]]; then
+  swift build -c release --product Fleck --disable-automatic-resolution \
+    -Xlinker -platform_version -Xlinker macos \
+    -Xlinker "$deployment_target" -Xlinker "$active_sdk_version"
+  swift build -c release --product fleck-agent --disable-automatic-resolution \
+    -Xlinker -platform_version -Xlinker macos \
+    -Xlinker "$deployment_target" -Xlinker "$active_sdk_version"
+  readonly app_executable="$release_directory/Fleck"
+  readonly helper_executable="$release_directory/fleck-agent"
+else
+  readonly app_executable="$prebuilt_app_executable"
+  readonly helper_executable="$prebuilt_helper_executable"
+fi
 for required_file in \
   "$app_executable" \
   "$helper_executable" \
@@ -163,6 +232,18 @@ readonly staged_app="$staging_root/Fleck.app"
 /bin/cp "$canonical_app_icon" "$staged_app/Contents/Resources/FleckAppIcon.icns"
 /bin/cp "$canonical_dark_app_icon" "$staged_app/Contents/Resources/FleckAppIconDark.icns"
 /usr/bin/plutil -insert FleckDevelopmentAccess -bool true "$staged_app/Contents/Info.plist"
+if [[ -n "$prebuilt_inputs" ]]; then
+  /bin/cp "$prebuilt_inputs" "$staged_app/Contents/Resources/FleckBuildInputs.json"
+  /usr/bin/plutil -insert FleckInputReceiptID -string "$input_receipt_id" \
+    "$staged_app/Contents/Info.plist"
+  /usr/bin/plutil -insert FleckInputReceiptSHA256 -string "$prebuilt_inputs_sha256" \
+    "$staged_app/Contents/Info.plist"
+  if [[ "$(/usr/bin/shasum -a 256 "$staged_app/Contents/Resources/FleckBuildInputs.json" \
+    | /usr/bin/awk '{print $1}')" != "$prebuilt_inputs_sha256" ]]; then
+    printf '%s\n' 'error: staged compile input receipt does not match the trusted transfer digest' >&2
+    exit 1
+  fi
+fi
 "$identity_tool" stamp \
   --capture "$identity_capture" \
   --plist "$staged_app/Contents/Info.plist"
@@ -174,11 +255,19 @@ verify_linker_identity "$staged_app/Contents/SharedSupport/fleck-agent"
 linked_libraries="$(xcrun otool -L "$app_executable")"
 staged_sparkle=''
 if /usr/bin/grep -Fq '@rpath/Sparkle.framework/Versions/B/Sparkle ' <<<"$linked_libraries"; then
-  sparkle_framework="$build_root/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
-  [[ -f "$sparkle_framework/Versions/B/Sparkle" ]] || {
-    printf '%s\n' 'error: linked Sparkle framework is missing from the resolved build artifacts' >&2
-    exit 1
-  }
+  if [[ -n "$prebuilt_inputs" ]]; then
+    sparkle_framework="$prebuilt_sparkle_framework"
+    [[ -n "$sparkle_framework" ]] || {
+      printf '%s\n' 'error: prebuilt inputs do not include the linked Sparkle framework' >&2
+      exit 1
+    }
+  else
+    sparkle_framework="$build_root/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+    [[ -f "$sparkle_framework/Versions/B/Sparkle" ]] || {
+      printf '%s\n' 'error: linked Sparkle framework is missing from the resolved build artifacts' >&2
+      exit 1
+    }
+  fi
   /bin/mkdir -p "$staged_app/Contents/Frameworks"
   staged_sparkle="$staged_app/Contents/Frameworks/Sparkle.framework"
   /usr/bin/ditto "$sparkle_framework" "$staged_sparkle"
@@ -217,10 +306,19 @@ fi
   --capture "$identity_capture" \
   --plist "$staged_app/Contents/Info.plist"
 
-readonly swift_path="$(xcrun --find swift)"
 published_device="$(/usr/bin/stat -f '%d' "$staged_app")"
 published_inode="$(/usr/bin/stat -f '%i' "$staged_app")"
-"$swift_path" -e '
+if [[ -n "$prebuilt_inputs" ]]; then
+  /bin/mv -n "$staged_app" "$app_destination"
+  if [[ -e "$staged_app" || -L "$staged_app" || ! -d "$app_destination" \
+    || -L "$app_destination" ]]; then
+    printf 'error: could not publish the staged app atomically without overwriting %s\n' \
+      "$app_destination" >&2
+    exit 1
+  fi
+else
+  readonly swift_path="$(xcrun --find swift)"
+  "$swift_path" -e '
   import Foundation
 
   let arguments = CommandLine.arguments
@@ -232,6 +330,7 @@ published_inode="$(/usr/bin/stat -f '%i' "$staged_app")"
   }
   try fileManager.moveItem(at: staged, to: destination)
 ' "$staged_app" "$app_destination"
+fi
 publication_created=1
 if [[ -n "${FLECK_DEVELOPMENT_TEST_REPLACE_AFTER_PUBLICATION:-}" ]]; then
   canonical_tmp="$(cd -- "${TMPDIR:-/tmp}" && pwd -P)"
@@ -249,6 +348,18 @@ if [[ -n "${FLECK_DEVELOPMENT_TEST_REPLACE_AFTER_PUBLICATION:-}" ]]; then
   exit 1
 fi
 /usr/bin/codesign --verify --deep --strict "$app_destination"
+if [[ -n "$prebuilt_inputs" ]]; then
+  if [[ "$(/usr/bin/shasum -a 256 "$app_destination/Contents/Resources/FleckBuildInputs.json" \
+    | /usr/bin/awk '{print $1}')" != "$prebuilt_inputs_sha256" ]]; then
+    printf '%s\n' 'error: published compile input receipt does not match the trusted transfer digest' >&2
+    exit 1
+  fi
+  if [[ "$(/usr/bin/plutil -extract FleckInputReceiptSHA256 raw -o - \
+    "$app_destination/Contents/Info.plist")" != "$prebuilt_inputs_sha256" ]]; then
+    printf '%s\n' 'error: published bundle plist does not bind the trusted transfer digest' >&2
+    exit 1
+  fi
+fi
 "$identity_tool" verify \
   --capture "$identity_capture" \
   --plist "$app_destination/Contents/Info.plist"

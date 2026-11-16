@@ -148,6 +148,7 @@ jobs:
       - name: Check product version and build identity policy
         run: |
           python3 -B -m unittest discover -s Tests/Scripts -p test_build_identity.py
+          python3 -B -m unittest discover -s Tests/Scripts -p test_build_inputs.py
           python3 -B -m unittest discover -s Tests/Scripts -p test_ci_docs_path.py
           python3 -B Scripts/fleck-build-identity.py check
       - name: Test ordinary graph

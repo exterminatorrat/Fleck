@@ -89,6 +89,63 @@ Hosted CI sets the explicit `ci-unverified` mode for non-handoff packaging.
 Contributors without the private registry use their issue or pull-request base
 and that hosted mode rather than weakening local handoff verification.
 
+### Split-machine compile inputs
+
+When the packaging machine cannot hold the compiler session, a separate build
+machine compiles only. Neither command reads or writes the accepted registry or
+the build identity allocator, and the receipt never claims a build identity.
+
+On the build machine:
+
+```sh
+unset FLECK_ENHANCED_CANDIDATE FLECK_BUILD_WITHOUT_SPARKLE
+python3 -B Scripts/fleck-build-inputs.py build \
+  --repo "$PWD" \
+  --output /absolute/absent/inputs-directory
+```
+
+That writes `Fleck`, `fleck-agent`, any linked `Sparkle.framework`, and an
+immutable `receipt.json` (mode `0444`) with status
+`compile-inputs-not-a-candidate`. It builds Release for arm64 with
+`--jobs 1` and single compiler threads, keeps `--disable-automatic-resolution`,
+and records the source commit and tree, `VERSION`, configuration, the full
+Swift version and Xcode version with its build number, the SDK version, the
+minimum OS target, the `Package.resolved` digest, the revisions read from the
+resolved checkouts, and a byte/mode/symlink/digest inventory of every input.
+Compiler output streams to the terminal instead of being buffered. Transfer the
+directory and the receipt's SHA-256 out of band.
+
+On the packaging machine, pass the trusted transfer digest:
+
+```sh
+Scripts/build-fleck-app.sh \
+  --prebuilt-inputs /absolute/transferred/receipt.json \
+  --input-receipt-sha256 RECEIPT_SHA256 \
+  --result-file "$RESULT_FILE"
+```
+
+The packager verifies the digest against the supplied value, re-checks the
+source, tree, version, configuration, architecture, dependency revisions, SDK,
+and minimum OS target, rejects missing, tampered, escaping, or unexpected inputs
+and any receipt that claims an allocated build identity, then copies the payload
+into a private staging directory and re-hashes the copies. The build and
+packaging machines need not share a Swift, Xcode, or SDK version: the receipted
+producer toolchain is checked for structure under the trusted transfer digest,
+and the payload itself must be a thin arm64 executable whose Mach-O build
+version records the receipt's SDK and minimum OS. Both packaged executables are
+re-checked against the receipted SDK after signing, so a locally installed SDK
+never has to match. It records `FleckInputReceiptID` and `FleckInputReceiptSHA256`
+in the bundle before signing and keeps the receipt at
+`Contents/Resources/FleckBuildInputs.json`. The prebuilt path never invokes
+`swift`; identity allocation, signing, result writing, and publication stay the
+normal canonical steps.
+
+Run the focused checks with the Enhanced candidate unset:
+
+```sh
+python3 -B -m unittest discover -s Tests/Scripts -p test_build_inputs.py
+```
+
 ## Safe native test environment
 
 Use a disposable macOS user account. Populate it only with synthetic notes,
