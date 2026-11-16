@@ -2905,12 +2905,11 @@ private func waitForSettingsAppKitState(
 
   await fixture.runtime.toggle()
   await fixture.runtime.toggle()
-  for _ in 0..<500 {
-    if fixture.runtime.currentCapsuleStatus == .noSpeech { break }
-    await Task.yield()
-  }
-  #expect(fixture.runtime.currentCapsuleStatus == .noSpeech)
-  for _ in 0..<100 { await Task.yield() }
+  #expect(await waitForRuntimeCondition {
+    fixture.runtime.currentCapsuleStatus == .noSpeech
+  })
+  try #require(await sleeper.waitForRegisteredContinuation())
+  let returnTask = try #require(fixture.runtime.capsuleReturnTaskForTesting())
   let requestedDurations = await sleeper.requestedDurations
   #expect(requestedDurations == [DictationRuntime.failureCapsuleDuration])
   let controller = fixture.runtime.capsuleController
@@ -2922,7 +2921,7 @@ private func waitForSettingsAppKitState(
   #expect(FleckRailAccessibility.actions(for: context) == [.dismiss])
 
   await sleeper.resumeAll()
-  for _ in 0..<100 { await Task.yield() }
+  await returnTask.value
   #expect(fixture.runtime.currentCapsuleStatus == .idle)
   #expect(controller.currentContext.status == .idle)
   #expect(controller.errorPresentationModel.presentation == nil)
@@ -2946,41 +2945,42 @@ private func waitForSettingsAppKitState(
 
   await fixture.runtime.toggle()
   await fixture.runtime.toggle()
-  for _ in 0..<500 {
-    if fixture.runtime.currentCapsuleStatus == .noSpeech { break }
-    await Task.yield()
-  }
-  #expect(fixture.runtime.currentCapsuleStatus == .noSpeech)
+  #expect(await waitForRuntimeCondition {
+    fixture.runtime.currentCapsuleStatus == .noSpeech
+  })
   let firstSessionID = try #require(controller.currentContext.sessionID)
-  for _ in 0..<100 { await Task.yield() }
+  try #require(await sleeper.waitForRegisteredContinuation())
+  let staleReturnTask = try #require(
+    fixture.runtime.capsuleReturnTaskForTesting()
+  )
   let firstDurations = await sleeper.requestedDurations
   #expect(firstDurations == [DictationRuntime.failureCapsuleDuration])
 
   await fixture.runtime.toggle()
   await fixture.runtime.toggle()
-  for _ in 0..<500 {
-    if fixture.runtime.currentCapsuleStatus == .noSpeech,
-      controller.currentContext.sessionID != firstSessionID
-    { break }
-    await Task.yield()
-  }
-  #expect(fixture.runtime.currentCapsuleStatus == .noSpeech)
+  #expect(await waitForRuntimeCondition {
+    fixture.runtime.currentCapsuleStatus == .noSpeech
+      && controller.currentContext.sessionID != firstSessionID
+  })
   let secondSessionID = try #require(controller.currentContext.sessionID)
   #expect(secondSessionID != firstSessionID)
-  for _ in 0..<100 { await Task.yield() }
+  try #require(await sleeper.waitForRegisteredContinuation(count: 2))
+  let secondReturnTask = try #require(
+    fixture.runtime.capsuleReturnTaskForTesting()
+  )
   let secondDurations = await sleeper.requestedDurations
   #expect(secondDurations == [
     DictationRuntime.failureCapsuleDuration, DictationRuntime.failureCapsuleDuration,
   ])
 
   await sleeper.resumeNext()
-  for _ in 0..<100 { await Task.yield() }
+  await staleReturnTask.value
   #expect(fixture.runtime.currentCapsuleStatus == .noSpeech)
   #expect(controller.currentContext.sessionID == secondSessionID)
   #expect(controller.errorPresentationModel.presentation?.kind == .noSpeech)
 
   await sleeper.resumeAll()
-  for _ in 0..<100 { await Task.yield() }
+  await secondReturnTask.value
   #expect(fixture.runtime.currentCapsuleStatus == .idle)
   #expect(controller.currentContext.status == .idle)
   await fixture.runtime.shutdown()
@@ -5257,7 +5257,10 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   await noSpeechFixture.runtime.toggle()
   await noSpeechFixture.runtime.toggle()
   #expect(noSpeechFixture.runtime.currentCapsuleStatus == .noSpeech)
-  for _ in 0..<100 { await Task.yield() }
+  try #require(await noSpeechSleeper.waitForRegisteredContinuation())
+  let returnTask = try #require(
+    noSpeechFixture.runtime.capsuleReturnTaskForTesting()
+  )
   let requestedDurations = await noSpeechSleeper.requestedDurations
   #expect(requestedDurations == [DictationRuntime.failureCapsuleDuration])
 
@@ -5267,7 +5270,7 @@ func DictationRuntimeRoutesStaleEnhancedPreferenceToAppleSpeechWhenAdmittedInsta
   noSpeechFixture.runtime.preferencesDidChange()
   #expect(noSpeechFixture.runtime.currentCapsuleStatus == .idle)
   await noSpeechSleeper.resumeAll()
-  for _ in 0..<100 { await Task.yield() }
+  await returnTask.value
   #expect(noSpeechFixture.runtime.currentCapsuleStatus == .idle)
   #expect(await noSpeechSleeper.requestedDurations == requestedDurations)
   await noSpeechFixture.runtime.shutdown()
@@ -7427,25 +7430,23 @@ private actor RuntimeHistorySaveProbe {
 private actor RuntimeCapsuleSleeper {
   private(set) var requestedDurations: [Duration] = []
   private var continuations: [CheckedContinuation<Void, Never>] = []
-  private var requestObservers: [CheckedContinuation<Void, Never>] = []
 
   func sleep(_ duration: Duration) async {
     requestedDurations.append(duration)
-    let observers = requestObservers
-    requestObservers.removeAll()
-    observers.forEach { $0.resume() }
     await withCheckedContinuation { continuations.append($0) }
   }
 
-  func waitForRequest() async {
-    guard requestedDurations.isEmpty else { return }
-    await withCheckedContinuation { requestObservers.append($0) }
-  }
-
-  func waitForRequestCount(_ count: Int) async {
-    while requestedDurations.count < count {
-      await withCheckedContinuation { requestObservers.append($0) }
+  func waitForRegisteredContinuation(
+    count: Int = 1,
+    timeout: Duration = .seconds(2)
+  ) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while continuations.count < count {
+      guard clock.now < deadline else { return false }
+      try? await Task.sleep(for: .milliseconds(2))
     }
+    return true
   }
 
   func resumeNext() {
@@ -7798,14 +7799,17 @@ private func clickRuntimeRetryThroughNativeHitTest(_ runtime: DictationRuntime, 
   await fixture.runtime.toggle()
   await fixture.runtime.shortcutController.waitForTerminalObservation()
   #expect(fixture.runtime.currentCapsuleStatus == .noSpeech)
-  for _ in 0..<100 { await Task.yield() }
+  try #require(await sleeper.waitForRegisteredContinuation())
+  let staleReturnTask = try #require(
+    fixture.runtime.capsuleReturnTaskForTesting()
+  )
   let requestedDurations = await sleeper.requestedDurations
   #expect(requestedDurations == [DictationRuntime.failureCapsuleDuration])
 
   await fixture.runtime.toggle()
   #expect(fixture.runtime.currentCapsuleStatus == .listening)
   await sleeper.resumeAll()
-  for _ in 0..<100 { await Task.yield() }
+  await staleReturnTask.value
   #expect(fixture.runtime.currentCapsuleStatus == .listening)
 
   await fixture.runtime.cancel()
