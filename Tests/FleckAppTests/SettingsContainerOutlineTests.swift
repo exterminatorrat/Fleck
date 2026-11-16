@@ -57,7 +57,6 @@ func settingsRestingContainerOutlinesRenderLightDarkAndIncreasedContrast() async
           .background(theme.color(.window))
           .environment(\.fleckThemeSnapshot, theme)
           .environment(\.colorScheme, theme.colorScheme)
-          .environment(\.colorSchemeContrast, increasedContrast ? .increased : .standard)
           .environment(\._accessibilityReduceTransparency, true)
           .frame(width: 612, height: 340)
         )
@@ -67,7 +66,13 @@ func settingsRestingContainerOutlinesRenderLightDarkAndIncreasedContrast() async
           backing: .buffered,
           defer: false
         )
-        window.appearance = NSAppearance(named: appearance == .dark ? .darkAqua : .aqua)
+        let nativeAppearance: NSAppearance.Name =
+          increasedContrast
+          ? (appearance == .dark
+            ? .accessibilityHighContrastDarkAqua : .accessibilityHighContrastAqua)
+          : (appearance == .dark ? .darkAqua : .aqua)
+        window.appearance = NSAppearance(named: nativeAppearance)
+        host.appearance = NSAppearance(named: nativeAppearance)
         window.contentView = host
         defer {
           window.contentView = nil
@@ -93,12 +98,12 @@ func settingsRestingContainerOutlinesRenderLightDarkAndIncreasedContrast() async
         } else {
           standardEdgeBrightness = brightness
         }
-        if let capturePath = ProcessInfo.processInfo.environment["FLECK_SETTINGS_OUTLINE_CAPTURE_DIR"] {
+        if let capturePath = ProcessInfo.processInfo.environment["FLECK_SETTINGS_WINDOW_CAPTURE_DIR"] {
           let directory = URL(fileURLWithPath: capturePath, isDirectory: true)
           try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
           let name = "settings-containers-\(family.rawValue)-\(appearance.rawValue)-\(increasedContrast ? "increased" : "standard").png"
           try #require(image.representation(using: .png, properties: [:]))
-            .write(to: directory.appendingPathComponent(name))
+            .write(to: directory.appendingPathComponent(name), options: .atomic)
         }
       }
     }
