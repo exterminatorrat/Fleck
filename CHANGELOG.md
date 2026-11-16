@@ -3,6 +3,14 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.15-beta.1] - 2026-11-16
+
+### Changed
+
+- Reserve a distinct public-source version for the approved Settings-outline and
+  no-speech fixes. Product behavior is unchanged from the internal
+  `1.8.14-beta.1` test candidate.
+
 ## [1.8.14-beta.1] - 2026-11-16
 
 ### Fixed
