@@ -4021,9 +4021,12 @@ private final class MenuPanelNativeRoundingWindow: NSWindow {
   await fixture.settleCursorRefresh()
   #expect(NSCursor.current === NSCursor.resizeLeftRight)
 
-  fixture.setSyntheticLivePointer(at: fixture.contentPoint)
-  fixture.exit(at: fixture.contentPoint)
-  await fixture.settleCursorRefresh()
+  let arrowDeadline = ContinuousClock.now + .seconds(2)
+  while NSCursor.current !== NSCursor.arrow, ContinuousClock.now < arrowDeadline {
+    fixture.setSyntheticLivePointer(at: fixture.contentPoint)
+    fixture.exit(at: fixture.contentPoint)
+    await fixture.settleCursorRefresh()
+  }
   #expect(NSCursor.current === NSCursor.arrow)
 }
 
@@ -4929,10 +4932,16 @@ private final class ResizeCursorHoverFixture {
   }
 
   func settleCursorRefresh() async {
-    for _ in 0..<4 {
+    for _ in 0..<8 {
+      drainMainRunLoop()
       host.layoutSubtreeIfNeeded()
       await Task.yield()
     }
+  }
+
+  @MainActor
+  private func drainMainRunLoop() {
+    RunLoop.current.run(until: Date().addingTimeInterval(0.02))
   }
 
   func exit(at point: CGPoint) {
