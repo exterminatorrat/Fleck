@@ -250,6 +250,13 @@
               from: nil
             )
           }
+          Button("Update Note Link Labels") {
+            NSApp.sendAction(
+              #selector(ListAwareTextView.relabelStaleNoteLinksFromMenu(_:)),
+              to: nil,
+              from: nil
+            )
+          }
         }
       }
 
