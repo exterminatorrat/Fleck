@@ -17,10 +17,13 @@
       case down
     }
 
+    static let recentNotesLimit = 8
+
     @Published private(set) var isPresented = false
     @Published var query = ""
     @Published private(set) var results: [WorkspaceSearchResult] = []
     @Published private(set) var highlightedNoteID: UUID?
+    @Published private(set) var isShowingRecentNotes = false
 
     private let searchOperation: SearchOperation
     private var searchTask: Task<Void, Never>?
@@ -84,6 +87,7 @@
       results = []
       highlightedNoteID = nil
       resultGeneration = nil
+      isShowingRecentNotes = false
       hasActivatedCurrentPresentation = false
       isPresented = true
     }
@@ -97,6 +101,7 @@
       results = []
       highlightedNoteID = nil
       resultGeneration = nil
+      isShowingRecentNotes = false
       sourceNoteID = nil
       sourceRevision = nil
       replacementRange = nil
@@ -133,12 +138,20 @@
       let candidates = notes.filter { $0.id != sourceID }
       let trimmedQuery = requestQuery.trimmingCharacters(in: .whitespacesAndNewlines)
 
-      guard isPresented, !trimmedQuery.isEmpty else {
+      guard isPresented else {
         results = []
         highlightedNoteID = nil
+        isShowingRecentNotes = false
         return
       }
 
+      guard !trimmedQuery.isEmpty else {
+        isShowingRecentNotes = true
+        apply(Self.recentResults(in: candidates), generation: generation)
+        return
+      }
+
+      isShowingRecentNotes = false
       let operation = searchOperation
       searchTask = Task { @MainActor [weak self] in
         let results = await operation(requestQuery, candidates, 50)
@@ -256,6 +269,36 @@
       default:
         return false
       }
+    }
+
+    static func recentResults(
+      in notes: [Note],
+      limit: Int = recentNotesLimit
+    ) -> [WorkspaceSearchResult] {
+      guard limit > 0 else { return [] }
+      return notes
+        .sorted { lhs, rhs in
+          if lhs.modifiedAt != rhs.modifiedAt { return lhs.modifiedAt > rhs.modifiedAt }
+          return lhs.id.uuidString.lowercased() < rhs.id.uuidString.lowercased()
+        }
+        .prefix(limit)
+        .map { note in
+          WorkspaceSearchResult(
+            noteID: note.id,
+            displayTitle: note.displayTitle,
+            snippet: recentPreview(of: note.body),
+            match: WorkspaceSearchMatch(field: .title, location: NSNotFound, length: 0),
+            score: 0
+          )
+        }
+    }
+
+    private static let recentPreviewLimit = 120
+
+    private static func recentPreview(of body: String) -> String {
+      let collapsed = body.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+      guard collapsed.count > recentPreviewLimit else { return collapsed }
+      return String(collapsed.prefix(recentPreviewLimit)) + "…"
     }
 
     private func apply(_ results: [WorkspaceSearchResult], generation: UInt64) {
@@ -455,7 +498,11 @@
             .accessibilityLabel("Dismiss note link picker")
           }
 
-          Text(controller.resultCountAccessibilityValue)
+          Text(
+            controller.isShowingRecentNotes
+              ? "Recent notes"
+              : controller.resultCountAccessibilityValue
+          )
             .font(.caption)
             .foregroundStyle(.secondary)
             .accessibilityElement(children: .ignore)
@@ -465,7 +512,7 @@
           if controller.results.isEmpty {
             Text(
               controller.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "Type to link a note"
+                ? "No other notes"
                 : "No matching notes"
             )
             .font(.callout)

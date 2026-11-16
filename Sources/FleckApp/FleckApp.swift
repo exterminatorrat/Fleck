@@ -242,6 +242,7 @@
               from: nil
             )
           }
+          .keyboardShortcut("k", modifiers: .command)
           Button("Open Note Link") {
             NSApp.sendAction(
               #selector(ListAwareTextView.openNoteLinkFromMenu(_:)),
