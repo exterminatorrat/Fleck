@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.24-beta.1] - 2026-11-17
+
+### Added
+
+- Note links show when their label no longer matches the target note's title: the
+  underline turns dashed, the context menu offers Use Current Title with the live
+  title in the label, and Editor > Update Note Link Labels rewrites every stale
+  label in the note as one undoable edit.
+
 ## [1.8.23-beta.1] - 2026-11-17
 
 ### Added
