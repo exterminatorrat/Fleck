@@ -35,8 +35,10 @@ func settingsRestingContainerOutlinesRenderLightDarkAndIncreasedContrast() async
         let host = NSHostingView(
           rootView: HStack(spacing: 24) {
             SettingsSidebarSurface {
-              Text("General")
-              Text("Appearance")
+              VStack(alignment: .leading) {
+                Text("General")
+                Text("Appearance")
+              }
             }
             .frame(width: 180, height: 280)
             VStack(alignment: .leading, spacing: 16) {
