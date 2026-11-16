@@ -696,6 +696,124 @@ func noteLinkPickerFieldUsesNeutralKeyboardFocusStyling() throws {
   #expect(!textView.validateMenuItem(try #require(requestItems.first)))
 }
 
+@Test @MainActor func NoteLinkPickerListsRecentNotesBeforeAnyQuery() {
+  let source = Note(
+    id: UUID(), title: "Source", body: "Source body",
+    modifiedAt: Date(timeIntervalSince1970: 40))
+  let older = Note(
+    id: UUID(), title: "Older", body: "Older body",
+    modifiedAt: Date(timeIntervalSince1970: 10))
+  let newest = Note(
+    id: UUID(), title: "Newest", body: "Newest body",
+    modifiedAt: Date(timeIntervalSince1970: 30))
+  let middle = Note(
+    id: UUID(), title: "Middle", body: "Middle body",
+    modifiedAt: Date(timeIntervalSince1970: 20))
+  let controller = NoteLinkPickerController(searchOperation: { _, _, _ in
+    Issue.record("An empty query must list recent notes instead of running a search")
+    return []
+  })
+
+  controller.present(
+    sourceNoteID: source.id,
+    replacementRange: NSRange(location: 0, length: 0),
+    sourceRevision: source.revision
+  )
+  controller.refresh(in: [older, newest, source, middle])
+
+  #expect(controller.isPresented)
+  #expect(controller.isShowingRecentNotes)
+  #expect(controller.results.map(\.noteID) == [newest.id, middle.id, older.id])
+  #expect(controller.results.map(\.snippet) == ["Newest body", "Middle body", "Older body"])
+  #expect(controller.resultsAreCurrent)
+  #expect(controller.highlightedNoteID == newest.id)
+}
+
+@Test @MainActor func NoteLinkPickerRecentNotesStopAtTheLimitAndSkipTheSourceNote() {
+  let source = Note(
+    id: UUID(), title: "Source", body: "Source body",
+    modifiedAt: Date(timeIntervalSince1970: 10_000))
+  let notes = (0..<12).map { index in
+    Note(
+      id: UUID(),
+      title: "Note \(index)",
+      body: "Body \(index)",
+      modifiedAt: Date(timeIntervalSince1970: TimeInterval(index))
+    )
+  }
+  let controller = NoteLinkPickerController()
+
+  controller.present(
+    sourceNoteID: source.id,
+    replacementRange: NSRange(location: 0, length: 0),
+    sourceRevision: source.revision
+  )
+  controller.refresh(in: [source] + notes)
+
+  #expect(controller.results.count == NoteLinkPickerController.recentNotesLimit)
+  #expect(!controller.results.contains { $0.noteID == source.id })
+  #expect(controller.results.map(\.noteID) == notes.suffix(8).reversed().map(\.id))
+}
+
+@Test @MainActor func NoteLinkPickerRestoresRecentNotesWhenTheQueryIsCleared() async {
+  let source = Note(id: UUID(), title: "Source", body: "Source body")
+  let target = Note(
+    id: UUID(), title: "Target", body: "Target body",
+    modifiedAt: Date(timeIntervalSince1970: 20))
+  let other = Note(
+    id: UUID(), title: "Other", body: "Other body",
+    modifiedAt: Date(timeIntervalSince1970: 10))
+  let controller = NoteLinkPickerController(searchOperation: { query, notes, _ in
+    notes
+      .filter { $0.displayTitle.localizedCaseInsensitiveContains(query) }
+      .map { note in
+        WorkspaceSearchResult(
+          noteID: note.id,
+          displayTitle: note.displayTitle,
+          snippet: note.body,
+          match: WorkspaceSearchMatch(field: .title, location: 0, length: 1),
+          score: 1
+        )
+      }
+  })
+
+  controller.present(
+    sourceNoteID: source.id,
+    replacementRange: NSRange(location: 0, length: 0),
+    sourceRevision: source.revision
+  )
+  controller.refresh(in: [source, target, other])
+  #expect(controller.results.map(\.noteID) == [target.id, other.id])
+
+  controller.setQuery("Targ", in: [source, target, other])
+  await settleNoteLinkPicker()
+  #expect(!controller.isShowingRecentNotes)
+  #expect(controller.results.map(\.noteID) == [target.id])
+
+  controller.setQuery("", in: [source, target, other])
+  #expect(controller.isShowingRecentNotes)
+  #expect(controller.results.map(\.noteID) == [target.id, other.id])
+  await settleNoteLinkPicker()
+  #expect(controller.results.map(\.noteID) == [target.id, other.id])
+}
+
+@Test func editorMenuBindsLinkToNoteToCommandK() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let app = try String(
+    contentsOf: root.appendingPathComponent("Sources/FleckApp/FleckApp.swift"),
+    encoding: .utf8
+  )
+  let editorMenu = try #require(
+    app.components(separatedBy: "CommandMenu(\"Editor\")").last
+  )
+
+  #expect(editorMenu.contains("Button(\"Link to Note…\")"))
+  #expect(editorMenu.contains(".keyboardShortcut(\"k\", modifiers: .command)"))
+}
+
 @Test @MainActor func NoteLinkPickerRejectsStaleSourceRevisionBeforeArbitraryReplacement() async {
   let source = Note(id: UUID(), title: "Source", body: "Source body", revision: 7)
   let target = Note(id: UUID(), title: "Target", body: "Target body", revision: 2)
