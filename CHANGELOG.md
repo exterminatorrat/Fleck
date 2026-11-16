@@ -3,6 +3,22 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.23-beta.1] - 2026-11-17
+
+### Added
+
+- The note link picker lists the notes edited most recently, and Command-K opens
+  Link to Note from the Editor menu, so linking a note no longer needs the `[[`
+  gesture or the toolbar tools menu.
+
+### Changed
+
+- Note links now display their label as the visible text in the accent color and
+  collapse the `(fleck://note/<uuid>)` destination, so a note reads as prose.
+  Placing the caret inside a link reveals the complete Markdown token for
+  editing, and the stored note body, exports, copy, and undo keep the full token
+  unchanged.
+
 ## [1.8.15-beta.1] - 2026-11-16
 
 ### Changed
