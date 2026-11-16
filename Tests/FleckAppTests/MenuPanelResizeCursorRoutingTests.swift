@@ -1236,7 +1236,15 @@ import Testing
   let startScreen = fixture.window.convertPoint(
     toScreen: fixture.host.convert(startPoint, to: nil)
   )
-  fixture.drag(toScreenPoint: CGPoint(x: statusFrame.midX + 6, y: startScreen.y))
+  let targetScreen = CGPoint(x: statusFrame.midX + 6, y: startScreen.y)
+  fixture.drag(toScreenPoint: targetScreen)
+  print(
+    "DIAG flip screen=\(screen.frame) visible=\(screen.visibleFrame) "
+      + "window=\(fixture.window.frame) status=\(statusFrame) "
+      + "startHost=\(startPoint) startScreen=\(startScreen) target=\(targetScreen) "
+      + "sideAfterDrag=\(String(describing: fixture.controller.currentFixedSide)) "
+      + "isTracking=\(fixture.controller.isTracking) commits=\(fixture.commits)"
+  )
   let flippedSide = fixture.controller.currentFixedSide
   try #require(
     flippedSide == .left,

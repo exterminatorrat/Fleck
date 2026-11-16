@@ -204,15 +204,15 @@ private func expectCleanGutter(
   #expect(geometry.prefix.width > 8)
   let bands = [
     NSRect(
-      x: geometry.prefix.minX + 0.5,
+      x: geometry.prefix.minX + 1.5,
       y: geometry.line.minY + 1,
-      width: geometry.prefix.width - 1.5,
+      width: geometry.prefix.width - 2.5,
       height: max(0, geometry.prefix.minY - geometry.line.minY - 2)
     ),
     NSRect(
-      x: geometry.prefix.minX + 0.5,
+      x: geometry.prefix.minX + 1.5,
       y: geometry.prefix.maxY + 1,
-      width: geometry.prefix.width - 1.5,
+      width: geometry.prefix.width - 2.5,
       height: max(0, geometry.line.maxY - geometry.prefix.maxY - 2)
     ),
   ]
