@@ -91,6 +91,13 @@ git diff
 Do not commit build output, local paths, secrets, signing material, credentials,
 model weights, personal fixtures, or unsanitized logs.
 
+## Write commits and pull requests
+
+Follow the [commit and pull request standards](docs/commit-and-pr-standards.md):
+a typed title such as `fix(editor): ...` or `feat(mcp): ...`, a commit body that
+explains why, and a completed pull request template. To use the commit message
+template locally, run `git config commit.template .gitmessage`.
+
 ## Open a pull request
 
 Keep the pull request small enough to review. Explain:
