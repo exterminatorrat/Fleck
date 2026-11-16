@@ -2652,6 +2652,9 @@
             commands: editorCommands,
             isVisible: isEditorVisible,
             liveNoteIDs: Set(appState.workspace.notes.map(\.id)),
+            noteLinkTitles: Dictionary(
+              uniqueKeysWithValues: appState.workspace.notes.map { ($0.id, $0.displayTitle) }
+            ),
             inlineImageStore: appState.inlineNoteImageStore,
             onInlineImageError: appState.inlineNoteImageImportFailed,
             onRequestNoteLink: { range in

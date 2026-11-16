@@ -1339,6 +1339,7 @@
     let commands: EditorCommands
     let isVisible: Bool
     let liveNoteIDs: Set<UUID>
+    let noteLinkTitles: [UUID: String]
     let inlineImageStore: InlineNoteImageStore?
     let onInlineImageError: ((String) -> Void)?
     let onRequestNoteLink: ((NSRange) -> Void)?
@@ -1352,6 +1353,7 @@
       let fontSize: Double
       let palette: FleckThemePalette
       let liveNoteIDs: Set<UUID>
+      var noteLinkTitles: [UUID: String] = [:]
       let isEnabled: Bool
       let reduceTransparency: Bool
       let showScrollEdgeBlur: Bool
@@ -1369,6 +1371,7 @@
       let bodyFontChanged: Bool
       let paletteChanged: Bool
       let liveNoteIDsChanged: Bool
+      let noteLinkTitlesChanged: Bool
       let isEnabledChanged: Bool
       let reduceTransparencyChanged: Bool
       let showScrollEdgeBlurChanged: Bool
@@ -1395,6 +1398,9 @@
         liveNoteIDsChanged = previous.map {
           $0.liveNoteIDs != current.liveNoteIDs
         } ?? true
+        noteLinkTitlesChanged = previous.map {
+          $0.noteLinkTitles != current.noteLinkTitles
+        } ?? true
         isEnabledChanged = previous.map { $0.isEnabled != current.isEnabled } ?? true
         reduceTransparencyChanged = previous.map {
           $0.reduceTransparency != current.reduceTransparency
@@ -1418,7 +1424,7 @@
       }
 
       var shouldRefreshNoteLinks: Bool {
-        contentReloaded || paletteChanged || liveNoteIDsChanged
+        contentReloaded || paletteChanged || liveNoteIDsChanged || noteLinkTitlesChanged
       }
 
       var shouldUpdateTypingFont: Bool {
@@ -1452,6 +1458,7 @@
       commands: EditorCommands,
       isVisible: Bool = true,
       liveNoteIDs: Set<UUID> = [],
+      noteLinkTitles: [UUID: String] = [:],
       inlineImageStore: InlineNoteImageStore? = nil,
       onInlineImageError: ((String) -> Void)? = nil,
       onRequestNoteLink: ((NSRange) -> Void)? = nil,
@@ -1475,6 +1482,7 @@
       self.commands = commands
       self.isVisible = isVisible
       self.liveNoteIDs = liveNoteIDs
+      self.noteLinkTitles = noteLinkTitles
       self.inlineImageStore = inlineImageStore
       self.onInlineImageError = onInlineImageError
       self.onRequestNoteLink = onRequestNoteLink
@@ -1490,6 +1498,7 @@
         fontSize: fontSize,
         palette: theme.palette,
         liveNoteIDs: liveNoteIDs,
+        noteLinkTitles: noteLinkTitles,
         isEnabled: isEnabled,
         reduceTransparency: reduceTransparency,
         showScrollEdgeBlur: showScrollEdgeBlur,
@@ -1734,7 +1743,8 @@
       if refresh {
         textView.refreshNoteLinks(
           accentColorHex: theme.palette[.accent],
-          liveNoteIDs: liveNoteIDs
+          liveNoteIDs: liveNoteIDs,
+          noteLinkTitles: noteLinkTitles
         )
       }
     }
@@ -2078,7 +2088,8 @@
         if let linkTextView = textView as? ListAwareTextView {
           linkTextView.refreshNoteLinks(
             accentColorHex: parent.theme.palette[.accent],
-            liveNoteIDs: parent.liveNoteIDs
+            liveNoteIDs: parent.liveNoteIDs,
+            noteLinkTitles: parent.noteLinkTitles
           )
         }
         parent.onChange(snapshot.string, updatedRTF)
@@ -2228,6 +2239,7 @@
     private static let noteLinkSeparatorMenuTag = 0xF1EC
     private static let noteLinkRequestMenuTag = 0xF1ED
     private static let noteLinkOpenMenuTag = 0xF1EE
+    private static let noteLinkRelabelMenuTag = 0xF1F0
     private static let copyImageMenuTag = 0xF1EF
     private static let managedImageReferenceType = NSPasteboard.PasteboardType(
       "com.harryjin.fleck.managed-image-reference"
@@ -2265,6 +2277,7 @@
     var noteLinkWarningColor = FleckThemeSnapshot.initial.nsColor(.warning) {
       didSet { needsDisplay = true }
     }
+    private var noteLinkTitles: [UUID: String] = [:]
     var reduceMotion = false
     private weak var checklistCompletionOverlay: ChecklistCompletionOverlay?
     private struct TemporaryAttributeSlice {
@@ -2282,6 +2295,16 @@
       let markerRange: NSRange
       let contentRange: NSRange
       let completed: Bool
+    }
+
+    /// Solid for a current link, dashed when the label disagrees with the live title, and dotted
+    /// when the target is gone. The pattern, not the color alone, carries the state.
+    static func noteLinkUnderlineStyle(isLive: Bool, isStale: Bool) -> Int {
+      guard isLive else {
+        return NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDot.rawValue
+      }
+      guard isStale else { return NSUnderlineStyle.single.rawValue }
+      return NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDash.rawValue
     }
 
     private var temporaryNoteLinkPresentations: [TemporaryNoteLinkPresentation] = []
@@ -2682,9 +2705,11 @@
 
     func refreshNoteLinks(
       accentColorHex: String,
-      liveNoteIDs: Set<UUID>
+      liveNoteIDs: Set<UUID>,
+      noteLinkTitles: [UUID: String] = [:]
     ) {
       self.liveNoteIDs = liveNoteIDs
+      self.noteLinkTitles = noteLinkTitles
       clearNoteLinkPresentation()
       guard let layoutManager, let textContainer else { return }
       let textLength = (string as NSString).length
@@ -2718,6 +2743,10 @@
           )
         )
         let isLive = liveNoteIDs.contains(link.targetNoteID)
+        let isStale = NoteLinkDrift(
+          link: link,
+          currentTitle: noteLinkTitles[link.targetNoteID]
+        ).isStale
         layoutManager.addTemporaryAttribute(
           .foregroundColor,
           value: isLive ? accent : unavailableLinkColor,
@@ -2725,9 +2754,7 @@
         )
         layoutManager.addTemporaryAttribute(
           .underlineStyle,
-          value: isLive
-            ? NSUnderlineStyle.single.rawValue
-            : NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDot.rawValue,
+          value: Self.noteLinkUnderlineStyle(isLive: isLive, isStale: isStale),
           forCharacterRange: link.range
         )
         temporaryNoteLinkPresentations.append(presentation)
@@ -5147,6 +5174,7 @@
           $0.tag == Self.noteLinkSeparatorMenuTag
             || $0.tag == Self.noteLinkRequestMenuTag
             || $0.tag == Self.noteLinkOpenMenuTag
+            || $0.tag == Self.noteLinkRelabelMenuTag
             || $0.tag == Self.copyImageMenuTag
         }
         .forEach(menu.removeItem)
@@ -5174,7 +5202,7 @@
       )
       requestItem.tag = Self.noteLinkRequestMenuTag
       requestItem.target = self
-      if noteLinkAtSelection() != nil {
+      if let link = noteLinkAtSelection() {
         let openItem = menu.addItem(
           withTitle: "Open Note Link",
           action: #selector(openNoteLinkFromMenu(_:)),
@@ -5182,8 +5210,68 @@
         )
         openItem.tag = Self.noteLinkOpenMenuTag
         openItem.target = self
+        if staleNoteLink(at: link) != nil, let title = noteLinkTitles[link.targetNoteID] {
+          let relabelItem = menu.addItem(
+            withTitle: "Use Current Title (“\(title)”)",
+            action: #selector(useCurrentNoteLinkTitle(_:)),
+            keyEquivalent: ""
+          )
+          relabelItem.tag = Self.noteLinkRelabelMenuTag
+          relabelItem.target = self
+        }
       }
       return menu
+    }
+
+    var hasStaleNoteLinks: Bool {
+      NoteLinkInspector.driftStates(
+        in: string,
+        titles: NoteLinkTargetTitles(titlesByID: noteLinkTitles)
+      ).contains(where: \.isStale)
+    }
+
+    /// The link's target still exists and its live title no longer matches the written label.
+    func staleNoteLink(at link: NoteLink) -> NoteLinkDrift? {
+      let drift = NoteLinkDrift(link: link, currentTitle: noteLinkTitles[link.targetNoteID])
+      return drift.isStale ? drift : nil
+    }
+
+    @objc func useCurrentNoteLinkTitle(_ sender: Any?) {
+      guard let link = noteLinkAtSelection(), let state = staleNoteLink(at: link),
+        let title = state.currentTitle
+      else { return }
+      replaceNoteLinkLabels(with: [(state.link.labelRange, title)])
+    }
+
+    @objc func relabelStaleNoteLinksFromMenu(_ sender: Any?) {
+      let stale = NoteLinkInspector.driftStates(
+        in: string,
+        titles: NoteLinkTargetTitles(titlesByID: noteLinkTitles)
+      ).filter(\.isStale)
+      guard !stale.isEmpty else { return }
+      replaceNoteLinkLabels(
+        with: stale.compactMap { state in
+          state.currentTitle.map { (state.link.labelRange, $0) }
+        }
+      )
+    }
+
+    private func replaceNoteLinkLabels(with replacements: [(NSRange, String)]) {
+      guard isEditable, !replacements.isEmpty else { return }
+      let selection = selectedRange()
+      breakUndoCoalescing()
+      undoManager?.beginUndoGrouping()
+      for (range, title) in replacements.sorted(by: { $0.0.location > $1.0.location }) {
+        guard NSMaxRange(range) <= (string as NSString).length else { continue }
+        insertText(NoteLinkFormatter.escapeLabel(title), replacementRange: range)
+      }
+      undoManager?.endUndoGrouping()
+      undoManager?.setActionName("Use Current Note Link Title")
+      breakUndoCoalescing()
+      let length = (string as NSString).length
+      setSelectedRange(
+        NSRange(location: min(selection.location, length), length: 0)
+      )
     }
 
     @objc func copyImageFromMenu(_ sender: NSMenuItem) {
@@ -5208,6 +5296,8 @@
       case #selector(openNoteLinkFromMenu(_:)):
         guard let link = noteLinkAtSelection() else { return false }
         return liveNoteIDs.contains(link.targetNoteID)
+      case #selector(relabelStaleNoteLinksFromMenu(_:)):
+        return isEditable && hasStaleNoteLinks
       default:
         return super.validateMenuItem(menuItem)
       }
@@ -5220,6 +5310,8 @@
       case #selector(openNoteLinkFromMenu(_:)):
         guard let link = noteLinkAtSelection() else { return false }
         return liveNoteIDs.contains(link.targetNoteID)
+      case #selector(relabelStaleNoteLinksFromMenu(_:)):
+        return isEditable && hasStaleNoteLinks
       default:
         return super.validateUserInterfaceItem(item)
       }
