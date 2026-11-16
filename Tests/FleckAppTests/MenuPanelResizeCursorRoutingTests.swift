@@ -1226,34 +1226,21 @@ import Testing
   let startPoint = fixture.bandExpectations[0].point
   fixture.mouseDown(atHostPoint: startPoint)
   try #require(fixture.controller.isTracking, "the flip drag never began")
-  let statusWindow = try #require(
-    fixture.statusButton.window,
+  try #require(
+    fixture.statusButton.window != nil,
     "the flip premise needs the status button in its own window"
-  )
-  let statusFrame = statusWindow.convertToScreen(
-    fixture.statusButton.convert(fixture.statusButton.bounds, to: nil)
   )
   let startScreen = fixture.window.convertPoint(
     toScreen: fixture.host.convert(startPoint, to: nil)
   )
-  let targetScreen = CGPoint(x: statusFrame.midX + 6, y: startScreen.y)
-  let hostScreenBefore = fixture.window.convertToScreen(
+  let hostScreen = fixture.window.convertToScreen(
     fixture.host.convert(fixture.host.bounds, to: nil)
   )
-  print(
-    "DIAG before screen=\(screen.frame) visible=\(screen.visibleFrame) "
-      + "window=\(fixture.window.frame) hostScreen=\(hostScreenBefore) "
-      + "outer=\(startLayout.outerBounds) body=\(startLayout.bodyBounds) "
-      + "startHost=\(startPoint) startScreen=\(startScreen) status=\(statusFrame) "
-      + "target=\(targetScreen) bands=\(fixture.bandExpectations.count)"
+  try #require(
+    startScreen.x < hostScreen.maxX,
+    "the flip premise needs the captured free edge inside the panel"
   )
-  fixture.drag(toScreenPoint: targetScreen)
-  print(
-    "DIAG after window=\(fixture.window.frame) "
-      + "hostScreen=\(fixture.window.convertToScreen(fixture.host.convert(fixture.host.bounds, to: nil))) "
-      + "side=\(String(describing: fixture.controller.currentFixedSide)) "
-      + "isTracking=\(fixture.controller.isTracking) commits=\(fixture.commits)"
-  )
+  fixture.drag(toScreenPoint: CGPoint(x: hostScreen.maxX + 6, y: startScreen.y))
   let flippedSide = fixture.controller.currentFixedSide
   try #require(
     flippedSide == .left,
