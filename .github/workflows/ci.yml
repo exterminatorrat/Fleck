@@ -71,7 +71,8 @@ jobs:
       contents: read
     steps:
       - name: Confirm Namespace started this job
-        run: printf 'Namespace runner started: %s\n' "$RUNNER_NAME"
+        run: |
+          printf 'Namespace runner started: %s\n' "$RUNNER_NAME"
 
   select-runner:
     name: Select CI runner
