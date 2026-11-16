@@ -186,6 +186,23 @@
     }
   }
 
+  struct SettingsContainerOutline: View {
+    @Environment(\.fleckThemeSnapshot) private var theme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    let cornerRadius: CGFloat
+
+    var body: some View {
+      RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        .stroke(
+          theme.increasedContrast || colorSchemeContrast == .increased
+            ? theme.color(.border) : Color(nsColor: .separatorColor),
+          lineWidth: 1
+        )
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+  }
+
   struct SettingsSidebarSurface<Content: View>: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
@@ -214,7 +231,7 @@
           ) {
           case .opaque:
             shape.fill(theme.color(.sidebar))
-              .overlay { shape.stroke(theme.color(.border), lineWidth: 1) }
+              .overlay { SettingsContainerOutline(cornerRadius: 22) }
           case .liquidGlass:
             if #available(macOS 26, *) {
               shape.fill(.clear)
@@ -557,7 +574,7 @@
         .background {
           let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
           shape.fill(theme.color(.card))
-            .overlay { shape.stroke(theme.color(.border), lineWidth: 1) }
+            .overlay { SettingsContainerOutline(cornerRadius: 12) }
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -601,7 +618,7 @@
       .background {
         let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
         shape.fill(theme.color(.raised))
-          .overlay { shape.stroke(theme.color(.border), lineWidth: 1) }
+          .overlay { SettingsContainerOutline(cornerRadius: 14) }
       }
       .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
@@ -706,7 +723,7 @@
         .background {
           let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
           shape.fill(theme.color(.card))
-            .overlay { shape.stroke(theme.color(.border), lineWidth: 1) }
+            .overlay { SettingsContainerOutline(cornerRadius: 10) }
         }
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
       }

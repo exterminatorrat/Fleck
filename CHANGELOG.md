@@ -3,6 +3,15 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.14-beta.1] - 2026-11-16
+
+### Fixed
+
+- Settings containers use understated native separators at rest while preserving
+  stronger Increase Contrast outlines and keyboard-focus indicators.
+- The terminal No speech heard notice returns to standby or hides after three
+  seconds, without dismissing a newer capture or another error.
+
 ## [1.8.13-beta.1] - 2026-11-15
 
 ### Fixed

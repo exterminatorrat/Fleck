@@ -1568,6 +1568,7 @@
             action: nil,
             coordinatorEvent: event
           )
+          scheduleIdle(after: Self.failureCapsuleDuration, owner: .dictation)
         case .cancelled:
           showIdleCapsule()
         }
