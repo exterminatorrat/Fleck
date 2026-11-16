@@ -664,6 +664,9 @@ class CompileInputTests(unittest.TestCase):
 
 
 class PackagerParserTests(unittest.TestCase):
+    def test_receipt_helper_is_executable_for_direct_packager_invocation(self):
+        self.assertTrue(os.access(ROOT / "Scripts/fleck-build-inputs.py", os.X_OK))
+
     def packager(self):
         return ROOT / "Scripts/build-fleck-app.sh"
 
