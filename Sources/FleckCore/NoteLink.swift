@@ -6,6 +6,27 @@ public struct NoteLink: Equatable, Sendable {
   public let range: NSRange
   public let destinationRange: NSRange
 
+  /// The escaped label text between the opening bracket and the closing bracket.
+  public var labelRange: NSRange {
+    NSRange(
+      location: range.location + 1,
+      length: max(0, destinationRange.location - range.location - 3)
+    )
+  }
+
+  /// The parts of the token outside the label: brackets, parenthesis, and destination.
+  public var nonLabelRanges: [NSRange] {
+    var ranges: [NSRange] = []
+    let leading = NSRange(location: range.location, length: labelRange.location - range.location)
+    if leading.length > 0 { ranges.append(leading) }
+    let trailing = NSRange(
+      location: NSMaxRange(labelRange),
+      length: NSMaxRange(range) - NSMaxRange(labelRange)
+    )
+    if trailing.length > 0 { ranges.append(trailing) }
+    return ranges
+  }
+
   public init(
     targetNoteID: UUID,
     label: String,

@@ -27,6 +27,36 @@ import Testing
   )
 }
 
+@Test func NoteLinkSplitsLabelFromTheRestOfTheToken() throws {
+  let id = UUID(uuidString: "550E8400-E29B-41D4-A716-446655440000")!
+  let body = "| [Plan \\] launch](fleck://note/\(id.uuidString)) |"
+  let link = try #require(NoteLinkParser.links(in: body).first)
+  let source = body as NSString
+
+  #expect(source.substring(with: link.labelRange) == #"Plan \] launch"#)
+  #expect(link.nonLabelRanges.count == 2)
+  #expect(source.substring(with: link.nonLabelRanges[0]) == "[")
+  #expect(
+    source.substring(with: link.nonLabelRanges[1])
+      == "](fleck://note/\(id.uuidString))"
+  )
+  #expect(link.nonLabelRanges[0].location == link.range.location)
+  #expect(NSMaxRange(link.nonLabelRanges[1]) == NSMaxRange(link.range))
+}
+
+@Test func NoteLinkLabelAndNonLabelRangesCoverTheWholeToken() throws {
+  let id = UUID(uuidString: "550E8400-E29B-41D4-A716-446655440000")!
+  let body = "[Target](fleck://note/\(id.uuidString))"
+  let link = try #require(NoteLinkParser.links(in: body).first)
+
+  #expect(link.range == NSRange(location: 0, length: (body as NSString).length))
+  #expect(link.labelRange == NSRange(location: 1, length: 6))
+  #expect(link.nonLabelRanges == [
+    NSRange(location: 0, length: 1),
+    NSRange(location: 7, length: (body as NSString).length - 7),
+  ])
+}
+
 @Test func NoteLinkParserRejectsBroadenedOrMalformedDestinations() {
   let id = "550E8400-E29B-41D4-A716-446655440000"
   let invalid = [

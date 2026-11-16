@@ -1733,7 +1733,7 @@
       textView.onUnavailableNoteLink = onUnavailableNoteLink
       if refresh {
         textView.refreshNoteLinks(
-          accentColorHex: theme.palette[.link],
+          accentColorHex: theme.palette[.accent],
           liveNoteIDs: liveNoteIDs
         )
       }
@@ -2077,7 +2077,7 @@
         richTextRTF = updatedRTF
         if let linkTextView = textView as? ListAwareTextView {
           linkTextView.refreshNoteLinks(
-            accentColorHex: parent.theme.palette[.link],
+            accentColorHex: parent.theme.palette[.accent],
             liveNoteIDs: parent.liveNoteIDs
           )
         }
@@ -2112,6 +2112,7 @@
 
       func textViewDidChangeSelection(_ notification: Notification) {
         guard let textView = notification.object as? NSTextView else { return }
+        (textView as? ListAwareTextView)?.updateNoteLinkGlyphVisibility()
         if noteLinkTrigger(in: textView) == nil {
           lastReportedNoteLinkTrigger = nil
         }
@@ -2284,6 +2285,9 @@
     }
 
     private var temporaryNoteLinkPresentations: [TemporaryNoteLinkPresentation] = []
+    private var noteLinkPresentationLinks: [NoteLink] = []
+    private var hiddenNoteLinkDestinationRanges: [NSRange] = []
+    private var hiddenNoteLinkTokenRanges: [NSRange] = []
     private var temporaryChecklistSlices: [TemporaryAttributeSlice] = []
     private var checklistTrackingArea: NSTrackingArea?
     private var hoveredChecklistMarkerRange: NSRange?
@@ -2457,6 +2461,17 @@
         outputGlyphs[index] = 0
         outputProperties[index] = .controlCharacter
         changed = true
+      }
+      if !hiddenNoteLinkDestinationRanges.isEmpty {
+        for index in outputCharacterIndexes.indices {
+          let characterIndex = outputCharacterIndexes[index]
+          guard hiddenNoteLinkDestinationRanges.contains(where: {
+            characterIndex >= $0.location && characterIndex < NSMaxRange($0)
+          }) else { continue }
+          outputGlyphs[index] = 0
+          outputProperties[index] = .null
+          changed = true
+        }
       }
       guard changed else { return 0 }
       outputGlyphs.withUnsafeBufferPointer { glyphBuffer in
@@ -2648,6 +2663,11 @@
 
     func clearNoteLinkPresentation() {
       clearChecklistPresentation()
+      let collapsedTokens = hiddenNoteLinkTokenRanges
+      hiddenNoteLinkDestinationRanges = []
+      hiddenNoteLinkTokenRanges = []
+      invalidateNoteLinkGlyphs(tokens: collapsedTokens, layoutManager: layoutManager)
+      noteLinkPresentationLinks = []
       guard let layoutManager else {
         temporaryNoteLinkPresentations = []
         return
@@ -2670,6 +2690,7 @@
       let textLength = (string as NSString).length
 
       let links = NoteLinkParser.links(in: string)
+      noteLinkPresentationLinks = links
       guard !links.isEmpty, textLength > 0 else {
         refreshChecklistPresentation()
         needsDisplay = true
@@ -2696,23 +2717,76 @@
             layoutManager: layoutManager
           )
         )
-        let color = liveNoteIDs.contains(link.targetNoteID) ? accent : unavailableLinkColor
+        let isLive = liveNoteIDs.contains(link.targetNoteID)
         layoutManager.addTemporaryAttribute(
           .foregroundColor,
-          value: color,
+          value: isLive ? accent : unavailableLinkColor,
           forCharacterRange: link.range
         )
         layoutManager.addTemporaryAttribute(
           .underlineStyle,
-          value: liveNoteIDs.contains(link.targetNoteID)
+          value: isLive
             ? NSUnderlineStyle.single.rawValue
             : NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDot.rawValue,
           forCharacterRange: link.range
         )
         temporaryNoteLinkPresentations.append(presentation)
       }
+      updateNoteLinkGlyphVisibility()
       refreshChecklistPresentation()
       needsDisplay = true
+    }
+
+    /// Collapses the `(fleck://note/<uuid>)` destination of every link the selection is not in,
+    /// so the editor shows the link's label as the visible text while the note body keeps the
+    /// complete Markdown token.
+    func updateNoteLinkGlyphVisibility() {
+      guard let layoutManager else { return }
+      let selection = selectedRange()
+      let textLength = (string as NSString).length
+      var destinations: [NSRange] = []
+      var tokens: [NSRange] = []
+      for link in noteLinkPresentationLinks {
+        let intersects = selection.length == 0
+          ? selection.location >= link.range.location && selection.location < NSMaxRange(link.range)
+          : NSIntersectionRange(link.range, selection).length > 0
+        guard !intersects else { continue }
+        let parts = link.nonLabelRanges.filter { range in
+          range.location >= 0 && NSMaxRange(range) <= textLength
+        }
+        guard !parts.isEmpty else { continue }
+        destinations.append(contentsOf: parts)
+        tokens.append(link.range)
+      }
+      guard tokens != hiddenNoteLinkTokenRanges else { return }
+      let collapsed = tokens.filter { !hiddenNoteLinkTokenRanges.contains($0) }
+      let revealed = hiddenNoteLinkTokenRanges.filter { !tokens.contains($0) }
+      hiddenNoteLinkDestinationRanges = destinations
+      hiddenNoteLinkTokenRanges = tokens
+      invalidateNoteLinkGlyphs(tokens: collapsed + revealed, layoutManager: layoutManager)
+      needsDisplay = true
+    }
+
+    /// Regenerates the glyphs of whole link tokens, widened by one character on each side so the
+    /// layout manager splits the surrounding glyph runs instead of reusing a collapsed run.
+    private func invalidateNoteLinkGlyphs(
+      tokens: [NSRange],
+      layoutManager: NSLayoutManager?
+    ) {
+      guard let layoutManager else { return }
+      let textLength = (string as NSString).length
+      for token in tokens where token.length > 0 {
+        let start = max(0, token.location - 1)
+        let end = min(textLength, NSMaxRange(token) + 1)
+        guard end > start else { continue }
+        let range = NSRange(location: start, length: end - start)
+        layoutManager.invalidateGlyphs(
+          forCharacterRange: range,
+          changeInLength: 0,
+          actualCharacterRange: nil
+        )
+        layoutManager.invalidateLayout(forCharacterRange: range, actualCharacterRange: nil)
+      }
     }
 
     private func temporaryAttributeSlices(
@@ -5196,6 +5270,7 @@
       clearInlineImageTypingAttributes()
       if changed, !isApplyingPasteOption { cancelPasteOptions() }
       if changed {
+        updateNoteLinkGlyphVisibility()
         needsDisplay = true
         window?.invalidateCursorRects(for: self)
       }
@@ -5223,6 +5298,7 @@
       }
       super.setSelectedRanges(adjustedRanges, affinity: affinity, stillSelecting: flag)
       clearInlineImageTypingAttributes()
+      updateNoteLinkGlyphVisibility()
       needsDisplay = true
       window?.invalidateCursorRects(for: self)
       guard !isApplyingPasteOption else { return }
