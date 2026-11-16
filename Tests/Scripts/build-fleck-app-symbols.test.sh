@@ -227,6 +227,10 @@ if [[ "$1" == 'strip' && "$2" == '-S' && $# == 3 ]]; then
   [[ "${FLECK_TEST_STRIP_NOOP:-0}" != 1 ]] || exit 0
   exec /usr/bin/strip -S "$3"
 fi
+if [[ "$1" == 'lipo' ]]; then
+  shift
+  exec /usr/bin/lipo "$@"
+fi
 if [[ "$1" == 'otool' ]]; then
   shift
   if [[ "$1" == '-l' && "${FLECK_TEST_OTOOL_FAIL:-0}" == 1 ]]; then
@@ -246,9 +250,17 @@ SCRIPT
   "$fixture_root/Scripts/build-fleck-app.sh" \
   "$fixture_root/Scripts/fleck-build-identity.py"
 
+extra_packager_arguments=()
 run_packager() {
   local result_file="$1"
   shift
+  local packager_arguments=(
+    "$fixture_root/Scripts/build-fleck-app.sh"
+    --result-file "$result_file"
+  )
+  if (( ${#extra_packager_arguments[@]} > 0 )); then
+    packager_arguments+=("${extra_packager_arguments[@]}")
+  fi
   /usr/bin/env \
     PATH="$fake_bin:/usr/bin:/bin" \
     CI=true \
@@ -261,8 +273,7 @@ run_packager() {
     FLECK_TEST_SOURCE_HASH_LOG="$source_hash_log" \
     FLECK_TEST_ROOT="$test_root" \
     "$@" \
-    "$fixture_root/Scripts/build-fleck-app.sh" \
-    --result-file "$result_file"
+    "${packager_arguments[@]}"
 }
 
 results="$fixture_root/.build/results"
@@ -429,5 +440,169 @@ extracted_app="$test_root/extracted/$(/usr/bin/basename "$sparkle_app")"
 /usr/bin/codesign --verify --deep --strict "$extracted_app"
 "$extracted_app/Contents/MacOS/Fleck" \
   || fail 'archive-extracted fixture cannot load the embedded framework'
+
+prebuilt_root="$test_root/prebuilt"
+eval_sentinel="$test_root/swift-eval-called"
+/bin/mkdir -p "$prebuilt_root"
+/bin/cp "$repo_root/Scripts/fleck-build-inputs.py" \
+  "$fixture_root/Scripts/fleck-build-inputs.py"
+/bin/chmod 755 "$fixture_root/Scripts/fleck-build-inputs.py"
+/bin/cp "$repo_root/Scripts/fleck-publish.py" "$fixture_root/Scripts/fleck-publish.py"
+/bin/chmod 755 "$fixture_root/Scripts/fleck-publish.py"
+cat > "$fixture_root/Package.resolved" <<'RESOLVED'
+{
+  "originHash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "pins": [],
+  "version": 3
+}
+RESOLVED
+for product in Fleck fleck-agent; do
+  /usr/bin/xcrun clang -x c - -o "$prebuilt_root/$product" \
+    -Xlinker -platform_version -Xlinker macos \
+    -Xlinker 14.0 -Xlinker 27.2 >/dev/null 2>&1 <<'C'
+int main(void) { return 0; }
+C
+done
+prebuilt_receipt_sha="$(python3 - "$prebuilt_root" "$fixture_root" <<'PYRECEIPT'
+import importlib.util
+import sys
+import uuid
+from pathlib import Path
+
+root = Path(sys.argv[1])
+repo = Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location(
+    "fleck_build_inputs", repo / "Scripts/fleck-build-inputs.py"
+)
+inputs = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(inputs)
+toolchain = {
+    "swiftVersion": "Swift version 6.4.2 (swift-6.4.2-RELEASE)",
+    "xcodeVersion": "Xcode 27.2",
+    "xcodeBuildVersion": "27B52",
+    "sdkVersion": "27.2",
+    "minimumOSVersion": inputs.MINIMUM_OS_VERSION,
+}
+receipt = {
+    "schemaVersion": inputs.SCHEMA_VERSION,
+    "status": inputs.RECEIPT_STATUS,
+    "receiptID": str(uuid.uuid4()),
+    "createdAt": inputs.create_time(),
+    "source": {"commit": "a" * 40, "tree": "b" * 40, "clean": True},
+    "productVersion": (repo / "VERSION").read_text(encoding="utf-8").strip(),
+    "configuration": inputs.CONFIGURATION,
+    "architecture": inputs.ARCHITECTURE,
+    "toolchain": toolchain,
+    "build": {
+        "products": list(inputs.PRODUCTS),
+        "linkerArguments": inputs.linker_arguments(toolchain),
+        "enhancedCandidate": False,
+        "withoutSparkle": False,
+    },
+    "dependencies": {
+        "packageResolvedSHA256": inputs.sha256_file(repo / "Package.resolved"),
+        "verifiedFromCheckouts": True,
+        "pins": [],
+    },
+    "frameworks": [],
+    "inventory": inputs.build_inventory(root),
+}
+print(inputs.write_receipt(root / inputs.RECEIPT_NAME, receipt))
+PYRECEIPT
+)"
+[[ -n "$prebuilt_receipt_sha" ]] || fail 'could not synthesize a compile input receipt'
+prebuilt_receipt_id="$(/usr/bin/plutil -extract receiptID raw -o - \
+  "$prebuilt_root/receipt.json")"
+[[ "$("$fake_bin/xcrun" --sdk macosx --show-sdk-version)" == '27.0' ]] \
+  || fail 'prebuilt case requires a local SDK that differs from the producer receipt'
+
+swift_log_lines="$(/usr/bin/wc -l < "$swift_log" | /usr/bin/tr -d '[:space:]')"
+cat > "$fake_bin/move-staged" <<SCRIPT
+#!/bin/sh
+printf 'prebuilt inputs ran the swift publication move\n' > '$eval_sentinel'
+exit 1
+SCRIPT
+/bin/chmod 755 "$fake_bin/move-staged"
+
+prebuilt_result="$results/prebuilt.json"
+extra_packager_arguments=(
+  --prebuilt-inputs "$prebuilt_root/receipt.json"
+  --input-receipt-sha256 "$prebuilt_receipt_sha"
+)
+if ! run_packager "$prebuilt_result" >"$test_root/prebuilt.log" 2>&1; then
+  /bin/cat "$test_root/prebuilt.log" >&2
+  fail 'packager rejected compile inputs from a different producer toolchain'
+fi
+extra_packager_arguments=()
+[[ "$(/usr/bin/wc -l < "$swift_log" | /usr/bin/tr -d '[:space:]')" == "$swift_log_lines" ]] \
+  || fail 'prebuilt inputs invoked the Swift compiler'
+test ! -e "$eval_sentinel" || fail 'prebuilt inputs published through swift -e'
+prebuilt_app="$("$fixture_root/Scripts/fleck-build-identity.py" read-result \
+  --repo "$fixture_root" --result-file "$prebuilt_result" --flavor development)"
+prebuilt_packaged="$prebuilt_app/Contents/MacOS/Fleck"
+prebuilt_published_hash="$(/usr/bin/shasum -a 256 "$prebuilt_packaged" \
+  | /usr/bin/awk '{print $1}')"
+/usr/bin/cmp -s "$prebuilt_root/receipt.json" \
+  "$prebuilt_app/Contents/Resources/FleckBuildInputs.json" \
+  || fail 'packager did not seal the compile input receipt in the bundle'
+[[ "$(/usr/bin/plutil -extract FleckInputReceiptSHA256 raw -o - \
+  "$prebuilt_app/Contents/Info.plist")" == "$prebuilt_receipt_sha" ]] \
+  || fail 'packaged Info.plist does not bind the compile input receipt digest'
+[[ "$(/usr/bin/plutil -extract FleckInputReceiptID raw -o - \
+  "$prebuilt_app/Contents/Info.plist")" == "$prebuilt_receipt_id" ]] \
+  || fail 'packaged Info.plist does not bind the compile input receipt identifier'
+/usr/bin/codesign --verify --deep --strict "$prebuilt_app"
+for executable in "$prebuilt_packaged" \
+  "$prebuilt_app/Contents/SharedSupport/fleck-agent"; do
+  stamp="$(/usr/bin/vtool -show-build "$executable" | /usr/bin/awk '
+    $1 == "minos" { minos = $2 }
+    $1 == "sdk" { sdk = $2 }
+    END { print minos " " sdk }')"
+  [[ "$stamp" == '14.0 27.2' ]] \
+    || fail "prebuilt $(/usr/bin/basename "$executable") was repackaged with ${stamp:-missing}"
+done
+
+published_apps="$(/usr/bin/find "$fixture_root/.build" -maxdepth 1 -name 'Fleck *.app' \
+  | /usr/bin/wc -l | /usr/bin/tr -d '[:space:]')"
+reject_prebuilt() {
+  local label="$1"
+  local log_path="$2"
+  local expected_message="$3"
+  shift 3
+  extra_packager_arguments=("$@")
+  if run_packager "$results/prebuilt-rejected.json" >"$log_path" 2>&1; then
+    extra_packager_arguments=()
+    fail "packager accepted $label"
+  fi
+  extra_packager_arguments=()
+  [[ ! -e "$results/prebuilt-rejected.json" ]] \
+    || fail "packager wrote a result receipt for $label"
+  /usr/bin/grep -Fq "$expected_message" "$log_path" \
+    || fail "packager did not reject $label before signing"
+  if /usr/bin/grep -Fq 'replacing existing signature' "$log_path"; then
+    fail "packager signed the app before rejecting $label"
+  fi
+  [[ "$(/usr/bin/find "$fixture_root/.build" -maxdepth 1 -name 'Fleck *.app' \
+    | /usr/bin/wc -l | /usr/bin/tr -d '[:space:]')" == "$published_apps" ]] \
+    || fail "$label published an app"
+  [[ "$(/usr/bin/shasum -a 256 "$prebuilt_packaged" | /usr/bin/awk '{print $1}')" \
+    == "$prebuilt_published_hash" ]] \
+    || fail "$label replaced the published prebuilt app"
+}
+
+reject_prebuilt 'an untrusted compile input digest' "$test_root/prebuilt-digest.log" \
+  'does not match the supplied transfer digest' \
+  --prebuilt-inputs "$prebuilt_root/receipt.json" \
+  --input-receipt-sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+
+/bin/cp "$prebuilt_root/Fleck" "$test_root/prebuilt-Fleck.original"
+printf 'tampered\n' >> "$prebuilt_root/Fleck"
+reject_prebuilt 'a tampered prebuilt payload' "$test_root/prebuilt-tampered.log" \
+  'does not match the receipt' \
+  --prebuilt-inputs "$prebuilt_root/receipt.json" \
+  --input-receipt-sha256 "$prebuilt_receipt_sha"
+/bin/mv -f "$test_root/prebuilt-Fleck.original" "$prebuilt_root/Fleck"
+
+test ! -e "$launch_sentinel" || fail 'prebuilt inputs launched the executable'
 
 printf 'build-fleck-app debug-symbol packaging tests passed.\n'

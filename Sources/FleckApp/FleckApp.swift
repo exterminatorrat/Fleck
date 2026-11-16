@@ -1252,6 +1252,10 @@
       await terminalSynchronizationTask?.value
     }
 
+    func capsuleReturnTaskForTesting() -> Task<Void, Never>? {
+      capsuleReturnTask
+    }
+
     func permissionRecoveryActions() -> [DictationSystemSettingsAction] {
       availability.openSystemSettings
     }
@@ -1568,6 +1572,7 @@
             action: nil,
             coordinatorEvent: event
           )
+          scheduleIdle(after: Self.failureCapsuleDuration, owner: .dictation)
         case .cancelled:
           showIdleCapsule()
         }
