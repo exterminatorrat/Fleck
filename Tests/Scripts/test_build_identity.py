@@ -601,10 +601,14 @@ class BuildIdentityTests(unittest.TestCase):
 
     def test_ci_checkout_preserves_accepted_source_ancestry(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        checkout = workflow.index("uses: actions/checkout@")
-        fetch = workflow.index("fetch-depth: 0", checkout)
-        first_step_after_checkout = workflow.index("- name:", checkout)
-        self.assertLess(fetch, first_step_after_checkout)
+        for job in ("detect-changes", "macos-build", "macos-validation"):
+            with self.subTest(job=job):
+                checkout = workflow.index(
+                    "uses: actions/checkout@", workflow.index(f"\n  {job}:\n")
+                )
+                fetch = workflow.index("fetch-depth: 0", checkout)
+                first_step_after_checkout = workflow.index("- name:", checkout)
+                self.assertLess(fetch, first_step_after_checkout)
         self.assertIn('PYTHONDONTWRITEBYTECODE: "1"', workflow)
         self.assertIn("python3 -B -m unittest", workflow)
         self.assertIn("python3 -B Scripts/fleck-build-identity.py check", workflow)
