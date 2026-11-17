@@ -2718,9 +2718,21 @@
     /// Re-collapses the links after an edit. Clearing the presentation to let an
     /// edit through also expands every destination, so without this the stored
     /// `fleck://note/` Markdown stays visible until the next model refresh.
+    ///
+    /// Only the collapse comes back here. The slices recorded for the previous
+    /// presentation describe ranges an edit has since moved, so they are dropped
+    /// instead of written back, and colour and underline are left to the next full
+    /// refresh: AppKit carries temporary attributes through an edit itself, and
+    /// the editor is not the only thing that paints them — a search highlight, the
+    /// composing ink or a dictation mark would otherwise be erased by the very
+    /// keystroke that moved it.
     private func restoreNoteLinkPresentationAfterEdit() {
       guard noteLinkAccentColorHex != nil else { return }
-      refreshNoteLinkPresentation(ensuringLayout: false)
+      temporaryNoteLinkPresentations = []
+      noteLinkPresentationLinks = NoteLinkParser.links(in: string)
+      updateNoteLinkGlyphVisibility()
+      refreshChecklistPresentation()
+      needsDisplay = true
     }
 
     private func refreshNoteLinkPresentation(ensuringLayout: Bool) {
