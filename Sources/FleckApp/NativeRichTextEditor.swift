@@ -557,6 +557,7 @@
         return
       }
       (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
+      let original = textView.textStorage?.attributedSubstring(from: range)
       var shouldEnable = false
       textView.textStorage?.enumerateAttribute(key, in: range) { value, _, stop in
         if (value as? Int ?? 0) == 0 {
@@ -569,6 +570,7 @@
         value: shouldEnable ? enabledValue : 0,
         range: range
       )
+      if let original { registerUndo(in: textView, range: range, replacement: original) }
       textView.didChangeText()
       refreshFormattingState()
     }
