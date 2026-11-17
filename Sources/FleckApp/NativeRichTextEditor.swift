@@ -3157,6 +3157,77 @@
       }
     }
 
+    /// Forward delete mirrors the Backspace path so the list, checklist and
+    /// rendered-link structure holds in both directions.
+    override func deleteForward(_ sender: Any?) {
+      guard !hasMarkedText(), isEditable else {
+        super.deleteForward(sender)
+        return
+      }
+      let selection = selectedRange()
+      let ns = string as NSString
+      guard selection.length == 0,
+        selection.location >= 0,
+        selection.location < ns.length
+      else {
+        super.deleteForward(sender)
+        return
+      }
+      if let link = NoteLinkParser.link(atUTF16Location: selection.location, in: string) {
+        performUndoGroup {
+          registerSelectionUndo(selection)
+          _ = replaceText(
+            in: link.range,
+            with: "",
+            selecting: NSRange(location: link.range.location, length: 0)
+          )
+        }
+        return
+      }
+      if mergeNextListItem(at: selection.location, string: ns) { return }
+      guard isSafeEditBoundary(selection.location, in: ns) else {
+        let cluster = ns.rangeOfComposedCharacterSequence(at: selection.location)
+        performUndoGroup {
+          registerSelectionUndo(selection)
+          _ = replaceText(
+            in: cluster,
+            with: "",
+            selecting: NSRange(location: cluster.location, length: 0)
+          )
+        }
+        return
+      }
+      super.deleteForward(sender)
+    }
+
+    /// A forward delete at the end of a list item joins the next item to this
+    /// one, dropping the next indent and marker so only one marker survives.
+    private func mergeNextListItem(at location: Int, string ns: NSString) -> Bool {
+      let paragraphRange = ns.paragraphRange(for: NSRange(location: location, length: 0))
+      guard let item = parsedListItem(in: paragraphRange, string: ns),
+        location == NSMaxRange(item.contentRange),
+        NSMaxRange(paragraphRange) < ns.length
+      else { return false }
+      let nextParagraph = ns.paragraphRange(
+        for: NSRange(location: NSMaxRange(paragraphRange), length: 0)
+      )
+      guard let next = parsedListItem(in: nextParagraph, string: ns) else { return false }
+      let mergeRange = NSRange(
+        location: location,
+        length: next.contentRange.location - location
+      )
+      guard mergeRange.length > 0 else { return false }
+      performUndoGroup {
+        registerSelectionUndo(selectedRange())
+        _ = replaceText(
+          in: mergeRange,
+          with: "",
+          selecting: NSRange(location: location, length: 0)
+        )
+      }
+      return true
+    }
+
     override func deleteWordBackward(_ sender: Any?) {
       let selection = selectedRange()
       let ns = string as NSString
