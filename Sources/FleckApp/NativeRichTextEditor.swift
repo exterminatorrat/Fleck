@@ -46,6 +46,9 @@
       "FleckFocusedDictationProvisional"
     )
 
+    /// Scroll offsets shared by every note this editor session shows.
+    let scrollMemory = EditorScrollMemory()
+
     @Published private(set) var isBold = false
     @Published private(set) var isItalic = false
     @Published private(set) var isUnderlined = false
@@ -1107,6 +1110,22 @@
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
   }
 
+  /// Remembers the editor's vertical scroll offset for each note it shows, so a
+  /// content reload or a note switch keeps the reader where they were. The
+  /// memory belongs to the editor session rather than one SwiftUI view, because
+  /// switching notes rebuilds the editor view and its coordinator.
+  final class EditorScrollMemory {
+    private var offsets: [UUID?: CGFloat] = [:]
+
+    func offset(forNote noteID: UUID?) -> CGFloat? {
+      offsets[noteID]
+    }
+
+    func remember(_ offset: CGFloat, forNote noteID: UUID?) {
+      offsets[noteID] = max(0, offset)
+    }
+  }
+
   final class NativeEditorScrollView: NSScrollView {
     struct ScrollEdgeBlurBand: Equatable {
       let blurRadius: CGFloat
@@ -1138,6 +1157,9 @@
 
     private var isLayingOutDocument = false
     private var scrollEdgeBlurViews: [EditorScrollEdgeBlurView] = []
+    var scrollMemory: EditorScrollMemory?
+    var noteID: UUID?
+    private var pendingScrollRestore: (offset: CGFloat, revealsCaret: Bool)?
     var showScrollEdgeBlur = false {
       didSet { updateScrollEdgeEffect() }
     }
@@ -1183,7 +1205,15 @@
         width: contentView.bounds.width,
         minimumHeight: contentView.bounds.height
       )
-      contentView.scroll(to: contentOrigin)
+      if let restore = pendingScrollRestore {
+        pendingScrollRestore = nil
+        contentView.scroll(to: scrollOrigin(restoring: restore.offset))
+        if restore.revealsCaret {
+          revealCaretIfHidden(in: documentView)
+        }
+      } else {
+        contentView.scroll(to: contentOrigin)
+      }
       reflectScrolledClipView(contentView)
       if scrollerStyle != .overlay { scrollerStyle = .overlay }
       if verticalScroller?.controlSize != .mini { verticalScroller?.controlSize = .mini }
@@ -1194,7 +1224,55 @@
       super.reflectScrolledClipView(cView)
       if cView === contentView {
         updateScrollEdgeEffect()
+        scrollMemory?.remember(contentView.bounds.origin.y, forNote: noteID)
       }
+    }
+
+    /// Restores `offset` at the next layout pass, once the new content has been
+    /// measured, so the scroll view cannot clamp against a stale content height.
+    func scheduleScrollRestore(_ offset: CGFloat, revealingCaretIfNeeded: Bool) {
+      pendingScrollRestore = (offset: offset, revealsCaret: revealingCaretIfNeeded)
+    }
+
+    private func scrollOrigin(restoring offset: CGFloat) -> NSPoint {
+      let maximumOffset = (documentView as? NativeEditorDocumentView).map {
+        max(0, $0.bounds.height - contentView.bounds.height)
+      } ?? max(0, offset)
+      return NSPoint(
+        x: contentView.bounds.origin.x,
+        y: min(max(0, offset), maximumOffset)
+      )
+    }
+
+    private func revealCaretIfHidden(in documentView: NativeEditorDocumentView) {
+      let textView = documentView.textView
+      guard !isCaretVisible(in: textView) else { return }
+      textView.scrollRangeToVisible(textView.selectedRange())
+    }
+
+    func isCaretVisible(in textView: NSTextView) -> Bool {
+      guard let layoutManager = textView.layoutManager,
+        let textContainer = textView.textContainer
+      else { return true }
+      let caretLocation = min(
+        textView.selectedRange().location,
+        (textView.string as NSString).length
+      )
+      let glyphRange = layoutManager.glyphRange(
+        forCharacterRange: NSRange(location: caretLocation, length: 0),
+        actualCharacterRange: nil
+      )
+      var caret = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+      caret.origin.x += textView.textContainerOrigin.x
+      caret.origin.y += textView.textContainerOrigin.y
+      caret.size.width = max(caret.size.width, 1)
+      caret.size.height = max(
+        caret.size.height,
+        layoutManager.defaultLineHeight(
+          for: textView.font ?? .systemFont(ofSize: NSFont.systemFontSize)
+        )
+      )
+      return contentView.bounds.contains(contentView.convert(caret, from: textView))
     }
 
     func relayoutDocument() {
@@ -1341,6 +1419,7 @@
 
     let text: String
     let richTextRTF: Data?
+    let noteID: UUID?
     let title: String
     let titleFontFamily: String
     let isPinned: Bool
@@ -1457,6 +1536,7 @@
     init(
       text: String,
       richTextRTF: Data?,
+      noteID: UUID? = nil,
       title: String = "",
       titleFontFamily: String? = nil,
       isPinned: Bool = false,
@@ -1484,6 +1564,7 @@
     ) {
       self.text = text
       self.richTextRTF = richTextRTF
+      self.noteID = noteID
       self.title = title
       self.titleFontFamily = titleFontFamily ?? fontFamily
       self.isPinned = isPinned
@@ -1540,6 +1621,7 @@
         )
       }
 
+      let rememberedScrollOffset = commands.scrollMemory.offset(forNote: noteID) ?? 0
       let scrollView = NativeEditorScrollView()
       scrollView.focusRingType = .none
       scrollView.hasVerticalScroller = true
@@ -1622,6 +1704,8 @@
       )
       scrollView.documentView = documentView
       documentView.autoresizingMask = [.width]
+      scrollView.scrollMemory = commands.scrollMemory
+      scrollView.noteID = noteID
       context.coordinator.scrollView = scrollView
       context.coordinator.attachedCommands = commands
       if let undoManager = textView.undoManager {
@@ -1632,10 +1716,8 @@
         commands.textView = textView
         commands.refreshFormattingState()
       }
+      scrollView.scheduleScrollRestore(rememberedScrollOffset, revealingCaretIfNeeded: false)
       scrollView.relayoutDocument()
-      scrollView.contentView.scroll(
-        to: NSPoint(x: scrollView.contentView.bounds.origin.x, y: 0)
-      )
       scrollView.reflectScrolledClipView(scrollView.contentView)
       context.coordinator.presentationInputs = presentationInputs(
         for: scrollView.contentView.bounds.size
@@ -1686,6 +1768,14 @@
         to: textView,
         coordinator: coordinator
       )
+      let noteChanged = scrollView.noteID != noteID
+      if noteChanged {
+        scrollView.noteID = noteID
+        scrollView.scheduleScrollRestore(
+          commands.scrollMemory.offset(forNote: noteID) ?? 0,
+          revealingCaretIfNeeded: false
+        )
+      }
       let changes = PresentationChanges(
         previous: coordinator.presentationInputs,
         current: currentInputs,
@@ -1747,7 +1837,7 @@
       if changes.shouldUpdateTypingFont {
         applyTypingFont(to: textView)
       }
-      if changes.shouldRelayoutDocument {
+      if changes.shouldRelayoutDocument || noteChanged {
         scrollView.relayoutDocument()
       }
       coordinator.presentationInputs = currentInputs
@@ -1912,6 +2002,9 @@
     }
 
     private func loadContent(into textView: NSTextView) {
+      let scrollView = textView.enclosingScrollView as? NativeEditorScrollView
+      let scrollOffset = scrollView?.contentView.bounds.origin.y
+      let caretWasVisible = scrollView?.isCaretVisible(in: textView) ?? false
       let source: NSAttributedString
       let loadedRichText: Bool
       if let richTextRTF,
@@ -1939,6 +2032,12 @@
         )
       } else {
         applyDefaultFont(to: textView)
+      }
+      if let scrollView, let scrollOffset, scrollView.noteID == noteID {
+        scrollView.scheduleScrollRestore(
+          scrollOffset,
+          revealingCaretIfNeeded: caretWasVisible
+        )
       }
     }
 
