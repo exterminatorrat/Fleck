@@ -36,6 +36,27 @@ public release log. Packaging unchanged source does not add a changelog entry.
   and its slot collapses when it does not, so the folder chips sit against the
   Unfiled label at rest and shift right when the chevron appears
   ([#148](https://github.com/exterminatorrat/Fleck/pull/148)).
+- Double, triple and Shift click on a note link keep AppKit's own selection
+  depth: the whole-token widening now applies only to a plain single click, so a
+  double click still takes the word, a triple click the paragraph, and Shift the
+  native extension, while no gesture leaves a link half selected
+  ([#150](https://github.com/exterminatorrat/Fleck/pull/150)).
+
+### Fixed
+
+- Text being composed by an input method draws in the note's own ink rather than
+  the text system's default black, including through a theme change mid
+  composition, and a composition keeps native handling until it commits:
+  Backspace, word Backspace, a newline, a list marker and a click made while text
+  is still pre-commit no longer run the editor's list and link logic against
+  half-formed text
+  ([#151](https://github.com/exterminatorrat/Fleck/pull/151)).
+- Command-Z after an agent or dictation rewrite restores the note. A contiguous
+  span rewritten on a note that is otherwise unchanged replaces only that span,
+  keeps the caret where the reader left it, and registers one undo step under the
+  author's name, so a single Command-Z brings back the text and the caret with
+  it. Whole-note rewrites and image-bearing content keep the reload path
+  ([#152](https://github.com/exterminatorrat/Fleck/pull/152)).
 
 ## [1.8.24-beta.1] - 2026-11-17
 
