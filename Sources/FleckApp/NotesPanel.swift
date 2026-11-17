@@ -3370,6 +3370,7 @@
 
     private var rootRow: some View {
       let unfiledNotes = appState.visibleNotes(in: nil)
+      let isDisclosurePainted = frozenUnfiledDisclosure ?? showsUnfiledDisclosure
       return HStack(spacing: 0) {
         Button {
           focusedRow = .unfiled
@@ -3424,16 +3425,14 @@
           setUnfiledCompact(!isUnfiledCompact)
           return .handled
         }
-        .opacity(showsUnfiledDisclosure ? 1 : 0)
-        .frame(
-          width: (frozenUnfiledDisclosure ?? showsUnfiledDisclosure) ? 28 : 0,
-          alignment: .leading
-        )
+        .opacity(isDisclosurePainted ? 1 : 0)
+        .frame(width: isDisclosurePainted ? 28 : 0, alignment: .leading)
         .clipped()
-        .allowsHitTesting(showsUnfiledDisclosure)
-        .accessibilityHidden(!showsUnfiledDisclosure)
+        .allowsHitTesting(isDisclosurePainted)
+        .accessibilityHidden(!isDisclosurePainted)
       }
       .fixedSize(horizontal: true, vertical: false)
+      .animation(folderMorphAnimation, value: isDisclosurePainted)
       .onHover { isUnfiledHovered = $0 }
       .contentShape(Rectangle())
       .background(nativeNoteDropAnchor(.unfiled))
@@ -3685,9 +3684,15 @@
       return parts.joined(separator: ", ")
     }
 
+    /// The chevron is painted only while the Unfiled row is under attention —
+    /// the pointer is over it, or keyboard focus sits on the row or the chevron.
+    /// Its 28pt slot belongs to the chevron: an unpainted slot takes no width, so
+    /// the folder chips beside it close the gap instead of leaving dead space, and
+    /// the reflow animates so it reads as deliberate rather than a jolt. A name
+    /// edit freezes the painted state through `frozenUnfiledDisclosure` so the
+    /// chevron does not blink out mid-typing.
     private var showsUnfiledDisclosure: Bool {
-      !isUnfiledCompact || isUnfiledHovered || focusedRow == .unfiled
-        || isUnfiledDisclosureFocused
+      isUnfiledHovered || focusedRow == .unfiled || isUnfiledDisclosureFocused
     }
 
     private func setUnfiledCompact(

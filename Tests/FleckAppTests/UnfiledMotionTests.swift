@@ -36,11 +36,14 @@ import Testing
   }
   await unfiledSettle(host)
   let initial = try #require(unfiledKeyViews(host).first)
+  #expect(window.makeFirstResponder(initial))
+  await unfiledSettle(host)
+  // The disclosure is painted only while the Unfiled row has attention, so the
+  // restored endpoint is measured with the row focused — the same condition the
+  // reversal loop leaves it in.
   let expanded = try #require(
     unfiledAX(host, label: "Unfiled")?.value(forKey: "accessibilityFrame") as? NSValue
   ).rectValue
-  #expect(window.makeFirstResponder(initial))
-  await unfiledSettle(host)
   if let directory = ProcessInfo.processInfo.environment["UNFILED_CAPTURE_DIR"] {
     try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
     let recording = Process()
