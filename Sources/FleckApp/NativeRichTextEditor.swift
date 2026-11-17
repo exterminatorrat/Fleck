@@ -1984,6 +1984,7 @@
     }
 
     private static func applyDefaultForegroundColor(_ color: NSColor, to textView: NSTextView) {
+      (textView as? ListAwareTextView)?.defaultInkColor = color
       guard let storage = textView.textStorage, let layoutManager = textView.layoutManager else {
         return
       }
@@ -2277,6 +2278,14 @@
     var noteLinkWarningColor = FleckThemeSnapshot.initial.nsColor(.warning) {
       didSet { needsDisplay = true }
     }
+    /// The ink the note body wears when neither the run nor the presentation
+    /// layer names a colour. AppKit inserts marked (pre-commit input method) text
+    /// with no foreground attribute, so the composing run needs this to match the
+    /// text around it instead of the text system's default black.
+    var defaultInkColor = NSColor.textColor {
+      didSet { applyCompositionInk() }
+    }
+    private var compositionInkRange: NSRange?
     private var noteLinkTitles: [UUID: String] = [:]
     var reduceMotion = false
     private weak var checklistCompletionOverlay: ChecklistCompletionOverlay?
@@ -2764,6 +2773,56 @@
       needsDisplay = true
     }
 
+    /// AppKit inserts composing text without a foreground attribute, so the marked
+    /// run draws in the text system's default black. Give it the ink the note around
+    /// it wears, and keep that ink once the input method commits the run.
+    private func applyCompositionInk() {
+      guard let layoutManager else { return }
+      let range: NSRange
+      if hasMarkedText() {
+        range = markedRange()
+        compositionInkRange = range
+      } else if let composed = compositionInkRange {
+        compositionInkRange = nil
+        let caret = selectedRange()
+        let end = caret.location == NSNotFound
+          ? NSMaxRange(composed)
+          : max(NSMaxRange(composed), caret.location)
+        range = NSRange(location: composed.location, length: max(0, end - composed.location))
+      } else {
+        return
+      }
+      let textLength = (string as NSString).length
+      let start = min(max(0, range.location), textLength)
+      let end = min(max(start, NSMaxRange(range)), textLength)
+      guard end > start else { return }
+      layoutManager.addTemporaryAttribute(
+        .foregroundColor,
+        value: compositionInk(at: start),
+        forCharacterRange: NSRange(location: start, length: end - start)
+      )
+      needsDisplay = true
+    }
+
+    private func compositionInk(at location: Int) -> NSColor {
+      guard let storage = textStorage, storage.length > 0 else { return defaultInkColor }
+      let index = min(max(0, location), storage.length - 1)
+      if let presented = layoutManager?.temporaryAttribute(
+        .foregroundColor,
+        atCharacterIndex: index,
+        effectiveRange: nil
+      ) as? NSColor {
+        return presented
+      }
+      return (storage.attribute(.foregroundColor, at: index, effectiveRange: nil) as? NSColor)
+        ?? defaultInkColor
+    }
+
+    override func unmarkText() {
+      super.unmarkText()
+      applyCompositionInk()
+    }
+
     /// Collapses the `(fleck://note/<uuid>)` destination of every link the selection is not in,
     /// so the editor shows the link's label as the visible text while the note body keeps the
     /// complete Markdown token.
@@ -3044,6 +3103,10 @@
     }
 
     override func deleteBackward(_ sender: Any?) {
+      guard !hasMarkedText() else {
+        super.deleteBackward(sender)
+        return
+      }
       let selection = selectedRange()
       let ns = string as NSString
       guard selection.length == 0, selection.location > 0, selection.location <= ns.length else {
@@ -3096,6 +3159,10 @@
     }
 
     override func deleteWordBackward(_ sender: Any?) {
+      guard !hasMarkedText() else {
+        super.deleteWordBackward(sender)
+        return
+      }
       let selection = selectedRange()
       let ns = string as NSString
       guard selection.length == 0,
@@ -3152,7 +3219,8 @@
     override func moveLeft(_ sender: Any?) {
       let selection = selectedRange()
       let ns = string as NSString
-      guard selection.length == 0,
+      guard !hasMarkedText(),
+        selection.length == 0,
         let item = bulletListItem(at: selection.location, string: ns),
         selection.location == item.contentRange.location,
         item.paragraphRange.location > 0
@@ -3209,7 +3277,7 @@
     }
 
     override func insertNewline(_ sender: Any?) {
-      guard automaticLists, selectedRange().length == 0 else {
+      guard automaticLists, !hasMarkedText(), selectedRange().length == 0 else {
         super.insertNewline(sender)
         return
       }
@@ -5350,6 +5418,7 @@
 
     override func didChangeText() {
       textChangeGeneration += 1
+      applyCompositionInk()
       super.didChangeText()
       needsDisplay = true
       window?.invalidateCursorRects(for: self)
@@ -5362,6 +5431,7 @@
       clearInlineImageTypingAttributes()
       if changed, !isApplyingPasteOption { cancelPasteOptions() }
       if changed {
+        applyCompositionInk()
         updateNoteLinkGlyphVisibility()
         needsDisplay = true
         window?.invalidateCursorRects(for: self)
@@ -5390,6 +5460,7 @@
       }
       super.setSelectedRanges(adjustedRanges, affinity: affinity, stillSelecting: flag)
       clearInlineImageTypingAttributes()
+      applyCompositionInk()
       updateNoteLinkGlyphVisibility()
       needsDisplay = true
       window?.invalidateCursorRects(for: self)
@@ -5576,6 +5647,10 @@
 
     override func mouseDown(with event: NSEvent) {
       cancelPasteOptions()
+      if hasMarkedText() {
+        super.mouseDown(with: event)
+        return
+      }
       if imageEditing.begin(with: event) { return }
       guard let layoutManager, let textContainer else {
         super.mouseDown(with: event)
