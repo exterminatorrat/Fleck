@@ -1018,13 +1018,54 @@ private final class RecordingFinderTextView: NSTextView {
     #expect(textView.string == expected)
     #expect(textView.selectedRange() == NSRange(location: 0, length: expected.utf16.count))
     try #require(textView.undoManager).undo()
-    #expect(textView.attributedString().isEqual(to: original))
+    #expect(textView.string == source)
+    #expect(
+      attributedStringRestoringSourceMarkers(textView, original: original)
+        .isEqual(to: original)
+    )
     #expect(textView.selectedRange() == NSRange(location: 0, length: source.utf16.count))
     try #require(textView.undoManager).redo()
     #expect(textView.string == expected)
     #expect(commands.decreaseIndent())
-    #expect(textView.attributedString().isEqual(to: original))
+    #expect(textView.string == source)
+    // Indent and undo normalise the font of the characters a list marker is drawn
+    // from, so that one attribute is the only difference they may leave behind.
+    #expect(
+      attributedStringRestoringSourceMarkers(textView, original: original)
+        .isEqual(to: original)
+    )
   }
+}
+
+/// The editor re-fonts the characters a list marker is drawn from so the drawn
+/// marker matches its line, which is the one attribute indent and undo are allowed
+/// to change. Restoring the source font over the marker prefix lets a
+/// byte-preservation check ignore exactly that and catch anything else.
+@MainActor
+private func attributedStringRestoringSourceMarkers(
+  _ textView: ListAwareTextView,
+  original: NSAttributedString
+) -> NSAttributedString {
+  let actual = NSMutableAttributedString(attributedString: textView.attributedString())
+  let prefix = markerPrefixRange(in: original.string as NSString)
+  guard prefix.length > 0, prefix.length <= original.length else { return actual }
+  original.enumerateAttributes(in: prefix, options: []) { attributes, subrange, _ in
+    if let font = attributes[.font] {
+      actual.addAttribute(.font, value: font, range: subrange)
+    } else {
+      actual.removeAttribute(.font, range: subrange)
+    }
+  }
+  return actual
+}
+
+/// The marker a list line starts with, up to the first character of its content.
+private func markerPrefixRange(in text: NSString) -> NSRange {
+  var index = 0
+  while index < text.length, text.character(at: index) == 0x20 { index += 1 }
+  while index < text.length, text.character(at: index) != 0x20 { index += 1 }
+  while index < text.length, text.character(at: index) == 0x20 { index += 1 }
+  return NSRange(location: 0, length: index)
 }
 
 @Test @MainActor func toolbarMixedIndentPreservesMetadataAndSelectionBoundary() throws {
