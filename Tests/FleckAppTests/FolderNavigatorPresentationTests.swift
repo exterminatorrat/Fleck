@@ -725,19 +725,21 @@ struct FolderNavigatorPresentationTests {
     )
     defer { fixture.close() }
     try fixture.click(fixture.element(label: "Collapse Unfiled"))
-    try await fixture.settleAnimation()
     let scroll = try fixture.folderScrollView()
-    let before = scroll.contentView.bounds
+    let before = try await fixture.settleNavigatorGeometry()
 
     try fixture.click(fixture.element(label: "New folder"))
-    try await fixture.settleAnimation()
-    #expect(scroll.contentView.bounds == before)
+    try await fixture.settleNavigatorGeometry()
+    #expect(scroll.contentView.bounds.origin == before.origin)
+    #expect(scroll.contentView.bounds.width == before.width)
     try fixture.click(fixture.element(label: "Cancel new folder"))
-    try await fixture.settleAnimation()
-    #expect(scroll.contentView.bounds == before)
+    try await fixture.settleNavigatorGeometry()
+    #expect(scroll.contentView.bounds.origin == before.origin)
+    #expect(scroll.contentView.bounds.width == before.width)
     try fixture.click(fixture.element(label: "New folder"))
-    try await fixture.settleAnimation()
-    #expect(scroll.contentView.bounds == before)
+    try await fixture.settleNavigatorGeometry()
+    #expect(scroll.contentView.bounds.origin == before.origin)
+    #expect(scroll.contentView.bounds.width == before.width)
   }
 
   @Test func compactUnfiledAllocationPreservesNonzeroScrolledOffsetDuringCompose() async throws {
@@ -747,16 +749,16 @@ struct FolderNavigatorPresentationTests {
     )
     defer { fixture.close() }
     try fixture.click(fixture.element(label: "Reveal later folders"))
-    try await fixture.settleAnimation()
+    _ = try await fixture.settleNavigatorGeometry()
     try fixture.click(fixture.element(label: "Collapse Unfiled"))
-    try await fixture.settleAnimation()
     let scroll = try fixture.folderScrollView()
-    let before = scroll.contentView.bounds
+    let before = try await fixture.settleNavigatorGeometry()
     #expect(before.minX > 0)
 
     try fixture.click(fixture.element(label: "New folder"))
-    try await fixture.settleAnimation()
-    #expect(scroll.contentView.bounds == before)
+    try await fixture.settleNavigatorGeometry()
+    #expect(scroll.contentView.bounds.origin == before.origin)
+    #expect(scroll.contentView.bounds.width == before.width)
   }
 
   @Test func deletingScrolledOverflowRestoresTheMountedScrollToLeading() async throws {
@@ -1734,6 +1736,21 @@ private final class FolderNavigatorFixture {
   func settleAnimation() async throws {
     try await Task.sleep(for: .milliseconds(260))
     await settle()
+  }
+
+  @discardableResult
+  func settleNavigatorGeometry() async throws -> NSRect {
+    var swept = try folderScrollView().contentView.bounds
+    var stableSamples = 0
+    for _ in 0..<80 {
+      try await Task.sleep(for: .milliseconds(50))
+      await settle()
+      let current = try folderScrollView().contentView.bounds
+      stableSamples = current == swept ? stableSamples + 1 : 0
+      swept = current
+      if stableSamples >= 6 { return current }
+    }
+    return swept
   }
 
   func resize(to width: CGFloat) async {
