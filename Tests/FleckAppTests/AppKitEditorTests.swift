@@ -1387,7 +1387,7 @@ private func captureChecklist(_ textView: ListAwareTextView, name: String) throw
   }
 }
 
-@Test @MainActor func emptyBulletMarkerUsesRelativeTemporaryOpacity() throws {
+@Test @MainActor func emptyBulletMarkerHidesItsNativeInkAndKeepsItsAuthoredColour() throws {
   let textView = ListAwareTextView(
     frame: NSRect(x: 0, y: 0, width: 320, height: 160)
   )
@@ -1408,29 +1408,31 @@ private func captureChecklist(_ textView: ListAwareTextView, name: String) throw
 
   textView.refreshChecklistPresentation()
 
-  let temporaryColor = try #require(
+  // The editor draws list markers itself, so it hides the native glyph instead of
+  // dimming it: storage keeps the authored colour and the marker on an empty line is
+  // the drawn one, which carries the dimmed opacity the text system used to.
+  let hiddenColor = try #require(
     layoutManager.temporaryAttribute(
       .foregroundColor,
       atCharacterIndex: 0,
       effectiveRange: nil
     ) as? NSColor
   )
-  #expect(abs(temporaryColor.alphaComponent - authoredColor.alphaComponent * 0.45) < 0.001)
-  #expect(temporaryColor.alphaComponent < authoredColor.alphaComponent)
+  #expect(hiddenColor.alphaComponent == 0)
   #expect(
     (storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
       == authoredColor
   )
+  #expect(
+    textView.drawnListMarkerPresentations.map(\.range)
+      == [NSRange(location: 0, length: 1)]
+  )
 
   textView.refreshChecklistPresentation()
-  let repeatedColor = try #require(
-    layoutManager.temporaryAttribute(
-      .foregroundColor,
-      atCharacterIndex: 0,
-      effectiveRange: nil
-    ) as? NSColor
+  #expect(
+    textView.drawnListMarkerPresentations.map(\.range)
+      == [NSRange(location: 0, length: 1)]
   )
-  #expect(abs(repeatedColor.alphaComponent - authoredColor.alphaComponent * 0.45) < 0.001)
 
   textView.clearNoteLinkPresentation()
   #expect(
@@ -1443,11 +1445,12 @@ private func captureChecklist(_ textView: ListAwareTextView, name: String) throw
   textView.refreshChecklistPresentation()
   #expect(textView.string == "• x")
   #expect(
-    layoutManager.temporaryAttribute(
-      .foregroundColor,
-      atCharacterIndex: 0,
-      effectiveRange: nil
-    ) == nil
+    (storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
+      == authoredColor
+  )
+  #expect(
+    textView.drawnListMarkerPresentations.map(\.range)
+      == [NSRange(location: 0, length: 1)]
   )
 }
 

@@ -44,7 +44,12 @@
   /// white paper. Background-relative on purpose, so the count cannot be faked by
   /// a uniformly dark bitmap.
   @MainActor
-  private func inkPixels(in view: ListAwareTextView, rect: NSRect, dark: Bool = false) -> Int {
+  private func inkPixels(
+    in view: ListAwareTextView,
+    rect: NSRect,
+    dark: Bool = false,
+    threshold: Double = 0.85
+  ) -> Int {
     view.layoutSubtreeIfNeeded()
     guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return -1 }
     view.cacheDisplay(in: view.bounds, to: rep)
@@ -61,7 +66,7 @@
         let luminance =
           0.299 * color.redComponent + 0.587 * color.greenComponent
           + 0.114 * color.blueComponent
-        let isInk = dark ? luminance > 0.2 : luminance < 0.85
+        let isInk = dark ? luminance > 0.2 : luminance < threshold
         if color.alphaComponent > 0.5 && isInk { count += 1 }
       }
     }
@@ -75,7 +80,8 @@
   private func markerInk(
     of view: ListAwareTextView,
     paragraphAt location: Int,
-    dark: Bool = false
+    dark: Bool = false,
+    threshold: Double = 0.85
   ) -> Int {
     guard let layoutManager = view.layoutManager, let container = view.textContainer else {
       return -1
@@ -91,7 +97,7 @@
     guard glyphs.length > 0 else { return -1 }
     let column = layoutManager.boundingRect(forGlyphRange: glyphs, in: container)
       .offsetBy(dx: view.textContainerOrigin.x, dy: view.textContainerOrigin.y)
-    return inkPixels(in: view, rect: column, dark: dark)
+    return inkPixels(in: view, rect: column, dark: dark, threshold: threshold)
   }
 
   /// Blank paper to the right of the used text, as a control that the measurement
@@ -145,7 +151,7 @@
       • has the caret
       • inside a selection
       • \u{4F60}\u{597D}
-      •
+      •\u{20}
       """
     let (view, window) = rasterEditor(text)
     defer { window.contentView = nil }
@@ -156,9 +162,16 @@
     )
     view.refreshChecklistPresentation()
 
-    for start in paragraphStarts(in: text) {
+    let starts = paragraphStarts(in: text)
+    for start in starts {
       #expect(markerInk(of: view, paragraphAt: start) > 4, "paragraph at \(start)")
     }
+
+    // An item with no content yet wears a dimmed marker: it still paints, but never
+    // as dark as the marker on a line that has some.
+    let empty = try #require(starts.last)
+    #expect(markerInk(of: view, paragraphAt: empty, threshold: 0.4) == 0)
+    #expect(markerInk(of: view, paragraphAt: starts[0], threshold: 0.4) > 0)
   }
 
   /// The caret sitting in a list paragraph does not remove that paragraph's marker.
@@ -367,7 +380,13 @@
     #expect(filled.count == 3)
     let inks = filled.map { markerInk(of: view, paragraphAt: $0) }
     #expect(inks.allSatisfy { $0 > 4 })
-    #expect(Set(inks).count == 1, "marker ink per line \(inks)")
+    // Every line inherits the one marker the note wears, drawn in one font at one
+    // size. The measurement is a count of rasterised pixels, so compare the counts
+    // within an edge pixel's worth rather than exactly.
+    let spread = (inks.max() ?? 0) - (inks.min() ?? 0)
+    #expect(spread <= max(2, (inks.max() ?? 0) / 10), "marker ink per line \(inks)")
+    let drawnFonts = Set(view.drawnListMarkerPresentations.map(\.font.fontName))
+    #expect(drawnFonts.count == 1, "drawn marker fonts \(drawnFonts)")
   }
 
   /// The run font cannot reach the marker: the same text in Avenir Next and in
