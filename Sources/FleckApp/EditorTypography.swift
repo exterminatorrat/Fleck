@@ -163,7 +163,13 @@
       defaultParagraphStyle(family: systemFamily, fontSize: fontSize)
     }
 
-    static func defaultParagraphStyle(family: String, fontSize: CGFloat) -> NSParagraphStyle {
+    /// The family defaults to the system one so a caller that only knows a size —
+    /// a test harness measuring a bare text view, say — keeps compiling and still
+    /// measures the same spacing the editor applies.
+    static func defaultParagraphStyle(
+      family: String = systemFamily,
+      fontSize: CGFloat
+    ) -> NSParagraphStyle {
       let style = NSMutableParagraphStyle()
       let lineHeight = lineHeight(fontSize: fontSize)
       style.minimumLineHeight = lineHeight
