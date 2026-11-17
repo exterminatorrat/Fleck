@@ -65,7 +65,11 @@ import Testing
     CGRect(x: 2_000, y: 700, width: 3_008, height: 1_692),
   ] {
     let compact = DictationCapsuleController.livePillFrame(in: visible)
-    let recovery = DictationCapsuleController.errorSurfaceFrame(for: .bottom, in: visible)
+    let recovery = DictationCapsuleController.errorSurfaceFrame(
+      for: .bottom,
+      layout: .approved,
+      in: visible
+    )
     #expect(compact.midX == visible.midX)
     #expect(recovery.midX == visible.midX)
     #expect(compact.minY == visible.minY)
@@ -158,12 +162,14 @@ import Testing
         let host = try #require(panel.contentView)
         host.layoutSubtreeIfNeeded()
         let screen = try #require(panel.screen ?? NSScreen.main ?? NSScreen.screens.first)
-        let isRecovery = controller.errorPresentationModel.presentation != nil
+        let recoveryPresentation = controller.errorPresentationModel.presentation
+        let isRecovery = recoveryPresentation != nil
         let presentation = DictationCapsulePresentation(status: status, action: action,
           chooser: routeChooser, context: context)
         let expected: CGRect
-        if isRecovery {
-          expected = DictationCapsuleController.errorSurfaceFrame(for: .bottom, in: screen.visibleFrame)
+        if let recoveryPresentation {
+          expected = DictationCapsuleController.errorSurfaceFrame(for: .bottom,
+            layout: FleckErrorLayout.forKind(recoveryPresentation.kind), in: screen.visibleFrame)
         } else if controller.fleckPillModel.usesFixedHost {
           expected = DictationCapsuleController.livePillFrame(in: screen.visibleFrame)
         } else {

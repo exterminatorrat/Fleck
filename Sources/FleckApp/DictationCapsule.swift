@@ -942,6 +942,10 @@
       )
     }
 
+    var brightestChannel: Double {
+      max(red, max(green, blue))
+    }
+
     var luminance: Double {
       func linear(_ value: Double) -> Double {
         value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
@@ -951,8 +955,13 @@
   }
 
   struct FleckRailColors: Equatable {
-    static let shellHex = "#17151C"
+    static let shellHex = "#0B0C0E"
     static let shellOpacity = 0.96
+    static let glassShellOpacity = 0.88
+    static let shellSurfaceBrightness = 14.0 / 255
+    static let shellBrightnessCeiling = 0.12
+    static let hairlineOpacity = 0.155
+    static let hairlineContrastBand = 1.15...1.6
     private static let textContrastMinimum = 5.2
     private static let signalContrastMinimum = 3.6
 
@@ -966,16 +975,36 @@
     let warning: FleckRailRGB
     let failure: FleckRailRGB
     let borderColor: Color
+    let appearance: FleckThemeAppearance
     let reduceTransparency: Bool
     let increasedContrast: Bool
 
     var effectiveShellOpacity: Double {
-      reduceTransparency ? 1 : Self.shellOpacity
+      if reduceTransparency { return 1 }
+      return appearance == .dark ? Self.glassShellOpacity : Self.shellOpacity
+    }
+
+    var shellBorderColor: Color {
+      increasedContrast ? borderColor : Color.white.opacity(Self.hairlineOpacity)
+    }
+
+    func compositedShell(over backdrop: FleckRailRGB) -> FleckRailRGB {
+      shell.mixed(with: backdrop, amount: 1 - effectiveShellOpacity)
+    }
+
+    func hairline(over backdrop: FleckRailRGB) -> FleckRailRGB {
+      let insideGlass = FleckRailRGB(red: 1, green: 1, blue: 1).mixed(
+        with: shell,
+        amount: 1 - Self.hairlineOpacity
+      )
+      return insideGlass.mixed(with: backdrop, amount: 1 - effectiveShellOpacity)
     }
 
     init(theme: FleckThemeSnapshot = .initial) {
       let palette = theme.palette
-      let shell = FleckRailRGB(hex: Self.shellHex)!
+      let shell = theme.appearance == .dark
+        ? Self.nearBlack(FleckRailRGB(hex: palette[.capsuleSurface])!)
+        : FleckRailRGB(hex: Self.shellHex)!
       accentHex = palette[.accent]
       self.shell = shell
       displayCore = Self.contrastSafe(
@@ -1014,6 +1043,7 @@
         minimum: Self.signalContrastMinimum
       )
       borderColor = theme.color(.capsuleBorder)
+      appearance = theme.appearance
       reduceTransparency = theme.reduceTransparency
       increasedContrast = theme.increasedContrast
     }
@@ -1021,6 +1051,9 @@
     var displayCoreHex: String { displayCore.hex }
     var displayLiveHex: String { displayLive.hex }
     var shellColor: Color { Color(red: shell.red, green: shell.green, blue: shell.blue) }
+    var shellEdgeColor: Color {
+      Color(red: shell.red * 0.45, green: shell.green * 0.45, blue: shell.blue * 0.45)
+    }
     var coreColor: Color {
       Color(red: displayCore.red, green: displayCore.green, blue: displayCore.blue)
     }
@@ -1059,6 +1092,15 @@
         }
       }
       return color.mixed(with: white, amount: high)
+    }
+
+    private static func nearBlack(_ tint: FleckRailRGB) -> FleckRailRGB {
+      let scale = shellSurfaceBrightness / max(tint.brightestChannel, 1.0 / 255)
+      return FleckRailRGB(
+        red: tint.red * scale,
+        green: tint.green * scale,
+        blue: tint.blue * scale
+      )
     }
   }
 
@@ -2007,10 +2049,7 @@
     nonisolated static let noSpeechSize = CGSize(width: 192, height: 36)
     nonisolated static let repairingModelSize = CGSize(width: 224, height: 36)
     nonisolated static let failureSize = CGSize(width: 264, height: 36)
-    nonisolated static let errorSurfaceSize = CGSize(
-      width: FleckErrorLayout.approved.canvasWidth,
-      height: FleckErrorLayout.approved.canvasHeight
-    )
+
     nonisolated static let edgeInset: CGFloat = 10
 
     let panel: DictationCapsulePanel
@@ -2680,11 +2719,11 @@
 
     nonisolated static func errorSurfaceFrame(
       for dock: DictationCapsuleDock,
+      layout: FleckErrorLayout,
       in visibleFrame: CGRect
     ) -> CGRect {
-      let width = min(max(errorSurfaceSize.width, 0), max(visibleFrame.width, 0))
-      let height = min(max(errorSurfaceSize.height, 0), max(visibleFrame.height, 0))
-      let layout = FleckErrorLayout.approved
+      let width = min(max(layout.canvasWidth, 0), max(visibleFrame.width, 0))
+      let height = min(max(layout.canvasHeight, 0), max(visibleFrame.height, 0))
       let x: CGFloat
       let y: CGFloat
       switch dock {
@@ -2810,14 +2849,19 @@
         chooser: presentationModel.chooser,
         context: currentContext
       )
-      let usesErrorSurface = errorPresentationModel.presentation != nil
+      let errorLayout = errorPresentationModel.presentation.map { FleckErrorLayout.forKind($0.kind) }
+      let usesErrorSurface = errorLayout != nil
       let usesLivePillHost = currentDock == .bottom
         && fleckPillModel.usesFixedHost
         && !usesErrorSurface
       let finalFrame: CGRect = usesLivePillHost
         ? Self.livePillFrame(in: screen.visibleFrame)
         : usesErrorSurface
-          ? Self.errorSurfaceFrame(for: currentDock, in: screen.visibleFrame)
+          ? Self.errorSurfaceFrame(
+            for: currentDock,
+            layout: errorLayout ?? .approved,
+            in: screen.visibleFrame
+          )
         : Self.frame(
           for: currentDock,
           size: Self.size(
@@ -3175,13 +3219,10 @@
                 cornerRadius: presentation.visualMode == .idle || presentation.visualMode == .arming ? 10 : 12,
                 style: .continuous
               )
-              .stroke(model.colors.borderColor, lineWidth: increaseContrast ? 1.5 : 0.8)
-            }
-            .overlay(alignment: .top) {
-              Rectangle()
-                .fill(model.colors.borderColor.opacity(0.22))
-                .frame(height: 1)
-                .padding(.horizontal, 10)
+              .stroke(
+                model.colors.shellBorderColor,
+                lineWidth: increaseContrast ? 1.5 : 0.8
+              )
             }
           }
         }
@@ -3622,7 +3663,7 @@
     let reduceMotion: Bool
     let colors: FleckRailColors
 
-    private var layout: FleckErrorLayout { .approved }
+    private var layout: FleckErrorLayout { FleckErrorLayout.forKind(presentation.kind) }
 
     var body: some View {
       ZStack {
@@ -3640,6 +3681,7 @@
           FleckErrorRepairProgressView(
             startedAt: presentation.repairStartedAt ?? ProcessInfo.processInfo.systemUptime,
             isVisible: isPresented,
+            layout: layout,
             increaseContrast: increaseContrast,
             reduceTransparency: reduceTransparency,
             reduceMotion: reduceMotion,
@@ -3652,7 +3694,8 @@
           .font(.system(size: FleckErrorGeometry.messageSize, weight: .regular))
           .foregroundStyle(colors.primaryTextColor)
           .lineLimit(1)
-          .fixedSize()
+          .truncationMode(.tail)
+          .frame(maxWidth: layout.messageMaxWidth)
 #if DEBUG
           .background(FleckRailFrameProbe(identifier: "fleck-error-message"))
 #endif
@@ -3667,6 +3710,7 @@
           FleckErrorActionButton(
             title: actionTitle,
             phase: presentation.phase,
+            layout: layout,
             isActionPressed: model.isActionPressed,
             increaseContrast: increaseContrast,
             reduceMotion: reduceMotion
@@ -3695,12 +3739,11 @@
   private struct FleckErrorRepairProgressView: View {
     let startedAt: TimeInterval
     let isVisible: Bool
+    let layout: FleckErrorLayout
     let increaseContrast: Bool
     let reduceTransparency: Bool
     let reduceMotion: Bool
     let colors: FleckRailColors
-
-    private var layout: FleckErrorLayout { .approved }
 
     var body: some View {
       TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion || !isVisible)) { _ in
@@ -3727,6 +3770,7 @@
   private struct FleckErrorActionButton: View {
     let title: String
     let phase: FleckErrorButtonPhase
+    let layout: FleckErrorLayout
     let isActionPressed: Bool
     let increaseContrast: Bool
     let reduceMotion: Bool
@@ -3746,6 +3790,7 @@
         .buttonStyle(FleckErrorActionStyle(
           phase: phase,
           title: title,
+          layout: layout,
           interaction: interaction,
           increaseContrast: increaseContrast,
           reduceMotion: reduceMotion
@@ -3758,6 +3803,7 @@
   struct FleckErrorActionStyle: ButtonStyle {
     let phase: FleckErrorButtonPhase
     let title: String
+    var layout: FleckErrorLayout
     var interaction: FleckErrorButtonInteraction = .idle
     let increaseContrast: Bool
     var reduceMotion = false
@@ -3804,6 +3850,7 @@
       return ZStack {
         FleckErrorButtonCanvas(
           feedback: feedback,
+          layout: layout,
           increaseContrast: increaseContrast,
           reduceMotion: reduceMotion
         )
@@ -3815,17 +3862,17 @@
           }
         }
           .position(
-            x: FleckErrorLayout.approved.buttonFaceWidth / 2,
-            y: FleckErrorLayout.approved.actionLabelCenterY
+            x: layout.buttonFaceWidth / 2,
+            y: layout.actionLabelCenterY
           )
       }
-      .frame(width: FleckErrorLayout.approved.buttonFaceWidth, height: FleckErrorLayout.approved.buttonFaceHeight)
+      .frame(width: layout.buttonFaceWidth, height: layout.buttonFaceHeight)
       .scaleEffect(feedback.scale)
       .animation(
         Self.animation(duration: FleckErrorGeometry.pressDuration, reduceMotion: reduceMotion),
         value: feedback.scale
       )
-      .frame(width: FleckErrorLayout.approved.buttonWidth, height: FleckErrorLayout.approved.buttonHeight)
+      .frame(width: layout.buttonWidth, height: layout.buttonHeight)
       .overlay {
         if renderedPhase == .focus {
           Capsule()

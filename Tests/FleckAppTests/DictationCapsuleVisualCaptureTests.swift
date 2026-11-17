@@ -62,9 +62,10 @@
       context: renderedContext
     )
     let expectedFrame: CGRect
-    if controller.errorPresentationModel.presentation != nil {
+    if let errorPresentation = controller.errorPresentationModel.presentation {
       expectedFrame = DictationCapsuleController.errorSurfaceFrame(
         for: controller.currentDock,
+        layout: FleckErrorLayout.forKind(errorPresentation.kind),
         in: screen.visibleFrame
       )
     } else if controller.fleckPillModel.usesFixedHost {
@@ -890,7 +891,7 @@
       let usesErrorSurface = controller.errorPresentationModel.presentation != nil
       let declaredSize: CGSize
       if usesErrorSurface {
-        declaredSize = DictationCapsuleController.errorSurfaceSize
+        declaredSize = controller.errorPresentationModel.presentation.map { FleckErrorLayout.forKind($0.kind).canvasSize } ?? FleckErrorLayout.approved.canvasSize
       } else if usesLivePillHost {
         declaredSize = DictationCapsuleController.livePillHostSize
       } else {
@@ -1009,7 +1010,7 @@
       let usesErrorSurface = controller.errorPresentationModel.presentation != nil
       let declaredSize: CGSize
       if usesErrorSurface {
-        declaredSize = DictationCapsuleController.errorSurfaceSize
+        declaredSize = controller.errorPresentationModel.presentation.map { FleckErrorLayout.forKind($0.kind).canvasSize } ?? FleckErrorLayout.approved.canvasSize
       } else if usesLivePillHost {
         declaredSize = DictationCapsuleController.livePillHostSize
       } else {
@@ -1295,7 +1296,7 @@
       if let size {
         captureSize = size
       } else if controller.errorPresentationModel.presentation != nil {
-        captureSize = DictationCapsuleController.errorSurfaceSize
+        captureSize = controller.errorPresentationModel.presentation.map { FleckErrorLayout.forKind($0.kind).canvasSize } ?? FleckErrorLayout.approved.canvasSize
       } else if controller.currentDock == .bottom
         && controller.fleckPillModel.usesFixedHost
       {

@@ -728,7 +728,11 @@ func FleckPillReducedMotionKeepsGeometryStaticAcrossTransitionsAndStopsDecorativ
   let visibleFrame = try #require(
     panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? NSScreen.screens.first?.visibleFrame
   )
-  let expectedErrorFrame = DictationCapsuleController.errorSurfaceFrame(for: .bottom, in: visibleFrame)
+  let expectedErrorFrame = DictationCapsuleController.errorSurfaceFrame(
+    for: .bottom,
+    layout: .approved,
+    in: visibleFrame
+  )
   let host = try #require(panel.contentView)
   host.layoutSubtreeIfNeeded()
   let expectedIntegerPanelWidth = CGFloat(
@@ -829,6 +833,45 @@ func FleckPillReducedMotionKeepsGeometryStaticAcrossTransitionsAndStopsDecorativ
   )
   #expect(controller.currentContext.status == .idle)
   #expect(controller.fleckPillModel.state == .standby)
+}
+
+@Test func FleckErrorSurfaceKeepsThePillGeometryForEveryKind() {
+  #expect(FleckErrorLayout.forKind(.noSpeech) == .compact)
+  #expect(FleckErrorLayout.forKind(.microphone) == .approved)
+  #expect(FleckErrorLayout.forKind(.repairing) == .approved)
+  #expect(FleckErrorLayout.compact.visibleWidth == 336)
+  #expect(FleckErrorLayout.compact.visibleHeight == 42)
+  #expect(FleckErrorLayout.compact.canvasHeight < FleckErrorLayout.approved.canvasHeight)
+  #expect(FleckErrorLayout.compact.canvasWidth < FleckErrorLayout.approved.canvasWidth)
+  for layout in [FleckErrorLayout.approved, .compact] {
+    #expect(layout.buttonFaceX == (layout.buttonWidth - layout.buttonFaceWidth) / 2)
+    #expect(layout.buttonFaceY == (layout.buttonHeight - layout.buttonFaceHeight) / 2)
+    #expect(
+      layout.messageCenterX + layout.messageMaxWidth / 2 + FleckErrorLayout.messageGap
+        == layout.buttonX + layout.buttonFaceX
+    )
+    #expect(abs(layout.buttonFaceRect.minX - (layout.buttonX + layout.buttonFaceX)) < 1e-9)
+    #expect(abs(layout.buttonFaceRect.width - layout.buttonFaceWidth) < 1e-9)
+    #expect(abs(layout.canvasSize.width - layout.canvasWidth) < 1e-9)
+    #expect(abs(layout.canvasSize.height - layout.canvasHeight) < 1e-9)
+  }
+  let font = NSFont.systemFont(ofSize: FleckErrorGeometry.messageSize, weight: .regular)
+  for kind in FleckErrorKind.allCases {
+    let width = Double((kind.message as NSString).size(withAttributes: [.font: font]).width)
+    let layout = FleckErrorLayout.forKind(kind)
+    #expect(
+      width <= layout.messageMaxWidth,
+      "\(kind.message) width=\(width) max=\(layout.messageMaxWidth)"
+    )
+  }
+  let noSpeechMessageWidth = Double(
+    (FleckErrorKind.noSpeech.message as NSString).size(withAttributes: [.font: font]).width
+  )
+  #expect(noSpeechMessageWidth <= FleckErrorLayout.compact.messageMaxWidth)
+  #expect(
+    FleckErrorLayout.compact.buttonX + FleckErrorLayout.compact.buttonFaceX
+      > FleckErrorLayout.compact.messageCenterX + FleckErrorLayout.compact.messageMaxWidth / 2
+  )
 }
 
 @Test func FleckPillBottomFrameStaysAttachedAndCentered() {

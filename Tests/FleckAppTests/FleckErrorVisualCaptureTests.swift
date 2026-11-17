@@ -16,6 +16,7 @@ private struct FleckErrorButtonCapture: View {
       .buttonStyle(FleckErrorActionStyle(
         phase: phase,
         title: title,
+        layout: .approved,
         interaction: interaction,
         increaseContrast: false
       ))
@@ -27,7 +28,12 @@ private struct FleckErrorButtonMidstateCapture: View {
 
   var body: some View {
     ZStack {
-      FleckErrorButtonCanvas(feedback: feedback, increaseContrast: false, reduceMotion: true)
+      FleckErrorButtonCanvas(
+        feedback: feedback,
+        layout: .approved,
+        increaseContrast: false,
+        reduceMotion: true
+      )
       Text("Try again")
         .font(.system(size: FleckErrorGeometry.actionSize, weight: .regular))
         .foregroundStyle(Color(
@@ -253,7 +259,7 @@ func FleckErrorNativeCaptureMatrixWritesOffscreenPNGsWhenRequested() throws {
         if errorName == "used-original-reference-fixture" {
           #expect(controller.currentContext.status == .idle)
           #expect(controller.errorPresentationModel.presentation == nil)
-          #expect(panel.frame.size != DictationCapsuleController.errorSurfaceSize)
+          #expect(panel.frame.size != FleckErrorLayout.approved.canvasSize)
           controller.errorPresentationModel.reconcile(
             context: context,
             action: action,
@@ -262,7 +268,7 @@ func FleckErrorNativeCaptureMatrixWritesOffscreenPNGsWhenRequested() throws {
             reduceMotion: true
           )
           panel.setFrame(
-            NSRect(origin: panel.frame.origin, size: DictationCapsuleController.errorSurfaceSize),
+            NSRect(origin: panel.frame.origin, size: FleckErrorLayout.approved.canvasSize),
             display: false
           )
         }
@@ -270,8 +276,8 @@ func FleckErrorNativeCaptureMatrixWritesOffscreenPNGsWhenRequested() throws {
         host.appearance = NSAppearance(named: appearance)
         host.layoutSubtreeIfNeeded()
         #expect(!panel.isVisible)
-        #expect(abs(panel.frame.width - DictationCapsuleController.errorSurfaceSize.width) < 1)
-        #expect(abs(panel.frame.height - DictationCapsuleController.errorSurfaceSize.height) < 1)
+        #expect(abs(panel.frame.width - FleckErrorLayout.approved.canvasSize.width) < 1)
+        #expect(abs(panel.frame.height - FleckErrorLayout.approved.canvasSize.height) < 1)
         #expect(controller.errorPresentationModel.presentation?.kind == kind)
         try saveCapture(
           of: host,

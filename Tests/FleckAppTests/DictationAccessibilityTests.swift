@@ -1262,8 +1262,11 @@ private func renderedPixels(with identifier: String, in host: NSView) throws -> 
         action: action,
         context: failureContext
       )
+      let layout = controller.errorPresentationModel.presentation
+        .map { FleckErrorLayout.forKind($0.kind) } ?? .approved
       let frame = DictationCapsuleController.errorSurfaceFrame(
         for: .bottom,
+        layout: layout,
         in: visibleFrame
       )
       nativeFrameControl.setFrame(frame, display: false)
@@ -1328,12 +1331,12 @@ private func renderedPixels(with identifier: String, in host: NSView) throws -> 
 
   controller.render(.noSpeech, action: nil)
   let screen = try #require(panel.screen ?? NSScreen.main ?? NSScreen.screens.first)
+  let error = try #require(controller.errorPresentationModel.presentation)
   let logicalFrame = DictationCapsuleController.errorSurfaceFrame(for: .bottom,
-    in: screen.visibleFrame)
+    layout: FleckErrorLayout.forKind(error.kind), in: screen.visibleFrame)
   nativeFrameControl.setFrame(logicalFrame, display: false)
   #expect(panel.frame == nativeFrameControl.frame)
   #expect(panel.frame.width <= nativeFrameControl.frame.width)
-  let error = try #require(controller.errorPresentationModel.presentation)
   #expect(controller.currentContext.status == .noSpeech)
   #expect(controller.presentationModel.action == nil)
   #expect(controller.currentChooser == nil)
@@ -1446,8 +1449,20 @@ private func renderedPixels(with identifier: String, in host: NSView) throws -> 
 
       #expect(theme.appearance == appearance)
       #expect(colors.accentHex == theme.palette[.accent])
-      #expect(colors.shell.hex == FleckRailColors.shellHex)
-      #expect(colors.effectiveShellOpacity == FleckRailColors.shellOpacity)
+      #expect(
+        colors.shell.brightestChannel
+          <= FleckRailColors.shellSurfaceBrightness + 1.0 / 255
+      )
+      for backdrop in [FleckRailRGB(red: 0, green: 0, blue: 0), FleckRailRGB(hex: theme.palette[.editorOpaque])!] {
+        #expect(
+          colors.compositedShell(over: backdrop).brightestChannel
+            <= FleckRailColors.shellBrightnessCeiling + 1.0 / 255
+        )
+      }
+      #expect(
+        colors.effectiveShellOpacity
+          == (appearance == .dark ? FleckRailColors.glassShellOpacity : FleckRailColors.shellOpacity)
+      )
       #expect(FleckRailColors.contrastRatio(colors.primaryText, against: colors.shell) >= 4.5)
       let compositedContrasts = secondaryTextCompositedContrasts(colors)
       #expect(compositedContrasts.secondaryText >= 4.5)

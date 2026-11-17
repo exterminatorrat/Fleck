@@ -251,12 +251,20 @@
   @Test func FleckErrorSurfaceFramesKeepTheirVisibleShellOnTheDock() {
     let visible = CGRect(x: 12, y: 40, width: 1_440, height: 900)
     let layout = FleckErrorLayout.approved
-    let bottom = DictationCapsuleController.errorSurfaceFrame(for: .bottom, in: visible)
+    let bottom = DictationCapsuleController.errorSurfaceFrame(
+      for: .bottom,
+      layout: layout,
+      in: visible
+    )
     let normalPill = DictationCapsuleController.livePillFrame(in: visible)
     FleckErrorReferenceSupport.expectClose(bottom.minY, normalPill.minY)
     FleckErrorReferenceSupport.expectClose(bottom.midX, visible.midX)
 
-    let left = DictationCapsuleController.errorSurfaceFrame(for: .left, in: visible)
+    let left = DictationCapsuleController.errorSurfaceFrame(
+      for: .left,
+      layout: layout,
+      in: visible
+    )
     FleckErrorReferenceSupport.expectClose(
       left.minX + layout.artworkPadding,
       visible.minX + DictationCapsuleController.edgeInset
@@ -266,7 +274,11 @@
       visible.midY
     )
 
-    let right = DictationCapsuleController.errorSurfaceFrame(for: .right, in: visible)
+    let right = DictationCapsuleController.errorSurfaceFrame(
+      for: .right,
+      layout: layout,
+      in: visible
+    )
     FleckErrorReferenceSupport.expectClose(
       right.minX + layout.canvasWidth - layout.artworkPadding,
       visible.maxX - DictationCapsuleController.edgeInset
@@ -462,7 +474,7 @@
 
     #expect(controller.currentContext.status == .idle)
     #expect(controller.errorPresentationModel.presentation == nil)
-    #expect(controller.panel.frame.size != DictationCapsuleController.errorSurfaceSize)
+    #expect(controller.panel.frame.size != FleckErrorLayout.approved.canvasSize)
     controller.dismiss()
   }
 
@@ -501,7 +513,7 @@
     #expect(controller.presentationModel.chooser == nil)
     #expect(!controller.panel.allowsActions)
     #expect(controller.currentContext.status == .idle)
-    #expect(controller.panel.frame.size != DictationCapsuleController.errorSurfaceSize)
+    #expect(controller.panel.frame.size != FleckErrorLayout.approved.canvasSize)
     let host = try #require(controller.panel.contentView)
     host.layoutSubtreeIfNeeded()
     let identifiers = fleckErrorDescendants(of: host).compactMap { $0.identifier?.rawValue }

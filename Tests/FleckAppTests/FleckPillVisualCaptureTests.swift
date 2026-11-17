@@ -214,11 +214,13 @@ import Testing
       var maximum = Int.min
       for y in 0..<image.pixelsHigh {
         for x in 0..<image.pixelsWide {
-          guard let color = image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
-            color.redComponent > 0.2,
-            color.greenComponent > 0.2,
-            color.blueComponent > 0.2
-          else { continue }
+          guard let color = image.colorAt(x: x, y: y) else { continue }
+          let composited = [
+            color.redComponent,
+            color.greenComponent,
+            color.blueComponent,
+          ].map { $0 * color.alphaComponent }
+          guard composited.allSatisfy({ $0 > 0.2 }) else { continue }
           minimum = min(minimum, x)
           maximum = max(maximum, x)
         }
@@ -254,10 +256,10 @@ import Testing
     let frames: [(frame: FleckPillMotionFrame, left: ClosedRange<Int>, right: ClosedRange<Int>)] = [
       (
         FleckPillMotion.sample(FleckPillMotion.anchors[.listening]!),
-        135...165,
-        375...420
+        172...182,
+        357...367
       ),
-      (opening, 175...230, 310...365),
+      (opening, 209...219, 320...330),
     ]
     let layers = FleckPillCanvasLayers(rim: false, shoulders: false, signal: true, halo: false)
     for sample in frames {

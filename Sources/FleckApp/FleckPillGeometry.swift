@@ -338,33 +338,96 @@ struct FleckErrorLayout: Equatable, Sendable {
     buttonFaceHeight / 2
   }
 
-  static let approved = Self()
+  var canvasSize: CGSize {
+    CGSize(width: canvasWidth, height: canvasHeight)
+  }
 
-  private init() {
-    let scale = 44.0 / 37
+  var buttonFaceRect: CGRect {
+    CGRect(
+      x: buttonX + buttonFaceX,
+      y: buttonY + buttonFaceY,
+      width: buttonFaceWidth,
+      height: buttonFaceHeight
+    )
+  }
+
+  var messageMaxWidth: Double {
+    2 * (buttonX + buttonFaceX - messageCenterX - Self.messageGap)
+  }
+
+  static let messageGap = 6.0
+  static let buttonFaceArtworkWidth = 64.0
+  static let buttonFaceArtworkHeight = 22.0
+
+  static let approved = Self(
+    visibleWidth: 384,
+    visibleHeight: 44,
+    scale: 44.0 / 37,
+    artworkPadding: 8 * (44.0 / 37),
+    messageCenterX: 8 * (44.0 / 37) + 142,
+    contentCenterY: 52 * (44.0 / 37) - 19,
+    button: (width: 72, height: 28, faceWidth: 64, faceHeight: 22, faceX: 4, faceY: 3),
+    buttonX: 8 * (44.0 / 37) + 258 - 36
+  )
+
+  /// The no-speech surface is the 288x36 compact layout at 7/6: the midpoint
+  /// between the full error surface that read as oversized and the compact one
+  /// that read as cramped. Every offset, inset and the button face scale with
+  /// it, so the surface grows without retuning any of its proportions.
+  static let compactScale = 7.0 / 6.0
+
+  static let compact = Self(
+    visibleWidth: 288 * compactScale,
+    visibleHeight: 36 * compactScale,
+    scale: 36 * compactScale / 37,
+    artworkPadding: 8 * (36 * compactScale / 37),
+    messageCenterX: 8 * (36 * compactScale / 37) + 110 * compactScale,
+    contentCenterY: 52 * (36 * compactScale / 37) - 18.5 * compactScale,
+    button: (
+      width: 64 * compactScale,
+      height: 24 * compactScale,
+      faceWidth: 58 * compactScale,
+      faceHeight: 19 * compactScale,
+      faceX: (64 * compactScale - 58 * compactScale) / 2,
+      faceY: (24 * compactScale - 19 * compactScale) / 2
+    ),
+    buttonX: 8 * (36 * compactScale / 37) + 161 * compactScale
+  )
+
+  static func forKind(_ kind: FleckErrorKind) -> Self {
+    kind == .noSpeech ? .compact : .approved
+  }
+
+  private init(
+    visibleWidth: Double,
+    visibleHeight: Double,
+    scale: Double,
+    artworkPadding: Double,
+    messageCenterX: Double,
+    contentCenterY: Double,
+    button: (width: Double, height: Double, faceWidth: Double, faceHeight: Double, faceX: Double, faceY: Double),
+    buttonX: Double
+  ) {
     let baseline = 52 * scale
-    let artworkWidth = 384 / scale
-    let buttonWidth = 72.0
-    let buttonHeight = 28.0
-    canvasWidth = 384 + 16 * scale
-    canvasHeight = baseline
-    visibleWidth = 384
-    visibleHeight = 44
+    self.visibleWidth = visibleWidth
+    self.visibleHeight = visibleHeight
     self.baseline = baseline
     self.scale = scale
-    self.artworkWidth = artworkWidth
-    centerExtension = artworkWidth - 224
-    artworkPadding = 8 * scale
-    messageCenterX = artworkPadding + 142
-    contentCenterY = baseline - 19
-    buttonX = artworkPadding + 258 - buttonWidth / 2
-    buttonY = contentCenterY - buttonHeight / 2
-    self.buttonWidth = buttonWidth
-    self.buttonHeight = buttonHeight
-    buttonFaceX = 4
-    buttonFaceY = 3
-    buttonFaceWidth = 64
-    buttonFaceHeight = 22
+    self.artworkWidth = visibleWidth / scale
+    self.artworkPadding = artworkPadding
+    self.messageCenterX = messageCenterX
+    self.contentCenterY = contentCenterY
+    canvasWidth = visibleWidth + 16 * scale
+    canvasHeight = baseline
+    centerExtension = visibleWidth / scale - 224
+    self.buttonWidth = button.width
+    self.buttonHeight = button.height
+    self.buttonX = buttonX
+    buttonY = contentCenterY - button.height / 2
+    buttonFaceX = button.faceX
+    buttonFaceY = button.faceY
+    buttonFaceWidth = button.faceWidth
+    buttonFaceHeight = button.faceHeight
   }
 }
 

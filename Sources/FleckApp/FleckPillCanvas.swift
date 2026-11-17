@@ -108,18 +108,7 @@ struct FleckErrorCanvas: View {
   let reduceTransparency: Bool
   let colors: FleckRailColors
 
-  private var statusColor: Color {
-    switch presentation.kind {
-    case .noSpeech, .usedOriginal:
-      colors.warningColor
-    case .repairing:
-      colors.liveColor
-    default:
-      colors.failureColor
-    }
-  }
-
-  private var layout: FleckErrorLayout { .approved }
+  private var layout: FleckErrorLayout { FleckErrorLayout.forKind(presentation.kind) }
 
   var body: some View {
     Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: false) { context, _ in
@@ -135,10 +124,8 @@ struct FleckErrorCanvas: View {
           FleckPillPainter.drawError(
             geometry,
             layout: layout,
-            shoulders: !reduceTransparency,
             increaseContrast: increaseContrast,
             colors: colors,
-            signalColor: statusColor,
             in: error
           )
         }
@@ -172,25 +159,27 @@ struct FleckErrorCanvas: View {
 
 struct FleckErrorButtonCanvas: View {
   let feedback: FleckErrorButtonFeedback
+  let layout: FleckErrorLayout
   let increaseContrast: Bool
   let reduceMotion: Bool
 
   var body: some View {
     ZStack {
-      FleckErrorButtonStopsCanvas(stops: feedback.stops, increaseContrast: increaseContrast)
+      FleckErrorButtonStopsCanvas(
+        stops: feedback.stops,
+        layout: layout,
+        increaseContrast: increaseContrast
+      )
         .animation(animation(duration: FleckErrorGeometry.buttonFillRimDuration), value: feedback.stops)
       if !increaseContrast {
-        FleckErrorButtonReflectionCanvas(opacity: feedback.reflection)
+        FleckErrorButtonReflectionCanvas(opacity: feedback.reflection, layout: layout)
           .animation(
             animation(duration: FleckErrorGeometry.buttonColorReflectionDuration),
             value: feedback.reflection
           )
       }
     }
-    .frame(
-      width: FleckErrorLayout.approved.buttonFaceWidth,
-      height: FleckErrorLayout.approved.buttonFaceHeight
-    )
+    .frame(width: layout.buttonFaceWidth, height: layout.buttonFaceHeight)
     .accessibilityHidden(true)
   }
 
@@ -205,6 +194,7 @@ private typealias FleckErrorButtonStopVector = AnimatablePair<FleckErrorButtonSt
 
 private struct FleckErrorButtonStopsCanvas: View, Animatable {
   var stops: FleckErrorButtonStops
+  var layout: FleckErrorLayout
   let increaseContrast: Bool
 
   nonisolated var animatableData: FleckErrorButtonStopVector {
@@ -227,18 +217,21 @@ private struct FleckErrorButtonStopsCanvas: View, Animatable {
 
   var body: some View {
     Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: false) { context, _ in
-      FleckPillPainter.drawErrorButtonStops(stops, increaseContrast: increaseContrast, in: context)
+      FleckPillPainter.drawErrorButtonStops(
+        stops,
+        layout: layout,
+        increaseContrast: increaseContrast,
+        in: context
+      )
     }
-    .frame(
-      width: FleckErrorLayout.approved.buttonFaceWidth,
-      height: FleckErrorLayout.approved.buttonFaceHeight
-    )
+    .frame(width: layout.buttonFaceWidth, height: layout.buttonFaceHeight)
     .accessibilityHidden(true)
   }
 }
 
 private struct FleckErrorButtonReflectionCanvas: View, Animatable {
   var opacity: Double
+  var layout: FleckErrorLayout
 
   nonisolated var animatableData: Double {
     get { opacity }
@@ -247,59 +240,14 @@ private struct FleckErrorButtonReflectionCanvas: View, Animatable {
 
   var body: some View {
     Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: false) { context, _ in
-      FleckPillPainter.drawErrorButtonReflection(opacity, in: context)
+      FleckPillPainter.drawErrorButtonReflection(opacity, layout: layout, in: context)
     }
-    .frame(
-      width: FleckErrorLayout.approved.buttonFaceWidth,
-      height: FleckErrorLayout.approved.buttonFaceHeight
-    )
+    .frame(width: layout.buttonFaceWidth, height: layout.buttonFaceHeight)
     .accessibilityHidden(true)
   }
 }
 
 private enum FleckPillPainter {
-  private static let activeBody = [
-    (0.0, color(0x17191D)),
-    (0.32, color(0x090A0D)),
-    (0.75, color(0x111216)),
-    (1.0, color(0x000000)),
-  ]
-  private static let activeRim = [
-    (0.0, color(0xFFFFFF, alpha: 0)),
-    (0.14, color(0xBCC0C8, alpha: 0.19)),
-    (0.23, color(0xFFFFFF, alpha: 0.9)),
-    (0.34, color(0xDDDFE5, alpha: 0.44)),
-    (0.52, color(0xDDDFE5, alpha: 0.31)),
-    (0.66, color(0xDDDFE5, alpha: 0.35)),
-    (0.78, color(0xFFFFFF, alpha: 0.77)),
-    (0.88, color(0xBCC0C8, alpha: 0.17)),
-    (1.0, color(0xFFFFFF, alpha: 0)),
-  ]
-  private static let idleRim = [
-    (0.0, color(0xFFFFFF, alpha: 0)),
-    (0.34, color(0xCCCFD7, alpha: 0.35)),
-    (0.5, color(0xFFFFFF, alpha: 0.7)),
-    (0.64, color(0xCCCFD7, alpha: 0.26)),
-    (1.0, color(0xFFFFFF, alpha: 0)),
-  ]
-  private static let insideRim = [
-    (0.0, color(0xAFB3BD, alpha: 0.24)),
-    (0.22, color(0xA0A5B0, alpha: 0.14)),
-    (0.8, color(0x949BA8, alpha: 0.07)),
-    (1.0, color(0x8A919E, alpha: 0)),
-  ]
-  private static let shoulderLeft = [
-    (0.0, color(0xFFFFFF, alpha: 0.82)),
-    (0.23, color(0xE0E2E9, alpha: 0.47)),
-    (0.6, color(0x9B9FA9, alpha: 0.19)),
-    (1.0, color(0x797D87, alpha: 0)),
-  ]
-  private static let shoulderRight = [
-    (0.0, color(0xFFFFFF, alpha: 0.66)),
-    (0.24, color(0xE0E2E9, alpha: 0.39)),
-    (0.65, color(0x9B9FA9, alpha: 0.15)),
-    (1.0, color(0x797D87, alpha: 0)),
-  ]
   fileprivate static func color(_ rgb: UInt32, alpha: Double = 1) -> Color {
     Color(
       .sRGB,
@@ -318,51 +266,34 @@ private enum FleckPillPainter {
   ) {
     let shell = FleckPillGeometry.shell(expansion: frame.expansion)
     let shellMatrix = viewMatrix(shell: shell.shellTransform)
-    let activeMatrix = viewMatrix(shell: shell.shellTransform, light: shell.lightTransform)
     let shellFill = path(shell.fill).applying(shellMatrix)
+    let shellBounds = shellFill.boundingRect
+    let stops = layers.shoulders
+      ? [
+        Gradient.Stop(color: colors.shellColor, location: 0),
+        Gradient.Stop(color: colors.shellColor, location: 0.86),
+        Gradient.Stop(color: colors.shellEdgeColor, location: 1),
+      ]
+      : [Gradient.Stop(color: colors.shellColor, location: 0)]
     context.drawLayer { body in
       body.opacity = colors.effectiveShellOpacity
       body.fill(
         shellFill,
-        with: linear(
-          activeBody,
-          start: point(0, shell.bodyTop, transform: shellMatrix),
-          end: point(0, 40, transform: shellMatrix)
+        with: .linearGradient(
+          Gradient(stops: stops),
+          startPoint: CGPoint(x: shellBounds.midX, y: shellBounds.minY),
+          endPoint: CGPoint(x: shellBounds.midX, y: shellBounds.maxY)
         )
       )
-      body.clip(to: shellFill)
-      body.drawLayer { active in
-        active.opacity = shell.expansion
-        drawActiveLight(
-          in: active,
-          matrix: activeMatrix,
-          visible: layers.shoulders
+      if layers.rim {
+        drawRim(
+          in: body,
+          shell: shell,
+          matrix: shellMatrix,
+          expansion: shell.expansion,
+          colors: colors
         )
       }
-      body.drawLayer { idle in
-        idle.opacity = 1 - shell.expansion
-        let idlePath = path("M 95 39 C 103 26 119 26 129 39")
-        drawBlurred(in: idle, transform: shellMatrix, radius: 1.6, opacity: 0.14) { glow in
-          glow.fill(stroked(idlePath, width: 2), with: .color(color(0x9399A5)))
-        }
-      }
-      body.fill(
-        shellFill,
-        with: linear(
-          [(0.0, color(0x000000, alpha: 0)), (1.0, color(0x000000))],
-          start: point(0, 36, transform: shellMatrix),
-          end: point(0, 40, transform: shellMatrix)
-        )
-      )
-    }
-    if layers.rim {
-      drawRim(
-        in: context,
-        shell: shell,
-        matrix: shellMatrix,
-        expansion: shell.expansion,
-        colors: colors
-      )
     }
     if layers.signal, frame.signalOpacity > 0, shell.expansion > 0 {
       drawSignal(
@@ -380,13 +311,10 @@ private enum FleckPillPainter {
   static func drawError(
     _ geometry: FleckErrorShellGeometry,
     layout: FleckErrorLayout,
-    shoulders: Bool,
     increaseContrast: Bool,
     colors: FleckRailColors,
-    signalColor: Color,
     in context: GraphicsContext
   ) {
-    let extra = layout.centerExtension
     let transform = CGAffineTransform(
       a: layout.scale,
       b: 0,
@@ -399,77 +327,19 @@ private enum FleckPillPainter {
     let contour = path(geometry.artworkContour)
     context.drawLayer { body in
       body.opacity = colors.effectiveShellOpacity
-      body.fill(
-        fill.applying(transform),
-        with: linear(
-          [
-            (0.0, color(0x131519)),
-            (0.32, color(0x090A0D)),
-            (0.75, color(0x090A0D)),
-            (1.0, color(0x000000)),
-          ],
-          start: point(0, 0, transform: transform),
-          end: point(0, 40, transform: transform)
-        )
+      body.fill(fill.applying(transform), with: .color(colors.shellColor))
+      body.stroke(
+        contour.applying(transform),
+        with: .color(colors.shellBorderColor),
+        lineWidth: increaseContrast ? 1 : 0.5
       )
-      body.clip(to: fill.applying(transform))
-      body.drawLayer { reflection in
-        reflection.opacity = FleckErrorGeometry.reflectionOpacity(
-          dismissal: geometry.dismissal
-        )
-        drawErrorActiveLight(
-          in: reflection,
-          transform: FleckErrorGeometry.reflectionTransform(for: geometry, layout: layout),
-          extra: extra,
-          visible: shoulders
+      if increaseContrast {
+        body.stroke(
+          contour.applying(transform),
+          with: .color(colors.primaryTextColor),
+          lineWidth: 1
         )
       }
-      body.fill(
-        fill.applying(transform),
-        with: linear(
-          [(0.0, color(0x000000, alpha: 0)), (1.0, color(0x000000))],
-          start: point(0, 36, transform: transform),
-          end: point(0, 40, transform: transform)
-        )
-      )
-    }
-    let rimStops = widenedRimStops(extra: extra, artworkWidth: layout.artworkWidth)
-    drawBlurred(in: context, transform: transform, radius: 0.7, opacity: 0.24) { glow in
-      fillLinearStroke(
-        glow,
-        path: contour,
-        width: 1.25,
-        transform: .identity,
-        stops: rimStops,
-        start: point(0, 0),
-        end: point(layout.artworkWidth, 0)
-      )
-    }
-    fillLinearStroke(
-      context,
-      path: contour,
-      width: 0.48,
-      transform: transform,
-      stops: rimStops,
-      start: point(0, 0, transform: transform),
-      end: point(layout.artworkWidth, 0, transform: transform)
-    )
-    context.stroke(
-      contour.applying(transform),
-      with: .color(colors.borderColor),
-      lineWidth: 0.48
-    )
-    context.stroke(
-      contour.applying(transform),
-      with: .color(signalColor.opacity(increaseContrast ? 0.65 : 0.35)),
-      lineWidth: increaseContrast ? 0.75 : 0.45
-    )
-    if increaseContrast {
-      context.stroke(
-        contour.applying(transform),
-        with: .color(colors.primaryTextColor),
-        lineWidth: 1
-      )
     }
   }
 
@@ -513,13 +383,15 @@ private enum FleckPillPainter {
 
   static func drawErrorButtonStops(
     _ stops: FleckErrorButtonStops,
+    layout: FleckErrorLayout,
     increaseContrast: Bool,
     in context: GraphicsContext
   ) {
-    let width = FleckErrorLayout.approved.buttonFaceWidth
-    let height = FleckErrorLayout.approved.buttonFaceHeight
+    let width = layout.buttonFaceWidth
+    let height = layout.buttonFaceHeight
     let rect = CGRect(x: 0.3, y: 0.3, width: width - 0.6, height: height - 0.6)
-    let face = Path(roundedRect: rect, cornerSize: CGSize(width: 10.7, height: 10.7))
+    let corner = CGSize(width: rect.height / 2, height: rect.height / 2)
+    let face = Path(roundedRect: rect, cornerSize: corner)
     if increaseContrast {
       context.fill(face, with: .color(Color(nsColor: .controlBackgroundColor)))
       context.stroke(face, with: .color(Color(nsColor: .controlTextColor)), lineWidth: 1)
@@ -554,20 +426,27 @@ private enum FleckPillPainter {
     )
   }
 
-  static func drawErrorButtonReflection(_ opacity: Double, in context: GraphicsContext) {
-    let width = FleckErrorLayout.approved.buttonFaceWidth
-    let height = FleckErrorLayout.approved.buttonFaceHeight
+  static func drawErrorButtonReflection(
+    _ opacity: Double,
+    layout: FleckErrorLayout,
+    in context: GraphicsContext
+  ) {
+    let width = layout.buttonFaceWidth
+    let height = layout.buttonFaceHeight
     let rect = CGRect(x: 0.8, y: 0.8, width: width - 1.6, height: height - 1.6)
-    let reflection = Path(roundedRect: rect, cornerSize: CGSize(width: 10.2, height: 10.2))
+    let corner = CGSize(width: rect.height / 2, height: rect.height / 2)
+    let reflection = Path(roundedRect: rect, cornerSize: corner)
+    let scaleX = width / FleckErrorLayout.buttonFaceArtworkWidth
+    let scaleY = height / FleckErrorLayout.buttonFaceArtworkHeight
     context.drawLayer { glass in
       glass.opacity = opacity
       fillRadial(
         in: glass,
         shape: reflection,
         transform: radialMatrix(
-          center: point(20, 0.7),
-          radiusX: 38,
-          radiusY: 14,
+          center: point(20 * scaleX, 0.7 * scaleY),
+          radiusX: 38 * scaleX,
+          radiusY: 14 * scaleY,
           angle: 0,
           outer: .identity
         ),
@@ -580,274 +459,6 @@ private enum FleckPillPainter {
     }
   }
 
-  private static func drawErrorActiveLight(
-    in context: GraphicsContext,
-    transform: CGAffineTransform,
-    extra: Double,
-    visible: Bool
-  ) {
-    let poolCenter = 112 + extra / 2
-    let poolRadius = 73 + extra / 2
-    let pool = ellipse(poolCenter, 24, poolRadius, 20).applying(transform)
-    fillRadial(
-      in: context,
-      shape: pool,
-      transform: radialMatrix(
-        center: point(poolCenter, 20),
-        radiusX: poolRadius,
-        radiusY: 20,
-        angle: 0,
-        outer: transform
-      ),
-      stops: [
-        (0.0, color(0xAAAEBA, alpha: 0.06)),
-        (1.0, color(0xAAAEBA, alpha: 0)),
-      ]
-    )
-    guard visible else { return }
-    let shoulderLeft = path("M 29 39 C 41 36 43.3 24 51 14 C 57.8 5.2 65 4.4 82 3.8")
-    let shoulderRight = widenedPath(
-      path("M 195 39 C 183 36 180.7 24 173 14 C 166.2 5.2 159 4.4 142 3.8"),
-      extra: extra
-    )
-    var shouldersPath = shoulderLeft
-    shouldersPath.addPath(shoulderRight)
-    drawBlurred(in: context, transform: transform, radius: 3.2, opacity: 1) { glow in
-      fillLinearStroke(
-        glow,
-        path: shouldersPath,
-        width: 4.6,
-        transform: .identity,
-        stops: insideRim,
-        start: point(0, 0),
-        end: point(0, 40)
-      )
-    }
-    drawBlurred(in: context, transform: transform, radius: 0.7, opacity: 1) { glow in
-      fillLinearStroke(
-        glow,
-        path: shouldersPath,
-        width: 1.5,
-        transform: .identity,
-        stops: insideRim,
-        start: point(0, 0),
-        end: point(0, 40)
-      )
-    }
-    let blackEdge = widenedPath(
-      path("M 45 23 C 52 9 63 3.2 79 3.4 L 145 3.4 C 161 3.2 172 9 179 23"),
-      extra: extra
-    )
-    drawBlurred(in: context, transform: transform, radius: 0.7, opacity: 0.7) { edge in
-      edge.fill(stroked(blackEdge, width: 1.4), with: .color(color(0x050506)))
-    }
-    for (line, stops, centerX, angle) in [
-      (shoulderLeft, shoulderLeftStops, 53.0, -41.0),
-      (shoulderRight, shoulderRightStops, 171.0 + extra, 41.0),
-    ] {
-      let centerY = 12.0
-      let ellipseShape = ellipse(
-        centerX + (centerX < 100 ? 2 : -2), 13, 27, 26
-      ).applying(transform)
-      context.drawLayer { glow in
-        glow.opacity = 0.26
-        fillRadial(
-          in: glow,
-          shape: ellipseShape,
-          transform: radialMatrix(
-            center: point(centerX, centerY),
-            radiusX: 20,
-            radiusY: 10,
-            angle: angle,
-            outer: transform
-          ),
-          stops: stops
-        )
-      }
-      drawBlurred(in: context, transform: transform, radius: 1.6, opacity: 1) { soft in
-        fillRadial(
-          in: soft,
-          shape: stroked(line, width: 8),
-          transform: radialMatrix(
-            center: point(centerX, centerY), radiusX: 20, radiusY: 10,
-            angle: angle, outer: .identity
-          ),
-          stops: stops
-        )
-      }
-      drawBlurred(in: context, transform: transform, radius: 0.7, opacity: 1) { near in
-        fillRadial(
-          in: near,
-          shape: stroked(line, width: 3.6),
-          transform: radialMatrix(
-            center: point(centerX, centerY), radiusX: 20, radiusY: 10,
-            angle: angle, outer: .identity
-          ),
-          stops: stops
-        )
-      }
-      let fine = centerX < 100
-        ? path("M 46 22 C 51 13 55.5 8.6 63.5 5.9")
-        : widenedPath(path("M 178 22 C 173 13 168.5 8.6 160.5 5.9"), extra: extra)
-      drawBlurred(in: context, transform: transform, radius: 0.7, opacity: 1) { highlight in
-        fillRadial(
-          in: highlight,
-          shape: stroked(fine, width: centerX < 100 ? 1.2 : 1.15),
-          transform: radialMatrix(
-            center: point(centerX, centerY), radiusX: 20, radiusY: 10,
-            angle: angle, outer: .identity
-          ),
-          stops: stops
-        )
-      }
-    }
-  }
-
-  private static let shoulderLeftStops = [
-    (0.0, color(0xFFFFFF, alpha: 0.82)),
-    (0.23, color(0xE0E2E9, alpha: 0.47)),
-    (0.6, color(0x9B9FA9, alpha: 0.19)),
-    (1.0, color(0x797D87, alpha: 0)),
-  ]
-  private static let shoulderRightStops = [
-    (0.0, color(0xFFFFFF, alpha: 0.66)),
-    (0.24, color(0xE0E2E9, alpha: 0.39)),
-    (0.65, color(0x9B9FA9, alpha: 0.15)),
-    (1.0, color(0x797D87, alpha: 0)),
-  ]
-
-  private static func widenedRimStops(
-    extra: Double,
-    artworkWidth: Double
-  ) -> [(Double, Color)] {
-    activeRim.map { location, color in
-      let x = location * 224
-      let widened = x > 112 ? x + extra : x
-      return (widened / artworkWidth, color)
-    }
-  }
-
-  private static func widenedPath(_ path: Path, extra: Double) -> Path {
-    func adjust(_ point: CGPoint) -> CGPoint {
-      CGPoint(x: point.x > 112 ? point.x + extra : point.x, y: point.y)
-    }
-    let result = CGMutablePath()
-    path.cgPath.applyWithBlock { pointer in
-      let element = pointer.pointee
-      switch element.type {
-      case .moveToPoint:
-        result.move(to: adjust(element.points[0]))
-      case .addLineToPoint:
-        result.addLine(to: adjust(element.points[0]))
-      case .addQuadCurveToPoint:
-        result.addQuadCurve(
-          to: adjust(element.points[1]),
-          control: adjust(element.points[0])
-        )
-      case .addCurveToPoint:
-        result.addCurve(
-          to: adjust(element.points[2]),
-          control1: adjust(element.points[0]),
-          control2: adjust(element.points[1])
-        )
-      case .closeSubpath:
-        result.closeSubpath()
-      @unknown default:
-        break
-      }
-    }
-    return Path(result)
-  }
-
-  private static func drawActiveLight(
-    in context: GraphicsContext,
-    matrix: CGAffineTransform,
-    visible: Bool
-  ) {
-    let pool = ellipse(112, 24, 73, 20).applying(matrix)
-    fillRadial(
-      in: context,
-      shape: pool,
-      transform: radialMatrix(center: point(112, 20), radiusX: 73, radiusY: 20, angle: 0, outer: matrix),
-      stops: [
-        (0.0, color(0xAAAEBA, alpha: 0.125)),
-        (1.0, color(0xAAAEBA, alpha: 0)),
-      ]
-    )
-    guard visible else { return }
-    let shoulderL = path("M 29 39 C 41 36 43.3 24 51 14 C 57.8 5.2 65 4.4 82 3.8")
-    let shoulderR = path("M 195 39 C 183 36 180.7 24 173 14 C 166.2 5.2 159 4.4 142 3.8")
-    let shoulderPairs = [(shoulderL, shoulderLeft, 53.0, -41.0, 0.82), (shoulderR, shoulderRight, 171.0, 41.0, 0.66)]
-    var shoulderPairPath = shoulderL
-    shoulderPairPath.addPath(shoulderR)
-    drawBlurred(in: context, transform: matrix, radius: 3.2, opacity: 1) { glow in
-      fillLinearStroke(
-        glow,
-        path: shoulderPairPath,
-        width: 4.6,
-        transform: .identity,
-        stops: insideRim,
-        start: point(0, 0),
-        end: point(0, 40)
-      )
-    }
-    drawBlurred(in: context, transform: matrix, radius: 0.7, opacity: 1) { glow in
-      fillLinearStroke(
-        glow,
-        path: shoulderPairPath,
-        width: 1.5,
-        transform: .identity,
-        stops: insideRim,
-        start: point(0, 0),
-        end: point(0, 40)
-      )
-    }
-    let blackEdge = path("M 45 23 C 52 9 63 3.2 79 3.4 L 145 3.4 C 161 3.2 172 9 179 23")
-    drawBlurred(in: context, transform: matrix, radius: 0.7, opacity: 0.7) { edge in
-      edge.fill(stroked(blackEdge, width: 1.4), with: .color(color(0x050506)))
-    }
-    for (line, stops, centerX, angle, _) in shoulderPairs {
-      let centerY = 12.0
-      let ellipseShape = ellipse(centerX + (centerX < 100 ? 2 : -2), 13, 27, 26).applying(matrix)
-      context.drawLayer { glow in
-        glow.opacity = 0.26
-        fillRadial(
-          in: glow,
-          shape: ellipseShape,
-          transform: radialMatrix(center: point(centerX, centerY), radiusX: 20, radiusY: 10, angle: angle, outer: matrix),
-          stops: stops
-        )
-      }
-      drawBlurred(in: context, transform: matrix, radius: 1.6, opacity: 1) { soft in
-        fillRadial(
-          in: soft,
-          shape: stroked(line, width: 8),
-          transform: radialMatrix(center: point(centerX, centerY), radiusX: 20, radiusY: 10, angle: angle, outer: .identity),
-          stops: stops
-        )
-      }
-      drawBlurred(in: context, transform: matrix, radius: 0.7, opacity: 1) { near in
-        fillRadial(
-          in: near,
-          shape: stroked(line, width: 3.6),
-          transform: radialMatrix(center: point(centerX, centerY), radiusX: 20, radiusY: 10, angle: angle, outer: .identity),
-          stops: stops
-        )
-      }
-      let fine = centerX < 100
-        ? path("M 46 22 C 51 13 55.5 8.6 63.5 5.9")
-        : path("M 178 22 C 173 13 168.5 8.6 160.5 5.9")
-      drawBlurred(in: context, transform: matrix, radius: 0.7, opacity: 1) { highlight in
-        fillRadial(
-          in: highlight,
-          shape: stroked(fine, width: centerX < 100 ? 1.2 : 1.15),
-          transform: radialMatrix(center: point(centerX, centerY), radiusX: 20, radiusY: 10, angle: angle, outer: .identity),
-          stops: stops
-        )
-      }
-    }
-  }
-
   private static func drawRim(
     in context: GraphicsContext,
     shell: FleckPillShellGeometry,
@@ -855,39 +466,10 @@ private enum FleckPillPainter {
     expansion: Double,
     colors: FleckRailColors
   ) {
-    let contour = path(shell.contour)
-    for (opacity, stops, width, startX, endX) in [
-      (expansion, activeRim, 0.48, 0.0, 224.0),
-      (1 - expansion, idleRim, 0.43, 83.0, 141.0),
-    ] {
-      context.drawLayer { rim in
-        rim.opacity = opacity
-        drawBlurred(in: rim, transform: matrix, radius: 0.7, opacity: 0.24) { glow in
-          fillLinearStroke(
-            glow,
-            path: contour,
-            width: 1.25,
-            transform: .identity,
-            stops: stops,
-            start: point(startX, 0),
-            end: point(endX, 0)
-          )
-        }
-        fillLinearStroke(
-          rim,
-          path: contour,
-          width: width,
-          transform: matrix,
-          stops: stops,
-          start: point(startX, 0, transform: matrix),
-          end: point(endX, 0, transform: matrix)
-        )
-      }
-    }
     context.stroke(
-      contour.applying(matrix),
-      with: .color(colors.borderColor),
-      lineWidth: expansion > 0.5 ? 0.48 : 0.43
+      path(shell.contour).applying(matrix),
+      with: .color(colors.shellBorderColor),
+      lineWidth: colors.increasedContrast ? 1 : (expansion > 0.5 ? 0.55 : 0.5)
     )
   }
 

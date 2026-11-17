@@ -11,11 +11,13 @@ import Testing
 
 @Test @MainActor
 func FleckPillMaterialRemainsDarkAcrossEveryPoseAndAccessibilityMode() throws {
-  func darkShellCoverage(
+  func darkShellSample(
+    name: String,
     frame: FleckPillArtworkFrame,
     layers: FleckPillCanvasLayers,
-    colors: FleckRailColors
-  ) throws -> Double {
+    colors: FleckRailColors,
+    ceiling: Double
+  ) throws -> (coverage: Double, interior: Int, brightest: Double, darkest: Double) {
     let shell = FleckPillGeometry.shell(expansion: frame.expansion)
     var shellPath = Path()
     for command in shell.fill.commands {
@@ -47,7 +49,7 @@ func FleckPillMaterialRemainsDarkAcrossEveryPoseAndAccessibilityMode() throws {
     let center = shell.shellTransform.applying(to: FleckPillPoint(x: 112, y: 20))
     let centerX = scale * CGFloat(8 + center.x)
     let renderer = ImageRenderer(content: ZStack {
-      Color.white
+      Color.black
       FleckPillCanvas(frame: frame, layers: layers, colors: colors)
     }.frame(width: 180, height: 39))
     renderer.scale = 1
@@ -58,8 +60,15 @@ func FleckPillMaterialRemainsDarkAcrossEveryPoseAndAccessibilityMode() throws {
     #expect(image.width == 180)
     #expect(image.height == 39)
     let bitmap = NSBitmapImageRep(cgImage: image)
+    if let directory = ProcessInfo.processInfo.environment["FLECK_ERROR_V3_CAPTURE_DIRECTORY"] {
+      try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+      let data = try #require(bitmap.representation(using: .png, properties: [:]))
+      try data.write(to: URL(fileURLWithPath: directory).appendingPathComponent("material-\(name).png"))
+    }
     var darkPixels = 0
     var interiorPixels = 0
+    var brightest = 0.0
+    var darkest = 1.0
     for y in 0..<bitmap.pixelsHigh {
       for x in 0..<bitmap.pixelsWide {
         guard abs(CGFloat(x) + 0.5 - centerX) <= 4 else { continue }
@@ -68,15 +77,19 @@ func FleckPillMaterialRemainsDarkAcrossEveryPoseAndAccessibilityMode() throws {
         ) else { continue }
         guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
         interiorPixels += 1
-        if color.redComponent < 0.25 && color.greenComponent < 0.25 && color.blueComponent < 0.25 {
+        let brightestChannel = max(color.redComponent, max(color.greenComponent, color.blueComponent))
+        brightest = max(brightest, brightestChannel)
+        darkest = min(darkest, brightestChannel)
+        if color.redComponent < ceiling && color.greenComponent < ceiling && color.blueComponent < ceiling {
           darkPixels += 1
         }
       }
     }
-    guard interiorPixels > 0 else { return 0 }
-    return Double(darkPixels) / Double(interiorPixels)
+    guard interiorPixels > 0 else { return (0, 0, brightest, darkest) }
+    return (Double(darkPixels) / Double(interiorPixels), interiorPixels, brightest, darkest)
   }
 
+  let ceiling = FleckRailColors.shellBrightnessCeiling + 1.0 / 255
   for family in FleckColorTheme.allCases {
     for (mode, appearance) in [(AppTheme.light, FleckThemeAppearance.light), (.dark, .dark)] {
       for reduceTransparency in [false, true] {
@@ -97,12 +110,18 @@ func FleckPillMaterialRemainsDarkAcrossEveryPoseAndAccessibilityMode() throws {
           )
           for pose in FleckPillPose.allCases {
             let motionFrame = try FleckPillGeometry.pose(named: pose.rawValue)
-            let coverage = try darkShellCoverage(
+            let name = "\(family.rawValue)-\(appearance.rawValue)-rt\(reduceTransparency)-ic\(increasedContrast)-\(pose.rawValue)"
+            let sample = try darkShellSample(
+              name: name,
               frame: motionFrame.artworkFrame,
               layers: layers,
-              colors: colors
+              colors: colors,
+              ceiling: ceiling
             )
-            #expect(coverage >= 0.8)
+            #expect(
+              sample.coverage >= 0.8,
+              "\(name) interior=\(sample.interior) darkest=\(sample.darkest) brightest=\(sample.brightest) ceiling=\(ceiling)"
+            )
           }
         }
       }
@@ -1317,7 +1336,7 @@ func FleckCapsuleErrorAndTerminalThemesRenderWithInjectedAccessibility() async t
               )
               let captureSize: CGSize
               if fixture.expectedErrorKind != nil {
-                captureSize = DictationCapsuleController.errorSurfaceSize
+                captureSize = controller.errorPresentationModel.presentation.map { FleckErrorLayout.forKind($0.kind).canvasSize } ?? FleckErrorLayout.approved.canvasSize
               } else if controller.fleckPillModel.usesFixedHost {
                 captureSize = DictationCapsuleController.livePillHostSize
               } else {
