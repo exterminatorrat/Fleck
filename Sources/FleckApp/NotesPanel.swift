@@ -2624,6 +2624,7 @@
           NativeRichTextEditor(
             text: note.body,
             richTextRTF: note.richTextRTF,
+            noteID: note.id,
             title: note.title,
             titleFontFamily: note.titleFontFamily ?? appState.preferences.fontFamily,
             isPinned: isPinned,
