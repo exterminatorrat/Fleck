@@ -3212,6 +3212,7 @@
     }
 
     override func moveLeft(_ sender: Any?) {
+      defer { snapSelectionToNoteLink() }
       let selection = selectedRange()
       let ns = string as NSString
       guard selection.length == 0,
@@ -3231,6 +3232,31 @@
       setSelectedRange(
         NSRange(location: previousParagraph.location + previousContentLength, length: 0)
       )
+    }
+
+    override func moveRight(_ sender: Any?) {
+      super.moveRight(sender)
+      snapSelectionToNoteLink()
+    }
+
+    override func moveUp(_ sender: Any?) {
+      super.moveUp(sender)
+      snapSelectionToNoteLink()
+    }
+
+    override func moveDown(_ sender: Any?) {
+      super.moveDown(sender)
+      snapSelectionToNoteLink()
+    }
+
+    override func moveWordLeft(_ sender: Any?) {
+      super.moveWordLeft(sender)
+      snapSelectionToNoteLink()
+    }
+
+    override func moveWordRight(_ sender: Any?) {
+      super.moveWordRight(sender)
+      snapSelectionToNoteLink()
     }
 
     override func resetCursorRects() {
@@ -5459,6 +5485,43 @@
       }
     }
 
+    /// A boundary is safe when it falls on an edge of a composed character
+    /// sequence, so no selection or deletion can split an emoji or an accented
+    /// cluster in half.
+    func isSafeEditBoundary(_ location: Int, in text: NSString) -> Bool {
+      guard location >= 0, location <= text.length else { return false }
+      guard location > 0, location < text.length else { return true }
+      return text.rangeOfComposedCharacterSequence(at: location).location == location
+    }
+
+    /// Widens a proposed selection so it never lands inside the stored Markdown
+    /// of a note link. A collapsed link renders as its label alone, so a caret
+    /// placed in the label would sit in the middle of the token and let an edit
+    /// cut a bracket or a destination away.
+    func snappedSelection(for proposed: NSRange, in text: NSString) -> NSRange {
+      guard !hasMarkedText(),
+        proposed.location != NSNotFound,
+        proposed.location >= 0,
+        proposed.location <= text.length,
+        NSMaxRange(proposed) <= text.length,
+        isSafeEditBoundary(proposed.location, in: text),
+        isSafeEditBoundary(NSMaxRange(proposed), in: text)
+      else { return proposed }
+
+      var result = proposed
+      for link in NoteLinkParser.links(in: text as String) where link.range.length > 0 {
+        let intersects = result.length == 0
+          ? result.location > link.range.location && result.location < NSMaxRange(link.range)
+          : NSIntersectionRange(link.range, result).length > 0
+        guard intersects else { continue }
+        let coversLink = link.range.location >= result.location
+          && NSMaxRange(link.range) <= NSMaxRange(result)
+        guard !coversLink else { continue }
+        result = NSUnionRange(result, link.range)
+      }
+      return result
+    }
+
     override func selectionRange(
       forProposedRange proposedCharRange: NSRange,
       granularity: NSSelectionGranularity
@@ -5467,7 +5530,9 @@
         forProposedRange: proposedCharRange,
         granularity: granularity
       )
-      return normalizedBulletCaretRange(proposed)
+      return normalizedBulletCaretRange(
+        snappedSelection(for: proposed, in: string as NSString)
+      )
     }
 
     override func setSelectedRanges(
@@ -5714,12 +5779,12 @@
         for: NSRange(location: characterIndex, length: 0)
       )
       guard let item = checklistItem(in: paragraphRange, string: ns) else {
-        super.mouseDown(with: event)
+        forwardClickSelection(with: event)
         return
       }
 
       guard checklistHitRect(for: item.markerRange)?.contains(point) == true else {
-        super.mouseDown(with: event)
+        forwardClickSelection(with: event)
         return
       }
 
@@ -5728,6 +5793,23 @@
         contentLength: item.contentRange.length,
         currentlyCompleted: item.completed
       )
+    }
+
+    /// A checklist marker keeps priority over selection; every other click keeps
+    /// AppKit's own placement, and a single click is widened off a note link so
+    /// the caret cannot land inside the collapsed token.
+    private func forwardClickSelection(with event: NSEvent) {
+      super.mouseDown(with: event)
+      guard event.clickCount == 1, !event.modifierFlags.contains(.shift) else { return }
+      snapSelectionToNoteLink()
+    }
+
+    private func snapSelectionToNoteLink() {
+      let text = string as NSString
+      let selection = selectedRange()
+      let snapped = snappedSelection(for: selection, in: text)
+      guard snapped != selection else { return }
+      setSelectedRange(snapped)
     }
 
     override func mouseDragged(with event: NSEvent) {
