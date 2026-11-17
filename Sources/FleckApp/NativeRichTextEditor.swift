@@ -2309,6 +2309,7 @@
 
     private var temporaryNoteLinkPresentations: [TemporaryNoteLinkPresentation] = []
     private var noteLinkPresentationLinks: [NoteLink] = []
+    private var noteLinkAccentColorHex: String?
     private var hiddenNoteLinkDestinationRanges: [NSRange] = []
     private var hiddenNoteLinkTokenRanges: [NSRange] = []
     private var temporaryChecklistSlices: [TemporaryAttributeSlice] = []
@@ -2710,8 +2711,23 @@
     ) {
       self.liveNoteIDs = liveNoteIDs
       self.noteLinkTitles = noteLinkTitles
+      noteLinkAccentColorHex = accentColorHex
+      refreshNoteLinkPresentation(ensuringLayout: true)
+    }
+
+    /// Re-collapses the links after an edit. Clearing the presentation to let an
+    /// edit through also expands every destination, so without this the stored
+    /// `fleck://note/` Markdown stays visible until the next model refresh.
+    private func restoreNoteLinkPresentationAfterEdit() {
+      guard noteLinkAccentColorHex != nil else { return }
+      refreshNoteLinkPresentation(ensuringLayout: false)
+    }
+
+    private func refreshNoteLinkPresentation(ensuringLayout: Bool) {
       clearNoteLinkPresentation()
-      guard let layoutManager, let textContainer else { return }
+      guard let layoutManager, let textContainer,
+        let accentColorHex = noteLinkAccentColorHex
+      else { return }
       let textLength = (string as NSString).length
 
       let links = NoteLinkParser.links(in: string)
@@ -2721,7 +2737,9 @@
         needsDisplay = true
         return
       }
-      layoutManager.ensureLayout(for: textContainer)
+      if ensuringLayout {
+        layoutManager.ensureLayout(for: textContainer)
+      }
       let canvasColor = EditorCanvasInk.canvasColor(for: self)
       let rawAccent = NSColor(hex: accentColorHex) ?? .controlAccentColor
       let accent = FleckColorContrast.accessibleForeground(rawAccent, against: canvasColor)
@@ -3046,7 +3064,15 @@
     override func deleteBackward(_ sender: Any?) {
       let selection = selectedRange()
       let ns = string as NSString
-      guard selection.length == 0, selection.location > 0, selection.location <= ns.length else {
+      guard selection.location != NSNotFound,
+        selection.location >= 0,
+        NSMaxRange(selection) <= ns.length
+      else {
+        super.deleteBackward(sender)
+        return
+      }
+      if removeNoteLinkBeforeCaret(selection: selection) { return }
+      guard selection.length == 0, selection.location > 0 else {
         super.deleteBackward(sender)
         return
       }
@@ -3098,9 +3124,16 @@
     override func deleteWordBackward(_ sender: Any?) {
       let selection = selectedRange()
       let ns = string as NSString
+      guard selection.location != NSNotFound,
+        selection.location >= 0,
+        NSMaxRange(selection) <= ns.length
+      else {
+        super.deleteWordBackward(sender)
+        return
+      }
+      if removeNoteLinkBeforeCaret(selection: selection) { return }
       guard selection.length == 0,
         selection.location > 0,
-        selection.location <= ns.length,
         let item = bulletListItem(at: selection.location, string: ns),
         selection.location == item.contentRange.location
       else {
@@ -3111,6 +3144,39 @@
         in: ns.paragraphRange(for: NSRange(location: selection.location, length: 0)),
         contentStart: item.contentRange.location
       )
+    }
+
+    /// Backspace removes a rendered note link as one unit. The stored token is
+    /// `[label](fleck://note/<uuid>)`, so deleting one character of it either
+    /// breaks the link or reveals the destination the label stands in for; the
+    /// link's range is the unit the reader sees and therefore the unit deleted.
+    /// A selection deletes everything it covers: the rest of the selection plus
+    /// every link it touches, because a link left half-deleted stops parsing and
+    /// shows its destination.
+    private func removeNoteLinkBeforeCaret(selection: NSRange) -> Bool {
+      let deletion: NSRange
+      if selection.length == 0 {
+        guard selection.location > 0,
+          let link = NoteLinkParser.link(atUTF16Location: selection.location - 1, in: string)
+        else { return false }
+        deletion = link.range
+      } else {
+        let touched = NoteLinkParser.links(in: string).filter {
+          NSIntersectionRange($0.range, selection).length > 0
+        }
+        guard let first = touched.first else { return false }
+        deletion = touched.dropFirst().reduce(first.range) { NSUnionRange($0, $1.range) }
+      }
+      let range = NSUnionRange(deletion, selection)
+      performUndoGroup {
+        registerSelectionUndo(selection)
+        _ = replaceText(
+          in: range,
+          with: "",
+          selecting: NSRange(location: range.location, length: 0)
+        )
+      }
+      return true
     }
 
     override func smartDeleteRange(forProposedRange proposedCharRange: NSRange) -> NSRange {
@@ -5350,6 +5416,7 @@
 
     override func didChangeText() {
       textChangeGeneration += 1
+      restoreNoteLinkPresentationAfterEdit()
       super.didChangeText()
       needsDisplay = true
       window?.invalidateCursorRects(for: self)
