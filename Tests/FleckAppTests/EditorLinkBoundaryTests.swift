@@ -30,20 +30,31 @@ private func linkBoundaryEditor(_ text: String) -> (ListAwareTextView, NSWindow)
 
 @MainActor
 private func linkLabelPoint(_ view: ListAwareTextView, at characterIndex: Int) -> NSPoint? {
-  guard let layoutManager = view.layoutManager, let container = view.textContainer else {
-    return nil
-  }
-  layoutManager.ensureLayout(for: container)
-  let glyphIndex = layoutManager.glyphIndexForCharacter(at: characterIndex)
-  let rect = layoutManager.boundingRect(
-    forGlyphRange: NSRange(location: glyphIndex, length: 1),
-    in: container
+  guard let window = view.window else { return nil }
+  let caret = view.firstRect(
+    forCharacterRange: NSRange(location: characterIndex, length: 1),
+    actualRange: nil
   )
-  guard rect.width > 0 else { return nil }
-  return NSPoint(
-    x: rect.midX + view.textContainerOrigin.x,
-    y: rect.midY + view.textContainerOrigin.y
+  guard caret.width > 0 || caret.height > 0 else { return nil }
+  let point = window.convertPoint(
+    fromScreen: NSPoint(x: caret.midX, y: caret.midY)
   )
+  return view.convert(point, from: nil)
+}
+
+/// A previous test can leave a synthesized mouse event in the queue. The click
+/// tracking AppKit runs inside `mouseDown` consumes whatever it finds first, so
+/// a stale event would turn the click into a drag to a foreign location.
+@MainActor
+private func drainPendingMouseEvents() {
+  while
+    NSApplication.shared.nextEvent(
+      matching: [.leftMouseDown, .leftMouseUp, .leftMouseDragged, .mouseMoved],
+      until: .distantPast,
+      inMode: .default,
+      dequeue: true
+    ) != nil
+  {}
 }
 
 @MainActor
@@ -54,6 +65,8 @@ private func clickEditor(
   clickCount: Int = 1,
   modifiers: NSEvent.ModifierFlags = []
 ) throws {
+  drainPendingMouseEvents()
+  defer { drainPendingMouseEvents() }
   let windowPoint = view.convert(point, to: nil)
   let down = try #require(
     NSEvent.mouseEvent(
