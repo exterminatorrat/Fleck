@@ -73,6 +73,7 @@
 
     weak var textView: NSTextView? {
       didSet {
+        applyBodyFontDefaults()
         if textView !== oldValue {
           editorSessionGeneration &+= 1
           hideFindInterface(in: oldValue)
@@ -96,8 +97,21 @@
     private var focusedDictationStorageID: ObjectIdentifier?
     private var focusedDictationEditObserver: NSObjectProtocol?
     private var isApplyingFocusedDictationEdit = false
-    var bodyFontFamily = ".AppleSystemUIFont"
-    var bodyFontSize: CGFloat = 17
+    var bodyFontFamily = ".AppleSystemUIFont" {
+      didSet { applyBodyFontDefaults() }
+    }
+    var bodyFontSize: CGFloat = 17 {
+      didSet { applyBodyFontDefaults() }
+    }
+
+    /// Keeps the view's indentation grid on the same body font the commands style
+    /// paragraphs with, so list tab stops and block indentation cannot step by
+    /// different amounts.
+    private func applyBodyFontDefaults() {
+      guard let listView = textView as? ListAwareTextView else { return }
+      listView.configuredBodyFontFamily = bodyFontFamily
+      listView.configuredBodyFontSize = bodyFontSize
+    }
     var copiedFormatting: [NSAttributedString.Key: Any]?
     @Published var areBodyCommandsBlocked = false {
       didSet {
@@ -1832,6 +1846,10 @@
       }
       if loadedRichText {
         applyTypingFont(to: textView)
+        (textView as? ListAwareTextView)?.migrateLegacyTypography(
+          family: fontFamily,
+          size: fontSize
+        )
       } else {
         applyDefaultFont(to: textView)
       }
@@ -1999,6 +2017,10 @@
     }
 
     private func applyTypingFont(to textView: NSTextView) {
+      if let listView = textView as? ListAwareTextView {
+        listView.configuredBodyFontFamily = fontFamily
+        listView.configuredBodyFontSize = fontSize
+      }
       var attributes = textView.typingAttributes
       attributes.merge(
         EditorTypography.defaultAttributes(
@@ -2158,6 +2180,30 @@
 
   final class ListAwareTextView: NSTextView, @MainActor NSLayoutManagerDelegate {
     private lazy var imageEditing = InlineImageEditingController(textView: self)
+
+    var configuredBodyFontFamily = EditorTypography.systemFamily
+    var configuredBodyFontSize: CGFloat = 17
+
+    var configuredBodyFont: NSFont {
+      EditorTypography.bodyFont(family: configuredBodyFontFamily, size: configuredBodyFontSize)
+    }
+
+    /// Restyles paragraphs that still carry an untouched earlier preset signature
+    /// onto the current grid. Mutates text storage only; list paragraphs are left
+    /// to the list engine so their indentation never moves.
+    @discardableResult
+    func migrateLegacyTypography(family: String, size: CGFloat) -> Int {
+      guard let storage = textStorage else { return 0 }
+      let text = string as NSString
+      return EditorTypographyMigration.migrate(
+        storage,
+        family: family,
+        size: size,
+        isListParagraph: { paragraphRange in
+          self.parsedListItem(in: paragraphRange, string: text) != nil
+        }
+      )
+    }
 
     @MainActor
     private final class ChecklistIndentTextContainer: NSTextContainer {
@@ -3317,12 +3363,9 @@
       {
         guard let storage = textStorage else { return }
         let paragraphRange = item.paragraphRange
-        let fontLocation = min(selection.location, storage.length - 1)
-        let font = (typingAttributes[.font] as? NSFont)
-          ?? (storage.attribute(.font, at: fontLocation, effectiveRange: nil) as? NSFont)
-          ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
         let baselineParagraphStyle = EditorTypography.defaultParagraphStyle(
-          fontSize: font.pointSize
+          family: configuredBodyFontFamily,
+          fontSize: configuredBodyFontSize
         )
         let existingParagraphStyle =
           storage.attribute(.paragraphStyle, at: paragraphRange.location, effectiveRange: nil)
@@ -3330,20 +3373,16 @@
         let paragraphStyle =
           (existingParagraphStyle ?? baselineParagraphStyle).mutableCopy()
           as! NSMutableParagraphStyle
+        let defaultInterval = baselineParagraphStyle.defaultTabInterval
         let matchesDefaultTabLayout =
-          paragraphStyle.defaultTabInterval == baselineParagraphStyle.defaultTabInterval
-          && paragraphStyle.tabStops.count == baselineParagraphStyle.tabStops.count
-          && zip(paragraphStyle.tabStops, baselineParagraphStyle.tabStops).allSatisfy { tabs in
-            tabs.0.isEqual(tabs.1)
-          }
+          EditorTypography.hasOnlyDefaultTabStops(paragraphStyle)
+          && (paragraphStyle.defaultTabInterval == 0
+            || abs(paragraphStyle.defaultTabInterval - defaultInterval) < 0.05)
         if matchesDefaultTabLayout,
           !ns.substring(with: paragraphRange).contains("\t")
         {
           paragraphStyle.tabStops = []
-          paragraphStyle.defaultTabInterval =
-            item.parsed.depth == 0
-            ? 36
-            : 3 * (" " as NSString).size(withAttributes: [.font: font]).width
+          paragraphStyle.defaultTabInterval = defaultInterval
         }
 
         let attributedParagraph = NSMutableAttributedString(
@@ -5111,9 +5150,13 @@
             at: 0,
             effectiveRange: nil
           ) as? NSParagraphStyle) ?? .default).mutableCopy() as! NSMutableParagraphStyle
-          let delta: CGFloat = removing ? -24 : 24
-          style.headIndent = min(max(style.headIndent + delta, 0), 240)
-          style.firstLineHeadIndent = min(max(style.firstLineHeadIndent + delta, 0), 240)
+          let indentUnit = EditorTypography.indentWidth(font: configuredBodyFont)
+          let delta: CGFloat = removing ? -indentUnit : indentUnit
+          style.headIndent = min(max(style.headIndent + delta, 0), EditorTypography.maxIndentPoints)
+          style.firstLineHeadIndent = min(
+            max(style.firstLineHeadIndent + delta, 0),
+            EditorTypography.maxIndentPoints
+          )
           segment.addAttribute(
             .paragraphStyle,
             value: style,

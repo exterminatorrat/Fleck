@@ -105,17 +105,18 @@ struct DictationFilingPlanTests {
       attributes: defaults.attributes
     )
     let styledRange = NSRange(location: 0, length: "Styled\n".utf16.count)
+    let headingMetrics = EditorTypography.headingMetrics(forStyleIndex: 0)
     attributed.addAttribute(
       .font,
       value: NSFontManager.shared.convert(
-        NSFont.systemFont(ofSize: defaults.fontSize * 1.75),
+        NSFont.systemFont(ofSize: defaults.fontSize * headingMetrics.scale),
         toHaveTrait: .boldFontMask
       ),
       range: styledRange
     )
     let paragraph = NSMutableParagraphStyle()
-    paragraph.paragraphSpacingBefore = 12
-    paragraph.paragraphSpacing = 8
+    paragraph.paragraphSpacingBefore = headingMetrics.spacingBefore
+    paragraph.paragraphSpacing = headingMetrics.spacingAfter
     attributed.addAttribute(.paragraphStyle, value: paragraph, range: styledRange)
     let rtf = try NoteRichTextCodec.encode(attributed)
     let styledHeadings = DictationSectionInsertion.headings(

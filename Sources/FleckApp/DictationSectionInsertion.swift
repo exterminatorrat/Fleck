@@ -362,11 +362,14 @@ enum DictationSectionInsertion {
       {
         let traits = NSFontManager.shared.traits(of: font)
         let titleRange = NSRange(location: paragraphStart, length: contentsEnd - paragraphStart)
-        let styles: [(level: Int, scale: CGFloat, before: CGFloat, after: CGFloat)] = [
-          (1, 1.75, 12, 8),
-          (2, 1.5, 10, 6),
-          (3, 1.25, 8, 4),
-        ]
+        let styles = EditorTypography.headingMetrics.enumerated().map { index, metrics in
+          (
+            level: index + 1,
+            scale: metrics.scale,
+            before: metrics.spacingBefore,
+            after: metrics.spacingAfter
+          )
+        }
         if let style = styles.first(where: { style in
           abs(font.pointSize - defaults.font.pointSize * style.scale) < 0.01
             && traits.contains(.boldFontMask)

@@ -12,13 +12,17 @@ private func tabCaretEditor(_ text: String) -> (ListAwareTextView, NSWindow) {
   view.allowsUndo = true
   view.textStorage?.setAttributedString(NSAttributedString(string: text, attributes: [
     .font: NSFont.systemFont(ofSize: 17),
-    .paragraphStyle: EditorTypography.defaultParagraphStyle(fontSize: 17),
+    .paragraphStyle: EditorTypography.systemDefaultParagraphStyle(fontSize: 17),
   ]))
   window.makeFirstResponder(view)
   return (view, window)
 }
 
-private func threeSpaceTabInterval(for font: NSFont) -> CGFloat {
+private func sourceIndentTabInterval(for font: NSFont) -> CGFloat {
+  4 * (" " as NSString).size(withAttributes: [.font: font]).width
+}
+
+private func persistedThreeSpaceTabInterval(for font: NSFont) -> CGFloat {
   3 * (" " as NSString).size(withAttributes: [.font: font]).width
 }
 
@@ -126,9 +130,9 @@ private func threeSpaceTabInterval(for font: NSFont) -> CGFloat {
   #expect(view.selectedRange() == NSRange(location: 4, length: 0))
 }
 
-@Test @MainActor func bulletTabUsesDepthSpecificDefaultAndPreservesCustomPolicy() throws {
+@Test @MainActor func bulletTabUsesTheSourceIndentGridAndPreservesCustomPolicy() throws {
   let font = NSFont.systemFont(ofSize: 17)
-  let defaultParagraph = EditorTypography.defaultParagraphStyle(fontSize: font.pointSize)
+  let defaultParagraph = EditorTypography.systemDefaultParagraphStyle(fontSize: font.pointSize)
   let (topLevel, topWindow) = tabCaretEditor("• item")
   defer { topWindow.contentView = nil }
   topLevel.textStorage?.addAttribute(
@@ -141,7 +145,7 @@ private func threeSpaceTabInterval(for font: NSFont) -> CGFloat {
   let topStyle = try #require(
     topLevel.textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
   )
-  #expect(topStyle.defaultTabInterval == 36)
+  #expect(abs(topStyle.defaultTabInterval - sourceIndentTabInterval(for: font)) < 0.01)
   #expect(topStyle.tabStops.isEmpty)
   #expect(topStyle.firstLineHeadIndent == defaultParagraph.firstLineHeadIndent)
   #expect(topStyle.headIndent == defaultParagraph.headIndent)
@@ -159,11 +163,11 @@ private func threeSpaceTabInterval(for font: NSFont) -> CGFloat {
   let nestedStyle = try #require(
     nested.textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
   )
-  #expect(abs(nestedStyle.defaultTabInterval - threeSpaceTabInterval(for: font)) < 0.01)
+  #expect(abs(nestedStyle.defaultTabInterval - sourceIndentTabInterval(for: font)) < 0.01)
   #expect(nestedStyle.tabStops.isEmpty)
 
   let persistedThreeSpaces = NSMutableParagraphStyle()
-  persistedThreeSpaces.defaultTabInterval = threeSpaceTabInterval(for: font)
+  persistedThreeSpaces.defaultTabInterval = persistedThreeSpaceTabInterval(for: font)
   let (persisted, persistedWindow) = tabCaretEditor("• item")
   defer { persistedWindow.contentView = nil }
   persisted.textStorage?.addAttribute(
@@ -176,7 +180,7 @@ private func threeSpaceTabInterval(for font: NSFont) -> CGFloat {
   let persistedStyle = try #require(
     persisted.textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
   )
-  #expect(abs(persistedStyle.defaultTabInterval - threeSpaceTabInterval(for: font)) < 0.01)
+  #expect(abs(persistedStyle.defaultTabInterval - persistedThreeSpaceTabInterval(for: font)) < 0.01)
   #expect(persistedStyle.isEqual(persistedThreeSpaces))
 
   let custom = NSMutableParagraphStyle()
@@ -288,4 +292,25 @@ private func threeSpaceTabInterval(for font: NSFont) -> CGFloat {
   readOnly.insertTab(nil)
   #expect(readOnly.string == "• item")
   #expect(readOnly.selectedRange() == NSRange(location: 2, length: 0))
+}
+
+@Test @MainActor func legacyBulletParagraphWithoutAGridAdoptsTheSourceIndentGrid() throws {
+  let font = NSFont.systemFont(ofSize: 17)
+  let legacy = NSMutableParagraphStyle()
+  legacy.defaultTabInterval = 0
+  let (view, window) = tabCaretEditor("• item")
+  defer { window.contentView = nil }
+  view.textStorage?.addAttribute(
+    .paragraphStyle,
+    value: legacy,
+    range: NSRange(location: 0, length: view.string.utf16.count)
+  )
+  view.setSelectedRange(NSRange(location: 2, length: 0))
+  view.insertTab(nil)
+  #expect(view.string == "• \titem")
+  let style = try #require(
+    view.textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+  )
+  #expect(abs(style.defaultTabInterval - sourceIndentTabInterval(for: font)) < 0.05)
+  #expect(style.tabStops.isEmpty)
 }

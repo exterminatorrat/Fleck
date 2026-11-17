@@ -12,7 +12,7 @@ private func inputRegressionEditor(_ text: String) -> (ListAwareTextView, NSWind
   view.allowsUndo = true
   view.textStorage?.setAttributedString(NSAttributedString(string: text, attributes: [
     .font: NSFont.systemFont(ofSize: 17),
-    .paragraphStyle: EditorTypography.defaultParagraphStyle(fontSize: 17),
+    .paragraphStyle: EditorTypography.systemDefaultParagraphStyle(fontSize: 17),
   ]))
   window.makeFirstResponder(view)
   return (view, window)
