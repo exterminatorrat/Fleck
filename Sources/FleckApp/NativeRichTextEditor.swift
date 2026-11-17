@@ -1778,6 +1778,20 @@
       else {
         return false
       }
+      if let editor = textView as? ListAwareTextView,
+        let edit = contiguousProgrammaticEdit(for: editor),
+        editor.applyProgrammaticEdit(
+          range: edit.range,
+          replacement: edit.replacement,
+          actionName: "Agent Edit"
+        )
+      {
+        coordinator.text = text
+        coordinator.richTextRTF = richTextRTF
+        coordinator.lastModelText = text
+        coordinator.lastModelRichTextRTF = richTextRTF
+        return true
+      }
       (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       (textView as? ListAwareTextView)?.cancelPasteOptions()
       let current = NSAttributedString(attributedString: textView.textStorage ?? NSTextStorage())
@@ -1808,6 +1822,76 @@
       coordinator.lastModelText = text
       coordinator.lastModelRichTextRTF = richTextRTF
       return true
+    }
+
+    /// Resolves the content `loadContent(into:)` would install for the current
+    /// model values, without touching a text view.
+    private func resolvedContent() -> NSAttributedString {
+      let source: NSAttributedString
+      if let richTextRTF,
+        let attributed = try? NoteRichTextCodec.decode(richTextRTF),
+        let canonical = canonicalAttributedText(attributed)
+      {
+        source = canonical
+      } else {
+        let plain = NSMutableAttributedString(string: text)
+        if plain.length > 0 {
+          plain.addAttributes(
+            EditorTypography.defaultAttributes(family: fontFamily, size: fontSize),
+            range: NSRange(location: 0, length: plain.length)
+          )
+        }
+        source = plain
+      }
+      return inlineImageStore?.projectedContent(from: source) ?? source
+    }
+
+    /// A model change that is one contiguous edit over a note that is otherwise
+    /// unchanged is applied in place, so it becomes a single undo step instead of
+    /// a reload. Whole-note rewrites and image-bearing content keep the reload.
+    private func contiguousProgrammaticEdit(
+      for editor: ListAwareTextView
+    ) -> (range: NSRange, replacement: NSAttributedString)? {
+      guard let storage = editor.textStorage else { return nil }
+      let target = resolvedContent()
+      guard !target.containsAttachments, !storage.containsAttachments else { return nil }
+      let current = storage.string as NSString
+      let updated = target.string as NSString
+      let sharedLimit = min(current.length, updated.length)
+      var prefix = 0
+      while prefix < sharedLimit,
+        current.character(at: prefix) == updated.character(at: prefix)
+      {
+        prefix += 1
+      }
+      var suffix = 0
+      while suffix < sharedLimit - prefix,
+        current.character(at: current.length - 1 - suffix)
+          == updated.character(at: updated.length - 1 - suffix)
+      {
+        suffix += 1
+      }
+      while prefix > 0,
+        !editor.isSafeEditBoundary(prefix, in: current)
+          || !editor.isSafeEditBoundary(prefix, in: updated)
+      {
+        prefix -= 1
+      }
+      while suffix > 0,
+        !editor.isSafeEditBoundary(current.length - suffix, in: current)
+          || !editor.isSafeEditBoundary(updated.length - suffix, in: updated)
+      {
+        suffix -= 1
+      }
+      guard prefix + suffix > 0,
+        (prefix + suffix) * 2 >= max(current.length, updated.length)
+      else { return nil }
+      let range = NSRange(location: prefix, length: current.length - prefix - suffix)
+      let replacement = target.attributedSubstring(
+        from: NSRange(location: prefix, length: updated.length - prefix - suffix)
+      )
+      guard range.length > 0 || replacement.length > 0 else { return nil }
+      return (range, replacement)
     }
 
     private func loadContent(into textView: NSTextView) {
@@ -6454,6 +6538,43 @@
         let format = paragraphStyle.textLists.last?.markerFormat
       else { return nil }
       return EditorNumberStyle(markerFormat: format)
+    }
+
+    /// Applies one programmatic edit — a dictation commit or an agent rewrite —
+    /// as a single undo step named after its author, over the exact range it
+    /// replaces. A caller that cannot express a change as one edit must keep
+    /// using the wholesale reload instead of routing a whole-note rewrite here.
+    @discardableResult
+    func applyProgrammaticEdit(
+      range: NSRange,
+      replacement: NSAttributedString,
+      actionName: String
+    ) -> Bool {
+      guard isEditable, !hasMarkedText(), let storage = textStorage,
+        range.location != NSNotFound,
+        range.location >= 0,
+        NSMaxRange(range) <= storage.length
+      else { return false }
+      let selection = selectionAfterEdit(range: range, replacementLength: replacement.length)
+      breakUndoCoalescing()
+      defer { breakUndoCoalescing() }
+      var applied = false
+      performUndoGroup {
+        registerSelectionUndo(selectedRange())
+        applied = replaceAttributedText(in: range, with: replacement, selecting: selection)
+        if applied { undoManager?.setActionName(actionName) }
+      }
+      return applied
+    }
+
+    private func selectionAfterEdit(range: NSRange, replacementLength: Int) -> NSRange {
+      let selection = selectedRange()
+      let delta = replacementLength - range.length
+      if NSMaxRange(selection) <= range.location { return selection }
+      if selection.location >= NSMaxRange(range) {
+        return NSRange(location: selection.location + delta, length: selection.length)
+      }
+      return NSRange(location: range.location + replacementLength, length: 0)
     }
 
     private func registerSelectionUndo(_ selection: NSRange) {
