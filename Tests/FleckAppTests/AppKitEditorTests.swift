@@ -5714,7 +5714,10 @@ private func withHostedTitleEditors(
     )
     await settleHostedView(host)
     let focusedFolderRowFrame = folderControl.convert(folderControl.bounds, to: host)
-    #expect(focusedFolderRowFrame == folderRowFrame)
+    // Focus left the Unfiled row, so its disclosure slot collapses and the rows
+    // beside it close that 28pt gap; the row keeps its own size and only shifts.
+    #expect(focusedFolderRowFrame.size == folderRowFrame.size)
+    #expect(folderRowFrame.minX - focusedFolderRowFrame.minX == 28)
     let after = try hostedThemeCapture(in: host)
     let changedNeutralPixels = hostedNeutralFocusOutlineChangedPixelCount(
       before: before,

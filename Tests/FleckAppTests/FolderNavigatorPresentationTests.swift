@@ -591,8 +591,10 @@ struct FolderNavigatorPresentationTests {
     defer { diagnostics.finish() }
 
     #expect(fixture.isVisible(label: "Reveal earlier folders"))
-    try fixture.click(fixture.element(label: "Collapse Unfiled"))
-    await fixture.settle()
+    try fixture.performAccessibilityPress(label: "Collapse Unfiled")
+    #expect(fixture.window.makeFirstResponder(fixture.host))
+    try await fixture.settleAnimation()
+    #expect(fixture.state.preferences.isUnfiledCompact)
     #expect(!fixture.isVisible(label: "Reveal earlier folders"))
 
     let first = try #require(fixture.state.workspace.folders.first)
