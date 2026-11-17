@@ -963,6 +963,9 @@
     static let hairlineOpacity = 0.155
     static let hairlineContrastBand = 1.15...1.6
     private static let textContrastMinimum = 5.2
+    /// Rail text also clears a fixed floor against black, so a darker shell
+    /// cannot dim the label below the luminance it reads at on the lightest one.
+    private static let textContrastFloorAgainstBlack = 6.5
     private static let signalContrastMinimum = 3.6
 
     let accentHex: String
@@ -1020,12 +1023,12 @@
       primaryText = Self.contrastSafe(
         FleckRailRGB(hex: palette[.capsuleText])!,
         against: shell,
-        minimum: Self.textContrastMinimum
+        minimum: Self.textMinimum(against: shell)
       )
       secondaryText = Self.contrastSafe(
         FleckRailRGB(hex: palette[.caption])!,
         against: shell,
-        minimum: Self.textContrastMinimum
+        minimum: Self.textMinimum(against: shell)
       )
       success = Self.contrastSafe(
         FleckRailRGB(hex: palette[.success])!,
@@ -1092,6 +1095,11 @@
         }
       }
       return color.mixed(with: white, amount: high)
+    }
+
+    private static func textMinimum(against shell: FleckRailRGB) -> Double {
+      let floor = textContrastFloorAgainstBlack * 0.05
+      return max(textContrastMinimum, floor / (shell.luminance + 0.05))
     }
 
     private static func nearBlack(_ tint: FleckRailRGB) -> FleckRailRGB {
