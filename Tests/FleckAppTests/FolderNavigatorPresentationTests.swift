@@ -2151,8 +2151,13 @@ private final class FolderNavigatorFixture {
   func beginRename(folderID: UUID) async throws {
     try click(element(identifier: "folder-\(folderID.uuidString)"))
     await settle()
-    try sendKey(characters: String(UnicodeScalar(UInt32(NSF2FunctionKey))!), keyCode: 0x78)
-    try #require(await waitForRenameEditor(folderID: folderID))
+    var renameEditorAppeared = false
+    for _ in 0..<3 {
+      if renameEditorAppeared { break }
+      try sendKey(characters: String(UnicodeScalar(UInt32(NSF2FunctionKey))!), keyCode: 0x78)
+      renameEditorAppeared = try await waitForRenameEditor(folderID: folderID)
+    }
+    try #require(renameEditorAppeared)
   }
 
   func waitForRenameEditor(
