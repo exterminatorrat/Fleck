@@ -2,6 +2,7 @@
   import AppKit
   import CoreGraphics
   import CoreImage
+  import CoreText
   import FleckCore
   import SwiftUI
 
@@ -1999,6 +2000,10 @@
     }
 
     private func applyTypingFont(to textView: NSTextView) {
+      if let listView = textView as? ListAwareTextView {
+        listView.configuredBodyFontFamily = fontFamily
+        listView.configuredBodyFontSize = CGFloat(fontSize)
+      }
       var attributes = textView.typingAttributes
       attributes.merge(
         EditorTypography.defaultAttributes(
@@ -2008,6 +2013,9 @@
         uniquingKeysWith: { _, new in new }
       )
       textView.typingAttributes = attributes
+      guard let listView = textView as? ListAwareTextView, listView.textStorage?.length ?? 0 > 0
+      else { return }
+      listView.normalizeListMarkerFonts()
     }
 
     private func applyDefaultFont(to textView: NSTextView) {
@@ -2022,6 +2030,7 @@
         ),
         range: NSRange(location: 0, length: storage.length)
       )
+      (textView as? ListAwareTextView)?.normalizeListMarkerFonts()
     }
 
     @MainActor
@@ -2262,6 +2271,13 @@
     )
 
     var automaticLists = true
+    var configuredBodyFontFamily = ".AppleSystemUIFont"
+    var configuredBodyFontSize: CGFloat = 17
+
+    var configuredBodyFont: NSFont {
+      EditorTypography.bodyFont(family: configuredBodyFontFamily, size: configuredBodyFontSize)
+    }
+
     var liveNoteIDs: Set<UUID> = []
     var onRequestNoteLink: ((NSRange) -> Void)?
     var onOpenNoteLink: ((UUID) -> Void)?
@@ -2336,6 +2352,7 @@
     private var pasteOptionsButton: NSButton?
     private var isApplyingPasteOption = false
     private var textChangeGeneration = 0
+    private var pendingEditRange: NSRange?
     private var pasteOptionsBoundsObserver: NSObjectProtocol?
     private var pasteOptionsFocusObservers: [NSObjectProtocol] = []
     private var pasteOptionsClickMonitor: Any?
@@ -2622,8 +2639,15 @@
           in: layoutManager,
           textLength: (string as NSString).length
         )
+        restoreTemporaryAttributeSlices(
+          temporaryScaledMarkerSlices,
+          in: layoutManager,
+          textLength: (string as NSString).length
+        )
       }
       temporaryChecklistSlices = []
+      temporaryScaledMarkerSlices = []
+      scaledListMarkers = []
       checklistPresentationNeedsRefresh = true
     }
 
@@ -2682,6 +2706,7 @@
           applyChecklistRecession(in: range, storage: storage, layoutManager: layoutManager)
         }
       }
+      refreshScaledListMarkers(storage: storage, layoutManager: layoutManager)
     }
 
     func clearNoteLinkPresentation() {
@@ -3040,6 +3065,7 @@
           )
         }
       }
+      drawScaledListMarkers(in: dirtyRect)
       imageEditing.draw()
     }
 
@@ -5345,14 +5371,46 @@
       }
       clearNoteLinkPresentation()
       if !isApplyingPasteOption { cancelPasteOptions() }
+      pendingEditRange = NSRange(
+        location: affectedCharRange.location == NSNotFound ? 0 : affectedCharRange.location,
+        length: (replacementString as NSString?)?.length ?? 0
+      )
       return true
     }
 
     override func didChangeText() {
       textChangeGeneration += 1
+      let edited = pendingEditRange
+      pendingEditRange = nil
+      normalizeListMarkerFonts(in: editedParagraphRange(for: edited))
       super.didChangeText()
       needsDisplay = true
       window?.invalidateCursorRects(for: self)
+    }
+
+    /// The paragraphs a typed edit can change the markers of: the one the caret
+    /// lands in and the one before it, because a newline splits one paragraph
+    /// into two and the marker can end up on either side of the split.
+    private func editedParagraphRange(for edited: NSRange?) -> NSRange {
+      let ns = string as NSString
+      guard ns.length > 0 else { return NSRange(location: 0, length: 0) }
+      if let edited, edited.length > 0 {
+        let start = min(max(0, edited.location), ns.length)
+        let end = min(NSMaxRange(edited), ns.length)
+        if start < end {
+          let span = NSRange(location: start, length: end - start)
+          let inserted = ns.substring(with: span)
+          if inserted.contains("\n") { return ns.paragraphRange(for: span) }
+        }
+      }
+      let caret = min(max(0, selectedRange().location), ns.length)
+      let probe = caret == ns.length && caret > 0 ? caret - 1 : caret
+      let paragraph = ns.paragraphRange(for: NSRange(location: probe, length: 0))
+      guard paragraph.location > 0 else { return paragraph }
+      let previous = ns.paragraphRange(
+        for: NSRange(location: paragraph.location - 1, length: 0)
+      )
+      return NSUnionRange(previous, paragraph)
     }
 
     override func setSelectedRange(_ range: NSRange) {
@@ -6057,6 +6115,228 @@
         parsed: item.parsed
       )
     }
+
+    /// Gives every text list marker the font its own line's text wears.
+    ///
+    /// A marker that carried a bigger font would re-measure its line: the paragraph
+    /// pins one line height, so a taller descender lifts the line's baseline inside
+    /// it and the text jumps the moment the marker's font changes. The scaled marker
+    /// an ideographic line needs is therefore drawn by the view — see
+    /// `scaledListMarkers` — while storage keeps the line's own font, so a stray
+    /// marker font from an older note, a paste, or an undo is repaired without
+    /// moving anything.
+    @discardableResult
+    func normalizeListMarkerFonts(in range: NSRange? = nil) -> Int {
+      guard !hasMarkedText(), let storage = textStorage, storage.length > 0 else { return 0 }
+      let ns = string as NSString
+      let start = min(max(0, range?.location ?? 0), ns.length)
+      let end = min(max(start, range.map(NSMaxRange) ?? ns.length), ns.length)
+      var changes = 0
+      var location = start
+      storage.beginEditing()
+      while location < end {
+        let paragraphRange = ns.paragraphRange(for: NSRange(location: location, length: 0))
+        if let item = parsedListItem(in: paragraphRange, string: ns),
+          item.markerRange.length > 0,
+          isTextListMarker(item.parsed.style)
+        {
+          let contentIndex = min(item.contentRange.location, ns.length - 1)
+          let contentFont =
+            (storage.attribute(.font, at: contentIndex, effectiveRange: nil) as? NSFont)
+            ?? configuredBodyFont
+          let current =
+            storage.attribute(.font, at: item.markerRange.location, effectiveRange: nil)
+            as? NSFont
+          let matches =
+            current.map {
+              $0.fontName == contentFont.fontName
+                && abs($0.pointSize - contentFont.pointSize) < 0.01
+            } ?? false
+          if !matches {
+            storage.addAttribute(.font, value: contentFont, range: item.markerRange)
+            changes += 1
+          }
+        }
+        let nextLocation = NSMaxRange(paragraphRange)
+        guard nextLocation > location else { break }
+        location = nextLocation
+      }
+      storage.endEditing()
+      return changes
+    }
+
+    /// A marker the text system cannot draw at the size its line needs. An ideograph
+    /// fills its em square far more completely than a capital, so a bullet at the body
+    /// size reads as a smaller dot beside CJK text. Storage keeps the line's own font —
+    /// a bigger one would change the line's metrics inside its fixed line height — and
+    /// the view draws the marker at the scaled size in this font instead.
+    private struct ScaledListMarker {
+      let range: NSRange
+      let font: NSFont
+      /// The ink resolved from storage before the native glyph was hidden. Reading
+      /// it at draw time would read back the clear temporary colour that hides that
+      /// glyph, and the marker would be painted invisible.
+      let ink: NSColor
+      let isEmpty: Bool
+    }
+
+    /// Test hook: the markers this view draws itself instead of the text system.
+    var drawnListMarkerPresentations: [(range: NSRange, font: NSFont)] {
+      scaledListMarkers.map { ($0.range, $0.font) }
+    }
+
+    private var scaledListMarkers: [ScaledListMarker] = []
+    private var temporaryScaledMarkerSlices: [TemporaryAttributeSlice] = []
+    private var drawnMarkerFontCache: [DrawnMarkerFontKey: NSFont] = [:]
+
+    private struct DrawnMarkerFontKey: Hashable {
+      let family: String
+      let pointSize: CGFloat
+    }
+
+    /// The font a text marker is drawn in: the note's body family at its line's own
+    /// point size, resolved once per family and size.
+    ///
+    /// It is deliberately not the font storage holds for the marker, and not a size
+    /// derived from the line's content: a line typed beside ideographs gets the same
+    /// marker as a line of capitals, and the bullet keeps the weight the note's own
+    /// body font gives it rather than whatever dot the face the text system
+    /// substituted for that content happens to carry — PingFang SC's dot is lighter
+    /// than Avenir Next's at the same point size.
+    private func drawnMarkerFont(contentFont: NSFont) -> NSFont {
+      let body =
+        NSFont(
+          descriptor: configuredBodyFont.fontDescriptor,
+          size: contentFont.pointSize
+        ) ?? configuredBodyFont
+      let key = DrawnMarkerFontKey(family: body.fontName, pointSize: body.pointSize)
+      if let cached = drawnMarkerFontCache[key] { return cached }
+      drawnMarkerFontCache[key] = body
+      return body
+    }
+
+    /// Collects every text list marker this view draws and hides the glyph the
+    /// text system would otherwise paint for it.
+    ///
+    /// Every marker is registered, at every scale: a marker the view does not draw
+    /// would fall back to the text system, and that fallback is a different size
+    /// and weight from the drawn one, which is how a bullet came to change size
+    /// while its own paragraph was being typed.
+    private func refreshScaledListMarkers(
+      storage: NSTextStorage,
+      layoutManager: NSLayoutManager
+    ) {
+      restoreTemporaryAttributeSlices(
+        temporaryScaledMarkerSlices,
+        in: layoutManager,
+        textLength: storage.length
+      )
+      temporaryScaledMarkerSlices = []
+      scaledListMarkers = []
+      drawnMarkerFontCache.removeAll(keepingCapacity: true)
+      let ns = string as NSString
+      var location = 0
+      while location < ns.length {
+        let paragraphRange = ns.paragraphRange(for: NSRange(location: location, length: 0))
+        let nextLocation = NSMaxRange(paragraphRange)
+        defer { location = max(nextLocation, location + 1) }
+        guard let item = parsedListItem(in: paragraphRange, string: ns),
+          item.markerRange.length > 0,
+          isTextListMarker(item.parsed.style)
+        else { continue }
+        let contentIndex = min(item.contentRange.location, ns.length - 1)
+        let contentFont =
+          (storage.attribute(.font, at: contentIndex, effectiveRange: nil) as? NSFont)
+          ?? configuredBodyFont
+        let font = drawnMarkerFont(contentFont: contentFont)
+        let ink =
+          (storage.attribute(
+            .foregroundColor,
+            at: item.markerRange.location,
+            effectiveRange: nil
+          ) as? NSColor)
+          ?? (storage.attribute(.foregroundColor, at: contentIndex, effectiveRange: nil)
+            as? NSColor)
+          ?? .textColor
+        scaledListMarkers.append(
+          ScaledListMarker(
+            range: item.markerRange,
+            font: font,
+            ink: ink,
+            isEmpty: item.contentRange.length == 0
+          )
+        )
+        temporaryScaledMarkerSlices.append(contentsOf: temporaryAttributeSlices(
+          .foregroundColor,
+          in: item.markerRange,
+          layoutManager: layoutManager
+        ))
+        layoutManager.addTemporaryAttribute(
+          .foregroundColor,
+          value: NSColor.clear,
+          forCharacterRange: item.markerRange
+        )
+      }
+    }
+
+    private func drawScaledListMarkers(in dirtyRect: NSRect) {
+      guard let storage = textStorage, let layoutManager, let textContainer,
+        let context = NSGraphicsContext.current?.cgContext
+      else { return }
+      let selection = selectedRange()
+      for marker in scaledListMarkers {
+        let glyphRange = layoutManager.glyphRange(
+          forCharacterRange: marker.range,
+          actualCharacterRange: nil
+        )
+        guard glyphRange.length > 0 else { continue }
+        let slot = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+          .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+        guard slot.intersects(dirtyRect) else { continue }
+        let fragment = layoutManager.lineFragmentRect(
+          forGlyphAt: glyphRange.location,
+          effectiveRange: nil
+        )
+        let location = layoutManager.location(forGlyphAt: glyphRange.location)
+        // Both axes come from the glyph's own layout position, which is where the
+        // text system would have painted it: drawing the marker ourselves must not
+        // move it by so much as a pixel.
+        let baseline = textContainerOrigin.y + fragment.minY + location.y
+        let originX = textContainerOrigin.x + fragment.minX + location.x
+        let isSelected =
+          selection.length > 0
+          && NSIntersectionRange(selection, marker.range).length > 0
+        let ink =
+          (isSelected ? selectedTextAttributes[.foregroundColor] as? NSColor : nil)
+          ?? marker.ink
+        let opacity = marker.isEmpty ? ChecklistMarkerDrawing.emptyListMarkerOpacity : 1
+        let text = (storage.string as NSString).substring(with: marker.range)
+        let line = CTLineCreateWithAttributedString(
+          NSAttributedString(
+            string: text,
+            attributes: [
+              .font: marker.font,
+              .foregroundColor: ink.withAlphaComponent(ink.alphaComponent * opacity),
+            ]
+          )
+        )
+        context.saveGState()
+        context.textMatrix = CGAffineTransform(scaleX: 1, y: isFlipped ? -1 : 1)
+        context.textPosition = CGPoint(x: originX, y: baseline)
+        CTLineDraw(line, context)
+        context.restoreGState()
+      }
+    }
+
+    /// Bullets and numbers are drawn from their stored characters; checklist
+    /// markers are drawn by the editor itself, so they keep their own scale.
+    private func isTextListMarker(_ style: EditorListStyle) -> Bool {
+      switch style {
+      case .bullet, .number: return true
+      case .checklist: return false
+      }
+    }
+
 
     private func removeBulletPrefix(in paragraphRange: NSRange, contentStart: Int) {
       performUndoGroup {
