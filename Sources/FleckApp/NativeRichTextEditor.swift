@@ -2570,6 +2570,32 @@
       NSAttributedString(string: text, attributes: destinationAttributes)
     }
 
+    /// The pasteboard's text and inline emphasis, read the way Paste reads it.
+    /// Nil when the pasteboard carries no text, which is how an image-only copy
+    /// is refused instead of arriving as an attachment.
+    static func matchedStylePasteboardContent(
+      from pasteboard: NSPasteboard
+    ) -> NSAttributedString? {
+      let formats: [(NSPasteboard.PasteboardType, NSAttributedString.DocumentType)] = [
+        (.rtfd, .rtfd),
+        (.rtf, .rtf),
+        (.html, .html),
+      ]
+      for (type, documentType) in formats {
+        guard let data = pasteboard.data(forType: type),
+          let attributed = try? NSAttributedString(
+            data: data,
+            options: [.documentType: documentType],
+            documentAttributes: nil
+          ),
+          !containsAttachment(in: attributed)
+        else { continue }
+        return attributed
+      }
+      guard let text = pasteboard.string(forType: .string) else { return nil }
+      return NSAttributedString(string: text)
+    }
+
     static func mergePaste(
       _ source: NSAttributedString,
       destinationAttributes: [NSAttributedString.Key: Any]
@@ -4627,6 +4653,41 @@
         hasRichFormatting: hasRichFormatting
       ) {
         super.paste(sender)
+      }
+    }
+
+    /// Edit ▸ Paste and Match Style (⇧⌥⌘V) reaches this view as the standard
+    /// `pasteAsPlainText:` action: the pasted text keeps only its emphasis and
+    /// links, and takes the destination paragraph's font, size, and spacing.
+    override func pasteAsPlainText(_ sender: Any?) {
+      guard !hasMarkedText(), pasteContext() != nil else {
+        super.pasteAsPlainText(sender)
+        return
+      }
+      pasteMatchedStyle(from: .general)
+    }
+
+    /// The command's insertion, split from the menu action so tests can drive a
+    /// scratch pasteboard instead of the user's clipboard.
+    func pasteMatchedStyle(from pasteboard: NSPasteboard) {
+      guard let context = pasteContext() else { return }
+      cancelPasteOptions()
+      guard let source = Self.matchedStylePasteboardContent(from: pasteboard) else { return }
+      let matched = completedChecklistInsertion(
+        Self.mergePaste(source, destinationAttributes: context.destinationAttributes),
+        replacing: context.replacementRange,
+        clearingInheritedContinuation: true
+      )
+      performUndoGroup {
+        _ = replaceAttributedText(
+          in: context.replacementRange,
+          with: matched,
+          selecting: NSRange(
+            location: context.replacementRange.location + matched.length,
+            length: 0
+          )
+        )
+        undoManager?.setActionName("Paste and Match Style")
       }
     }
 
