@@ -5705,11 +5705,16 @@
     }
 
     /// A checklist marker keeps priority over selection; every other click keeps
-    /// AppKit's own placement, and a single click is widened off a note link so
-    /// the caret cannot land inside the collapsed token.
+    /// AppKit's own depth, and a single click is widened off a note link so the
+    /// caret cannot land inside the collapsed token.
     private func forwardClickSelection(with event: NSEvent) {
+      let isMultiClick = event.clickCount > 1
+      let extendsSelection = event.modifierFlags.contains(.shift)
       super.mouseDown(with: event)
-      guard event.clickCount == 1, !event.modifierFlags.contains(.shift) else { return }
+      // Double-click selects the word and triple-click the paragraph through
+      // AppKit, and Shift-click extends natively; the proposal snap in
+      // selectionRange(forProposedRange:granularity:) widens those off a link.
+      guard !isMultiClick, !extendsSelection else { return }
       snapSelectionToNoteLink()
     }
 
