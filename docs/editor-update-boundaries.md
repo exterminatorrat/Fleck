@@ -59,8 +59,8 @@ Behavioral coverage includes external-edit callback ownership, single-step undo,
 formatting outside a replacement, canonical Unicode selections, caret visibility,
 typography recognition and migration idempotence, marker rasterization, and
 temporary-ink restoration. Editor fixtures must close their windows. Static
-selection-fill comparisons use settled Reduce Motion endpoints; separate motion
-tests retain animation coverage.
+selection-fill comparisons disable animations locally on their hosted SwiftUI
+subtree; separate motion tests retain animation coverage.
 
 Native compilation, AppKit tests, and visual checks require macOS. Source review
 and the reduction in repeated operations do not establish a measured latency,

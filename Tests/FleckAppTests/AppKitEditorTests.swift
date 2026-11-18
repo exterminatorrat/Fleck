@@ -5870,11 +5870,10 @@ private func hostedFolderSelectionGeometry(
       $0.theme = .dark
     }
     let commands = EditorCommands()
-    // This compares selected and unselected endpoints. Disclosure motion has its
-    // own tests; sampling its 220 ms transition here makes the ink comparison
-    // depend on how quickly the asynchronous initial folder selection settles.
+    // Compare the selected and unselected endpoints without an intermediate
+    // disclosure animation. Dedicated navigator tests retain motion coverage.
     let (window, host) = hostedPanel(
-      root: root, state: state, commands: commands, reduceMotion: true
+      root: root, state: state, commands: commands, disableAnimations: true
     )
     window.appearance = NSAppearance(named: .darkAqua)
     window.isReleasedWhenClosed = false
@@ -6945,7 +6944,7 @@ private func hostedPanel(
   state: AppState,
   commands: EditorCommands,
   isPinned: Bool = false,
-  reduceMotion: Bool? = nil
+  disableAnimations: Bool = false
 ) -> (NSWindow, NSHostingView<AnyView>) {
   let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
   let panel = NotesPanel(
@@ -6956,8 +6955,13 @@ private func hostedPanel(
   )
   let themedPanel = FleckThemeTestRoot(state: state) { panel }
   let rootView: AnyView
-  if let reduceMotion {
-    rootView = AnyView(themedPanel.environment(\.accessibilityReduceMotion, reduceMotion))
+  if disableAnimations {
+    // SwiftUI's accessibilityReduceMotion is read-only. Disable animation
+    // for this snapshot subtree without changing global accessibility settings.
+    rootView = AnyView(themedPanel.transaction { transaction in
+      transaction.animation = nil
+      transaction.disablesAnimations = true
+    })
   } else {
     rootView = AnyView(themedPanel)
   }
