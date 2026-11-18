@@ -7,6 +7,7 @@ import Testing
 private func metricsEditor(_ body: String) -> (NSWindow, ListAwareTextView, EditorCommands) {
   let frame = NSRect(x: 0, y: 0, width: 520, height: 260)
   let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+  window.isReleasedWhenClosed = false
   let textView = ListAwareTextView(frame: frame)
   window.contentView = textView
   textView.isEditable = true
@@ -54,7 +55,7 @@ private func metricsEditor(_ body: String) -> (NSWindow, ListAwareTextView, Edit
 @Test @MainActor func headingStylesKeepHierarchyAndSpacing() throws {
   let body = "heading under test"
   let (window, textView, commands) = metricsEditor(body)
-  defer { withExtendedLifetime(window) {} }
+  defer { closeEditorTestWindow(window) }
   let storage = try #require(textView.textStorage)
   let fullRange = NSRange(location: 0, length: (body as NSString).length)
   textView.setSelectedRange(fullRange)
@@ -94,7 +95,7 @@ private func metricsEditor(_ body: String) -> (NSWindow, ListAwareTextView, Edit
   ]
   for (style, before, after) in expectations {
     let (window, textView, commands) = metricsEditor("spacing preset")
-    defer { withExtendedLifetime(window) {} }
+    defer { closeEditorTestWindow(window) }
     let storage = try #require(textView.textStorage)
     let neutral = NSMutableParagraphStyle()
     neutral.paragraphSpacingBefore = 1
@@ -116,7 +117,7 @@ private func metricsEditor(_ body: String) -> (NSWindow, ListAwareTextView, Edit
 
 @Test @MainActor func toolbarRecognizesPresetsWithoutChangingParagraphGeometry() throws {
   let (window, textView, commands) = metricsEditor("First paragraph\nSecond paragraph")
-  defer { withExtendedLifetime(window) {} }
+  defer { closeEditorTestWindow(window) }
   let storage = try #require(textView.textStorage)
   let fullRange = NSRange(location: 0, length: storage.length)
   textView.setSelectedRange(fullRange)
@@ -146,7 +147,7 @@ private func metricsEditor(_ body: String) -> (NSWindow, ListAwareTextView, Edit
 
 @Test @MainActor func toolbarRecognizesTypingPresetsWithoutChangingTypingAttributes() throws {
   let (window, textView, commands) = metricsEditor("")
-  defer { withExtendedLifetime(window) {} }
+  defer { closeEditorTestWindow(window) }
 
   for style in EditorTextStyle.allCases {
     #expect(commands.applyTextStyle(style))
@@ -163,7 +164,7 @@ private func metricsEditor(_ body: String) -> (NSWindow, ListAwareTextView, Edit
 @Test @MainActor func toolbarRejectsAMixedParagraphPreset() throws {
   let body = "First paragraph\nSecond paragraph"
   let (window, textView, commands) = metricsEditor(body)
-  defer { withExtendedLifetime(window) {} }
+  defer { closeEditorTestWindow(window) }
   let storage = try #require(textView.textStorage)
   let fullRange = NSRange(location: 0, length: storage.length)
   let secondRange = (body as NSString).paragraphRange(
@@ -190,7 +191,7 @@ private func metricsEditor(_ body: String) -> (NSWindow, ListAwareTextView, Edit
 @Test @MainActor func codeParagraphKeepsMonospacedBodySizedText() throws {
   let body = "let value = 42"
   let (window, textView, commands) = metricsEditor(body)
-  defer { withExtendedLifetime(window) {} }
+  defer { closeEditorTestWindow(window) }
   let storage = try #require(textView.textStorage)
   textView.setSelectedRange(NSRange(location: 0, length: (body as NSString).length))
 
@@ -208,7 +209,7 @@ private func metricsEditor(_ body: String) -> (NSWindow, ListAwareTextView, Edit
 @Test @MainActor func multiLineBlockIndentMovesExactlyOneGridStep() throws {
   let body = "first line\nsecond line"
   let (window, textView, commands) = metricsEditor(body)
-  defer { withExtendedLifetime(window) {} }
+  defer { closeEditorTestWindow(window) }
   let storage = try #require(textView.textStorage)
   let unit = EditorTypography.indentWidth(
     font: EditorTypography.bodyFont(family: ".AppleSystemUIFont", size: 17)
@@ -245,7 +246,7 @@ private func metricsEditor(_ body: String) -> (NSWindow, ListAwareTextView, Edit
 @Test @MainActor func blockIndentStepsByTheBodyGridInsideHeadingParagraphs() throws {
   let body = "A heading that gets indented"
   let (window, textView, commands) = metricsEditor(body)
-  defer { withExtendedLifetime(window) {} }
+  defer { closeEditorTestWindow(window) }
   let storage = try #require(textView.textStorage)
   let unit = EditorTypography.indentWidth(
     font: EditorTypography.bodyFont(family: ".AppleSystemUIFont", size: 17)
@@ -266,7 +267,7 @@ private func metricsEditor(_ body: String) -> (NSWindow, ListAwareTextView, Edit
 @Test @MainActor func resizedRunIndentsByTheBodyGrid() throws {
   let body = "Text enlarged past the body size"
   let (window, textView, commands) = metricsEditor(body)
-  defer { withExtendedLifetime(window) {} }
+  defer { closeEditorTestWindow(window) }
   let storage = try #require(textView.textStorage)
   let unit = EditorTypography.indentWidth(
     font: EditorTypography.bodyFont(family: ".AppleSystemUIFont", size: 17)
@@ -286,7 +287,7 @@ private func metricsEditor(_ body: String) -> (NSWindow, ListAwareTextView, Edit
 
 @Test @MainActor func resizedRunKeepsListTabsOnTheBodyGrid() throws {
   let (window, textView, _) = metricsEditor("• item")
-  defer { withExtendedLifetime(window) {} }
+  defer { closeEditorTestWindow(window) }
   let storage = try #require(textView.textStorage)
   let unit = EditorTypography.indentWidth(
     font: EditorTypography.bodyFont(family: ".AppleSystemUIFont", size: 17)
@@ -309,7 +310,7 @@ private func metricsEditor(_ body: String) -> (NSWindow, ListAwareTextView, Edit
 @Test @MainActor func resizedRunKeepsBlockIndentTabsOnTheBodyGrid() throws {
   let body = "A selected line of enlarged text"
   let (window, textView, commands) = metricsEditor(body)
-  defer { withExtendedLifetime(window) {} }
+  defer { closeEditorTestWindow(window) }
   let storage = try #require(textView.textStorage)
   let unit = EditorTypography.indentWidth(
     font: EditorTypography.bodyFont(family: ".AppleSystemUIFont", size: 17)
