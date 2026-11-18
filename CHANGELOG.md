@@ -3,6 +3,61 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.31-beta.1] - 2026-11-18
+
+### Added
+
+- The editor remembers where each note was scrolled to. Coming back to a note
+  restores its own offset, an external write leaves the viewport where it was,
+  and a note shorter than the remembered offset opens at its own top
+  ([#145](https://github.com/exterminatorrat/Fleck/pull/145)).
+
+### Changed
+
+- A note link is selected whole instead of placing the caret inside its stored
+  Markdown, so clicking a link can no longer put the caret where a single
+  Backspace would cut a bracket or a destination out of the body
+  ([#143](https://github.com/exterminatorrat/Fleck/pull/143)).
+- Backspace and Option+Backspace delete a rendered note link as one unit. A
+  selection that touches a link, or spans two, removes every intersected link in
+  one undo step instead of leaving a raw destination in the text
+  ([#144](https://github.com/exterminatorrat/Fleck/pull/144)).
+- Forward delete treats links, list joins and composed characters the way
+  Backspace does: a note link goes whole, deleting at the end of a list item
+  joins the next item's content while keeping a single marker, and a caret beside
+  an emoji never removes half a character
+  ([#146](https://github.com/exterminatorrat/Fleck/pull/146)).
+- Text list markers are drawn by the editor in the note's own body font at each
+  line's size, so a bullet no longer changes size while its paragraph is being
+  typed or when the line's text renders in a different face. A note set in a CJK
+  font now paints one marker size on every line
+  ([#147](https://github.com/exterminatorrat/Fleck/pull/147)).
+- The Unfiled row's disclosure chevron shows only while that row has attention,
+  and its slot collapses when it does not, so the folder chips sit against the
+  Unfiled label at rest and shift right when the chevron appears
+  ([#148](https://github.com/exterminatorrat/Fleck/pull/148)).
+- Double, triple and Shift click on a note link keep AppKit's own selection
+  depth: the whole-token widening now applies only to a plain single click, so a
+  double click still takes the word, a triple click the paragraph, and Shift the
+  native extension, while no gesture leaves a link half selected
+  ([#150](https://github.com/exterminatorrat/Fleck/pull/150)).
+
+### Fixed
+
+- Text being composed by an input method draws in the note's own ink rather than
+  the text system's default black, including through a theme change mid
+  composition, and a composition keeps native handling until it commits:
+  Backspace, word Backspace, a newline, a list marker and a click made while text
+  is still pre-commit no longer run the editor's list and link logic against
+  half-formed text
+  ([#151](https://github.com/exterminatorrat/Fleck/pull/151)).
+- Command-Z after an agent or dictation rewrite restores the note. A contiguous
+  span rewritten on a note that is otherwise unchanged replaces only that span,
+  keeps the caret where the reader left it, and registers one undo step under the
+  author's name, so a single Command-Z brings back the text and the caret with
+  it. Whole-note rewrites and image-bearing content keep the reload path
+  ([#152](https://github.com/exterminatorrat/Fleck/pull/152)).
+
 ## [1.8.24-beta.1] - 2026-11-17
 
 ### Added
