@@ -20,6 +20,7 @@ final class EditorMouseTestWindow: NSWindow {
     modifiers: NSEvent.ModifierFlags = []
   ) throws {
     try #require(view.window === self)
+    try #require(windowNumber > 0)
     drainPendingMouseEvents()
     defer { drainPendingMouseEvents() }
 
@@ -58,8 +59,8 @@ final class EditorMouseTestWindow: NSWindow {
       )
     )
 
-    // Dequeue the down event before dispatching it: calling mouseDown directly
-    // leaves NSApplication.currentEvent pointing at an unrelated earlier event.
+    // Dequeue before delivering to the responder so NSApplication.currentEvent
+    // describes this gesture, including during AppKit's native selection work.
     // Keep the matching up queued for NSTextView's synchronous tracking loop.
     let application = NSApplication.shared
     application.postEvent(up, atStart: true)
@@ -73,12 +74,16 @@ final class EditorMouseTestWindow: NSWindow {
       )
     )
     try #require(queuedDown.windowNumber == windowNumber)
+    try #require(queuedDown.window === self)
     try #require(queuedDown.eventNumber == downNumber)
     try #require(application.currentEvent?.eventNumber == downNumber)
-    application.sendEvent(queuedDown)
+    // These tests target the editor responder. Application-level routing can
+    // discard synthetic clicks in the shared host before they reach this view.
+    view.mouseDown(with: queuedDown)
 
     // A checklist marker handles its down without starting AppKit tracking.
-    // Deliver that click's remaining up normally, and reject foreign events.
+    // Deliver that click's remaining up to the same responder, rejecting any
+    // event that belongs to another window or gesture.
     if let pendingUp = application.nextEvent(
       matching: .leftMouseUp,
       until: .distantPast,
@@ -86,8 +91,9 @@ final class EditorMouseTestWindow: NSWindow {
       dequeue: true
     ) {
       try #require(pendingUp.windowNumber == windowNumber)
+      try #require(pendingUp.window === self)
       try #require(pendingUp.eventNumber == downNumber + 1)
-      application.sendEvent(pendingUp)
+      view.mouseUp(with: pendingUp)
     }
   }
 
