@@ -65,6 +65,15 @@ class AppKitPreflightTests(unittest.TestCase):
         self.assertEqual([phase for phase, _ in calls], ["list", "run"])
         self.assertEqual(calls[-1][1], "--filter ^.+$ --no-parallel")
 
+    def test_unset_preflight_preserves_focused_request(self):
+        result, calls = self.run_fixture(request=r"^FleckCoreTests\.unrelated\(\)$")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([phase for phase, _ in calls], ["list", "run"])
+        self.assertEqual(
+            calls[-1][1], r"--filter ^(FleckCoreTests\.unrelated\(\)/) --no-parallel",
+        )
+        self.assertIn("matched test count: 1", result.stdout)
+
     def test_passing_preflight_reuses_list_and_keeps_full_filter(self):
         result, calls = self.run_fixture(SELECTOR)
         self.assertEqual(result.returncode, 0, result.stderr)
