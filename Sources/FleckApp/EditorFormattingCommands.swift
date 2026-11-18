@@ -472,7 +472,8 @@
         let paragraph = textView.typingAttributes[.paragraphStyle] as? NSParagraphStyle
         return EditorTextStyle.allCases.first {
           EditorTypography.fontsVisuallyMatch(actual, font(for: $0))
-            && paragraphsVisuallyMatch(paragraph, styledParagraph(paragraph, style: $0))
+            && EditorTypography.presetParagraphMetrics(for: $0, size: bodyFontSize)
+              .matches(paragraph ?? .default)
         }
       case .range(let range):
         guard let storage = textView.textStorage else { return nil }
@@ -489,32 +490,18 @@
             }
           }
           guard matches else { return false }
+          let metrics = EditorTypography.presetParagraphMetrics(for: style, size: bodyFontSize)
           let substring = (textView.string as NSString).substring(with: range)
           enumerateParagraphs(in: substring) { paragraphRange in
             guard matches else { return }
             let location = min(range.location + paragraphRange.location, storage.length - 1)
             let actual = storage.attribute(.paragraphStyle, at: location, effectiveRange: nil)
               as? NSParagraphStyle
-            matches = paragraphsVisuallyMatch(
-              actual,
-              styledParagraph(actual, style: style)
-            )
+            matches = metrics.matches(actual ?? .default)
           }
           return matches
         }
       }
-    }
-
-    private func paragraphsVisuallyMatch(
-      _ lhs: NSParagraphStyle?,
-      _ rhs: NSParagraphStyle
-    ) -> Bool {
-      let lhs = lhs ?? .default
-      return abs(lhs.minimumLineHeight - rhs.minimumLineHeight) < 0.01
-        && abs(lhs.maximumLineHeight - rhs.maximumLineHeight) < 0.01
-        && abs(lhs.lineHeightMultiple - rhs.lineHeightMultiple) < 0.01
-        && abs(lhs.paragraphSpacingBefore - rhs.paragraphSpacingBefore) < 0.01
-        && abs(lhs.paragraphSpacing - rhs.paragraphSpacing) < 0.01
     }
 
     private func font(for style: EditorTextStyle) -> NSFont {

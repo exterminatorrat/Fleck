@@ -5870,9 +5870,15 @@ private func hostedFolderSelectionGeometry(
       $0.theme = .dark
     }
     let commands = EditorCommands()
-    let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+    // This compares selected and unselected endpoints. Disclosure motion has its
+    // own tests; sampling its 220 ms transition here makes the ink comparison
+    // depend on how quickly the asynchronous initial folder selection settles.
+    let (window, host) = hostedPanel(
+      root: root, state: state, commands: commands, reduceMotion: true
+    )
     window.appearance = NSAppearance(named: .darkAqua)
-    defer { window.orderOut(nil) }
+    window.isReleasedWhenClosed = false
+    defer { closeEditorTestWindow(window) }
     await settleHostedView(host)
 
     let folderRowViews = try expectedFolderRowIdentifiers.map { identifier in
@@ -6938,7 +6944,8 @@ private func hostedPanel(
   root: URL,
   state: AppState,
   commands: EditorCommands,
-  isPinned: Bool = false
+  isPinned: Bool = false,
+  reduceMotion: Bool? = nil
 ) -> (NSWindow, NSHostingView<AnyView>) {
   let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
   let panel = NotesPanel(
@@ -6947,7 +6954,13 @@ private func hostedPanel(
     sizing: .container,
     editorCommands: commands
   )
-  let rootView = AnyView(FleckThemeTestRoot(state: state) { panel })
+  let themedPanel = FleckThemeTestRoot(state: state) { panel }
+  let rootView: AnyView
+  if let reduceMotion {
+    rootView = AnyView(themedPanel.environment(\.accessibilityReduceMotion, reduceMotion))
+  } else {
+    rootView = AnyView(themedPanel)
+  }
   let host = NSHostingView(rootView: rootView)
   let window = NSWindow(
     contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),

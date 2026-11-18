@@ -15,6 +15,7 @@
       backing: .buffered,
       defer: false
     )
+    window.isReleasedWhenClosed = false
     window.contentView = view
     view.textStorage?.setAttributedString(
       NSAttributedString(string: text, attributes: [
@@ -44,6 +45,31 @@
     return CTLineGetBoundsWithOptions(line, .useGlyphPathBounds).height
   }
 
+  @Test @MainActor func clearingEmptyListMarkersRestoresTheirUnderlyingInk() throws {
+    let (view, window) = markerEditor("• \n1. ")
+    defer { closeEditorTestWindow(window) }
+    let storage = try #require(view.textStorage)
+    let layoutManager = try #require(view.layoutManager)
+    let original = NSAttributedString(attributedString: storage)
+    let range = NSRange(location: 0, length: storage.length)
+    let ink = NSColor(calibratedRed: 0.2, green: 0.6, blue: 0.9, alpha: 0.8)
+    layoutManager.addTemporaryAttribute(.foregroundColor, value: ink, forCharacterRange: range)
+
+    for _ in 0..<3 {
+      view.refreshChecklistPresentation()
+      #expect(view.drawnListMarkerPresentations.count == 2)
+      view.clearNoteLinkPresentation()
+
+      for location in [0, 3] {
+        let restored = try #require(layoutManager.temporaryAttribute(
+          .foregroundColor, atCharacterIndex: location, effectiveRange: nil
+        ) as? NSColor)
+        #expect(restored.isEqual(ink))
+      }
+      #expect(storage.isEqual(to: original))
+    }
+  }
+
   /// Both lines carry the same marker, drawn at the size their own text occupies, so
   /// the ideographic line sits exactly where the Latin one does and neither line's
   /// bullet outweighs the other's.
@@ -52,7 +78,7 @@
     let cjkLine = "• \u{4F60}\u{597D}\u{4E16}\u{754C}"
     let text = latinLine + "\n" + cjkLine
     let (view, window) = markerEditor(text)
-    defer { window.contentView = nil }
+    defer { closeEditorTestWindow(window) }
 
     let layoutManager = try #require(view.layoutManager)
     let container = try #require(view.textContainer)
@@ -110,7 +136,7 @@
     let cjk = "• \u{4F60}\u{597D}\u{4E16}\u{754C}"
     let text = cjk + "\nsecond line\nthird line"
     let (view, window) = markerEditor(text)
-    defer { window.contentView = nil }
+    defer { closeEditorTestWindow(window) }
     let layoutManager = try #require(view.layoutManager)
     let container = try #require(view.textContainer)
 
@@ -156,7 +182,7 @@
   @Test @MainActor func staleMarkerFontIsRepairedToTheLineFont() throws {
     let text = "• \u{4F60}\u{597D}\u{4E16}\u{754C}"
     let (view, window) = markerEditor(text)
-    defer { window.contentView = nil }
+    defer { closeEditorTestWindow(window) }
     let storage = try #require(view.textStorage)
     let layoutManager = try #require(view.layoutManager)
     let container = try #require(view.textContainer)
@@ -199,7 +225,7 @@
   @Test @MainActor func latinOnlyListKeepsTheBodyFontAndLineHeight() throws {
     let text = "• hello world\n1. hello again"
     let (view, window) = markerEditor(text)
-    defer { window.contentView = nil }
+    defer { closeEditorTestWindow(window) }
     let layoutManager = try #require(view.layoutManager)
     let container = try #require(view.textContainer)
     layoutManager.ensureLayout(for: container)
@@ -233,7 +259,7 @@
   /// it: the drawn font's ascent and descent still ride in the same band.
   @Test @MainActor func cjkMarkerStaysInsideTheParagraphLineHeight() throws {
     let (view, window) = markerEditor("• \u{4F60}\u{597D}\u{4E16}\u{754C}")
-    defer { window.contentView = nil }
+    defer { closeEditorTestWindow(window) }
     let layoutManager = try #require(view.layoutManager)
     let container = try #require(view.textContainer)
 
@@ -259,7 +285,7 @@
   /// paragraph's own, so committing another character cannot change what is drawn.
   @Test @MainActor func typingDoesNotResizeTheDrawnMarker() throws {
     let (view, window) = markerEditor("• \u{4F60}\u{597D}\u{4E16}\u{754C}")
-    defer { window.contentView = nil }
+    defer { closeEditorTestWindow(window) }
     let storage = try #require(view.textStorage)
     view.refreshChecklistPresentation()
     let before = try #require(view.drawnListMarkerPresentations.first)
@@ -278,7 +304,7 @@
   /// paragraph the edit wrote into has to carry its own drawn marker.
   @Test @MainActor func multiLineInsertionDrawsEveryPastedListMarker() throws {
     let (view, window) = markerEditor("• hello")
-    defer { window.contentView = nil }
+    defer { closeEditorTestWindow(window) }
     let storage = try #require(view.textStorage)
     let insertion =
       "\n• \u{4F60}\u{597D}\n• \u{4E16}\u{754C}\n• \u{65E5}\u{672C}"
@@ -306,7 +332,7 @@
     let latin = "• hello world"
     let cjk = "• \u{4F60}\u{597D}\u{4E16}\u{754C}"
     let (view, window) = markerEditor(latin + "\n" + cjk)
-    defer { window.contentView = nil }
+    defer { closeEditorTestWindow(window) }
     let layoutManager = try #require(view.layoutManager)
     let storage = try #require(view.textStorage)
     view.normalizeListMarkerFonts()

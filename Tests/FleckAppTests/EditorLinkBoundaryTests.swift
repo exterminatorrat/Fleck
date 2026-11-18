@@ -14,6 +14,7 @@ private func linkBoundaryEditor(_ text: String) -> (ListAwareTextView, NSWindow)
     backing: .buffered,
     defer: false
   )
+  window.isReleasedWhenClosed = false
   window.contentView = view
   view.allowsUndo = true
   view.textStorage?.setAttributedString(
@@ -108,7 +109,7 @@ private func clickEditor(
   let target = UUID()
   let text = "Body \(NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)) tail"
   let (view, window) = linkBoundaryEditor(text)
-  defer { window.contentView = nil }
+  defer { closeEditorTestWindow(window) }
   let link = try #require(NoteLinkParser.links(in: text).first)
 
   let point = try #require(linkLabelPoint(view, at: link.labelRange.location + 1))
@@ -121,7 +122,7 @@ private func clickEditor(
   let target = UUID()
   let text = "Body \(NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)) tail"
   let (view, window) = linkBoundaryEditor(text)
-  defer { window.contentView = nil }
+  defer { closeEditorTestWindow(window) }
   let link = try #require(NoteLinkParser.links(in: text).first)
   let ns = view.string as NSString
 
@@ -146,7 +147,7 @@ private func clickEditor(
   let target = UUID()
   let text = "Body \(NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)) tail"
   let (view, window) = linkBoundaryEditor(text)
-  defer { window.contentView = nil }
+  defer { closeEditorTestWindow(window) }
   let link = try #require(NoteLinkParser.links(in: text).first)
   let ns = view.string as NSString
 
@@ -171,7 +172,7 @@ private func clickEditor(
   let target = UUID()
   let text = "Body \(NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)) tail"
   let (view, window) = linkBoundaryEditor(text)
-  defer { window.contentView = nil }
+  defer { closeEditorTestWindow(window) }
 
   view.setSelectedRange(NSRange(location: 0, length: 0))
   view.setMarkedText(
@@ -190,7 +191,7 @@ private func clickEditor(
   let target = UUID()
   let text = "Body \(NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)) tail"
   let (view, window) = linkBoundaryEditor(text)
-  defer { window.contentView = nil }
+  defer { closeEditorTestWindow(window) }
   let link = try #require(NoteLinkParser.links(in: text).first)
 
   let point = try #require(linkLabelPoint(view, at: link.labelRange.location + 1))

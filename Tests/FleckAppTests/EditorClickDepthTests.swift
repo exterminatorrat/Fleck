@@ -14,6 +14,7 @@ private func clickDepthEditor(_ text: String) -> (ListAwareTextView, NSWindow) {
     backing: .buffered,
     defer: false
   )
+  window.isReleasedWhenClosed = false
   window.contentView = view
   view.allowsUndo = true
   view.textStorage?.setAttributedString(
@@ -104,7 +105,7 @@ private func click(
 
 @Test @MainActor func doubleClickSelectsTheWordUnderThePointer() throws {
   let (view, window) = clickDepthEditor("alpha beta gamma")
-  defer { window.contentView = nil }
+  defer { closeEditorTestWindow(window) }
 
   let point = try #require(characterPoint(view, at: 1))
   try click(view, in: window, at: point, clickCount: 2)
@@ -118,7 +119,7 @@ private func click(
 
 @Test @MainActor func tripleClickSelectsTheParagraphUnderThePointer() throws {
   let (view, window) = clickDepthEditor("first line\nsecond line")
-  defer { window.contentView = nil }
+  defer { closeEditorTestWindow(window) }
 
   let point = try #require(characterPoint(view, at: 2))
   try click(view, in: window, at: point, clickCount: 3)
@@ -130,7 +131,7 @@ private func click(
 
 @Test @MainActor func doubleClickOnAChecklistMarkerStillTogglesIt() throws {
   let (view, window) = clickDepthEditor("○ one\n○ two")
-  defer { window.contentView = nil }
+  defer { closeEditorTestWindow(window) }
 
   let hitRect = try #require(view.checklistHitRect(for: NSRange(location: 0, length: 1)))
   try click(
@@ -146,7 +147,7 @@ private func click(
 
 @Test @MainActor func shiftClickExtendsTheSelectionNatively() throws {
   let (view, window) = clickDepthEditor("alpha beta gamma")
-  defer { window.contentView = nil }
+  defer { closeEditorTestWindow(window) }
 
   view.setSelectedRange(NSRange(location: 0, length: 5))
   let anchorBefore = view.selectedRange()

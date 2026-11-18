@@ -114,6 +114,79 @@ private func metricsEditor(_ body: String) -> (NSWindow, ListAwareTextView, Edit
   }
 }
 
+@Test @MainActor func toolbarRecognizesPresetsWithoutChangingParagraphGeometry() throws {
+  let (window, textView, commands) = metricsEditor("First paragraph\nSecond paragraph")
+  defer { withExtendedLifetime(window) {} }
+  let storage = try #require(textView.textStorage)
+  let fullRange = NSRange(location: 0, length: storage.length)
+  textView.setSelectedRange(fullRange)
+
+  for style in EditorTextStyle.allCases {
+    _ = commands.applyTextStyle(style)
+    let paragraph = try #require(
+      (storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil)
+        as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle
+    )
+    paragraph.alignment = .right
+    paragraph.headIndent = 19
+    paragraph.firstLineHeadIndent = 7
+    paragraph.lineSpacing = 3
+    paragraph.defaultTabInterval = 72
+    paragraph.tabStops = [NSTextTab(textAlignment: .right, location: 90, options: [:])]
+    storage.addAttribute(.paragraphStyle, value: paragraph, range: fullRange)
+    let before = NSAttributedString(attributedString: storage)
+
+    commands.refreshFormattingState()
+
+    #expect(commands.currentTextStyle == style)
+    #expect(!commands.isTextStyleMixed)
+    #expect(storage.isEqual(to: before))
+  }
+}
+
+@Test @MainActor func toolbarRecognizesTypingPresetsWithoutChangingTypingAttributes() throws {
+  let (window, textView, commands) = metricsEditor("")
+  defer { withExtendedLifetime(window) {} }
+
+  for style in EditorTextStyle.allCases {
+    #expect(commands.applyTextStyle(style))
+    let before = NSDictionary(dictionary: textView.typingAttributes)
+
+    commands.refreshFormattingState()
+
+    #expect(commands.currentTextStyle == style)
+    #expect(!commands.isTextStyleMixed)
+    #expect(NSDictionary(dictionary: textView.typingAttributes).isEqual(before))
+  }
+}
+
+@Test @MainActor func toolbarRejectsAMixedParagraphPreset() throws {
+  let body = "First paragraph\nSecond paragraph"
+  let (window, textView, commands) = metricsEditor(body)
+  defer { withExtendedLifetime(window) {} }
+  let storage = try #require(textView.textStorage)
+  let fullRange = NSRange(location: 0, length: storage.length)
+  let secondRange = (body as NSString).paragraphRange(
+    for: NSRange(location: ("First paragraph\n" as NSString).length, length: 0)
+  )
+  textView.setSelectedRange(fullRange)
+  #expect(commands.applyTextStyle(.heading2))
+  let paragraph = try #require(
+    (storage.attribute(.paragraphStyle, at: secondRange.location, effectiveRange: nil)
+      as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle
+  )
+  paragraph.paragraphSpacing += 2
+  storage.addAttribute(.paragraphStyle, value: paragraph, range: secondRange)
+
+  commands.refreshFormattingState()
+
+  #expect(commands.currentTextStyle == nil)
+  #expect(commands.isTextStyleMixed)
+  textView.setSelectedRange(NSRange(location: 0, length: 0))
+  commands.refreshFormattingState()
+  #expect(commands.currentTextStyle == .heading2)
+}
+
 @Test @MainActor func codeParagraphKeepsMonospacedBodySizedText() throws {
   let body = "let value = 42"
   let (window, textView, commands) = metricsEditor(body)

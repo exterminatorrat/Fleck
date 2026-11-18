@@ -25,6 +25,28 @@
       let after: CGFloat
     }
 
+    struct PresetParagraphMetrics: Equatable {
+      let lineHeight: CGFloat
+      let spacingBefore: CGFloat
+      let spacingAfter: CGFloat
+
+      func matches(_ paragraph: NSParagraphStyle, tolerance: CGFloat = 0.01) -> Bool {
+        abs(paragraph.minimumLineHeight - lineHeight) < tolerance
+          && abs(paragraph.maximumLineHeight - lineHeight) < tolerance
+          && abs(paragraph.lineHeightMultiple) < tolerance
+          && abs(paragraph.paragraphSpacingBefore - spacingBefore) < tolerance
+          && abs(paragraph.paragraphSpacing - spacingAfter) < tolerance
+      }
+
+      func apply(to paragraph: NSMutableParagraphStyle) {
+        paragraph.minimumLineHeight = lineHeight
+        paragraph.maximumLineHeight = lineHeight
+        paragraph.lineHeightMultiple = 0
+        paragraph.paragraphSpacingBefore = spacingBefore
+        paragraph.paragraphSpacing = spacingAfter
+      }
+    }
+
     static let quoteParagraphSpacing: CGFloat = 8
     static let codeParagraphSpacing: CGFloat = 4
 
@@ -75,19 +97,25 @@
       return font
     }
 
+    static func presetParagraphMetrics(
+      for style: EditorTextStyle,
+      size: CGFloat
+    ) -> PresetParagraphMetrics {
+      let spacing = presetSpacing(for: style)
+      return PresetParagraphMetrics(
+        lineHeight: lineHeight(fontSize: size * presetScale(for: style)),
+        spacingBefore: spacing.before,
+        spacingAfter: spacing.after
+      )
+    }
+
     static func applyPresetFields(
       _ paragraph: NSMutableParagraphStyle,
       for style: EditorTextStyle,
       family: String,
       size: CGFloat
     ) {
-      let spacing = presetSpacing(for: style)
-      let presetLineHeight = lineHeight(fontSize: size * presetScale(for: style))
-      paragraph.minimumLineHeight = presetLineHeight
-      paragraph.maximumLineHeight = presetLineHeight
-      paragraph.lineHeightMultiple = 0
-      paragraph.paragraphSpacingBefore = spacing.before
-      paragraph.paragraphSpacing = spacing.after
+      presetParagraphMetrics(for: style, size: size).apply(to: paragraph)
       paragraph.defaultTabInterval = indentWidth(font: bodyFont(family: family, size: size))
     }
 

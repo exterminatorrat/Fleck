@@ -3,6 +3,27 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.32-beta.1] - 2026-11-18
+
+### Changed
+
+- Editor presentation shares one list parse per refresh, resolves marker fonts
+  once per size, and limits marker glyph lookups to the region being repainted.
+  Native change notifications no longer rebuild the same presentation twice.
+- Toolbar style recognition compares shared paragraph metrics without measuring
+  fonts, and legacy typography migration resolves target presets once per load.
+
+### Fixed
+
+- Incremental external edits preserve the reader's viewport and reveal a caret
+  that was visible before the edit. Canonically equivalent Unicode changes use
+  the existing selection mapping, and rich-text changes retain formatting outside
+  the replaced span.
+- Applying model-originated content no longer serializes and saves the same edit
+  again through the user-edit callback. Undo and subsequent typing still publish.
+- Clearing empty list-marker presentation restores the original underlying ink
+  instead of retaining a dimmed temporary color.
+
 ## [1.8.31-beta.1] - 2026-11-18
 
 ### Added

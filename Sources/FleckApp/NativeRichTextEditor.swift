@@ -1251,28 +1251,18 @@
     }
 
     func isCaretVisible(in textView: NSTextView) -> Bool {
-      guard let layoutManager = textView.layoutManager,
-        let textContainer = textView.textContainer
-      else { return true }
+      guard let window = textView.window else { return true }
       let caretLocation = min(
         textView.selectedRange().location,
         (textView.string as NSString).length
       )
-      let glyphRange = layoutManager.glyphRange(
+      let screenRect = textView.firstRect(
         forCharacterRange: NSRange(location: caretLocation, length: 0),
-        actualCharacterRange: nil
+        actualRange: nil
       )
-      var caret = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
-      caret.origin.x += textView.textContainerOrigin.x
-      caret.origin.y += textView.textContainerOrigin.y
+      var caret = contentView.convert(window.convertFromScreen(screenRect), from: nil)
       caret.size.width = max(caret.size.width, 1)
-      caret.size.height = max(
-        caret.size.height,
-        layoutManager.defaultLineHeight(
-          for: textView.font ?? .systemFont(ofSize: NSFont.systemFontSize)
-        )
-      )
-      return contentView.bounds.contains(contentView.convert(caret, from: textView))
+      return contentView.bounds.contains(caret)
     }
 
     func relayoutDocument() {
@@ -1885,18 +1875,33 @@
       else {
         return false
       }
+      let scrollView = textView.enclosingScrollView as? NativeEditorScrollView
+      let scrollOffset = scrollView?.contentView.bounds.origin.y
+      let caretWasVisible = scrollView?.isCaretVisible(in: textView) ?? false
+      coordinator.isApplyingExternalContent = true
+      defer {
+        coordinator.isApplyingExternalContent = false
+        coordinator.text = text
+        coordinator.richTextRTF = richTextRTF
+        coordinator.lastModelText = text
+        coordinator.lastModelRichTextRTF = richTextRTF
+        if let scrollView, let scrollOffset, scrollView.noteID == noteID {
+          scrollView.scheduleScrollRestore(
+            scrollOffset,
+            revealingCaretIfNeeded: caretWasVisible
+          )
+        }
+      }
+      let content = resolvedContent()
       if let editor = textView as? ListAwareTextView,
-        let edit = contiguousProgrammaticEdit(for: editor),
+        scrollView == nil || scrollView?.noteID == noteID,
+        let edit = contiguousProgrammaticEdit(for: editor, content: content),
         editor.applyProgrammaticEdit(
           range: edit.range,
           replacement: edit.replacement,
           actionName: "Agent Edit"
         )
       {
-        coordinator.text = text
-        coordinator.richTextRTF = richTextRTF
-        coordinator.lastModelText = text
-        coordinator.lastModelRichTextRTF = richTextRTF
         return true
       }
       (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
@@ -1911,7 +1916,7 @@
         from: currentSource.string,
         to: text
       ).map { canonicalSelection(sourceSelection, applying: $0) } ?? sourceSelection
-      loadContent(into: textView)
+      loadContent(content, into: textView)
       let reloaded = NSAttributedString(attributedString: textView.textStorage ?? NSTextStorage())
       let sourceLocation = min(remappedSourceSelection.location, text.utf16.count)
       let clampedSourceSelection = NSRange(
@@ -1924,22 +1929,25 @@
           in: reloaded
         )
       )
-      coordinator.text = text
-      coordinator.richTextRTF = richTextRTF
-      coordinator.lastModelText = text
-      coordinator.lastModelRichTextRTF = richTextRTF
       return true
+    }
+
+    private struct ResolvedContent {
+      let attributedString: NSAttributedString
+      let usesRichText: Bool
     }
 
     /// Resolves the content `loadContent(into:)` would install for the current
     /// model values, without touching a text view.
-    private func resolvedContent() -> NSAttributedString {
+    private func resolvedContent() -> ResolvedContent {
       let source: NSAttributedString
+      let usesRichText: Bool
       if let richTextRTF,
         let attributed = try? NoteRichTextCodec.decode(richTextRTF),
         let canonical = canonicalAttributedText(attributed)
       {
         source = canonical
+        usesRichText = true
       } else {
         let plain = NSMutableAttributedString(string: text)
         if plain.length > 0 {
@@ -1949,19 +1957,27 @@
           )
         }
         source = plain
+        usesRichText = false
       }
-      return inlineImageStore?.projectedContent(from: source) ?? source
+      return ResolvedContent(
+        attributedString: inlineImageStore?.projectedContent(from: source) ?? source,
+        usesRichText: usesRichText
+      )
     }
 
     /// A model change that is one contiguous edit over a note that is otherwise
     /// unchanged is applied in place, so it becomes a single undo step instead of
     /// a reload. Whole-note rewrites and image-bearing content keep the reload.
     private func contiguousProgrammaticEdit(
-      for editor: ListAwareTextView
+      for editor: ListAwareTextView,
+      content: ResolvedContent
     ) -> (range: NSRange, replacement: NSAttributedString)? {
       guard let storage = editor.textStorage else { return nil }
-      let target = resolvedContent()
+      let target = content.attributedString
       guard !target.containsAttachments, !storage.containsAttachments else { return nil }
+      // Canonically equivalent text needs the reload's UTF-16 selection mapping,
+      // including selections inside a decomposed character sequence.
+      guard storage.string != target.string else { return nil }
       let current = storage.string as NSString
       let updated = target.string as NSString
       let sharedLimit = min(current.length, updated.length)
@@ -1993,6 +2009,16 @@
       guard prefix + suffix > 0,
         (prefix + suffix) * 2 >= max(current.length, updated.length)
       else { return nil }
+      if content.usesRichText {
+        let prefixRange = NSRange(location: 0, length: prefix)
+        let currentSuffix = NSRange(location: current.length - suffix, length: suffix)
+        let targetSuffix = NSRange(location: updated.length - suffix, length: suffix)
+        guard attributesMatch(
+          storage, in: prefixRange, target, in: prefixRange
+        ), attributesMatch(
+          storage, in: currentSuffix, target, in: targetSuffix
+        ) else { return nil }
+      }
       let range = NSRange(location: prefix, length: current.length - prefix - suffix)
       let replacement = target.attributedSubstring(
         from: NSRange(location: prefix, length: updated.length - prefix - suffix)
@@ -2001,30 +2027,44 @@
       return (range, replacement)
     }
 
-    private func loadContent(into textView: NSTextView) {
-      let scrollView = textView.enclosingScrollView as? NativeEditorScrollView
-      let scrollOffset = scrollView?.contentView.bounds.origin.y
-      let caretWasVisible = scrollView?.isCaretVisible(in: textView) ?? false
-      let source: NSAttributedString
-      let loadedRichText: Bool
-      if let richTextRTF,
-        let attributed = try? NoteRichTextCodec.decode(richTextRTF),
-        let canonicalAttributed = canonicalAttributedText(attributed)
-      {
-        source = canonicalAttributed
-        loadedRichText = true
-      } else {
-        source = NSAttributedString(string: text)
-        loadedRichText = false
-      }
-      if let inlineImageStore {
-        textView.textStorage?.setAttributedString(
-          inlineImageStore.projectedContent(from: source)
+    /// Text in these ranges already matches. Compare attribute runs without
+    /// copying the unchanged parts of the note into attributed substrings.
+    private func attributesMatch(
+      _ current: NSAttributedString,
+      in currentRange: NSRange,
+      _ target: NSAttributedString,
+      in targetRange: NSRange
+    ) -> Bool {
+      var offset = 0
+      while offset < currentRange.length {
+        var currentRun = NSRange()
+        var targetRun = NSRange()
+        let currentAttributes = current.attributes(
+          at: currentRange.location + offset,
+          effectiveRange: &currentRun
         )
-      } else {
-        textView.textStorage?.setAttributedString(source)
+        let targetAttributes = target.attributes(
+          at: targetRange.location + offset,
+          effectiveRange: &targetRun
+        )
+        guard NSDictionary(dictionary: currentAttributes).isEqual(to: targetAttributes) else {
+          return false
+        }
+        offset = min(
+          NSMaxRange(currentRun) - currentRange.location,
+          NSMaxRange(targetRun) - targetRange.location
+        )
       }
-      if loadedRichText {
+      return true
+    }
+
+    private func loadContent(into textView: NSTextView) {
+      loadContent(resolvedContent(), into: textView)
+    }
+
+    private func loadContent(_ content: ResolvedContent, into textView: NSTextView) {
+      textView.textStorage?.setAttributedString(content.attributedString)
+      if content.usesRichText {
         applyTypingFont(to: textView)
         (textView as? ListAwareTextView)?.migrateLegacyTypography(
           family: fontFamily,
@@ -2032,12 +2072,6 @@
         )
       } else {
         applyDefaultFont(to: textView)
-      }
-      if let scrollView, let scrollOffset, scrollView.noteID == noteID {
-        scrollView.scheduleScrollRestore(
-          scrollOffset,
-          revealingCaretIfNeeded: caretWasVisible
-        )
       }
     }
 
@@ -2224,17 +2258,17 @@
 
     private func applyDefaultFont(to textView: NSTextView) {
       let font = configuredFont()
-      applyTypingFont(to: textView)
       textView.font = font
-      guard let storage = textView.textStorage, storage.length > 0 else { return }
-      storage.addAttributes(
-        EditorTypography.defaultAttributes(
-          family: fontFamily,
-          size: fontSize
-        ),
-        range: NSRange(location: 0, length: storage.length)
-      )
-      (textView as? ListAwareTextView)?.normalizeListMarkerFonts()
+      if let storage = textView.textStorage, storage.length > 0 {
+        storage.addAttributes(
+          EditorTypography.defaultAttributes(
+            family: fontFamily,
+            size: fontSize
+          ),
+          range: NSRange(location: 0, length: storage.length)
+        )
+      }
+      applyTypingFont(to: textView)
     }
 
     @MainActor
@@ -2248,6 +2282,7 @@
       var richTextRTF: Data?
       var lastModelText: String
       var lastModelRichTextRTF: Data?
+      fileprivate var isApplyingExternalContent = false
       private var lastReportedNoteLinkTrigger: (text: String, range: NSRange)?
       var hasPendingLocalEdit: Bool {
         !editorTextExactlyMatches(text, lastModelText)
@@ -2263,6 +2298,7 @@
       }
 
       func textDidChange(_ notification: Notification) {
+        guard !isApplyingExternalContent else { return }
         let signpostState = FleckPerformanceSignposts.signposter.beginInterval(
           FleckPerformanceSignposts.editorChange
         )
@@ -2543,6 +2579,12 @@
       let completed: Bool
     }
 
+    private struct ParsedListItem {
+      let markerRange: NSRange
+      let contentRange: NSRange
+      let parsed: ParsedEditorListLine
+    }
+
     /// Solid for a current link, dashed when the label disagrees with the live title, and dotted
     /// when the target is gone. The pattern, not the color alone, carries the state.
     static func noteLinkUnderlineStyle(isLive: Bool, isStale: Bool) -> Int {
@@ -2556,6 +2598,7 @@
     private var temporaryNoteLinkPresentations: [TemporaryNoteLinkPresentation] = []
     private var noteLinkPresentationLinks: [NoteLink] = []
     private var noteLinkAccentColorHex: String?
+    private var noteLinkPresentationGeneration = -1
     private var hiddenNoteLinkDestinationRanges: [NSRange] = []
     private var hiddenNoteLinkTokenRanges: [NSRange] = []
     private var temporaryChecklistSlices: [TemporaryAttributeSlice] = []
@@ -2909,6 +2952,10 @@
     }
 
     func refreshChecklistPresentation() {
+      refreshChecklistPresentation(linkRanges: NoteLinkParser.links(in: string).map(\.range))
+    }
+
+    private func refreshChecklistPresentation(linkRanges: [NSRange]) {
       clearChecklistPresentation()
       checklistPresentationNeedsRefresh = false
       guard let storage = textStorage, let layoutManager, storage.length > 0 else {
@@ -2916,27 +2963,8 @@
         return
       }
 
-      let linkRanges = NoteLinkParser.links(in: string).map(\.range)
-      for markerRange in emptyListMarkerRanges() {
-        temporaryChecklistSlices.append(contentsOf: temporaryAttributeSlices(
-          .foregroundColor,
-          in: markerRange,
-          layoutManager: layoutManager
-        ))
-        let effectiveColor = effectiveForegroundColor(
-          at: markerRange.location,
-          storage: storage,
-          layoutManager: layoutManager
-        )
-        layoutManager.addTemporaryAttribute(
-          .foregroundColor,
-          value: effectiveColor.withAlphaComponent(
-            effectiveColor.alphaComponent * ChecklistMarkerDrawing.emptyListMarkerOpacity
-          ),
-          forCharacterRange: markerRange
-        )
-      }
-      for item in checklistItems() {
+      let items = parsedListItems()
+      for item in items where item.parsed.style == .checklist {
         temporaryChecklistSlices.append(contentsOf: temporaryAttributeSlices(
           .foregroundColor,
           in: item.markerRange,
@@ -2948,7 +2976,7 @@
           forCharacterRange: item.markerRange
         )
 
-        guard item.completed, item.contentRange.length > 0 else { continue }
+        guard item.parsed.isChecklistComplete, item.contentRange.length > 0 else { continue }
         for range in rangesExcluding(item.contentRange, ranges: linkRanges) {
           temporaryChecklistSlices.append(contentsOf: temporaryAttributeSlices(
             .foregroundColor,
@@ -2963,11 +2991,12 @@
           applyChecklistRecession(in: range, storage: storage, layoutManager: layoutManager)
         }
       }
-      refreshScaledListMarkers(storage: storage, layoutManager: layoutManager)
+      refreshScaledListMarkers(items: items, storage: storage, layoutManager: layoutManager)
     }
 
     func clearNoteLinkPresentation() {
       clearChecklistPresentation()
+      noteLinkPresentationGeneration = -1
       let collapsedTokens = hiddenNoteLinkTokenRanges
       hiddenNoteLinkDestinationRanges = []
       hiddenNoteLinkTokenRanges = []
@@ -3012,7 +3041,8 @@
       temporaryNoteLinkPresentations = []
       noteLinkPresentationLinks = NoteLinkParser.links(in: string)
       updateNoteLinkGlyphVisibility()
-      refreshChecklistPresentation()
+      refreshChecklistPresentation(linkRanges: noteLinkPresentationLinks.map(\.range))
+      noteLinkPresentationGeneration = textChangeGeneration
       needsDisplay = true
     }
 
@@ -3025,8 +3055,9 @@
 
       let links = NoteLinkParser.links(in: string)
       noteLinkPresentationLinks = links
+      noteLinkPresentationGeneration = textChangeGeneration
       guard !links.isEmpty, textLength > 0 else {
-        refreshChecklistPresentation()
+        refreshChecklistPresentation(linkRanges: [])
         needsDisplay = true
         return
       }
@@ -3071,7 +3102,7 @@
         temporaryNoteLinkPresentations.append(presentation)
       }
       updateNoteLinkGlyphVisibility()
-      refreshChecklistPresentation()
+      refreshChecklistPresentation(linkRanges: links.map(\.range))
       needsDisplay = true
     }
 
@@ -5905,9 +5936,14 @@
       let edited = pendingEditRange
       pendingEditRange = nil
       normalizeListMarkerFonts(in: editedParagraphRange(for: edited))
-      restoreNoteLinkPresentationAfterEdit()
-      applyCompositionInk()
       super.didChangeText()
+      // The coordinator refreshes presentation while handling the native change
+      // notification. Standalone views still need that work, but doing it before
+      // the notification rebuilds every link and marker twice per keystroke.
+      if noteLinkPresentationGeneration != textChangeGeneration {
+        restoreNoteLinkPresentationAfterEdit()
+      }
+      applyCompositionInk()
       needsDisplay = true
       window?.invalidateCursorRects(for: self)
     }
@@ -6586,30 +6622,23 @@
       return items
     }
 
-    private func emptyListMarkerRanges() -> [NSRange] {
+    private func parsedListItems() -> [ParsedListItem] {
       let ns = string as NSString
       guard ns.length > 0 else { return [] }
       var location = 0
-      var ranges: [NSRange] = []
+      var items: [ParsedListItem] = []
       while location < ns.length {
         let paragraphRange = ns.paragraphRange(
           for: NSRange(location: location, length: 0)
         )
-        if let item = parsedListItem(in: paragraphRange, string: ns),
-          item.parsed.content.isEmpty
-        {
-          switch item.parsed.style {
-          case .bullet, .number:
-            ranges.append(item.markerRange)
-          case .checklist:
-            break
-          }
+        if let item = parsedListItem(in: paragraphRange, string: ns) {
+          items.append(item)
         }
         let nextLocation = NSMaxRange(paragraphRange)
         guard nextLocation > location else { break }
         location = nextLocation
       }
-      return ranges
+      return items
     }
 
     private func checklistItem(in paragraphRange: NSRange, string ns: NSString) -> ChecklistItem? {
@@ -6657,11 +6686,7 @@
       return prefixes
     }
 
-    private func parsedListItem(in paragraphRange: NSRange, string ns: NSString) -> (
-      markerRange: NSRange,
-      contentRange: NSRange,
-      parsed: ParsedEditorListLine
-    )? {
+    private func parsedListItem(in paragraphRange: NSRange, string ns: NSString) -> ParsedListItem? {
       let paragraph = ns.substring(with: paragraphRange).trimmingCharacters(in: .newlines)
       guard let parsed = EditorListEngine.parse(paragraph) else { return nil }
       let markerStart = parsed.depth * 4
@@ -6673,7 +6698,7 @@
         location: paragraphRange.location + markerStart,
         length: markerLength
       )
-      return (
+      return ParsedListItem(
         markerRange: markerRange,
         contentRange: NSRange(
           location: NSMaxRange(markerRange) + 1,
@@ -6778,33 +6803,6 @@
 
     private var scaledListMarkers: [ScaledListMarker] = []
     private var temporaryScaledMarkerSlices: [TemporaryAttributeSlice] = []
-    private var drawnMarkerFontCache: [DrawnMarkerFontKey: NSFont] = [:]
-
-    private struct DrawnMarkerFontKey: Hashable {
-      let family: String
-      let pointSize: CGFloat
-    }
-
-    /// The font a text marker is drawn in: the note's body family at its line's own
-    /// point size, resolved once per family and size.
-    ///
-    /// It is deliberately not the font storage holds for the marker, and not a size
-    /// derived from the line's content: a line typed beside ideographs gets the same
-    /// marker as a line of capitals, and the bullet keeps the weight the note's own
-    /// body font gives it rather than whatever dot the face the text system
-    /// substituted for that content happens to carry — PingFang SC's dot is lighter
-    /// than Avenir Next's at the same point size.
-    private func drawnMarkerFont(contentFont: NSFont) -> NSFont {
-      let body =
-        NSFont(
-          descriptor: configuredBodyFont.fontDescriptor,
-          size: contentFont.pointSize
-        ) ?? configuredBodyFont
-      let key = DrawnMarkerFontKey(family: body.fontName, pointSize: body.pointSize)
-      if let cached = drawnMarkerFontCache[key] { return cached }
-      drawnMarkerFontCache[key] = body
-      return body
-    }
 
     /// Collects every text list marker this view draws and hides the glyph the
     /// text system would otherwise paint for it.
@@ -6814,41 +6812,43 @@
     /// and weight from the drawn one, which is how a bullet came to change size
     /// while its own paragraph was being typed.
     private func refreshScaledListMarkers(
+      items: [ParsedListItem],
       storage: NSTextStorage,
       layoutManager: NSLayoutManager
     ) {
-      restoreTemporaryAttributeSlices(
-        temporaryScaledMarkerSlices,
-        in: layoutManager,
-        textLength: storage.length
-      )
-      temporaryScaledMarkerSlices = []
-      scaledListMarkers = []
-      drawnMarkerFontCache.removeAll(keepingCapacity: true)
-      let ns = string as NSString
-      var location = 0
-      while location < ns.length {
-        let paragraphRange = ns.paragraphRange(for: NSRange(location: location, length: 0))
-        let nextLocation = NSMaxRange(paragraphRange)
-        defer { location = max(nextLocation, location + 1) }
-        guard let item = parsedListItem(in: paragraphRange, string: ns),
-          item.markerRange.length > 0,
-          isTextListMarker(item.parsed.style)
-        else { continue }
-        let contentIndex = min(item.contentRange.location, ns.length - 1)
+      // The note's family is constant during this pass. Resolve each distinct
+      // line size once; a local cache needs no invalidation when the note changes.
+      var bodyFont: NSFont?
+      var fonts: [CGFloat: NSFont] = [:]
+      for item in items where isTextListMarker(item.parsed.style) {
+        let contentIndex = min(item.contentRange.location, storage.length - 1)
+        if bodyFont == nil { bodyFont = configuredBodyFont }
+        guard let bodyFont else { continue }
         let contentFont =
           (storage.attribute(.font, at: contentIndex, effectiveRange: nil) as? NSFont)
-          ?? configuredBodyFont
-        let font = drawnMarkerFont(contentFont: contentFont)
-        let ink =
-          (storage.attribute(
-            .foregroundColor,
+          ?? bodyFont
+        let font: NSFont
+        if let cached = fonts[contentFont.pointSize] {
+          font = cached
+        } else {
+          font = NSFont(descriptor: bodyFont.fontDescriptor, size: contentFont.pointSize) ?? bodyFont
+          fonts[contentFont.pointSize] = font
+        }
+        let storedInk = (storage.attribute(
+          .foregroundColor, at: item.markerRange.location, effectiveRange: nil
+        ) as? NSColor) ?? (storage.attribute(
+          .foregroundColor, at: contentIndex, effectiveRange: nil
+        ) as? NSColor)
+        let ink: NSColor
+        if let storedInk, !storedInk.isEqual(NSColor.textColor) {
+          ink = storedInk
+        } else {
+          ink = effectiveForegroundColor(
             at: item.markerRange.location,
-            effectiveRange: nil
-          ) as? NSColor)
-          ?? (storage.attribute(.foregroundColor, at: contentIndex, effectiveRange: nil)
-            as? NSColor)
-          ?? .textColor
+            storage: storage,
+            layoutManager: layoutManager
+          )
+        }
         scaledListMarkers.append(
           ScaledListMarker(
             range: item.markerRange,
@@ -6872,10 +6872,21 @@
 
     private func drawScaledListMarkers(in dirtyRect: NSRect) {
       guard let storage = textStorage, let layoutManager, let textContainer,
+        !scaledListMarkers.isEmpty,
         let context = NSGraphicsContext.current?.cgContext
       else { return }
+      let visibleGlyphs = layoutManager.glyphRange(
+        forBoundingRect: dirtyRect.offsetBy(
+          dx: -textContainerOrigin.x, dy: -textContainerOrigin.y
+        ),
+        in: textContainer
+      )
+      guard visibleGlyphs.length > 0 else { return }
+      let visibleCharacters = layoutManager.characterRange(
+        forGlyphRange: visibleGlyphs, actualGlyphRange: nil
+      )
       let selection = selectedRange()
-      for marker in scaledListMarkers {
+      for marker in scaledListMarkers(in: visibleCharacters) {
         let glyphRange = layoutManager.glyphRange(
           forCharacterRange: marker.range,
           actualCharacterRange: nil
@@ -6917,6 +6928,28 @@
         CTLineDraw(line, context)
         context.restoreGState()
       }
+    }
+
+    /// Markers are collected in document order. Find the dirty slice before
+    /// asking TextKit for glyph geometry, so repainting a caret or scrolling a
+    /// long note does not lay out every offscreen list marker.
+    private func scaledListMarkers(in range: NSRange) -> ArraySlice<ScaledListMarker> {
+      var lower = 0
+      var upper = scaledListMarkers.count
+      while lower < upper {
+        let middle = lower + (upper - lower) / 2
+        if NSMaxRange(scaledListMarkers[middle].range) <= range.location {
+          lower = middle + 1
+        } else {
+          upper = middle
+        }
+      }
+      let start = lower
+      let end = NSMaxRange(range)
+      while lower < scaledListMarkers.count, scaledListMarkers[lower].range.location < end {
+        lower += 1
+      }
+      return scaledListMarkers[start..<lower]
     }
 
     /// Bullets and numbers are drawn from their stored characters; checklist

@@ -230,6 +230,7 @@ private func scrollEditor(_ scrollView: NSScrollView, to offset: CGFloat) {
   let caretLocation = try #require(caretOffset)
   textView.setSelectedRange(NSRange(location: caretLocation, length: 0))
   await settleScrollMemoryHost(host)
+  #expect(scrollView.isCaretVisible(in: textView))
   let offsetBeforeReload = scrollView.contentView.bounds.origin.y
 
   let insertedAbove = (1...40)
@@ -243,5 +244,30 @@ private func scrollEditor(_ scrollView: NSScrollView, to offset: CGFloat) {
 
   let offsetAfterReload = scrollView.contentView.bounds.origin.y
   #expect(abs(offsetAfterReload - offsetBeforeReload) > 1)
+  #expect(scrollView.isCaretVisible(in: textView))
+}
+
+@Test @MainActor func caretVisibilityTracksTheTerminalEmptyLine() async throws {
+  let commands = EditorCommands()
+  let body = longScrollMemoryBody() + "\n"
+  let host = NSHostingView(
+    rootView: ScrollMemoryHarness(
+      note: ScrollMemoryNote(id: UUID(), text: body),
+      commands: commands
+    )
+  )
+  let window = makeScrollMemoryWindow(host: host)
+  defer { window.orderOut(nil) }
+  await settleScrollMemoryHost(host)
+
+  let scrollView = try #require(hostedEditorScrollView(in: host))
+  let textView = try #require(scrollView.documentView as? NativeEditorDocumentView).textView
+  textView.setSelectedRange(NSRange(location: (body as NSString).length, length: 0))
+  scrollEditor(scrollView, to: 0)
+  await settleScrollMemoryHost(host)
+  #expect(!scrollView.isCaretVisible(in: textView))
+
+  textView.scrollRangeToVisible(textView.selectedRange())
+  await settleScrollMemoryHost(host)
   #expect(scrollView.isCaretVisible(in: textView))
 }

@@ -401,3 +401,53 @@ private func migrate(_ storage: NSTextStorage) -> Int {
   let bodyParagraph = try paragraphStyle(liveStorage, at: listLength)
   #expect(abs(bodyParagraph.paragraphSpacing - EditorTypography.bodyParagraphSpacing) < 0.01)
 }
+
+@Test @MainActor func migratingMixedPresetsPreservesUnownedAttributesAndIsIdempotent() throws {
+  let cases: [(LegacyPreset, CGFloat, CGFloat, CGFloat)] = [
+    (legacyHeading3, 1.15, 8, 4),
+    (legacyBody, 1, 0, 8),
+    (legacyCode, 1, 4, 4),
+    (legacyHeading1, 1.6, 16, 8),
+    (legacyQuote, 1, 8, 8),
+    (legacyHeading2, 1.35, 12, 6),
+  ]
+  let storage = NSTextStorage()
+  var paragraphs: [(range: NSRange, size: CGFloat, before: CGFloat, after: CGFloat)] = []
+  for (index, item) in cases.enumerated() {
+    var attributes = legacyAttributes(item.0)
+    let paragraph = try #require(
+      (attributes[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy()
+        as? NSMutableParagraphStyle
+    )
+    paragraph.lineSpacing = 3
+    paragraph.baseWritingDirection = .rightToLeft
+    attributes[.paragraphStyle] = paragraph
+    attributes[.foregroundColor] = NSColor.systemPurple
+    attributes[.kern] = 1.25
+    let text = "Paragraph \(index)\n"
+    let range = NSRange(location: storage.length, length: (text as NSString).length)
+    paragraphs.append((range, migrationBodySize * item.1, item.2, item.3))
+    storage.append(NSAttributedString(string: text, attributes: attributes))
+  }
+  let originalText = storage.string
+
+  #expect(migrate(storage) == cases.count)
+
+  #expect(storage.string == originalText)
+  for expected in paragraphs {
+    let attributes = storage.attributes(at: expected.range.location, effectiveRange: nil)
+    let font = try #require(attributes[.font] as? NSFont)
+    let paragraph = try #require(attributes[.paragraphStyle] as? NSParagraphStyle)
+    #expect(abs(font.pointSize - expected.size) < 0.01)
+    #expect(paragraph.paragraphSpacingBefore == expected.before)
+    #expect(paragraph.paragraphSpacing == expected.after)
+    #expect(paragraph.lineSpacing == 3)
+    #expect(paragraph.baseWritingDirection == .rightToLeft)
+    #expect((attributes[.foregroundColor] as? NSColor)?.isEqual(NSColor.systemPurple) == true)
+    #expect(attributes[.kern] as? Double == 1.25)
+  }
+  let migrated = NSAttributedString(attributedString: storage)
+
+  #expect(migrate(storage) == 0)
+  #expect(storage.isEqual(to: migrated))
+}

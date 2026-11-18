@@ -23,6 +23,7 @@
       backing: .buffered,
       defer: false
     )
+    window.isReleasedWhenClosed = false
     window.contentView = view
     view.configuredBodyFontFamily = family
     view.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
@@ -128,12 +129,61 @@
     return starts
   }
 
+  @Test(arguments: [true, false])
+  @MainActor func listMarkerUsesContentOrPresentedInk(useContentColor: Bool) throws {
+    let (view, window) = rasterEditor("• colored text")
+    defer { closeEditorTestWindow(window) }
+    let storage = try #require(view.textStorage)
+    let layoutManager = try #require(view.layoutManager)
+    let container = try #require(view.textContainer)
+    let fullRange = NSRange(location: 0, length: storage.length)
+    if useContentColor {
+      storage.removeAttribute(.foregroundColor, range: NSRange(location: 0, length: 2))
+      storage.addAttribute(
+        .foregroundColor, value: NSColor.red,
+        range: NSRange(location: 2, length: storage.length - 2)
+      )
+    } else {
+      storage.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
+      layoutManager.addTemporaryAttribute(
+        .foregroundColor, value: NSColor.red, forCharacterRange: fullRange
+      )
+    }
+    view.refreshChecklistPresentation()
+    layoutManager.ensureLayout(for: container)
+    let glyphs = layoutManager.glyphRange(
+      forCharacterRange: NSRange(location: 0, length: 1), actualCharacterRange: nil
+    )
+    let rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: container)
+      .offsetBy(dx: view.textContainerOrigin.x, dy: view.textContainerOrigin.y)
+    let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+    view.cacheDisplay(in: view.bounds, to: bitmap)
+    let scale = CGFloat(bitmap.pixelsWide) / view.bounds.width
+    var redPixels = 0
+    let x0 = max(0, Int((rect.minX * scale).rounded(.down)))
+    let x1 = min(bitmap.pixelsWide, Int((rect.maxX * scale).rounded(.up)))
+    let y0 = max(0, Int((rect.minY * scale).rounded(.down)))
+    let y1 = min(bitmap.pixelsHigh, Int((rect.maxY * scale).rounded(.up)))
+    try #require(x0 < x1 && y0 < y1)
+    for y in y0..<y1 {
+      for x in x0..<x1 {
+        guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+        if color.redComponent > color.greenComponent + 0.2,
+          color.redComponent > color.blueComponent + 0.2
+        {
+          redPixels += 1
+        }
+      }
+    }
+    #expect(redPixels > 2)
+  }
+
   /// A plain note with two list items paints both markers. Build 208 drew no
   /// marker ink here at all, which is what Harry saw in every note.
   @Test @MainActor func plainListItemsPaintTheirMarkers() throws {
     let text = "• first item\n• second item"
     let (view, window) = rasterEditor(text)
-    defer { window.contentView = nil }
+    defer { closeEditorTestWindow(window) }
     view.refreshChecklistPresentation()
 
     for start in paragraphStarts(in: text) {
@@ -154,7 +204,7 @@
       •\u{20}
       """
     let (view, window) = rasterEditor(text)
-    defer { window.contentView = nil }
+    defer { closeEditorTestWindow(window) }
     let ns = text as NSString
     view.refreshChecklistPresentation()
     view.setSelectedRange(
@@ -178,7 +228,7 @@
   @Test @MainActor func theCaretParagraphKeepsItsMarker() throws {
     let text = "• first item\n• second item"
     let (view, window) = rasterEditor(text)
-    defer { window.contentView = nil }
+    defer { closeEditorTestWindow(window) }
     let second = paragraphStarts(in: text)[1]
     view.setSelectedRange(NSRange(location: 0, length: 0))
     view.refreshChecklistPresentation()
@@ -195,7 +245,7 @@
   @Test @MainActor func listParagraphKeepsAPlainParagraphBaseline() throws {
     let text = "plain paragraph\n• list paragraph"
     let (view, window) = rasterEditor(text)
-    defer { window.contentView = nil }
+    defer { closeEditorTestWindow(window) }
     let storage = try #require(view.textStorage)
     let layoutManager = try #require(view.layoutManager)
     let container = try #require(view.textContainer)
@@ -239,7 +289,7 @@
   @Test @MainActor func scaledMarkerPaintsInDarkAppearance() throws {
     let text = "• \u{4F60}\u{597D} world"
     let (view, window) = rasterEditor(text, dark: true)
-    defer { window.contentView = nil }
+    defer { closeEditorTestWindow(window) }
     view.refreshChecklistPresentation()
     view.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
     view.refreshChecklistPresentation()
@@ -316,7 +366,7 @@
   @Test @MainActor func everyListMarkerIsDrawnByTheView() throws {
     let text = "• top level\n    • nested level\n1. numbered\n• \u{4F60}\u{597D}\n• "
     let (view, window) = rasterEditor(text)
-    defer { window.contentView = nil }
+    defer { closeEditorTestWindow(window) }
     let ns = text as NSString
     view.refreshChecklistPresentation()
 
@@ -341,7 +391,7 @@
   @Test @MainActor func movingTheCaretNeverChangesAMarker() throws {
     let text = "• hello world\n• \u{4F60}\u{597D}\u{4E16}\u{754C}\n• \n• \u{518D}\u{89C1}"
     let (view, window) = rasterEditor(text, family: "Avenir Next")
-    defer { window.contentView = nil }
+    defer { closeEditorTestWindow(window) }
     let avenir = try #require(NSFont(name: "AvenirNext-Regular", size: 17))
     let pingfang = try #require(NSFont(name: "PingFangSC-Regular", size: 17))
     let starts = paragraphStarts(in: text)
@@ -398,7 +448,7 @@
     var signatures: [String] = []
     for font in [avenir, pingfang] {
       let (view, window) = rasterEditor(text, family: "Avenir Next")
-      defer { window.contentView = nil }
+      defer { closeEditorTestWindow(window) }
       setRunFont(font, paragraphAt: 0, in: view)
       view.normalizeListMarkerFonts()
       view.setSelectedRange(
@@ -419,7 +469,7 @@
   @Test @MainActor func appendingACharacterLeavesTheMarkerAlone() throws {
     let text = "• hello"
     let (view, window) = rasterEditor(text, family: "Avenir Next")
-    defer { window.contentView = nil }
+    defer { closeEditorTestWindow(window) }
     let storage = try #require(view.textStorage)
     view.refreshChecklistPresentation()
     let before = markerSignature(of: view, paragraphAt: 0)

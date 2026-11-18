@@ -23,26 +23,20 @@
       let spacingAfter: CGFloat
     }
 
-    private struct Candidate {
+    private struct Preset {
       let style: EditorTextStyle
-      let lineHeight: CGFloat
-      let spacingBefore: CGFloat
-      let spacingAfter: CGFloat
       let font: NSFont
+      let metrics: EditorTypography.PresetParagraphMetrics
+    }
+
+    private struct Candidate {
+      let target: Preset
+      let font: NSFont
+      let metrics: EditorTypography.PresetParagraphMetrics
 
       func matches(runFont: NSFont, paragraph: NSParagraphStyle) -> Bool {
-        guard
-          abs(paragraph.paragraphSpacingBefore - spacingBefore)
-            < EditorTypographyMigration.tolerance,
-          abs(paragraph.paragraphSpacing - spacingAfter)
-            < EditorTypographyMigration.tolerance,
-          abs(paragraph.minimumLineHeight - lineHeight)
-            < EditorTypographyMigration.tolerance,
-          abs(paragraph.maximumLineHeight - lineHeight)
-            < EditorTypographyMigration.tolerance,
-          abs(paragraph.lineHeightMultiple) < EditorTypographyMigration.tolerance
-        else { return false }
-        return EditorTypography.fontsVisuallyMatch(runFont, font)
+        metrics.matches(paragraph, tolerance: EditorTypographyMigration.tolerance)
+          && EditorTypography.fontsVisuallyMatch(runFont, font)
       }
     }
 
@@ -57,18 +51,6 @@
       Signature(style: .code, scale: 1, spacingBefore: 4, spacingAfter: 4),
     ]
 
-    static var currentSignatures: [Signature] {
-      EditorTextStyle.allCases.map { style in
-        let spacing = EditorTypography.presetSpacing(for: style)
-        return Signature(
-          style: style,
-          scale: EditorTypography.presetScale(for: style),
-          spacingBefore: spacing.before,
-          spacingAfter: spacing.after
-        )
-      }
-    }
-
     @discardableResult
     static func migrate(
       _ storage: NSTextStorage,
@@ -76,19 +58,33 @@
       size: CGFloat,
       isListParagraph: (NSRange) -> Bool
     ) -> Int {
-      let candidates = (legacySignatures + currentSignatures).map { signature in
-        Candidate(
-          style: signature.style,
-          lineHeight: EditorTypography.lineHeight(fontSize: size * signature.scale),
-          spacingBefore: signature.spacingBefore,
-          spacingAfter: signature.spacingAfter,
-          font: EditorTypography.presetFont(
-            for: signature.style,
-            family: family,
-            size: size,
-            scale: signature.scale
-          )
+      guard storage.length > 0 else { return 0 }
+      let tabInterval = EditorTypography.indentWidth(
+        font: EditorTypography.bodyFont(family: family, size: size)
+      )
+      let candidates = EditorTextStyle.allCases.flatMap { style -> [Candidate] in
+        let target = Preset(
+          style: style,
+          font: EditorTypography.presetFont(for: style, family: family, size: size),
+          metrics: EditorTypography.presetParagraphMetrics(for: style, size: size)
         )
+        let legacy = legacySignatures.filter { $0.style == style }.map { signature in
+          Candidate(
+            target: target,
+            font: EditorTypography.presetFont(
+              for: style,
+              family: family,
+              size: size,
+              scale: signature.scale
+            ),
+            metrics: EditorTypography.PresetParagraphMetrics(
+              lineHeight: EditorTypography.lineHeight(fontSize: size * signature.scale),
+              spacingBefore: signature.spacingBefore,
+              spacingAfter: signature.spacingAfter
+            )
+          )
+        }
+        return legacy + [Candidate(target: target, font: target.font, metrics: target.metrics)]
       }
       let text = storage.string as NSString
       var migrated = 0
@@ -102,7 +98,7 @@
         guard paragraphRange.length > 0, !isListParagraph(paragraphRange) else { continue }
         guard !text.substring(with: paragraphRange).contains("\t") else { continue }
         guard
-          let style = presetStyle(
+          let preset = matchingPreset(
             in: storage,
             paragraphRange: paragraphRange,
             candidates: candidates
@@ -111,9 +107,8 @@
         if restyle(
           storage,
           paragraphRange: paragraphRange,
-          style: style,
-          family: family,
-          size: size
+          preset: preset,
+          tabInterval: tabInterval
         ) {
           migrated += 1
         }
@@ -122,11 +117,11 @@
       return migrated
     }
 
-    private static func presetStyle(
+    private static func matchingPreset(
       in storage: NSTextStorage,
       paragraphRange: NSRange,
       candidates: [Candidate]
-    ) -> EditorTextStyle? {
+    ) -> Preset? {
       var fontRange = NSRange()
       var styleRange = NSRange()
       guard
@@ -144,21 +139,19 @@
         covers(styleRange, paragraphRange),
         hasDefaultGeometry(paragraph)
       else { return nil }
-      let matches = candidates.filter {
-        $0.matches(runFont: font, paragraph: paragraph)
+      var match: Preset?
+      for candidate in candidates where candidate.matches(runFont: font, paragraph: paragraph) {
+        if let match, match.style != candidate.target.style { return nil }
+        match = candidate.target
       }
-      guard let first = matches.first,
-        matches.allSatisfy({ $0.style == first.style })
-      else { return nil }
-      return first.style
+      return match
     }
 
     private static func restyle(
       _ storage: NSTextStorage,
       paragraphRange: NSRange,
-      style: EditorTextStyle,
-      family: String,
-      size: CGFloat
+      preset: Preset,
+      tabInterval: CGFloat
     ) -> Bool {
       let existing = storage.attribute(
         .paragraphStyle,
@@ -170,37 +163,21 @@
         at: paragraphRange.location,
         effectiveRange: nil
       ) as? NSFont
-      let desiredFont = EditorTypography.presetFont(for: style, family: family, size: size)
-      let desiredSpacing = EditorTypography.presetSpacing(for: style)
-      let desiredLineHeight = EditorTypography.lineHeight(
-        fontSize: size * EditorTypography.presetScale(for: style)
-      )
-      let desiredTabInterval = EditorTypography.indentWidth(
-        font: EditorTypography.bodyFont(family: family, size: size)
-      )
       let metricsMatch = existing.map {
-        abs($0.paragraphSpacingBefore - desiredSpacing.before) < tolerance
-          && abs($0.paragraphSpacing - desiredSpacing.after) < tolerance
-          && abs($0.minimumLineHeight - desiredLineHeight) < tolerance
-          && abs($0.maximumLineHeight - desiredLineHeight) < tolerance
-          && abs($0.lineHeightMultiple) < tolerance
-          && abs($0.defaultTabInterval - desiredTabInterval) < tolerance
+        preset.metrics.matches($0, tolerance: tolerance)
+          && abs($0.defaultTabInterval - tabInterval) < tolerance
       } ?? false
       let fontMatches = existingFont.map {
-        EditorTypography.fontsVisuallyMatch($0, desiredFont)
+        EditorTypography.fontsVisuallyMatch($0, preset.font)
       } ?? false
       guard !(metricsMatch && fontMatches) else { return false }
       if !fontMatches {
-        storage.addAttribute(.font, value: desiredFont, range: paragraphRange)
+        storage.addAttribute(.font, value: preset.font, range: paragraphRange)
       }
       let paragraph =
         ((existing?.mutableCopy()) as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
-      EditorTypography.applyPresetFields(
-        paragraph,
-        for: style,
-        family: family,
-        size: size
-      )
+      preset.metrics.apply(to: paragraph)
+      paragraph.defaultTabInterval = tabInterval
       storage.addAttribute(.paragraphStyle, value: paragraph, range: paragraphRange)
       return true
     }
