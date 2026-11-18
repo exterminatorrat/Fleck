@@ -1387,7 +1387,7 @@ private func captureChecklist(_ textView: ListAwareTextView, name: String) throw
   }
 }
 
-@Test @MainActor func emptyBulletMarkerUsesRelativeTemporaryOpacity() throws {
+@Test @MainActor func emptyBulletMarkerHidesItsNativeInkAndKeepsItsAuthoredColour() throws {
   let textView = ListAwareTextView(
     frame: NSRect(x: 0, y: 0, width: 320, height: 160)
   )
@@ -1408,29 +1408,31 @@ private func captureChecklist(_ textView: ListAwareTextView, name: String) throw
 
   textView.refreshChecklistPresentation()
 
-  let temporaryColor = try #require(
+  // The editor draws list markers itself, so it hides the native glyph instead of
+  // dimming it: storage keeps the authored colour and the marker on an empty line is
+  // the drawn one, which carries the dimmed opacity the text system used to.
+  let hiddenColor = try #require(
     layoutManager.temporaryAttribute(
       .foregroundColor,
       atCharacterIndex: 0,
       effectiveRange: nil
     ) as? NSColor
   )
-  #expect(abs(temporaryColor.alphaComponent - authoredColor.alphaComponent * 0.45) < 0.001)
-  #expect(temporaryColor.alphaComponent < authoredColor.alphaComponent)
+  #expect(hiddenColor.alphaComponent == 0)
   #expect(
     (storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
       == authoredColor
   )
+  #expect(
+    textView.drawnListMarkerPresentations.map(\.range)
+      == [NSRange(location: 0, length: 1)]
+  )
 
   textView.refreshChecklistPresentation()
-  let repeatedColor = try #require(
-    layoutManager.temporaryAttribute(
-      .foregroundColor,
-      atCharacterIndex: 0,
-      effectiveRange: nil
-    ) as? NSColor
+  #expect(
+    textView.drawnListMarkerPresentations.map(\.range)
+      == [NSRange(location: 0, length: 1)]
   )
-  #expect(abs(repeatedColor.alphaComponent - authoredColor.alphaComponent * 0.45) < 0.001)
 
   textView.clearNoteLinkPresentation()
   #expect(
@@ -1443,11 +1445,12 @@ private func captureChecklist(_ textView: ListAwareTextView, name: String) throw
   textView.refreshChecklistPresentation()
   #expect(textView.string == "• x")
   #expect(
-    layoutManager.temporaryAttribute(
-      .foregroundColor,
-      atCharacterIndex: 0,
-      effectiveRange: nil
-    ) == nil
+    (storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
+      == authoredColor
+  )
+  #expect(
+    textView.drawnListMarkerPresentations.map(\.range)
+      == [NSRange(location: 0, length: 1)]
   )
 }
 
@@ -4103,7 +4106,7 @@ func toolbarFontSizeNativePromptAndEditLifecycle(width: Double) async throws {
   #expect(navigator.contains("count:"))
 }
 
-@Test func compactUnfiledDisclosureShowsExpandedAtRestAndOnInteraction() throws {
+@Test func compactUnfiledDisclosureShowsOnlyWhileTheRowIsUnderAttention() throws {
   let source = try notesPanelSource()
   let navigator = try #require(
     source.components(separatedBy: "private struct FolderNavigator").last
@@ -4114,9 +4117,25 @@ func toolbarFontSizeNativePromptAndEditLifecycle(width: Double) async throws {
 
   #expect(
     normalizedNavigator.contains(
-      "private var showsUnfiledDisclosure: Bool { !isUnfiledCompact || isUnfiledHovered || focusedRow == .unfiled || isUnfiledDisclosureFocused }"
+      "private var showsUnfiledDisclosure: Bool { isUnfiledHovered || focusedRow == .unfiled || isUnfiledDisclosureFocused }"
     )
   )
+  #expect(!normalizedNavigator.contains("!isUnfiledCompact || isUnfiledHovered"))
+  #expect(
+    normalizedNavigator.contains(
+      "let isDisclosurePainted = frozenUnfiledDisclosure ?? showsUnfiledDisclosure"
+    )
+  )
+  #expect(
+    normalizedNavigator.contains(
+      ".frame(width: isDisclosurePainted ? 28 : 0, alignment: .leading)"
+    )
+  )
+  #expect(!normalizedNavigator.contains(".frame(width: 28, alignment: .leading)"))
+  #expect(normalizedNavigator.contains(".opacity(isDisclosurePainted ? 1 : 0)"))
+  #expect(normalizedNavigator.contains(".animation(folderMorphAnimation, value: isDisclosurePainted)"))
+  #expect(normalizedNavigator.contains(".allowsHitTesting(isDisclosurePainted)"))
+  #expect(normalizedNavigator.contains(".accessibilityHidden(!isDisclosurePainted)"))
 }
 
 @Test func compactUnfiledRemovesOnlyItsAccidentalEditorLayoutModifiers() throws {
@@ -5529,7 +5548,7 @@ private func withHostedTitleEditors(
   )
 }
 
-@Test @MainActor func hostedUnfiledDisclosureKeepsFolderToolbarFramesStable() async throws {
+@Test @MainActor func hostedUnfiledDisclosureCollapsesItsSlotAndReflowsFolderRows() async throws {
   let previousNavigatorAccessibility = enableHostedAccessibility()
   defer { restoreHostedAccessibility(previousNavigatorAccessibility) }
   let root = FileManager.default.temporaryDirectory
@@ -5563,59 +5582,52 @@ private func withHostedTitleEditors(
   #expect(window.makeFirstResponder(editor))
   await settleHostedView(host)
 
-  let before = hostedNavigatorKeyViewFrames(
-    in: host,
-    identifiers: ["folder-unfiled", "folder-\(folder.id.uuidString)"]
-  )
-  let beforeFolderFrame = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
-  let beforeHostSize = host.bounds.size
-  let beforeEditorFrame = host.convert(editor.bounds, from: editor)
+  let identifiers = ["folder-unfiled", "folder-\(folder.id.uuidString)"]
+  let hostSizeAtRest = host.bounds.size
+  let editorFrameAtRest = host.convert(editor.bounds, from: editor)
+
+  @MainActor func unfiledFrame() throws -> CGRect {
+    let control = try #require(
+      hostedNavigatorKeyViews(in: host, identifiers: identifiers).first
+    )
+    return control.convert(control.bounds, to: host)
+  }
+
+  // Nothing is under attention while the body has the caret, so the chevron takes
+  // no room and the folder chip sits a single 4pt gap from the Unfiled label.
+  let collapsedUnfiled = try unfiledFrame()
+  let collapsedFolder = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
+  let collapsedGap = collapsedFolder.minX - collapsedUnfiled.maxX
+  #expect(abs(collapsedGap - 4) < 0.5)
+
+  // Attention on the row paints the chevron; the chip reflows right by its width
+  // while the Unfiled row itself holds still.
   let unfiledControl = try #require(
-    hostedNavigatorKeyViews(
-      in: host,
-      identifiers: ["folder-unfiled", "folder-\(folder.id.uuidString)"]
-    ).first
+    hostedNavigatorKeyViews(in: host, identifiers: identifiers).first
   )
-  let unfiledFrame = unfiledControl.convert(unfiledControl.bounds, to: host)
-  let addFolder = try #require(
-    hostedAccessibilityElements(in: host, identifier: "folder-new").first
-  )
-  let addFolderFrame = try #require(addFolder.value(forKey: "accessibilityFrame") as? NSValue)
-    .rectValue
-  let expectedDisclosureFrame = CGSize(width: 28, height: 24)
-  #expect(abs(addFolderFrame.width - 28) < 0.5)
-  #expect(abs(addFolderFrame.height - 28) < 0.5)
-  #expect(hostedDisclosureHasAddFolderSizing(in: host) == false)
   #expect(window.makeFirstResponder(unfiledControl))
-  await settleHostedView(host)
-  let focused = hostedNavigatorKeyViewFrames(
-    in: host,
-    identifiers: ["folder-unfiled", "folder-\(folder.id.uuidString)"]
-  )
-  let focusedFolderFrame = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
-  #expect(hostedDisclosureFrame(in: host) == expectedDisclosureFrame)
-  #expect(state.preferences.isUnfiledCompact)
-  #expect(focused.count == before.count)
-  #expect(focusedFolderFrame.minX == beforeFolderFrame.minX + 28)
-  #expect(focusedFolderFrame.minY == beforeFolderFrame.minY)
-  #expect(host.bounds.size == beforeHostSize)
-  #expect(host.convert(editor.bounds, from: editor) == beforeEditorFrame)
-
-  try sendHostedClick(
-    at: NSPoint(x: unfiledFrame.maxX + 14, y: unfiledFrame.midY),
-    in: host,
-    to: window
-  )
   forceHostedViewUpdate(host)
-  let expandingFolderFrame = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
-  try await Task.sleep(for: .milliseconds(300))
+  try await Task.sleep(for: .milliseconds(400))
   await settleHostedView(host)
-  let expandedFolderFrame = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
+  let paintedUnfiled = try unfiledFrame()
+  let paintedFolder = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
+  let paintedGap = paintedFolder.minX - paintedUnfiled.maxX
+  #expect(abs(paintedGap - 32) < 0.5)
+  #expect(abs(paintedFolder.minX - collapsedFolder.minX - 28) < 0.5)
+  #expect(abs(paintedUnfiled.minX - collapsedUnfiled.minX) < 0.5)
+  #expect(abs(paintedUnfiled.width - collapsedUnfiled.width) < 0.5)
 
-  #expect(!state.preferences.isUnfiledCompact)
-  #expect(expandingFolderFrame == expandedFolderFrame)
-  #expect(host.bounds.size == beforeHostSize)
-  #expect(host.convert(editor.bounds, from: editor) == beforeEditorFrame)
+  // Dropping attention closes the gap again, and the reflow leaves the editor and
+  // the panel where they were.
+  #expect(window.makeFirstResponder(editor))
+  forceHostedViewUpdate(host)
+  try await Task.sleep(for: .milliseconds(400))
+  await settleHostedView(host)
+  let releasedFolder = try #require(hostedSchoolFolderFrame(folderID: folder.id, in: host))
+  #expect(abs(releasedFolder.minX - collapsedFolder.minX) < 0.5)
+  #expect(abs(try unfiledFrame().maxX - collapsedUnfiled.maxX) < 0.5)
+  #expect(host.bounds.size == hostSizeAtRest)
+  #expect(host.convert(editor.bounds, from: editor) == editorFrameAtRest)
 }
 
 @Test @MainActor func hostedFolderKeyboardFocusAddsOutlineToUnselectedRow() async throws {
@@ -5705,7 +5717,10 @@ private func withHostedTitleEditors(
     )
     await settleHostedView(host)
     let focusedFolderRowFrame = folderControl.convert(folderControl.bounds, to: host)
-    #expect(focusedFolderRowFrame == folderRowFrame)
+    // Focus left the Unfiled row, so its disclosure slot collapses and the rows
+    // beside it close that 28pt gap; the row keeps its own size and only shifts.
+    #expect(focusedFolderRowFrame.size == folderRowFrame.size)
+    #expect(folderRowFrame.minX - focusedFolderRowFrame.minX == 28)
     let after = try hostedThemeCapture(in: host)
     let changedNeutralPixels = hostedNeutralFocusOutlineChangedPixelCount(
       before: before,
@@ -5855,9 +5870,14 @@ private func hostedFolderSelectionGeometry(
       $0.theme = .dark
     }
     let commands = EditorCommands()
-    let (window, host) = hostedPanel(root: root, state: state, commands: commands)
+    // Compare the selected and unselected endpoints without an intermediate
+    // disclosure animation. Dedicated navigator tests retain motion coverage.
+    let (window, host) = hostedPanel(
+      root: root, state: state, commands: commands, disableAnimations: true
+    )
     window.appearance = NSAppearance(named: .darkAqua)
-    defer { window.orderOut(nil) }
+    window.isReleasedWhenClosed = false
+    defer { closeEditorTestWindow(window) }
     await settleHostedView(host)
 
     let folderRowViews = try expectedFolderRowIdentifiers.map { identifier in
@@ -6816,11 +6836,14 @@ private func hostedAccessibilityElements(in value: Any?, identifier: String) -> 
 
 @MainActor
 private func hostedDisclosureFrame(in host: NSView) -> CGSize? {
-  guard
-    let element = hostedUnignoredAccessibilityElements(in: host, label: "Expand Unfiled").first,
-    let frame = element.value(forKey: "accessibilityFrame") as? NSValue
-  else { return nil }
-  return frame.rectValue.size
+  for label in ["Expand Unfiled", "Collapse Unfiled"] {
+    guard
+      let element = hostedUnignoredAccessibilityElements(in: host, label: label).first,
+      let frame = element.value(forKey: "accessibilityFrame") as? NSValue
+    else { continue }
+    return frame.rectValue.size
+  }
+  return nil
 }
 
 @MainActor
@@ -6920,7 +6943,8 @@ private func hostedPanel(
   root: URL,
   state: AppState,
   commands: EditorCommands,
-  isPinned: Bool = false
+  isPinned: Bool = false,
+  disableAnimations: Bool = false
 ) -> (NSWindow, NSHostingView<AnyView>) {
   let runtime = DictationRuntime(appState: state, applicationSupportURL: root)
   let panel = NotesPanel(
@@ -6929,7 +6953,18 @@ private func hostedPanel(
     sizing: .container,
     editorCommands: commands
   )
-  let rootView = AnyView(FleckThemeTestRoot(state: state) { panel })
+  let themedPanel = FleckThemeTestRoot(state: state) { panel }
+  let rootView: AnyView
+  if disableAnimations {
+    // SwiftUI's accessibilityReduceMotion is read-only. Disable animation
+    // for this snapshot subtree without changing global accessibility settings.
+    rootView = AnyView(themedPanel.transaction { transaction in
+      transaction.animation = nil
+      transaction.disablesAnimations = true
+    })
+  } else {
+    rootView = AnyView(themedPanel)
+  }
   let host = NSHostingView(rootView: rootView)
   let window = NSWindow(
     contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),

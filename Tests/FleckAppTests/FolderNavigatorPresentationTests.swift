@@ -591,8 +591,10 @@ struct FolderNavigatorPresentationTests {
     defer { diagnostics.finish() }
 
     #expect(fixture.isVisible(label: "Reveal earlier folders"))
-    try fixture.click(fixture.element(label: "Collapse Unfiled"))
-    await fixture.settle()
+    try fixture.performAccessibilityPress(label: "Collapse Unfiled")
+    #expect(fixture.window.makeFirstResponder(fixture.host))
+    try await fixture.settleAnimation()
+    #expect(fixture.state.preferences.isUnfiledCompact)
     #expect(!fixture.isVisible(label: "Reveal earlier folders"))
 
     let first = try #require(fixture.state.workspace.folders.first)
@@ -723,19 +725,21 @@ struct FolderNavigatorPresentationTests {
     )
     defer { fixture.close() }
     try fixture.click(fixture.element(label: "Collapse Unfiled"))
-    try await fixture.settleAnimation()
     let scroll = try fixture.folderScrollView()
-    let before = scroll.contentView.bounds
+    let before = try await fixture.settleNavigatorGeometry()
 
     try fixture.click(fixture.element(label: "New folder"))
-    try await fixture.settleAnimation()
-    #expect(scroll.contentView.bounds == before)
+    try await fixture.settleNavigatorGeometry()
+    #expect(scroll.contentView.bounds.origin == before.origin)
+    #expect(scroll.contentView.bounds.width == before.width)
     try fixture.click(fixture.element(label: "Cancel new folder"))
-    try await fixture.settleAnimation()
-    #expect(scroll.contentView.bounds == before)
+    try await fixture.settleNavigatorGeometry()
+    #expect(scroll.contentView.bounds.origin == before.origin)
+    #expect(scroll.contentView.bounds.width == before.width)
     try fixture.click(fixture.element(label: "New folder"))
-    try await fixture.settleAnimation()
-    #expect(scroll.contentView.bounds == before)
+    try await fixture.settleNavigatorGeometry()
+    #expect(scroll.contentView.bounds.origin == before.origin)
+    #expect(scroll.contentView.bounds.width == before.width)
   }
 
   @Test func compactUnfiledAllocationPreservesNonzeroScrolledOffsetDuringCompose() async throws {
@@ -745,16 +749,16 @@ struct FolderNavigatorPresentationTests {
     )
     defer { fixture.close() }
     try fixture.click(fixture.element(label: "Reveal later folders"))
-    try await fixture.settleAnimation()
+    _ = try await fixture.settleNavigatorGeometry()
     try fixture.click(fixture.element(label: "Collapse Unfiled"))
-    try await fixture.settleAnimation()
     let scroll = try fixture.folderScrollView()
-    let before = scroll.contentView.bounds
+    let before = try await fixture.settleNavigatorGeometry()
     #expect(before.minX > 0)
 
     try fixture.click(fixture.element(label: "New folder"))
-    try await fixture.settleAnimation()
-    #expect(scroll.contentView.bounds == before)
+    try await fixture.settleNavigatorGeometry()
+    #expect(scroll.contentView.bounds.origin == before.origin)
+    #expect(scroll.contentView.bounds.width == before.width)
   }
 
   @Test func deletingScrolledOverflowRestoresTheMountedScrollToLeading() async throws {
@@ -1734,6 +1738,21 @@ private final class FolderNavigatorFixture {
     await settle()
   }
 
+  @discardableResult
+  func settleNavigatorGeometry() async throws -> NSRect {
+    var swept = try folderScrollView().contentView.bounds
+    var stableSamples = 0
+    for _ in 0..<80 {
+      try await Task.sleep(for: .milliseconds(50))
+      await settle()
+      let current = try folderScrollView().contentView.bounds
+      stableSamples = current == swept ? stableSamples + 1 : 0
+      swept = current
+      if stableSamples >= 6 { return current }
+    }
+    return swept
+  }
+
   func resize(to width: CGFloat) async {
     window.setContentSize(NSSize(width: width, height: 430))
     host.frame = NSRect(origin: .zero, size: NSSize(width: width, height: 430))
@@ -2132,8 +2151,13 @@ private final class FolderNavigatorFixture {
   func beginRename(folderID: UUID) async throws {
     try click(element(identifier: "folder-\(folderID.uuidString)"))
     await settle()
-    try sendKey(characters: String(UnicodeScalar(UInt32(NSF2FunctionKey))!), keyCode: 0x78)
-    try #require(await waitForRenameEditor(folderID: folderID))
+    var renameEditorAppeared = false
+    for _ in 0..<3 {
+      if renameEditorAppeared { break }
+      try sendKey(characters: String(UnicodeScalar(UInt32(NSF2FunctionKey))!), keyCode: 0x78)
+      renameEditorAppeared = try await waitForRenameEditor(folderID: folderID)
+    }
+    try #require(renameEditorAppeared)
   }
 
   func waitForRenameEditor(

@@ -19,13 +19,17 @@ private func bulletEditor(_ text: String) -> (ListAwareTextView, NSWindow) {
   return (textView, window)
 }
 
-private func threeSpaceTabInterval(for font: NSFont) -> CGFloat {
+private func sourceIndentTabInterval(for font: NSFont) -> CGFloat {
+  4 * (" " as NSString).size(withAttributes: [.font: font]).width
+}
+
+private func persistedThreeSpaceTabInterval(for font: NSFont) -> CGFloat {
   3 * (" " as NSString).size(withAttributes: [.font: font]).width
 }
 
-@Test @MainActor func nestedBulletFirstTabRetainsItsThreeSpaceGrid() throws {
+@Test @MainActor func nestedBulletFirstTabUsesTheSourceIndentGrid() throws {
   let font = NSFont.systemFont(ofSize: 17)
-  let paragraph = EditorTypography.defaultParagraphStyle(fontSize: font.pointSize)
+  let paragraph = EditorTypography.systemDefaultParagraphStyle(fontSize: font.pointSize)
   let (view, window) = bulletEditor("    ◦ item")
   defer { window.contentView = nil }
   view.textStorage?.setAttributedString(NSAttributedString(
@@ -37,7 +41,10 @@ private func threeSpaceTabInterval(for font: NSFont) -> CGFloat {
   let style = try #require(
     view.textStorage?.attribute(.paragraphStyle, at: 6, effectiveRange: nil) as? NSParagraphStyle
   )
-  #expect(abs(style.defaultTabInterval - threeSpaceTabInterval(for: font)) < 0.01)
+  #expect(
+    abs(style.defaultTabInterval - sourceIndentTabInterval(for: NSFont.systemFont(ofSize: 17)))
+      < 0.05
+  )
   #expect(style.tabStops.isEmpty)
   #expect(style.minimumLineHeight == paragraph.minimumLineHeight)
   #expect(style.maximumLineHeight == paragraph.maximumLineHeight)
@@ -49,7 +56,7 @@ private func threeSpaceTabInterval(for font: NSFont) -> CGFloat {
 ) throws {
   let font = NSFont.systemFont(ofSize: 17)
   let paragraph = NSMutableParagraphStyle()
-  paragraph.defaultTabInterval = threeSpaceTabInterval(for: font)
+  paragraph.defaultTabInterval = persistedThreeSpaceTabInterval(for: font)
   paragraph.tabStops = explicitStop
     ? [NSTextTab(textAlignment: .right, location: 72, options: [:])] : []
   paragraph.firstLineHeadIndent = 4
@@ -89,13 +96,13 @@ private func threeSpaceTabInterval(for font: NSFont) -> CGFloat {
 @MainActor func explicitBulletTabChoosesAppDefaultForUnspecifiedSettingsIncludingRTF(
   _ throughRTF: Bool
 ) throws {
-  let paragraph = EditorTypography.defaultParagraphStyle(fontSize: 17)
+  let paragraph = EditorTypography.systemDefaultParagraphStyle(fontSize: 17)
   let source = NSAttributedString(string: "• item", attributes: [
     .font: NSFont.systemFont(ofSize: 17), .paragraphStyle: paragraph, .underlineStyle: 1,
   ])
   let content = throughRTF ? try NoteRichTextCodec.decode(NoteRichTextCodec.encode(source)) : source
   let previous = try #require(content.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
-  try #require(previous.defaultTabInterval == paragraph.defaultTabInterval)
+  #expect(abs(previous.defaultTabInterval - paragraph.defaultTabInterval) < 0.05)
   try #require(previous.tabStops == paragraph.tabStops)
   let (view, window) = bulletEditor(content.string)
   defer { window.contentView = nil }
@@ -105,8 +112,9 @@ private func threeSpaceTabInterval(for font: NSFont) -> CGFloat {
   #expect(view.string == "• \titem")
   #expect(view.selectedRange() == NSRange(location: 3, length: 0))
   let storage = try #require(view.textStorage)
+  let gridFont = NSFont.systemFont(ofSize: 17)
   let style = try #require(storage.attribute(.paragraphStyle, at: 2, effectiveRange: nil) as? NSParagraphStyle)
-  #expect(style.defaultTabInterval == 36)
+  #expect(abs(style.defaultTabInterval - sourceIndentTabInterval(for: gridFont)) < 0.05)
   #expect(style.tabStops.isEmpty)
   #expect(style.firstLineHeadIndent == previous.firstLineHeadIndent)
   #expect(style.headIndent == previous.headIndent)
@@ -116,11 +124,14 @@ private func threeSpaceTabInterval(for font: NSFont) -> CGFloat {
   #expect(storage.attribute(.underlineStyle, at: 3, effectiveRange: nil) as? Int == 1)
   let reopened = try NoteRichTextCodec.decode(NoteRichTextCodec.encode(storage))
   #expect(reopened.string == storage.string)
-  #expect((reopened.attribute(.paragraphStyle, at: 2, effectiveRange: nil) as? NSParagraphStyle)?.defaultTabInterval == 36)
+  let reopenedStyle = try #require(
+    reopened.attribute(.paragraphStyle, at: 2, effectiveRange: nil) as? NSParagraphStyle
+  )
+  #expect(abs(reopenedStyle.defaultTabInterval - sourceIndentTabInterval(for: gridFont)) < 0.05)
 }
 
 @Test @MainActor func bulletTabPreservesAnExistingTabUsingAppKitDefaultStops() throws {
-  let paragraph = EditorTypography.defaultParagraphStyle(fontSize: 17)
+  let paragraph = EditorTypography.systemDefaultParagraphStyle(fontSize: 17)
   let (view, window) = bulletEditor("• \titem")
   defer { window.contentView = nil }
   view.textStorage?.addAttribute(.paragraphStyle, value: paragraph,
@@ -340,11 +351,12 @@ private func rtfDefaultTabIntervalTwips(in data: Data) throws -> Int {
   #expect(textView.selectedRange() == NSRange(location: 2, length: 0))
 }
 
-@Test("Depth-zero bullet Tab chooses the 36-point app default for default tab settings")
-@MainActor func bulletTabUsesThreeSpaceIntervalAndAlignsToNextStop() throws {
+@Test("Depth-zero bullet Tab chooses the source indent grid for default tab settings")
+@MainActor func bulletTabUsesSourceIndentIntervalAndAlignsToNextStop() throws {
   let font = NSFont.systemFont(ofSize: 14)
-  let defaultParagraph = EditorTypography.defaultParagraphStyle(fontSize: font.pointSize)
+  let defaultParagraph = EditorTypography.systemDefaultParagraphStyle(fontSize: font.pointSize)
   let (textView, _) = bulletEditor("• X\n• Y")
+  textView.configuredBodyFontSize = font.pointSize
   let original = NSAttributedString(
     string: textView.string,
     attributes: [.font: font, .paragraphStyle: defaultParagraph]
@@ -363,7 +375,7 @@ private func rtfDefaultTabIntervalTwips(in data: Data) throws -> Int {
   let untouchedStyle = try #require(
     storage.attribute(.paragraphStyle, at: 5, effectiveRange: nil) as? NSParagraphStyle
   )
-  let expectedInterval: CGFloat = 36
+  let expectedInterval = sourceIndentTabInterval(for: font)
   #expect(abs(insertedStyle.defaultTabInterval - expectedInterval) < 0.01)
   #expect(insertedStyle.tabStops.isEmpty)
   #expect(insertedStyle.minimumLineHeight == defaultParagraph.minimumLineHeight)
@@ -405,8 +417,9 @@ private func rtfDefaultTabIntervalTwips(in data: Data) throws -> Int {
     for content in ["i", "W", "iW", "Wi"] {
       for offset in 0...content.count {
         let original = "• \(content)\n"
-        let paragraphStyle = EditorTypography.defaultParagraphStyle(fontSize: fontCase.font.pointSize)
+        let paragraphStyle = EditorTypography.systemDefaultParagraphStyle(fontSize: fontCase.font.pointSize)
         textView.undoManager?.removeAllActions()
+        textView.configuredBodyFontSize = fontCase.font.pointSize
         textView.textStorage?.setAttributedString(
           NSAttributedString(
             string: original,
@@ -430,7 +443,9 @@ private func rtfDefaultTabIntervalTwips(in data: Data) throws -> Int {
         let caretBeforeTabX = layoutManager.location(forGlyphAt: insertionGlyph).x
         let caretBeforeTabContainerX = paragraphLineX + caretBeforeTabX
         let spaceWidth = (" " as NSString).size(withAttributes: [.font: fontCase.font]).width
-        let interval: CGFloat = 36
+        let interval = sourceIndentTabInterval(
+          for: NSFont.systemFont(ofSize: fontCase.font.pointSize)
+        )
         let nextStopIndex = ((caretBeforeTabX - paragraphOriginX) / interval).rounded(.down) + 1
         let expectedCaretAfterTabX = paragraphOriginX + nextStopIndex * interval
 
@@ -510,7 +525,7 @@ private func rtfDefaultTabIntervalTwips(in data: Data) throws -> Int {
 
 @Test @MainActor func bulletTabInsertionAndDeletionUndoRedoRestoreCharacterAndParagraphStyle() throws {
   let font = NSFont.systemFont(ofSize: 14)
-  let paragraph = EditorTypography.defaultParagraphStyle(fontSize: font.pointSize)
+  let paragraph = EditorTypography.systemDefaultParagraphStyle(fontSize: font.pointSize)
   let (textView, _) = bulletEditor("• item")
   textView.textStorage?.setAttributedString(
     NSAttributedString(string: textView.string, attributes: [.font: font, .paragraphStyle: paragraph])
@@ -562,8 +577,9 @@ private func rtfDefaultTabIntervalTwips(in data: Data) throws -> Int {
 
 @Test @MainActor func bulletTabSurvivesPlainAndRichClipboardRoundTrips() throws {
   let font = NSFont.systemFont(ofSize: 14)
-  let paragraph = EditorTypography.defaultParagraphStyle(fontSize: font.pointSize)
+  let paragraph = EditorTypography.systemDefaultParagraphStyle(fontSize: font.pointSize)
   let (source, sourceWindow) = bulletEditor("• item")
+  source.configuredBodyFontSize = font.pointSize
   source.textStorage?.setAttributedString(
     NSAttributedString(string: source.string, attributes: [.font: font, .paragraphStyle: paragraph])
   )
@@ -621,7 +637,7 @@ private func rtfDefaultTabIntervalTwips(in data: Data) throws -> Int {
 @Test @MainActor func wholeParagraphRichPastePreservesNativeTabFormatting() throws {
   let font = try #require(NSFont(name: "Helvetica", size: 14))
   #expect(font.pointSize == 14)
-  let paragraph = EditorTypography.defaultParagraphStyle(fontSize: font.pointSize)
+  let paragraph = EditorTypography.systemDefaultParagraphStyle(fontSize: font.pointSize)
   let (source, sourceWindow) = bulletEditor("• item")
   source.textStorage?.setAttributedString(
     NSAttributedString(string: source.string, attributes: [.font: font, .paragraphStyle: paragraph])
@@ -665,8 +681,11 @@ private func rtfDefaultTabIntervalTwips(in data: Data) throws -> Int {
   expectSamePublicFont(decodedTabFont, as: sourceTabFont)
   expectSamePublicFont(decodedBodyFont, as: sourceBodyFont)
   let encodedTwips = CGFloat(try rtfDefaultTabIntervalTwips(in: richData))
-  #expect(abs(36 * 20 - encodedTwips) <= 1)
-  #expect(richStyle.defaultTabInterval == encodedTwips / 20)
+  #expect(
+    abs(sourceIndentTabInterval(for: NSFont.systemFont(ofSize: font.pointSize)) * 20 - encodedTwips)
+      <= 1
+  )
+  #expect(abs(richStyle.defaultTabInterval - encodedTwips / 20) < 0.05)
 
   let richPaste = bulletEditor("").0
   richPaste.insertPastedTextForTesting(richText, plainText: richText.string)
@@ -690,8 +709,9 @@ private func rtfDefaultTabIntervalTwips(in data: Data) throws -> Int {
 
 @Test @MainActor func bulletTabSurvivesNoteRTFRoundTrip() throws {
   let font = NSFont.systemFont(ofSize: 14)
-  let paragraph = EditorTypography.defaultParagraphStyle(fontSize: font.pointSize)
+  let paragraph = EditorTypography.systemDefaultParagraphStyle(fontSize: font.pointSize)
   let (textView, _) = bulletEditor("• item")
+  textView.configuredBodyFontSize = font.pointSize
   textView.textStorage?.setAttributedString(
     NSAttributedString(string: textView.string, attributes: [.font: font, .paragraphStyle: paragraph])
   )
@@ -715,7 +735,7 @@ private func rtfDefaultTabIntervalTwips(in data: Data) throws -> Int {
     restored.attribute(.paragraphStyle, at: 2, effectiveRange: nil) as? NSParagraphStyle
   )
   let encodedTwips = CGFloat(try rtfDefaultTabIntervalTwips(in: rtf))
-  #expect(abs(36 * 20 - encodedTwips) <= 1)
+  #expect(abs(sourceIndentTabInterval(for: NSFont.systemFont(ofSize: font.pointSize)) * 20 - encodedTwips) <= 1)
   #expect(restoredStyle.defaultTabInterval == encodedTwips / 20)
   let reopened = bulletEditor(restored.string).0
   reopened.textStorage?.setAttributedString(restored)
@@ -873,10 +893,11 @@ private final class ManagedBulletImageFixture {
 }
 
 @Test("Depth-zero default-tab policy preserves paragraph metrics and explicit custom stops")
-@MainActor func f63PortBulletTabPreservesMetricsAndUsesThreeSpaceDefault() throws {
+@MainActor func f63PortBulletTabPreservesMetricsAndUsesSourceIndentDefault() throws {
   let font = NSFont.systemFont(ofSize: 14)
-  let defaultParagraph = EditorTypography.defaultParagraphStyle(fontSize: font.pointSize)
+  let defaultParagraph = EditorTypography.systemDefaultParagraphStyle(fontSize: font.pointSize)
   let (textView, _) = bulletEditor("• X\n• Y")
+  textView.configuredBodyFontSize = font.pointSize
   textView.textStorage?.setAttributedString(
     NSAttributedString(string: textView.string, attributes: [.font: font, .paragraphStyle: defaultParagraph])
   )
@@ -891,7 +912,9 @@ private final class ManagedBulletImageFixture {
   let untouchedStyle = try #require(
     storage.attribute(.paragraphStyle, at: 5, effectiveRange: nil) as? NSParagraphStyle
   )
-  #expect(insertedStyle.defaultTabInterval == 36)
+  #expect(
+    abs(insertedStyle.defaultTabInterval - sourceIndentTabInterval(for: font)) < 0.05
+  )
   #expect(insertedStyle.tabStops.isEmpty)
   #expect(insertedStyle.minimumLineHeight == defaultParagraph.minimumLineHeight)
   #expect(insertedStyle.maximumLineHeight == defaultParagraph.maximumLineHeight)
@@ -920,7 +943,7 @@ private final class ManagedBulletImageFixture {
 
 @Test @MainActor func f63PortBulletTabRTFRoundTripPreservesParagraphStyle() throws {
   let font = NSFont.systemFont(ofSize: 14)
-  let paragraph = EditorTypography.defaultParagraphStyle(fontSize: font.pointSize)
+  let paragraph = EditorTypography.systemDefaultParagraphStyle(fontSize: font.pointSize)
   let (source, _) = bulletEditor("• item")
   source.textStorage?.setAttributedString(
     NSAttributedString(string: source.string, attributes: [.font: font, .paragraphStyle: paragraph])

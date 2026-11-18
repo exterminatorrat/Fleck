@@ -183,8 +183,9 @@ fi
 
 for field in \
   'if launch_host list --list-tests' \
-  '/usr/bin/grep -E -- "$identifier_regex" "$canonical_output" > "$matches"' \
-  'if launch_host run --filter "$run_filter" --no-parallel' \
+  '/usr/bin/grep -E -- "$selection_regex" "$canonical_output" > "$matches"' \
+  'if launch_host "$phase" --filter "$run_filter" --no-parallel' \
+  'run_test_selection "$identifier_regex" run' \
   'if "$codesign_path" --verify --deep --strict --verbose=2 "$expected_host_app"' \
   'if ! verify_configured_host_resources "$configured_host_contents"'; do
   /usr/bin/grep -Fq -- "$field" "$runner" || fail "prebuilt path lost normal host gate: $field"

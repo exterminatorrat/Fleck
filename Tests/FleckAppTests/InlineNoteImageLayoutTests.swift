@@ -4,6 +4,8 @@ import Testing
 
 @testable import FleckApp
 
+private let gridParagraphSpacing = EditorTypography.bodyParagraphSpacing
+
 @Test @MainActor func productionHostDragReservesTheFullImageLine() throws {
   let fixture = try ProductionImageLayoutFixture()
   defer { fixture.remove() }
@@ -52,8 +54,8 @@ import Testing
   #expect(NSIntersectionRect(geometry.bounds, followingBounds).isEmpty)
   #expect(geometry.bounds.width == 426)
   #expect(geometry.bounds.height == 320)
-  #expect(geometry.line.height == 320)
-  #expect(textLineHeight(at: 0, in: editor) == 27)
+  #expect(geometry.line.height == 320 + gridParagraphSpacing)
+  #expect(textLineHeight(at: 0, in: editor) == 27 + gridParagraphSpacing)
   #expect(editor.layoutManager?.usedRect(for: geometry.container).contains(geometry.bounds) == true)
   let editorBounds = geometry.bounds.offsetBy(
     dx: editor.textContainerOrigin.x,
@@ -116,7 +118,7 @@ import Testing
   #expect(geometries[3].attachmentBounds.size == NSSize(width: 426, height: 320))
   #expect(geometries[4].attachmentBounds.size == NSSize(width: 120, height: 240))
   #expect(geometries[3].line.minY != geometries[4].line.minY)
-  #expect(textLineHeight(at: 0, in: editor) == 27)
+  #expect(textLineHeight(at: 0, in: editor) == 27 + gridParagraphSpacing)
   #expect(geometries[0].bounds.minX > 0)
   #expect(
     try glyphLocation(of: " trailing text.", in: editor).x
@@ -186,13 +188,13 @@ import Testing
   editor.deleteBackward(nil)
   harness.settle()
   #expect(try attachmentGeometries(in: editor).count == 4)
-  #expect(textLineHeight(at: removedLandscapeRange.location, in: editor) == 27)
+  #expect(textLineHeight(at: removedLandscapeRange.location, in: editor) == 27 + gridParagraphSpacing)
   editor.undoManager?.undo()
   harness.settle()
   #expect(try attachmentGeometries(in: editor).count == 5)
   editor.undoManager?.redo()
   harness.settle()
-  #expect(textLineHeight(at: removedLandscapeRange.location, in: editor) == 27)
+  #expect(textLineHeight(at: removedLandscapeRange.location, in: editor) == 27 + gridParagraphSpacing)
   editor.undoManager?.undo()
   harness.settle()
 
@@ -371,7 +373,7 @@ import Testing
     #expect(geometry.attachmentBounds.size == NSSize(width: 426, height: 320))
     #expect(geometry.line.insetBy(dx: -0.5, dy: -0.5).contains(geometry.bounds))
   }
-  #expect(geometries[0].line.height == 320)
+  #expect(geometries[0].line.height == 320 + gridParagraphSpacing)
   let neighboringCharacters = displayed.range(of: "Same-paragraph image.")
   let neighboringGlyphs = layout.glyphRange(
     forCharacterRange: neighboringCharacters,
@@ -422,7 +424,9 @@ import Testing
   let controlCharacter = displayed.range(of: "Open checklist").location
   let controlGlyph = layout.glyphIndexForCharacter(at: controlCharacter)
   let controlLine = layout.lineFragmentRect(forGlyphAt: controlGlyph, effectiveRange: nil)
-  let nativeBelowBaseline = controlLine.height - layout.location(forGlyphAt: controlGlyph).y
+  let nativeBelowBaseline =
+    controlLine.height - gridParagraphSpacing
+      - layout.location(forGlyphAt: controlGlyph).y
   let mixedBelowBaseline = sharedFragment.line.height - firstSharedLocation.y
   #expect(mixedBelowBaseline >= nativeBelowBaseline)
 
@@ -502,7 +506,7 @@ import Testing
     let geometry = try attachmentGeometry(in: editor)
 
     #expect(geometry.line.insetBy(dx: -0.5, dy: -0.5).contains(geometry.bounds))
-    #expect(geometry.line.height == 400)
+    #expect(geometry.line.height == 400 + gridParagraphSpacing)
     #expect(NSIntersectionRect(
       geometry.bounds,
       try glyphBounds(of: "Before", in: editor)

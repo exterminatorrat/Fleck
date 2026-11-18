@@ -25,6 +25,9 @@ private func expansionEditor(_ string: String) -> (NSWindow, ListAwareTextView, 
   return (window, textView, commands)
 }
 
+private let bodyIndentUnit =
+  4 * (" " as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 16)]).width
+
 @MainActor
 private func expansionDescendant<T: NSView>(in view: NSView, as type: T.Type) -> T? {
   if let match = view as? T { return match }
@@ -343,8 +346,8 @@ private final class RecordingFinderTextView: NSTextView {
     #expect(trailingView.attributedString().isEqual(to: original))
     let typingStyle = trailingView.typingAttributes[.paragraphStyle] as? NSParagraphStyle
     #expect(typingStyle?.alignment == .right)
-    #expect(typingStyle?.headIndent == 24)
-    #expect((trailingView.typingAttributes[.font] as? NSFont)?.pointSize == 24)
+    #expect(typingStyle?.headIndent == bodyIndentUnit)
+    #expect((trailingView.typingAttributes[.font] as? NSFont)?.pointSize == 16 * 1.35)
   }
 }
 
@@ -381,7 +384,7 @@ private final class RecordingFinderTextView: NSTextView {
 
   #expect(commands.applyTextStyle(.heading1))
   let font = try #require(textView.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
-  #expect(font.pointSize == 28)
+  #expect(font.pointSize == 16 * 1.6)
   #expect(NSFontManager.shared.traits(of: font).contains(.boldFontMask))
   #expect(textView.textStorage?.attribute(.link, at: 0, effectiveRange: nil) as? URL == link)
 
@@ -395,18 +398,18 @@ private final class RecordingFinderTextView: NSTextView {
     documentAttributes: nil
   )
   let restoredFont = try #require(restored.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
-  #expect(restoredFont.pointSize == 28)
+  #expect(restoredFont.pointSize == 16 * 1.6)
   #expect(NSFontManager.shared.traits(of: restoredFont).contains(.boldFontMask))
   #expect(restored.attribute(.link, at: 0, effectiveRange: nil) as? URL == link)
 }
 
 @Test @MainActor func everyVisualStyleAppliesItsCentralizedFontAndParagraphPreset() throws {
   let expectations: [(EditorTextStyle, CGFloat, NSFontTraitMask, CGFloat, CGFloat)] = [
-    (.normal, 16, [], 0, 0),
-    (.heading1, 28, .boldFontMask, 12, 8),
-    (.heading2, 24, .boldFontMask, 10, 6),
-    (.heading3, 20, .boldFontMask, 8, 4),
-    (.quote, 16, .italicFontMask, 6, 6),
+    (.normal, 16, [], 0, 8),
+    (.heading1, 25.6, .boldFontMask, 16, 8),
+    (.heading2, 21.6, .boldFontMask, 12, 6),
+    (.heading3, 18.4, .boldFontMask, 8, 4),
+    (.quote, 16, .italicFontMask, 8, 8),
     (.code, 16, [], 4, 4),
   ]
   for (style, size, trait, before, after) in expectations {
@@ -987,7 +990,7 @@ private final class RecordingFinderTextView: NSTextView {
   let plainLocation = (textView.string as NSString).range(of: "Plain").location
   #expect(
     (textView.textStorage?.attribute(.paragraphStyle, at: plainLocation, effectiveRange: nil)
-      as? NSParagraphStyle)?.headIndent == 24
+      as? NSParagraphStyle)?.headIndent == bodyIndentUnit
   )
 
   try #require(textView.undoManager).undo()
@@ -1015,13 +1018,54 @@ private final class RecordingFinderTextView: NSTextView {
     #expect(textView.string == expected)
     #expect(textView.selectedRange() == NSRange(location: 0, length: expected.utf16.count))
     try #require(textView.undoManager).undo()
-    #expect(textView.attributedString().isEqual(to: original))
+    #expect(textView.string == source)
+    #expect(
+      attributedStringRestoringSourceMarkers(textView, original: original)
+        .isEqual(to: original)
+    )
     #expect(textView.selectedRange() == NSRange(location: 0, length: source.utf16.count))
     try #require(textView.undoManager).redo()
     #expect(textView.string == expected)
     #expect(commands.decreaseIndent())
-    #expect(textView.attributedString().isEqual(to: original))
+    #expect(textView.string == source)
+    // Indent and undo normalise the font of the characters a list marker is drawn
+    // from, so that one attribute is the only difference they may leave behind.
+    #expect(
+      attributedStringRestoringSourceMarkers(textView, original: original)
+        .isEqual(to: original)
+    )
   }
+}
+
+/// The editor re-fonts the characters a list marker is drawn from so the drawn
+/// marker matches its line, which is the one attribute indent and undo are allowed
+/// to change. Restoring the source font over the marker prefix lets a
+/// byte-preservation check ignore exactly that and catch anything else.
+@MainActor
+private func attributedStringRestoringSourceMarkers(
+  _ textView: ListAwareTextView,
+  original: NSAttributedString
+) -> NSAttributedString {
+  let actual = NSMutableAttributedString(attributedString: textView.attributedString())
+  let prefix = markerPrefixRange(in: original.string as NSString)
+  guard prefix.length > 0, prefix.length <= original.length else { return actual }
+  original.enumerateAttributes(in: prefix, options: []) { attributes, subrange, _ in
+    if let font = attributes[.font] {
+      actual.addAttribute(.font, value: font, range: subrange)
+    } else {
+      actual.removeAttribute(.font, range: subrange)
+    }
+  }
+  return actual
+}
+
+/// The marker a list line starts with, up to the first character of its content.
+private func markerPrefixRange(in text: NSString) -> NSRange {
+  var index = 0
+  while index < text.length, text.character(at: index) == 0x20 { index += 1 }
+  while index < text.length, text.character(at: index) != 0x20 { index += 1 }
+  while index < text.length, text.character(at: index) == 0x20 { index += 1 }
+  return NSRange(location: 0, length: index)
 }
 
 @Test @MainActor func toolbarMixedIndentPreservesMetadataAndSelectionBoundary() throws {
@@ -1086,7 +1130,7 @@ private final class RecordingFinderTextView: NSTextView {
     at: plainRange.location + 12,
     effectiveRange: nil
   ) as? NSParagraphStyle
-  #expect(plainStyle?.headIndent == 24)
+  #expect(plainStyle?.headIndent == bodyIndentUnit)
   #expect(textView.string.hasPrefix("Adjacent\n"))
   #expect(textView.string.hasSuffix("\nTrailing"))
 
@@ -1159,7 +1203,7 @@ private final class RecordingFinderTextView: NSTextView {
     at: plainLocation,
     effectiveRange: nil
   ) as? NSParagraphStyle
-  #expect(plainStyle?.headIndent == 24)
+  #expect(plainStyle?.headIndent == bodyIndentUnit)
 }
 
 @Test @MainActor func webLinkTargetRejectsRevisionAndVisibilityChanges() throws {

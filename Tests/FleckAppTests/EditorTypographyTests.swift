@@ -5,7 +5,7 @@ import Testing
 
 @Test @MainActor func editorTypographyUsesAvenirAndOpenBodyRhythm() throws {
   let font = EditorTypography.bodyFont(family: "Avenir Next", size: 17)
-  let paragraph = EditorTypography.defaultParagraphStyle(fontSize: 17)
+  let paragraph = EditorTypography.systemDefaultParagraphStyle(fontSize: 17)
 
   #expect(font.familyName == "Avenir Next")
   #expect(font.pointSize == 17)

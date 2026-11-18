@@ -2,6 +2,7 @@
   import AppKit
   import CoreGraphics
   import CoreImage
+  import CoreText
   import FleckCore
   import SwiftUI
 
@@ -45,6 +46,9 @@
       "FleckFocusedDictationProvisional"
     )
 
+    /// Scroll offsets shared by every note this editor session shows.
+    let scrollMemory = EditorScrollMemory()
+
     @Published private(set) var isBold = false
     @Published private(set) var isItalic = false
     @Published private(set) var isUnderlined = false
@@ -73,6 +77,7 @@
 
     weak var textView: NSTextView? {
       didSet {
+        applyBodyFontDefaults()
         if textView !== oldValue {
           editorSessionGeneration &+= 1
           hideFindInterface(in: oldValue)
@@ -96,8 +101,21 @@
     private var focusedDictationStorageID: ObjectIdentifier?
     private var focusedDictationEditObserver: NSObjectProtocol?
     private var isApplyingFocusedDictationEdit = false
-    var bodyFontFamily = ".AppleSystemUIFont"
-    var bodyFontSize: CGFloat = 17
+    var bodyFontFamily = ".AppleSystemUIFont" {
+      didSet { applyBodyFontDefaults() }
+    }
+    var bodyFontSize: CGFloat = 17 {
+      didSet { applyBodyFontDefaults() }
+    }
+
+    /// Keeps the view's indentation grid on the same body font the commands style
+    /// paragraphs with, so list tab stops and block indentation cannot step by
+    /// different amounts.
+    private func applyBodyFontDefaults() {
+      guard let listView = textView as? ListAwareTextView else { return }
+      listView.configuredBodyFontFamily = bodyFontFamily
+      listView.configuredBodyFontSize = bodyFontSize
+    }
     var copiedFormatting: [NSAttributedString.Key: Any]?
     @Published var areBodyCommandsBlocked = false {
       didSet {
@@ -542,6 +560,7 @@
         return
       }
       (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
+      let original = textView.textStorage?.attributedSubstring(from: range)
       var shouldEnable = false
       textView.textStorage?.enumerateAttribute(key, in: range) { value, _, stop in
         if (value as? Int ?? 0) == 0 {
@@ -554,6 +573,7 @@
         value: shouldEnable ? enabledValue : 0,
         range: range
       )
+      if let original { registerUndo(in: textView, range: range, replacement: original) }
       textView.didChangeText()
       refreshFormattingState()
     }
@@ -1090,6 +1110,22 @@
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
   }
 
+  /// Remembers the editor's vertical scroll offset for each note it shows, so a
+  /// content reload or a note switch keeps the reader where they were. The
+  /// memory belongs to the editor session rather than one SwiftUI view, because
+  /// switching notes rebuilds the editor view and its coordinator.
+  final class EditorScrollMemory {
+    private var offsets: [UUID?: CGFloat] = [:]
+
+    func offset(forNote noteID: UUID?) -> CGFloat? {
+      offsets[noteID]
+    }
+
+    func remember(_ offset: CGFloat, forNote noteID: UUID?) {
+      offsets[noteID] = max(0, offset)
+    }
+  }
+
   final class NativeEditorScrollView: NSScrollView {
     struct ScrollEdgeBlurBand: Equatable {
       let blurRadius: CGFloat
@@ -1121,6 +1157,9 @@
 
     private var isLayingOutDocument = false
     private var scrollEdgeBlurViews: [EditorScrollEdgeBlurView] = []
+    var scrollMemory: EditorScrollMemory?
+    var noteID: UUID?
+    private var pendingScrollRestore: (offset: CGFloat, revealsCaret: Bool)?
     var showScrollEdgeBlur = false {
       didSet { updateScrollEdgeEffect() }
     }
@@ -1166,7 +1205,15 @@
         width: contentView.bounds.width,
         minimumHeight: contentView.bounds.height
       )
-      contentView.scroll(to: contentOrigin)
+      if let restore = pendingScrollRestore {
+        pendingScrollRestore = nil
+        contentView.scroll(to: scrollOrigin(restoring: restore.offset))
+        if restore.revealsCaret {
+          revealCaretIfHidden(in: documentView)
+        }
+      } else {
+        contentView.scroll(to: contentOrigin)
+      }
       reflectScrolledClipView(contentView)
       if scrollerStyle != .overlay { scrollerStyle = .overlay }
       if verticalScroller?.controlSize != .mini { verticalScroller?.controlSize = .mini }
@@ -1177,7 +1224,45 @@
       super.reflectScrolledClipView(cView)
       if cView === contentView {
         updateScrollEdgeEffect()
+        scrollMemory?.remember(contentView.bounds.origin.y, forNote: noteID)
       }
+    }
+
+    /// Restores `offset` at the next layout pass, once the new content has been
+    /// measured, so the scroll view cannot clamp against a stale content height.
+    func scheduleScrollRestore(_ offset: CGFloat, revealingCaretIfNeeded: Bool) {
+      pendingScrollRestore = (offset: offset, revealsCaret: revealingCaretIfNeeded)
+    }
+
+    private func scrollOrigin(restoring offset: CGFloat) -> NSPoint {
+      let maximumOffset = (documentView as? NativeEditorDocumentView).map {
+        max(0, $0.bounds.height - contentView.bounds.height)
+      } ?? max(0, offset)
+      return NSPoint(
+        x: contentView.bounds.origin.x,
+        y: min(max(0, offset), maximumOffset)
+      )
+    }
+
+    private func revealCaretIfHidden(in documentView: NativeEditorDocumentView) {
+      let textView = documentView.textView
+      guard !isCaretVisible(in: textView) else { return }
+      textView.scrollRangeToVisible(textView.selectedRange())
+    }
+
+    func isCaretVisible(in textView: NSTextView) -> Bool {
+      guard let window = textView.window else { return true }
+      let caretLocation = min(
+        textView.selectedRange().location,
+        (textView.string as NSString).length
+      )
+      let screenRect = textView.firstRect(
+        forCharacterRange: NSRange(location: caretLocation, length: 0),
+        actualRange: nil
+      )
+      var caret = contentView.convert(window.convertFromScreen(screenRect), from: nil)
+      caret.size.width = max(caret.size.width, 1)
+      return contentView.bounds.contains(caret)
     }
 
     func relayoutDocument() {
@@ -1324,6 +1409,7 @@
 
     let text: String
     let richTextRTF: Data?
+    let noteID: UUID?
     let title: String
     let titleFontFamily: String
     let isPinned: Bool
@@ -1440,6 +1526,7 @@
     init(
       text: String,
       richTextRTF: Data?,
+      noteID: UUID? = nil,
       title: String = "",
       titleFontFamily: String? = nil,
       isPinned: Bool = false,
@@ -1467,6 +1554,7 @@
     ) {
       self.text = text
       self.richTextRTF = richTextRTF
+      self.noteID = noteID
       self.title = title
       self.titleFontFamily = titleFontFamily ?? fontFamily
       self.isPinned = isPinned
@@ -1523,6 +1611,7 @@
         )
       }
 
+      let rememberedScrollOffset = commands.scrollMemory.offset(forNote: noteID) ?? 0
       let scrollView = NativeEditorScrollView()
       scrollView.focusRingType = .none
       scrollView.hasVerticalScroller = true
@@ -1605,6 +1694,8 @@
       )
       scrollView.documentView = documentView
       documentView.autoresizingMask = [.width]
+      scrollView.scrollMemory = commands.scrollMemory
+      scrollView.noteID = noteID
       context.coordinator.scrollView = scrollView
       context.coordinator.attachedCommands = commands
       if let undoManager = textView.undoManager {
@@ -1615,10 +1706,8 @@
         commands.textView = textView
         commands.refreshFormattingState()
       }
+      scrollView.scheduleScrollRestore(rememberedScrollOffset, revealingCaretIfNeeded: false)
       scrollView.relayoutDocument()
-      scrollView.contentView.scroll(
-        to: NSPoint(x: scrollView.contentView.bounds.origin.x, y: 0)
-      )
       scrollView.reflectScrolledClipView(scrollView.contentView)
       context.coordinator.presentationInputs = presentationInputs(
         for: scrollView.contentView.bounds.size
@@ -1669,6 +1758,14 @@
         to: textView,
         coordinator: coordinator
       )
+      let noteChanged = scrollView.noteID != noteID
+      if noteChanged {
+        scrollView.noteID = noteID
+        scrollView.scheduleScrollRestore(
+          commands.scrollMemory.offset(forNote: noteID) ?? 0,
+          revealingCaretIfNeeded: false
+        )
+      }
       let changes = PresentationChanges(
         previous: coordinator.presentationInputs,
         current: currentInputs,
@@ -1730,7 +1827,7 @@
       if changes.shouldUpdateTypingFont {
         applyTypingFont(to: textView)
       }
-      if changes.shouldRelayoutDocument {
+      if changes.shouldRelayoutDocument || noteChanged {
         scrollView.relayoutDocument()
       }
       coordinator.presentationInputs = currentInputs
@@ -1778,6 +1875,35 @@
       else {
         return false
       }
+      let scrollView = textView.enclosingScrollView as? NativeEditorScrollView
+      let scrollOffset = scrollView?.contentView.bounds.origin.y
+      let caretWasVisible = scrollView?.isCaretVisible(in: textView) ?? false
+      coordinator.isApplyingExternalContent = true
+      defer {
+        coordinator.isApplyingExternalContent = false
+        coordinator.text = text
+        coordinator.richTextRTF = richTextRTF
+        coordinator.lastModelText = text
+        coordinator.lastModelRichTextRTF = richTextRTF
+        if let scrollView, let scrollOffset, scrollView.noteID == noteID {
+          scrollView.scheduleScrollRestore(
+            scrollOffset,
+            revealingCaretIfNeeded: caretWasVisible
+          )
+        }
+      }
+      let content = resolvedContent()
+      if let editor = textView as? ListAwareTextView,
+        scrollView == nil || scrollView?.noteID == noteID,
+        let edit = contiguousProgrammaticEdit(for: editor, content: content),
+        editor.applyProgrammaticEdit(
+          range: edit.range,
+          replacement: edit.replacement,
+          actionName: "Agent Edit"
+        )
+      {
+        return true
+      }
       (textView as? ListAwareTextView)?.clearNoteLinkPresentation()
       (textView as? ListAwareTextView)?.cancelPasteOptions()
       let current = NSAttributedString(attributedString: textView.textStorage ?? NSTextStorage())
@@ -1790,7 +1916,7 @@
         from: currentSource.string,
         to: text
       ).map { canonicalSelection(sourceSelection, applying: $0) } ?? sourceSelection
-      loadContent(into: textView)
+      loadContent(content, into: textView)
       let reloaded = NSAttributedString(attributedString: textView.textStorage ?? NSTextStorage())
       let sourceLocation = min(remappedSourceSelection.location, text.utf16.count)
       let clampedSourceSelection = NSRange(
@@ -1803,35 +1929,147 @@
           in: reloaded
         )
       )
-      coordinator.text = text
-      coordinator.richTextRTF = richTextRTF
-      coordinator.lastModelText = text
-      coordinator.lastModelRichTextRTF = richTextRTF
+      return true
+    }
+
+    private struct ResolvedContent {
+      let attributedString: NSAttributedString
+      let usesRichText: Bool
+    }
+
+    /// Resolves the content `loadContent(into:)` would install for the current
+    /// model values, without touching a text view.
+    private func resolvedContent() -> ResolvedContent {
+      let source: NSAttributedString
+      let usesRichText: Bool
+      if let richTextRTF,
+        let attributed = try? NoteRichTextCodec.decode(richTextRTF),
+        let canonical = canonicalAttributedText(attributed)
+      {
+        source = canonical
+        usesRichText = true
+      } else {
+        let plain = NSMutableAttributedString(string: text)
+        if plain.length > 0 {
+          plain.addAttributes(
+            EditorTypography.defaultAttributes(family: fontFamily, size: fontSize),
+            range: NSRange(location: 0, length: plain.length)
+          )
+        }
+        source = plain
+        usesRichText = false
+      }
+      return ResolvedContent(
+        attributedString: inlineImageStore?.projectedContent(from: source) ?? source,
+        usesRichText: usesRichText
+      )
+    }
+
+    /// A model change that is one contiguous edit over a note that is otherwise
+    /// unchanged is applied in place, so it becomes a single undo step instead of
+    /// a reload. Whole-note rewrites and image-bearing content keep the reload.
+    private func contiguousProgrammaticEdit(
+      for editor: ListAwareTextView,
+      content: ResolvedContent
+    ) -> (range: NSRange, replacement: NSAttributedString)? {
+      guard let storage = editor.textStorage else { return nil }
+      let target = content.attributedString
+      guard !target.containsAttachments, !storage.containsAttachments else { return nil }
+      // Canonically equivalent text needs the reload's UTF-16 selection mapping,
+      // including selections inside a decomposed character sequence.
+      guard storage.string != target.string else { return nil }
+      let current = storage.string as NSString
+      let updated = target.string as NSString
+      let sharedLimit = min(current.length, updated.length)
+      var prefix = 0
+      while prefix < sharedLimit,
+        current.character(at: prefix) == updated.character(at: prefix)
+      {
+        prefix += 1
+      }
+      var suffix = 0
+      while suffix < sharedLimit - prefix,
+        current.character(at: current.length - 1 - suffix)
+          == updated.character(at: updated.length - 1 - suffix)
+      {
+        suffix += 1
+      }
+      while prefix > 0,
+        !editor.isSafeEditBoundary(prefix, in: current)
+          || !editor.isSafeEditBoundary(prefix, in: updated)
+      {
+        prefix -= 1
+      }
+      while suffix > 0,
+        !editor.isSafeEditBoundary(current.length - suffix, in: current)
+          || !editor.isSafeEditBoundary(updated.length - suffix, in: updated)
+      {
+        suffix -= 1
+      }
+      guard prefix + suffix > 0,
+        (prefix + suffix) * 2 >= max(current.length, updated.length)
+      else { return nil }
+      if content.usesRichText {
+        let prefixRange = NSRange(location: 0, length: prefix)
+        let currentSuffix = NSRange(location: current.length - suffix, length: suffix)
+        let targetSuffix = NSRange(location: updated.length - suffix, length: suffix)
+        guard attributesMatch(
+          storage, in: prefixRange, target, in: prefixRange
+        ), attributesMatch(
+          storage, in: currentSuffix, target, in: targetSuffix
+        ) else { return nil }
+      }
+      let range = NSRange(location: prefix, length: current.length - prefix - suffix)
+      let replacement = target.attributedSubstring(
+        from: NSRange(location: prefix, length: updated.length - prefix - suffix)
+      )
+      guard range.length > 0 || replacement.length > 0 else { return nil }
+      return (range, replacement)
+    }
+
+    /// Text in these ranges already matches. Compare attribute runs without
+    /// copying the unchanged parts of the note into attributed substrings.
+    private func attributesMatch(
+      _ current: NSAttributedString,
+      in currentRange: NSRange,
+      _ target: NSAttributedString,
+      in targetRange: NSRange
+    ) -> Bool {
+      var offset = 0
+      while offset < currentRange.length {
+        var currentRun = NSRange()
+        var targetRun = NSRange()
+        let currentAttributes = current.attributes(
+          at: currentRange.location + offset,
+          effectiveRange: &currentRun
+        )
+        let targetAttributes = target.attributes(
+          at: targetRange.location + offset,
+          effectiveRange: &targetRun
+        )
+        guard NSDictionary(dictionary: currentAttributes).isEqual(to: targetAttributes) else {
+          return false
+        }
+        offset = min(
+          NSMaxRange(currentRun) - currentRange.location,
+          NSMaxRange(targetRun) - targetRange.location
+        )
+      }
       return true
     }
 
     private func loadContent(into textView: NSTextView) {
-      let source: NSAttributedString
-      let loadedRichText: Bool
-      if let richTextRTF,
-        let attributed = try? NoteRichTextCodec.decode(richTextRTF),
-        let canonicalAttributed = canonicalAttributedText(attributed)
-      {
-        source = canonicalAttributed
-        loadedRichText = true
-      } else {
-        source = NSAttributedString(string: text)
-        loadedRichText = false
-      }
-      if let inlineImageStore {
-        textView.textStorage?.setAttributedString(
-          inlineImageStore.projectedContent(from: source)
-        )
-      } else {
-        textView.textStorage?.setAttributedString(source)
-      }
-      if loadedRichText {
+      loadContent(resolvedContent(), into: textView)
+    }
+
+    private func loadContent(_ content: ResolvedContent, into textView: NSTextView) {
+      textView.textStorage?.setAttributedString(content.attributedString)
+      if content.usesRichText {
         applyTypingFont(to: textView)
+        (textView as? ListAwareTextView)?.migrateLegacyTypography(
+          family: fontFamily,
+          size: fontSize
+        )
       } else {
         applyDefaultFont(to: textView)
       }
@@ -1984,6 +2222,7 @@
     }
 
     private static func applyDefaultForegroundColor(_ color: NSColor, to textView: NSTextView) {
+      (textView as? ListAwareTextView)?.defaultInkColor = color
       guard let storage = textView.textStorage, let layoutManager = textView.layoutManager else {
         return
       }
@@ -1999,6 +2238,10 @@
     }
 
     private func applyTypingFont(to textView: NSTextView) {
+      if let listView = textView as? ListAwareTextView {
+        listView.configuredBodyFontFamily = fontFamily
+        listView.configuredBodyFontSize = fontSize
+      }
       var attributes = textView.typingAttributes
       attributes.merge(
         EditorTypography.defaultAttributes(
@@ -2008,20 +2251,24 @@
         uniquingKeysWith: { _, new in new }
       )
       textView.typingAttributes = attributes
+      guard let listView = textView as? ListAwareTextView, listView.textStorage?.length ?? 0 > 0
+      else { return }
+      listView.normalizeListMarkerFonts()
     }
 
     private func applyDefaultFont(to textView: NSTextView) {
       let font = configuredFont()
-      applyTypingFont(to: textView)
       textView.font = font
-      guard let storage = textView.textStorage, storage.length > 0 else { return }
-      storage.addAttributes(
-        EditorTypography.defaultAttributes(
-          family: fontFamily,
-          size: fontSize
-        ),
-        range: NSRange(location: 0, length: storage.length)
-      )
+      if let storage = textView.textStorage, storage.length > 0 {
+        storage.addAttributes(
+          EditorTypography.defaultAttributes(
+            family: fontFamily,
+            size: fontSize
+          ),
+          range: NSRange(location: 0, length: storage.length)
+        )
+      }
+      applyTypingFont(to: textView)
     }
 
     @MainActor
@@ -2035,6 +2282,7 @@
       var richTextRTF: Data?
       var lastModelText: String
       var lastModelRichTextRTF: Data?
+      fileprivate var isApplyingExternalContent = false
       private var lastReportedNoteLinkTrigger: (text: String, range: NSRange)?
       var hasPendingLocalEdit: Bool {
         !editorTextExactlyMatches(text, lastModelText)
@@ -2050,6 +2298,7 @@
       }
 
       func textDidChange(_ notification: Notification) {
+        guard !isApplyingExternalContent else { return }
         let signpostState = FleckPerformanceSignposts.signposter.beginInterval(
           FleckPerformanceSignposts.editorChange
         )
@@ -2159,6 +2408,30 @@
   final class ListAwareTextView: NSTextView, @MainActor NSLayoutManagerDelegate {
     private lazy var imageEditing = InlineImageEditingController(textView: self)
 
+    var configuredBodyFontFamily = EditorTypography.systemFamily
+    var configuredBodyFontSize: CGFloat = 17
+
+    var configuredBodyFont: NSFont {
+      EditorTypography.bodyFont(family: configuredBodyFontFamily, size: configuredBodyFontSize)
+    }
+
+    /// Restyles paragraphs that still carry an untouched earlier preset signature
+    /// onto the current grid. Mutates text storage only; list paragraphs are left
+    /// to the list engine so their indentation never moves.
+    @discardableResult
+    func migrateLegacyTypography(family: String, size: CGFloat) -> Int {
+      guard let storage = textStorage else { return 0 }
+      let text = string as NSString
+      return EditorTypographyMigration.migrate(
+        storage,
+        family: family,
+        size: size,
+        isListParagraph: { paragraphRange in
+          self.parsedListItem(in: paragraphRange, string: text) != nil
+        }
+      )
+    }
+
     @MainActor
     private final class ChecklistIndentTextContainer: NSTextContainer {
       weak var listAwareTextView: ListAwareTextView?
@@ -2262,6 +2535,7 @@
     )
 
     var automaticLists = true
+
     var liveNoteIDs: Set<UUID> = []
     var onRequestNoteLink: ((NSRange) -> Void)?
     var onOpenNoteLink: ((UUID) -> Void)?
@@ -2277,6 +2551,14 @@
     var noteLinkWarningColor = FleckThemeSnapshot.initial.nsColor(.warning) {
       didSet { needsDisplay = true }
     }
+    /// The ink the note body wears when neither the run nor the presentation
+    /// layer names a colour. AppKit inserts marked (pre-commit input method) text
+    /// with no foreground attribute, so the composing run needs this to match the
+    /// text around it instead of the text system's default black.
+    var defaultInkColor = NSColor.textColor {
+      didSet { applyCompositionInk() }
+    }
+    private var compositionInkRange: NSRange?
     private var noteLinkTitles: [UUID: String] = [:]
     var reduceMotion = false
     private weak var checklistCompletionOverlay: ChecklistCompletionOverlay?
@@ -2297,6 +2579,12 @@
       let completed: Bool
     }
 
+    private struct ParsedListItem {
+      let markerRange: NSRange
+      let contentRange: NSRange
+      let parsed: ParsedEditorListLine
+    }
+
     /// Solid for a current link, dashed when the label disagrees with the live title, and dotted
     /// when the target is gone. The pattern, not the color alone, carries the state.
     static func noteLinkUnderlineStyle(isLive: Bool, isStale: Bool) -> Int {
@@ -2309,6 +2597,8 @@
 
     private var temporaryNoteLinkPresentations: [TemporaryNoteLinkPresentation] = []
     private var noteLinkPresentationLinks: [NoteLink] = []
+    private var noteLinkAccentColorHex: String?
+    private var noteLinkPresentationGeneration = -1
     private var hiddenNoteLinkDestinationRanges: [NSRange] = []
     private var hiddenNoteLinkTokenRanges: [NSRange] = []
     private var temporaryChecklistSlices: [TemporaryAttributeSlice] = []
@@ -2336,6 +2626,7 @@
     private var pasteOptionsButton: NSButton?
     private var isApplyingPasteOption = false
     private var textChangeGeneration = 0
+    private var pendingEditRange: NSRange?
     private var pasteOptionsBoundsObserver: NSObjectProtocol?
     private var pasteOptionsFocusObservers: [NSObjectProtocol] = []
     private var pasteOptionsClickMonitor: Any?
@@ -2570,6 +2861,32 @@
       NSAttributedString(string: text, attributes: destinationAttributes)
     }
 
+    /// The pasteboard's text and inline emphasis, read the way Paste reads it.
+    /// Nil when the pasteboard carries no text, which is how an image-only copy
+    /// is refused instead of arriving as an attachment.
+    static func matchedStylePasteboardContent(
+      from pasteboard: NSPasteboard
+    ) -> NSAttributedString? {
+      let formats: [(NSPasteboard.PasteboardType, NSAttributedString.DocumentType)] = [
+        (.rtfd, .rtfd),
+        (.rtf, .rtf),
+        (.html, .html),
+      ]
+      for (type, documentType) in formats {
+        guard let data = pasteboard.data(forType: type),
+          let attributed = try? NSAttributedString(
+            data: data,
+            options: [.documentType: documentType],
+            documentAttributes: nil
+          ),
+          !containsAttachment(in: attributed)
+        else { continue }
+        return attributed
+      }
+      guard let text = pasteboard.string(forType: .string) else { return nil }
+      return NSAttributedString(string: text)
+    }
+
     static func mergePaste(
       _ source: NSAttributedString,
       destinationAttributes: [NSAttributedString.Key: Any]
@@ -2622,12 +2939,23 @@
           in: layoutManager,
           textLength: (string as NSString).length
         )
+        restoreTemporaryAttributeSlices(
+          temporaryScaledMarkerSlices,
+          in: layoutManager,
+          textLength: (string as NSString).length
+        )
       }
       temporaryChecklistSlices = []
+      temporaryScaledMarkerSlices = []
+      scaledListMarkers = []
       checklistPresentationNeedsRefresh = true
     }
 
     func refreshChecklistPresentation() {
+      refreshChecklistPresentation(linkRanges: NoteLinkParser.links(in: string).map(\.range))
+    }
+
+    private func refreshChecklistPresentation(linkRanges: [NSRange]) {
       clearChecklistPresentation()
       checklistPresentationNeedsRefresh = false
       guard let storage = textStorage, let layoutManager, storage.length > 0 else {
@@ -2635,27 +2963,8 @@
         return
       }
 
-      let linkRanges = NoteLinkParser.links(in: string).map(\.range)
-      for markerRange in emptyListMarkerRanges() {
-        temporaryChecklistSlices.append(contentsOf: temporaryAttributeSlices(
-          .foregroundColor,
-          in: markerRange,
-          layoutManager: layoutManager
-        ))
-        let effectiveColor = effectiveForegroundColor(
-          at: markerRange.location,
-          storage: storage,
-          layoutManager: layoutManager
-        )
-        layoutManager.addTemporaryAttribute(
-          .foregroundColor,
-          value: effectiveColor.withAlphaComponent(
-            effectiveColor.alphaComponent * ChecklistMarkerDrawing.emptyListMarkerOpacity
-          ),
-          forCharacterRange: markerRange
-        )
-      }
-      for item in checklistItems() {
+      let items = parsedListItems()
+      for item in items where item.parsed.style == .checklist {
         temporaryChecklistSlices.append(contentsOf: temporaryAttributeSlices(
           .foregroundColor,
           in: item.markerRange,
@@ -2667,7 +2976,7 @@
           forCharacterRange: item.markerRange
         )
 
-        guard item.completed, item.contentRange.length > 0 else { continue }
+        guard item.parsed.isChecklistComplete, item.contentRange.length > 0 else { continue }
         for range in rangesExcluding(item.contentRange, ranges: linkRanges) {
           temporaryChecklistSlices.append(contentsOf: temporaryAttributeSlices(
             .foregroundColor,
@@ -2682,10 +2991,12 @@
           applyChecklistRecession(in: range, storage: storage, layoutManager: layoutManager)
         }
       }
+      refreshScaledListMarkers(items: items, storage: storage, layoutManager: layoutManager)
     }
 
     func clearNoteLinkPresentation() {
       clearChecklistPresentation()
+      noteLinkPresentationGeneration = -1
       let collapsedTokens = hiddenNoteLinkTokenRanges
       hiddenNoteLinkDestinationRanges = []
       hiddenNoteLinkTokenRanges = []
@@ -2710,18 +3021,49 @@
     ) {
       self.liveNoteIDs = liveNoteIDs
       self.noteLinkTitles = noteLinkTitles
+      noteLinkAccentColorHex = accentColorHex
+      refreshNoteLinkPresentation(ensuringLayout: true)
+    }
+
+    /// Re-collapses the links after an edit. Clearing the presentation to let an
+    /// edit through also expands every destination, so without this the stored
+    /// `fleck://note/` Markdown stays visible until the next model refresh.
+    ///
+    /// Only the collapse comes back here. The slices recorded for the previous
+    /// presentation describe ranges an edit has since moved, so they are dropped
+    /// instead of written back, and colour and underline are left to the next full
+    /// refresh: AppKit carries temporary attributes through an edit itself, and
+    /// the editor is not the only thing that paints them — a search highlight, the
+    /// composing ink or a dictation mark would otherwise be erased by the very
+    /// keystroke that moved it.
+    private func restoreNoteLinkPresentationAfterEdit() {
+      guard noteLinkAccentColorHex != nil else { return }
+      temporaryNoteLinkPresentations = []
+      noteLinkPresentationLinks = NoteLinkParser.links(in: string)
+      updateNoteLinkGlyphVisibility()
+      refreshChecklistPresentation(linkRanges: noteLinkPresentationLinks.map(\.range))
+      noteLinkPresentationGeneration = textChangeGeneration
+      needsDisplay = true
+    }
+
+    private func refreshNoteLinkPresentation(ensuringLayout: Bool) {
       clearNoteLinkPresentation()
-      guard let layoutManager, let textContainer else { return }
+      guard let layoutManager, let textContainer,
+        let accentColorHex = noteLinkAccentColorHex
+      else { return }
       let textLength = (string as NSString).length
 
       let links = NoteLinkParser.links(in: string)
       noteLinkPresentationLinks = links
+      noteLinkPresentationGeneration = textChangeGeneration
       guard !links.isEmpty, textLength > 0 else {
-        refreshChecklistPresentation()
+        refreshChecklistPresentation(linkRanges: [])
         needsDisplay = true
         return
       }
-      layoutManager.ensureLayout(for: textContainer)
+      if ensuringLayout {
+        layoutManager.ensureLayout(for: textContainer)
+      }
       let canvasColor = EditorCanvasInk.canvasColor(for: self)
       let rawAccent = NSColor(hex: accentColorHex) ?? .controlAccentColor
       let accent = FleckColorContrast.accessibleForeground(rawAccent, against: canvasColor)
@@ -2760,8 +3102,58 @@
         temporaryNoteLinkPresentations.append(presentation)
       }
       updateNoteLinkGlyphVisibility()
-      refreshChecklistPresentation()
+      refreshChecklistPresentation(linkRanges: links.map(\.range))
       needsDisplay = true
+    }
+
+    /// AppKit inserts composing text without a foreground attribute, so the marked
+    /// run draws in the text system's default black. Give it the ink the note around
+    /// it wears, and keep that ink once the input method commits the run.
+    private func applyCompositionInk() {
+      guard let layoutManager else { return }
+      let range: NSRange
+      if hasMarkedText() {
+        range = markedRange()
+        compositionInkRange = range
+      } else if let composed = compositionInkRange {
+        compositionInkRange = nil
+        let caret = selectedRange()
+        let end = caret.location == NSNotFound
+          ? NSMaxRange(composed)
+          : max(NSMaxRange(composed), caret.location)
+        range = NSRange(location: composed.location, length: max(0, end - composed.location))
+      } else {
+        return
+      }
+      let textLength = (string as NSString).length
+      let start = min(max(0, range.location), textLength)
+      let end = min(max(start, NSMaxRange(range)), textLength)
+      guard end > start else { return }
+      layoutManager.addTemporaryAttribute(
+        .foregroundColor,
+        value: compositionInk(at: start),
+        forCharacterRange: NSRange(location: start, length: end - start)
+      )
+      needsDisplay = true
+    }
+
+    private func compositionInk(at location: Int) -> NSColor {
+      guard let storage = textStorage, storage.length > 0 else { return defaultInkColor }
+      let index = min(max(0, location), storage.length - 1)
+      if let presented = layoutManager?.temporaryAttribute(
+        .foregroundColor,
+        atCharacterIndex: index,
+        effectiveRange: nil
+      ) as? NSColor {
+        return presented
+      }
+      return (storage.attribute(.foregroundColor, at: index, effectiveRange: nil) as? NSColor)
+        ?? defaultInkColor
+    }
+
+    override func unmarkText() {
+      super.unmarkText()
+      applyCompositionInk()
     }
 
     /// Collapses the `(fleck://note/<uuid>)` destination of every link the selection is not in,
@@ -3040,13 +3432,26 @@
           )
         }
       }
+      drawScaledListMarkers(in: dirtyRect)
       imageEditing.draw()
     }
 
     override func deleteBackward(_ sender: Any?) {
+      guard !hasMarkedText() else {
+        super.deleteBackward(sender)
+        return
+      }
       let selection = selectedRange()
       let ns = string as NSString
-      guard selection.length == 0, selection.location > 0, selection.location <= ns.length else {
+      guard selection.location != NSNotFound,
+        selection.location >= 0,
+        NSMaxRange(selection) <= ns.length
+      else {
+        super.deleteBackward(sender)
+        return
+      }
+      if removeNoteLinkBeforeCaret(selection: selection) { return }
+      guard selection.length == 0, selection.location > 0 else {
         super.deleteBackward(sender)
         return
       }
@@ -3095,12 +3500,94 @@
       }
     }
 
-    override func deleteWordBackward(_ sender: Any?) {
+    /// Forward delete mirrors the Backspace path so the list, checklist and
+    /// rendered-link structure holds in both directions.
+    override func deleteForward(_ sender: Any?) {
+      guard !hasMarkedText(), isEditable else {
+        super.deleteForward(sender)
+        return
+      }
       let selection = selectedRange()
       let ns = string as NSString
       guard selection.length == 0,
+        selection.location >= 0,
+        selection.location < ns.length
+      else {
+        super.deleteForward(sender)
+        return
+      }
+      if let link = NoteLinkParser.link(atUTF16Location: selection.location, in: string) {
+        performUndoGroup {
+          registerSelectionUndo(selection)
+          _ = replaceText(
+            in: link.range,
+            with: "",
+            selecting: NSRange(location: link.range.location, length: 0)
+          )
+        }
+        return
+      }
+      if mergeNextListItem(at: selection.location, string: ns) { return }
+      guard isSafeEditBoundary(selection.location, in: ns) else {
+        let cluster = ns.rangeOfComposedCharacterSequence(at: selection.location)
+        performUndoGroup {
+          registerSelectionUndo(selection)
+          _ = replaceText(
+            in: cluster,
+            with: "",
+            selecting: NSRange(location: cluster.location, length: 0)
+          )
+        }
+        return
+      }
+      super.deleteForward(sender)
+    }
+
+    /// A forward delete at the end of a list item joins the next item to this
+    /// one, dropping the next indent and marker so only one marker survives.
+    private func mergeNextListItem(at location: Int, string ns: NSString) -> Bool {
+      let paragraphRange = ns.paragraphRange(for: NSRange(location: location, length: 0))
+      guard let item = parsedListItem(in: paragraphRange, string: ns),
+        location == NSMaxRange(item.contentRange),
+        NSMaxRange(paragraphRange) < ns.length
+      else { return false }
+      let nextParagraph = ns.paragraphRange(
+        for: NSRange(location: NSMaxRange(paragraphRange), length: 0)
+      )
+      guard let next = parsedListItem(in: nextParagraph, string: ns) else { return false }
+      let mergeRange = NSRange(
+        location: location,
+        length: next.contentRange.location - location
+      )
+      guard mergeRange.length > 0 else { return false }
+      performUndoGroup {
+        registerSelectionUndo(selectedRange())
+        _ = replaceText(
+          in: mergeRange,
+          with: "",
+          selecting: NSRange(location: location, length: 0)
+        )
+      }
+      return true
+    }
+
+    override func deleteWordBackward(_ sender: Any?) {
+      guard !hasMarkedText() else {
+        super.deleteWordBackward(sender)
+        return
+      }
+      let selection = selectedRange()
+      let ns = string as NSString
+      guard selection.location != NSNotFound,
+        selection.location >= 0,
+        NSMaxRange(selection) <= ns.length
+      else {
+        super.deleteWordBackward(sender)
+        return
+      }
+      if removeNoteLinkBeforeCaret(selection: selection) { return }
+      guard selection.length == 0,
         selection.location > 0,
-        selection.location <= ns.length,
         let item = bulletListItem(at: selection.location, string: ns),
         selection.location == item.contentRange.location
       else {
@@ -3111,6 +3598,39 @@
         in: ns.paragraphRange(for: NSRange(location: selection.location, length: 0)),
         contentStart: item.contentRange.location
       )
+    }
+
+    /// Backspace removes a rendered note link as one unit. The stored token is
+    /// `[label](fleck://note/<uuid>)`, so deleting one character of it either
+    /// breaks the link or reveals the destination the label stands in for; the
+    /// link's range is the unit the reader sees and therefore the unit deleted.
+    /// A selection deletes everything it covers: the rest of the selection plus
+    /// every link it touches, because a link left half-deleted stops parsing and
+    /// shows its destination.
+    private func removeNoteLinkBeforeCaret(selection: NSRange) -> Bool {
+      let deletion: NSRange
+      if selection.length == 0 {
+        guard selection.location > 0,
+          let link = NoteLinkParser.link(atUTF16Location: selection.location - 1, in: string)
+        else { return false }
+        deletion = link.range
+      } else {
+        let touched = NoteLinkParser.links(in: string).filter {
+          NSIntersectionRange($0.range, selection).length > 0
+        }
+        guard let first = touched.first else { return false }
+        deletion = touched.dropFirst().reduce(first.range) { NSUnionRange($0, $1.range) }
+      }
+      let range = NSUnionRange(deletion, selection)
+      performUndoGroup {
+        registerSelectionUndo(selection)
+        _ = replaceText(
+          in: range,
+          with: "",
+          selecting: NSRange(location: range.location, length: 0)
+        )
+      }
+      return true
     }
 
     override func smartDeleteRange(forProposedRange proposedCharRange: NSRange) -> NSRange {
@@ -3150,9 +3670,11 @@
     }
 
     override func moveLeft(_ sender: Any?) {
+      defer { snapSelectionToNoteLink() }
       let selection = selectedRange()
       let ns = string as NSString
-      guard selection.length == 0,
+      guard !hasMarkedText(),
+        selection.length == 0,
         let item = bulletListItem(at: selection.location, string: ns),
         selection.location == item.contentRange.location,
         item.paragraphRange.location > 0
@@ -3169,6 +3691,31 @@
       setSelectedRange(
         NSRange(location: previousParagraph.location + previousContentLength, length: 0)
       )
+    }
+
+    override func moveRight(_ sender: Any?) {
+      super.moveRight(sender)
+      snapSelectionToNoteLink()
+    }
+
+    override func moveUp(_ sender: Any?) {
+      super.moveUp(sender)
+      snapSelectionToNoteLink()
+    }
+
+    override func moveDown(_ sender: Any?) {
+      super.moveDown(sender)
+      snapSelectionToNoteLink()
+    }
+
+    override func moveWordLeft(_ sender: Any?) {
+      super.moveWordLeft(sender)
+      snapSelectionToNoteLink()
+    }
+
+    override func moveWordRight(_ sender: Any?) {
+      super.moveWordRight(sender)
+      snapSelectionToNoteLink()
     }
 
     override func resetCursorRects() {
@@ -3209,7 +3756,7 @@
     }
 
     override func insertNewline(_ sender: Any?) {
-      guard automaticLists, selectedRange().length == 0 else {
+      guard automaticLists, !hasMarkedText(), selectedRange().length == 0 else {
         super.insertNewline(sender)
         return
       }
@@ -3317,12 +3864,9 @@
       {
         guard let storage = textStorage else { return }
         let paragraphRange = item.paragraphRange
-        let fontLocation = min(selection.location, storage.length - 1)
-        let font = (typingAttributes[.font] as? NSFont)
-          ?? (storage.attribute(.font, at: fontLocation, effectiveRange: nil) as? NSFont)
-          ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
         let baselineParagraphStyle = EditorTypography.defaultParagraphStyle(
-          fontSize: font.pointSize
+          family: configuredBodyFontFamily,
+          fontSize: configuredBodyFontSize
         )
         let existingParagraphStyle =
           storage.attribute(.paragraphStyle, at: paragraphRange.location, effectiveRange: nil)
@@ -3330,20 +3874,16 @@
         let paragraphStyle =
           (existingParagraphStyle ?? baselineParagraphStyle).mutableCopy()
           as! NSMutableParagraphStyle
+        let defaultInterval = baselineParagraphStyle.defaultTabInterval
         let matchesDefaultTabLayout =
-          paragraphStyle.defaultTabInterval == baselineParagraphStyle.defaultTabInterval
-          && paragraphStyle.tabStops.count == baselineParagraphStyle.tabStops.count
-          && zip(paragraphStyle.tabStops, baselineParagraphStyle.tabStops).allSatisfy { tabs in
-            tabs.0.isEqual(tabs.1)
-          }
+          EditorTypography.hasOnlyDefaultTabStops(paragraphStyle)
+          && (paragraphStyle.defaultTabInterval == 0
+            || abs(paragraphStyle.defaultTabInterval - defaultInterval) < 0.05)
         if matchesDefaultTabLayout,
           !ns.substring(with: paragraphRange).contains("\t")
         {
           paragraphStyle.tabStops = []
-          paragraphStyle.defaultTabInterval =
-            item.parsed.depth == 0
-            ? 36
-            : 3 * (" " as NSString).size(withAttributes: [.font: font]).width
+          paragraphStyle.defaultTabInterval = defaultInterval
         }
 
         let attributedParagraph = NSMutableAttributedString(
@@ -4630,6 +5170,41 @@
       }
     }
 
+    /// Edit ▸ Paste and Match Style (⇧⌥⌘V) reaches this view as the standard
+    /// `pasteAsPlainText:` action: the pasted text keeps only its emphasis and
+    /// links, and takes the destination paragraph's font, size, and spacing.
+    override func pasteAsPlainText(_ sender: Any?) {
+      guard !hasMarkedText(), pasteContext() != nil else {
+        super.pasteAsPlainText(sender)
+        return
+      }
+      pasteMatchedStyle(from: .general)
+    }
+
+    /// The command's insertion, split from the menu action so tests can drive a
+    /// scratch pasteboard instead of the user's clipboard.
+    func pasteMatchedStyle(from pasteboard: NSPasteboard) {
+      guard let context = pasteContext() else { return }
+      cancelPasteOptions()
+      guard let source = Self.matchedStylePasteboardContent(from: pasteboard) else { return }
+      let matched = completedChecklistInsertion(
+        Self.mergePaste(source, destinationAttributes: context.destinationAttributes),
+        replacing: context.replacementRange,
+        clearingInheritedContinuation: true
+      )
+      performUndoGroup {
+        _ = replaceAttributedText(
+          in: context.replacementRange,
+          with: matched,
+          selecting: NSRange(
+            location: context.replacementRange.location + matched.length,
+            length: 0
+          )
+        )
+        undoManager?.setActionName("Paste and Match Style")
+      }
+    }
+
     func insertPastedTextForTesting(
       _ attributedText: NSAttributedString,
       plainText: String? = nil,
@@ -5111,9 +5686,13 @@
             at: 0,
             effectiveRange: nil
           ) as? NSParagraphStyle) ?? .default).mutableCopy() as! NSMutableParagraphStyle
-          let delta: CGFloat = removing ? -24 : 24
-          style.headIndent = min(max(style.headIndent + delta, 0), 240)
-          style.firstLineHeadIndent = min(max(style.firstLineHeadIndent + delta, 0), 240)
+          let indentUnit = EditorTypography.indentWidth(font: configuredBodyFont)
+          let delta: CGFloat = removing ? -indentUnit : indentUnit
+          style.headIndent = min(max(style.headIndent + delta, 0), EditorTypography.maxIndentPoints)
+          style.firstLineHeadIndent = min(
+            max(style.firstLineHeadIndent + delta, 0),
+            EditorTypography.maxIndentPoints
+          )
           segment.addAttribute(
             .paragraphStyle,
             value: style,
@@ -5345,14 +5924,53 @@
       }
       clearNoteLinkPresentation()
       if !isApplyingPasteOption { cancelPasteOptions() }
+      pendingEditRange = NSRange(
+        location: affectedCharRange.location == NSNotFound ? 0 : affectedCharRange.location,
+        length: (replacementString as NSString?)?.length ?? 0
+      )
       return true
     }
 
     override func didChangeText() {
       textChangeGeneration += 1
+      let edited = pendingEditRange
+      pendingEditRange = nil
+      normalizeListMarkerFonts(in: editedParagraphRange(for: edited))
       super.didChangeText()
+      // The coordinator refreshes presentation while handling the native change
+      // notification. Standalone views still need that work, but doing it before
+      // the notification rebuilds every link and marker twice per keystroke.
+      if noteLinkPresentationGeneration != textChangeGeneration {
+        restoreNoteLinkPresentationAfterEdit()
+      }
+      applyCompositionInk()
       needsDisplay = true
       window?.invalidateCursorRects(for: self)
+    }
+
+    /// The paragraphs a typed edit can change the markers of: the one the caret
+    /// lands in and the one before it, because a newline splits one paragraph
+    /// into two and the marker can end up on either side of the split.
+    private func editedParagraphRange(for edited: NSRange?) -> NSRange {
+      let ns = string as NSString
+      guard ns.length > 0 else { return NSRange(location: 0, length: 0) }
+      if let edited, edited.length > 0 {
+        let start = min(max(0, edited.location), ns.length)
+        let end = min(NSMaxRange(edited), ns.length)
+        if start < end {
+          let span = NSRange(location: start, length: end - start)
+          let inserted = ns.substring(with: span)
+          if inserted.contains("\n") { return ns.paragraphRange(for: span) }
+        }
+      }
+      let caret = min(max(0, selectedRange().location), ns.length)
+      let probe = caret == ns.length && caret > 0 ? caret - 1 : caret
+      let paragraph = ns.paragraphRange(for: NSRange(location: probe, length: 0))
+      guard paragraph.location > 0 else { return paragraph }
+      let previous = ns.paragraphRange(
+        for: NSRange(location: paragraph.location - 1, length: 0)
+      )
+      return NSUnionRange(previous, paragraph)
     }
 
     override func setSelectedRange(_ range: NSRange) {
@@ -5362,10 +5980,48 @@
       clearInlineImageTypingAttributes()
       if changed, !isApplyingPasteOption { cancelPasteOptions() }
       if changed {
+        applyCompositionInk()
         updateNoteLinkGlyphVisibility()
         needsDisplay = true
         window?.invalidateCursorRects(for: self)
       }
+    }
+
+    /// A boundary is safe when it falls on an edge of a composed character
+    /// sequence, so no selection or deletion can split an emoji or an accented
+    /// cluster in half.
+    func isSafeEditBoundary(_ location: Int, in text: NSString) -> Bool {
+      guard location >= 0, location <= text.length else { return false }
+      guard location > 0, location < text.length else { return true }
+      return text.rangeOfComposedCharacterSequence(at: location).location == location
+    }
+
+    /// Widens a proposed selection so it never lands inside the stored Markdown
+    /// of a note link. A collapsed link renders as its label alone, so a caret
+    /// placed in the label would sit in the middle of the token and let an edit
+    /// cut a bracket or a destination away.
+    func snappedSelection(for proposed: NSRange, in text: NSString) -> NSRange {
+      guard !hasMarkedText(),
+        proposed.location != NSNotFound,
+        proposed.location >= 0,
+        proposed.location <= text.length,
+        NSMaxRange(proposed) <= text.length,
+        isSafeEditBoundary(proposed.location, in: text),
+        isSafeEditBoundary(NSMaxRange(proposed), in: text)
+      else { return proposed }
+
+      var result = proposed
+      for link in NoteLinkParser.links(in: text as String) where link.range.length > 0 {
+        let intersects = result.length == 0
+          ? result.location > link.range.location && result.location < NSMaxRange(link.range)
+          : NSIntersectionRange(link.range, result).length > 0
+        guard intersects else { continue }
+        let coversLink = link.range.location >= result.location
+          && NSMaxRange(link.range) <= NSMaxRange(result)
+        guard !coversLink else { continue }
+        result = NSUnionRange(result, link.range)
+      }
+      return result
     }
 
     override func selectionRange(
@@ -5376,7 +6032,9 @@
         forProposedRange: proposedCharRange,
         granularity: granularity
       )
-      return normalizedBulletCaretRange(proposed)
+      return normalizedBulletCaretRange(
+        snappedSelection(for: proposed, in: string as NSString)
+      )
     }
 
     override func setSelectedRanges(
@@ -5390,6 +6048,7 @@
       }
       super.setSelectedRanges(adjustedRanges, affinity: affinity, stillSelecting: flag)
       clearInlineImageTypingAttributes()
+      applyCompositionInk()
       updateNoteLinkGlyphVisibility()
       needsDisplay = true
       window?.invalidateCursorRects(for: self)
@@ -5576,6 +6235,10 @@
 
     override func mouseDown(with event: NSEvent) {
       cancelPasteOptions()
+      if hasMarkedText() {
+        super.mouseDown(with: event)
+        return
+      }
       if imageEditing.begin(with: event) { return }
       guard let layoutManager, let textContainer else {
         super.mouseDown(with: event)
@@ -5623,12 +6286,12 @@
         for: NSRange(location: characterIndex, length: 0)
       )
       guard let item = checklistItem(in: paragraphRange, string: ns) else {
-        super.mouseDown(with: event)
+        forwardClickSelection(with: event)
         return
       }
 
       guard checklistHitRect(for: item.markerRange)?.contains(point) == true else {
-        super.mouseDown(with: event)
+        forwardClickSelection(with: event)
         return
       }
 
@@ -5637,6 +6300,28 @@
         contentLength: item.contentRange.length,
         currentlyCompleted: item.completed
       )
+    }
+
+    /// A checklist marker keeps priority over selection; every other click keeps
+    /// AppKit's own depth, and a single click is widened off a note link so the
+    /// caret cannot land inside the collapsed token.
+    private func forwardClickSelection(with event: NSEvent) {
+      let isMultiClick = event.clickCount > 1
+      let extendsSelection = event.modifierFlags.contains(.shift)
+      super.mouseDown(with: event)
+      // Double-click selects the word and triple-click the paragraph through
+      // AppKit, and Shift-click extends natively; the proposal snap in
+      // selectionRange(forProposedRange:granularity:) widens those off a link.
+      guard !isMultiClick, !extendsSelection else { return }
+      snapSelectionToNoteLink()
+    }
+
+    private func snapSelectionToNoteLink() {
+      let text = string as NSString
+      let selection = selectedRange()
+      let snapped = snappedSelection(for: selection, in: text)
+      guard snapped != selection else { return }
+      setSelectedRange(snapped)
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -5937,30 +6622,23 @@
       return items
     }
 
-    private func emptyListMarkerRanges() -> [NSRange] {
+    private func parsedListItems() -> [ParsedListItem] {
       let ns = string as NSString
       guard ns.length > 0 else { return [] }
       var location = 0
-      var ranges: [NSRange] = []
+      var items: [ParsedListItem] = []
       while location < ns.length {
         let paragraphRange = ns.paragraphRange(
           for: NSRange(location: location, length: 0)
         )
-        if let item = parsedListItem(in: paragraphRange, string: ns),
-          item.parsed.content.isEmpty
-        {
-          switch item.parsed.style {
-          case .bullet, .number:
-            ranges.append(item.markerRange)
-          case .checklist:
-            break
-          }
+        if let item = parsedListItem(in: paragraphRange, string: ns) {
+          items.append(item)
         }
         let nextLocation = NSMaxRange(paragraphRange)
         guard nextLocation > location else { break }
         location = nextLocation
       }
-      return ranges
+      return items
     }
 
     private func checklistItem(in paragraphRange: NSRange, string ns: NSString) -> ChecklistItem? {
@@ -6008,11 +6686,7 @@
       return prefixes
     }
 
-    private func parsedListItem(in paragraphRange: NSRange, string ns: NSString) -> (
-      markerRange: NSRange,
-      contentRange: NSRange,
-      parsed: ParsedEditorListLine
-    )? {
+    private func parsedListItem(in paragraphRange: NSRange, string ns: NSString) -> ParsedListItem? {
       let paragraph = ns.substring(with: paragraphRange).trimmingCharacters(in: .newlines)
       guard let parsed = EditorListEngine.parse(paragraph) else { return nil }
       let markerStart = parsed.depth * 4
@@ -6024,7 +6698,7 @@
         location: paragraphRange.location + markerStart,
         length: markerLength
       )
-      return (
+      return ParsedListItem(
         markerRange: markerRange,
         contentRange: NSRange(
           location: NSMaxRange(markerRange) + 1,
@@ -6057,6 +6731,236 @@
         parsed: item.parsed
       )
     }
+
+    /// Gives every text list marker the font its own line's text wears.
+    ///
+    /// A marker that carried a bigger font would re-measure its line: the paragraph
+    /// pins one line height, so a taller descender lifts the line's baseline inside
+    /// it and the text jumps the moment the marker's font changes. The scaled marker
+    /// an ideographic line needs is therefore drawn by the view — see
+    /// `scaledListMarkers` — while storage keeps the line's own font, so a stray
+    /// marker font from an older note, a paste, or an undo is repaired without
+    /// moving anything.
+    @discardableResult
+    func normalizeListMarkerFonts(in range: NSRange? = nil) -> Int {
+      guard !hasMarkedText(), let storage = textStorage, storage.length > 0 else { return 0 }
+      let ns = string as NSString
+      let start = min(max(0, range?.location ?? 0), ns.length)
+      let end = min(max(start, range.map(NSMaxRange) ?? ns.length), ns.length)
+      var changes = 0
+      var location = start
+      storage.beginEditing()
+      while location < end {
+        let paragraphRange = ns.paragraphRange(for: NSRange(location: location, length: 0))
+        if let item = parsedListItem(in: paragraphRange, string: ns),
+          item.markerRange.length > 0,
+          isTextListMarker(item.parsed.style)
+        {
+          let contentIndex = min(item.contentRange.location, ns.length - 1)
+          let contentFont =
+            (storage.attribute(.font, at: contentIndex, effectiveRange: nil) as? NSFont)
+            ?? configuredBodyFont
+          let current =
+            storage.attribute(.font, at: item.markerRange.location, effectiveRange: nil)
+            as? NSFont
+          let matches =
+            current.map {
+              $0.fontName == contentFont.fontName
+                && abs($0.pointSize - contentFont.pointSize) < 0.01
+            } ?? false
+          if !matches {
+            storage.addAttribute(.font, value: contentFont, range: item.markerRange)
+            changes += 1
+          }
+        }
+        let nextLocation = NSMaxRange(paragraphRange)
+        guard nextLocation > location else { break }
+        location = nextLocation
+      }
+      storage.endEditing()
+      return changes
+    }
+
+    /// A marker the text system cannot draw at the size its line needs. An ideograph
+    /// fills its em square far more completely than a capital, so a bullet at the body
+    /// size reads as a smaller dot beside CJK text. Storage keeps the line's own font —
+    /// a bigger one would change the line's metrics inside its fixed line height — and
+    /// the view draws the marker at the scaled size in this font instead.
+    private struct ScaledListMarker {
+      let range: NSRange
+      let font: NSFont
+      /// The ink resolved from storage before the native glyph was hidden. Reading
+      /// it at draw time would read back the clear temporary colour that hides that
+      /// glyph, and the marker would be painted invisible.
+      let ink: NSColor
+      let isEmpty: Bool
+    }
+
+    /// Test hook: the markers this view draws itself instead of the text system.
+    var drawnListMarkerPresentations: [(range: NSRange, font: NSFont)] {
+      scaledListMarkers.map { ($0.range, $0.font) }
+    }
+
+    private var scaledListMarkers: [ScaledListMarker] = []
+    private var temporaryScaledMarkerSlices: [TemporaryAttributeSlice] = []
+
+    /// Collects every text list marker this view draws and hides the glyph the
+    /// text system would otherwise paint for it.
+    ///
+    /// Every marker is registered, at every scale: a marker the view does not draw
+    /// would fall back to the text system, and that fallback is a different size
+    /// and weight from the drawn one, which is how a bullet came to change size
+    /// while its own paragraph was being typed.
+    private func refreshScaledListMarkers(
+      items: [ParsedListItem],
+      storage: NSTextStorage,
+      layoutManager: NSLayoutManager
+    ) {
+      // The note's family is constant during this pass. Resolve each distinct
+      // line size once; a local cache needs no invalidation when the note changes.
+      var bodyFont: NSFont?
+      var fonts: [CGFloat: NSFont] = [:]
+      for item in items where isTextListMarker(item.parsed.style) {
+        let contentIndex = min(item.contentRange.location, storage.length - 1)
+        if bodyFont == nil { bodyFont = configuredBodyFont }
+        guard let bodyFont else { continue }
+        let contentFont =
+          (storage.attribute(.font, at: contentIndex, effectiveRange: nil) as? NSFont)
+          ?? bodyFont
+        let font: NSFont
+        if let cached = fonts[contentFont.pointSize] {
+          font = cached
+        } else {
+          font = NSFont(descriptor: bodyFont.fontDescriptor, size: contentFont.pointSize) ?? bodyFont
+          fonts[contentFont.pointSize] = font
+        }
+        let storedInk = (storage.attribute(
+          .foregroundColor, at: item.markerRange.location, effectiveRange: nil
+        ) as? NSColor) ?? (storage.attribute(
+          .foregroundColor, at: contentIndex, effectiveRange: nil
+        ) as? NSColor)
+        let ink: NSColor
+        if let storedInk, !storedInk.isEqual(NSColor.textColor) {
+          ink = storedInk
+        } else {
+          ink = effectiveForegroundColor(
+            at: item.markerRange.location,
+            storage: storage,
+            layoutManager: layoutManager
+          )
+        }
+        scaledListMarkers.append(
+          ScaledListMarker(
+            range: item.markerRange,
+            font: font,
+            ink: ink,
+            isEmpty: item.contentRange.length == 0
+          )
+        )
+        temporaryScaledMarkerSlices.append(contentsOf: temporaryAttributeSlices(
+          .foregroundColor,
+          in: item.markerRange,
+          layoutManager: layoutManager
+        ))
+        layoutManager.addTemporaryAttribute(
+          .foregroundColor,
+          value: NSColor.clear,
+          forCharacterRange: item.markerRange
+        )
+      }
+    }
+
+    private func drawScaledListMarkers(in dirtyRect: NSRect) {
+      guard let storage = textStorage, let layoutManager, let textContainer,
+        !scaledListMarkers.isEmpty,
+        let context = NSGraphicsContext.current?.cgContext
+      else { return }
+      let visibleGlyphs = layoutManager.glyphRange(
+        forBoundingRect: dirtyRect.offsetBy(
+          dx: -textContainerOrigin.x, dy: -textContainerOrigin.y
+        ),
+        in: textContainer
+      )
+      guard visibleGlyphs.length > 0 else { return }
+      let visibleCharacters = layoutManager.characterRange(
+        forGlyphRange: visibleGlyphs, actualGlyphRange: nil
+      )
+      let selection = selectedRange()
+      for marker in scaledListMarkers(in: visibleCharacters) {
+        let glyphRange = layoutManager.glyphRange(
+          forCharacterRange: marker.range,
+          actualCharacterRange: nil
+        )
+        guard glyphRange.length > 0 else { continue }
+        let slot = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+          .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+        guard slot.intersects(dirtyRect) else { continue }
+        let fragment = layoutManager.lineFragmentRect(
+          forGlyphAt: glyphRange.location,
+          effectiveRange: nil
+        )
+        let location = layoutManager.location(forGlyphAt: glyphRange.location)
+        // Both axes come from the glyph's own layout position, which is where the
+        // text system would have painted it: drawing the marker ourselves must not
+        // move it by so much as a pixel.
+        let baseline = textContainerOrigin.y + fragment.minY + location.y
+        let originX = textContainerOrigin.x + fragment.minX + location.x
+        let isSelected =
+          selection.length > 0
+          && NSIntersectionRange(selection, marker.range).length > 0
+        let ink =
+          (isSelected ? selectedTextAttributes[.foregroundColor] as? NSColor : nil)
+          ?? marker.ink
+        let opacity = marker.isEmpty ? ChecklistMarkerDrawing.emptyListMarkerOpacity : 1
+        let text = (storage.string as NSString).substring(with: marker.range)
+        let line = CTLineCreateWithAttributedString(
+          NSAttributedString(
+            string: text,
+            attributes: [
+              .font: marker.font,
+              .foregroundColor: ink.withAlphaComponent(ink.alphaComponent * opacity),
+            ]
+          )
+        )
+        context.saveGState()
+        context.textMatrix = CGAffineTransform(scaleX: 1, y: isFlipped ? -1 : 1)
+        context.textPosition = CGPoint(x: originX, y: baseline)
+        CTLineDraw(line, context)
+        context.restoreGState()
+      }
+    }
+
+    /// Markers are collected in document order. Find the dirty slice before
+    /// asking TextKit for glyph geometry, so repainting a caret or scrolling a
+    /// long note does not lay out every offscreen list marker.
+    private func scaledListMarkers(in range: NSRange) -> ArraySlice<ScaledListMarker> {
+      var lower = 0
+      var upper = scaledListMarkers.count
+      while lower < upper {
+        let middle = lower + (upper - lower) / 2
+        if NSMaxRange(scaledListMarkers[middle].range) <= range.location {
+          lower = middle + 1
+        } else {
+          upper = middle
+        }
+      }
+      let start = lower
+      let end = NSMaxRange(range)
+      while lower < scaledListMarkers.count, scaledListMarkers[lower].range.location < end {
+        lower += 1
+      }
+      return scaledListMarkers[start..<lower]
+    }
+
+    /// Bullets and numbers are drawn from their stored characters; checklist
+    /// markers are drawn by the editor itself, so they keep their own scale.
+    private func isTextListMarker(_ style: EditorListStyle) -> Bool {
+      switch style {
+      case .bullet, .number: return true
+      case .checklist: return false
+      }
+    }
+
 
     private func removeBulletPrefix(in paragraphRange: NSRange, contentStart: Int) {
       performUndoGroup {
@@ -6372,6 +7276,43 @@
         let format = paragraphStyle.textLists.last?.markerFormat
       else { return nil }
       return EditorNumberStyle(markerFormat: format)
+    }
+
+    /// Applies one programmatic edit — a dictation commit or an agent rewrite —
+    /// as a single undo step named after its author, over the exact range it
+    /// replaces. A caller that cannot express a change as one edit must keep
+    /// using the wholesale reload instead of routing a whole-note rewrite here.
+    @discardableResult
+    func applyProgrammaticEdit(
+      range: NSRange,
+      replacement: NSAttributedString,
+      actionName: String
+    ) -> Bool {
+      guard isEditable, !hasMarkedText(), let storage = textStorage,
+        range.location != NSNotFound,
+        range.location >= 0,
+        NSMaxRange(range) <= storage.length
+      else { return false }
+      let selection = selectionAfterEdit(range: range, replacementLength: replacement.length)
+      breakUndoCoalescing()
+      defer { breakUndoCoalescing() }
+      var applied = false
+      performUndoGroup {
+        registerSelectionUndo(selectedRange())
+        applied = replaceAttributedText(in: range, with: replacement, selecting: selection)
+        if applied { undoManager?.setActionName(actionName) }
+      }
+      return applied
+    }
+
+    private func selectionAfterEdit(range: NSRange, replacementLength: Int) -> NSRange {
+      let selection = selectedRange()
+      let delta = replacementLength - range.length
+      if NSMaxRange(selection) <= range.location { return selection }
+      if selection.location >= NSMaxRange(range) {
+        return NSRange(location: selection.location + delta, length: selection.length)
+      }
+      return NSRange(location: range.location + replacementLength, length: 0)
     }
 
     private func registerSelectionUndo(_ selection: NSRange) {

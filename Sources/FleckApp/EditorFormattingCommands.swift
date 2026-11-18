@@ -9,6 +9,15 @@
     case heading3 = "Heading 3"
     case quote = "Quote"
     case code = "Code"
+
+    var headingLevel: Int {
+      switch self {
+      case .heading1: 1
+      case .heading2: 2
+      case .heading3: 3
+      case .normal, .quote, .code: 0
+      }
+    }
   }
 
   enum EditorLineSpacing: String, CaseIterable, Hashable {
@@ -169,13 +178,16 @@
       {
         return listTextView.adjustSelectedParagraphIndent(removing: removing)
       }
+      let unit = EditorTypography.indentWidth(
+        font: EditorTypography.bodyFont(family: bodyFontFamily, size: bodyFontSize)
+      )
       return mutateParagraphs {
-        let next = removing ? $0.headIndent - 24 : $0.headIndent + 24
-        $0.headIndent = min(max(next, 0), 240)
+        let next = removing ? $0.headIndent - unit : $0.headIndent + unit
+        $0.headIndent = min(max(next, 0), EditorTypography.maxIndentPoints)
         $0.firstLineHeadIndent = min(max(
-          removing ? $0.firstLineHeadIndent - 24 : $0.firstLineHeadIndent + 24,
+          removing ? $0.firstLineHeadIndent - unit : $0.firstLineHeadIndent + unit,
           0
-        ), 240)
+        ), EditorTypography.maxIndentPoints)
       }
     }
 
@@ -459,8 +471,9 @@
         guard let actual = textView.typingAttributes[.font] as? NSFont else { return nil }
         let paragraph = textView.typingAttributes[.paragraphStyle] as? NSParagraphStyle
         return EditorTextStyle.allCases.first {
-          fontsVisuallyMatch(actual, font(for: $0))
-            && paragraphsVisuallyMatch(paragraph, styledParagraph(paragraph, style: $0))
+          EditorTypography.fontsVisuallyMatch(actual, font(for: $0))
+            && EditorTypography.presetParagraphMetrics(for: $0, size: bodyFontSize)
+              .matches(paragraph ?? .default)
         }
       case .range(let range):
         guard let storage = textView.textStorage else { return nil }
@@ -469,7 +482,7 @@
           var matches = true
           storage.enumerateAttribute(.font, in: range) { value, _, stop in
             guard let actual = value as? NSFont,
-              fontsVisuallyMatch(actual, expectedFont)
+              EditorTypography.fontsVisuallyMatch(actual, expectedFont)
             else {
               matches = false
               stop.pointee = true
@@ -477,64 +490,22 @@
             }
           }
           guard matches else { return false }
+          let metrics = EditorTypography.presetParagraphMetrics(for: style, size: bodyFontSize)
           let substring = (textView.string as NSString).substring(with: range)
           enumerateParagraphs(in: substring) { paragraphRange in
             guard matches else { return }
             let location = min(range.location + paragraphRange.location, storage.length - 1)
             let actual = storage.attribute(.paragraphStyle, at: location, effectiveRange: nil)
               as? NSParagraphStyle
-            matches = paragraphsVisuallyMatch(
-              actual,
-              styledParagraph(actual, style: style)
-            )
+            matches = metrics.matches(actual ?? .default)
           }
           return matches
         }
       }
     }
 
-    private func fontsVisuallyMatch(_ lhs: NSFont, _ rhs: NSFont) -> Bool {
-      fontFamiliesVisuallyMatch(lhs.familyName, rhs.familyName)
-        && abs(lhs.pointSize - rhs.pointSize) < 0.01
-        && NSFontManager.shared.traits(of: lhs).intersection([.boldFontMask, .italicFontMask])
-          == NSFontManager.shared.traits(of: rhs).intersection([.boldFontMask, .italicFontMask])
-    }
-
-    private func fontFamiliesVisuallyMatch(_ lhs: String?, _ rhs: String?) -> Bool {
-      if lhs == rhs { return true }
-      return Set([lhs, rhs].compactMap { $0 }) == Set([".AppleSystemUIFont", "Helvetica Neue"])
-    }
-
-    private func paragraphsVisuallyMatch(
-      _ lhs: NSParagraphStyle?,
-      _ rhs: NSParagraphStyle
-    ) -> Bool {
-      let lhs = lhs ?? .default
-      return abs(lhs.minimumLineHeight - rhs.minimumLineHeight) < 0.01
-        && abs(lhs.maximumLineHeight - rhs.maximumLineHeight) < 0.01
-        && abs(lhs.lineHeightMultiple - rhs.lineHeightMultiple) < 0.01
-        && abs(lhs.paragraphSpacingBefore - rhs.paragraphSpacingBefore) < 0.01
-        && abs(lhs.paragraphSpacing - rhs.paragraphSpacing) < 0.01
-    }
-
     private func font(for style: EditorTextStyle) -> NSFont {
-      let size: CGFloat
-      switch style {
-      case .normal, .quote, .code: size = bodyFontSize
-      case .heading1: size = bodyFontSize * 1.75
-      case .heading2: size = bodyFontSize * 1.5
-      case .heading3: size = bodyFontSize * 1.25
-      }
-      if style == .code { return .monospacedSystemFont(ofSize: size, weight: .regular) }
-      var font = EditorTypography.bodyFont(family: bodyFontFamily, size: size)
-      let manager = NSFontManager.shared
-      font = manager.convert(font, toNotHaveTrait: [.boldFontMask, .italicFontMask])
-      if [.heading1, .heading2, .heading3].contains(style) {
-        font = manager.convert(font, toHaveTrait: .boldFontMask)
-      } else if style == .quote {
-        font = manager.convert(font, toHaveTrait: .italicFontMask)
-      }
-      return font
+      EditorTypography.presetFont(for: style, family: bodyFontFamily, size: bodyFontSize)
     }
 
     private func styledParagraph(
@@ -543,31 +514,12 @@
     ) -> NSParagraphStyle {
       let result = ((paragraph ?? .default).mutableCopy() as? NSMutableParagraphStyle)
         ?? NSMutableParagraphStyle()
-      let defaultLineHeight = font(for: style).pointSize / 17
-        * EditorTypography.defaultLineHeight
-      result.minimumLineHeight = defaultLineHeight
-      result.maximumLineHeight = defaultLineHeight
-      result.lineHeightMultiple = 0
-      switch style {
-      case .normal:
-        result.paragraphSpacingBefore = 0
-        result.paragraphSpacing = 0
-      case .heading1:
-        result.paragraphSpacingBefore = 12
-        result.paragraphSpacing = 8
-      case .heading2:
-        result.paragraphSpacingBefore = 10
-        result.paragraphSpacing = 6
-      case .heading3:
-        result.paragraphSpacingBefore = 8
-        result.paragraphSpacing = 4
-      case .quote:
-        result.paragraphSpacingBefore = 6
-        result.paragraphSpacing = 6
-      case .code:
-        result.paragraphSpacingBefore = 4
-        result.paragraphSpacing = 4
-      }
+      EditorTypography.applyPresetFields(
+        result,
+        for: style,
+        family: bodyFontFamily,
+        size: bodyFontSize
+      )
       return result
     }
 
