@@ -29,11 +29,12 @@ private func linkBoundaryEditor(_ text: String) -> (ListAwareTextView, EditorMou
   return (view, window)
 }
 
-@Test @MainActor func clickInsideLinkLabelSelectsTheWholeLink() throws {
+@Test @MainActor func clickInsideLinkLabelSelectsTheWholeLink() async throws {
   let target = UUID()
   let text = "Body \(NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)) tail"
   let (view, window) = linkBoundaryEditor(text)
   defer { closeEditorTestWindow(window) }
+  try await window.prepareForClick()
   let link = try #require(NoteLinkParser.links(in: text).first)
 
   let point = try #require(editorCharacterPoint(view, at: link.labelRange.location + 1))
@@ -111,11 +112,12 @@ private func linkBoundaryEditor(_ text: String) -> (ListAwareTextView, EditorMou
   #expect(view.snappedSelection(for: caret, in: view.string as NSString) == caret)
 }
 
-@Test @MainActor func deletingAWholeSelectedLinkLeavesNoStrayBrackets() throws {
+@Test @MainActor func deletingAWholeSelectedLinkLeavesNoStrayBrackets() async throws {
   let target = UUID()
   let text = "Body \(NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)) tail"
   let (view, window) = linkBoundaryEditor(text)
   defer { closeEditorTestWindow(window) }
+  try await window.prepareForClick()
   let link = try #require(NoteLinkParser.links(in: text).first)
 
   let point = try #require(editorCharacterPoint(view, at: link.labelRange.location + 1))

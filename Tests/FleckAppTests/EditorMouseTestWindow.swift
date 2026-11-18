@@ -13,6 +13,36 @@ final class EditorMouseTestWindow: NSWindow {
     syntheticMouseLocation ?? super.mouseLocationOutsideOfEventStream
   }
 
+  /// Wait before computing a hit point: a newly ordered window's AppKit frame
+  /// can precede the WindowServer frame used to convert posted mouse events.
+  func prepareForClick() async throws {
+    try #require(windowNumber > 0)
+    try #require(isVisible)
+    let primaryHeight = try #require(NSScreen.screens.first).frame.height
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(5))
+    while clock.now < deadline {
+      let expected = CGRect(
+        x: frame.minX, y: primaryHeight - frame.maxY,
+        width: frame.width, height: frame.height
+      )
+      if let actual = windowServerFrame(),
+        abs(actual.minX - expected.minX) < 1,
+        abs(actual.minY - expected.minY) < 1,
+        abs(actual.width - expected.width) < 1,
+        abs(actual.height - expected.height) < 1
+      {
+        contentView?.layoutSubtreeIfNeeded()
+        return
+      }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    try #require(
+      Bool(false),
+      "WindowServer did not receive editor frame: AppKit=\(frame), Quartz=\(String(describing: windowServerFrame())), primaryHeight=\(primaryHeight)"
+    )
+  }
+
   func click(
     _ view: NSView,
     at point: NSPoint,
@@ -58,12 +88,27 @@ final class EditorMouseTestWindow: NSWindow {
         pressure: 0
       )
     )
+    try #require(down.locationInWindow == windowPoint)
+    try #require(up.locationInWindow == windowPoint)
 
     // Dequeue before delivering to the responder so NSApplication.currentEvent
     // describes this gesture, including during AppKit's native selection work.
     // Keep the matching up queued for NSTextView's synchronous tracking loop.
     let application = NSApplication.shared
     application.postEvent(up, atStart: true)
+    // Validate the queued up before dequeuing down, so peeking cannot replace
+    // the down event as NSApplication.currentEvent during native selection.
+    let queuedUp = try #require(
+      application.nextEvent(
+        matching: .leftMouseUp,
+        until: .distantPast,
+        inMode: .default,
+        dequeue: false
+      )
+    )
+    try #require(queuedUp.window === self)
+    try #require(queuedUp.eventNumber == downNumber + 1)
+    try requireClickGeometry(of: queuedUp, in: view, at: point, windowPoint: windowPoint)
     application.postEvent(down, atStart: true)
     let queuedDown = try #require(
       application.nextEvent(
@@ -76,6 +121,7 @@ final class EditorMouseTestWindow: NSWindow {
     try #require(queuedDown.windowNumber == windowNumber)
     try #require(queuedDown.window === self)
     try #require(queuedDown.eventNumber == downNumber)
+    try requireClickGeometry(of: queuedDown, in: view, at: point, windowPoint: windowPoint)
     try #require(application.currentEvent?.eventNumber == downNumber)
     // These tests target the editor responder. Application-level routing can
     // discard synthetic clicks in the shared host before they reach this view.
@@ -93,8 +139,39 @@ final class EditorMouseTestWindow: NSWindow {
       try #require(pendingUp.windowNumber == windowNumber)
       try #require(pendingUp.window === self)
       try #require(pendingUp.eventNumber == downNumber + 1)
+      try requireClickGeometry(of: pendingUp, in: view, at: point, windowPoint: windowPoint)
       view.mouseUp(with: pendingUp)
     }
+  }
+
+  private func windowServerFrame() -> CGRect? {
+    let windows = CGWindowListCopyWindowInfo(
+      [.optionIncludingWindow], CGWindowID(windowNumber)
+    ) as? [[String: Any]]
+    guard let bounds = windows?.first?[kCGWindowBounds as String] as? NSDictionary else {
+      return nil
+    }
+    return CGRect(dictionaryRepresentation: bounds)
+  }
+
+  private func requireClickGeometry(
+    of event: NSEvent,
+    in view: NSView,
+    at point: NSPoint,
+    windowPoint: NSPoint
+  ) throws {
+    let received = event.locationInWindow
+    let receivedViewPoint = view.convert(received, from: nil)
+    let diagnostic = "event=\(event.type) number=\(event.eventNumber) "
+      + "expectedWindowPoint=\(windowPoint) receivedWindowPoint=\(received) "
+      + "expectedViewPoint=\(point) receivedViewPoint=\(receivedViewPoint) "
+      + "expectedScreenPoint=\(convertPoint(toScreen: windowPoint)) "
+      + "receivedScreenPoint=\(convertPoint(toScreen: received)) "
+      + "windowFrame=\(frame) viewFrame=\(view.frame) viewBounds=\(view.bounds) "
+      + "windowServerFrame=\(String(describing: windowServerFrame())) "
+      + "screenFrames=\(NSScreen.screens.map(\.frame))"
+    try #require(received == windowPoint, "\(diagnostic)")
+    try #require(receivedViewPoint == point, "\(diagnostic)")
   }
 
   private func drainPendingMouseEvents() {

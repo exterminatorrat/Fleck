@@ -57,6 +57,9 @@ on:
 permissions:
   contents: read
 
+env:
+  FLECK_EDITOR_PREFLIGHT_SELECTOR: '^FleckAppTests\.(doubleClick.*|tripleClick.*|shiftClickExtends.*|clickInsideLinkLabel.*|deletingAWholeSelectedLink.*|movingTheCaretNeverChangesAMarker.*)$'
+
 concurrency:
   group: ci-${{ github.event_name == 'workflow_dispatch' && inputs.namespace_qualification_only && 'namespace-qualification-' || github.event_name == 'workflow_dispatch' && inputs.ordinary_test_diagnostic_selector != '' && 'focused-' || github.event_name == 'workflow_dispatch' && inputs.native_runner_provider == 'namespace' && 'namespace-native-' || '' }}${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -154,6 +157,7 @@ jobs:
       - name: Test ordinary graph
         env:
           FLECK_NATIVE_CAPTURE_QA: "0"
+          FLECK_TEST_APPKIT_PREFLIGHT_SELECTOR: ${{ env.FLECK_EDITOR_PREFLIGHT_SELECTOR }}
         run: |
           unset FLECK_ENHANCED_CANDIDATE
           Scripts/run-nonempty-swift-tests.sh '^.+$'
@@ -189,6 +193,7 @@ jobs:
           unset FLECK_ENHANCED_CANDIDATE FLECK_PERF_RUN FLECK_PERF_PREBUILT_RECEIPT
           python3 -B -m unittest discover -s Tests/Scripts -p test_validate_perf_prebuilt.py
           Tests/Scripts/prebuilt-perf-wrapper.test.sh
+          python3 -B -m unittest discover -s Tests/Scripts -p test_appkit_preflight.py
           Scripts/test-nonempty-swift-test-runners.sh
       - name: Package Fleck app
         run: |
@@ -272,6 +277,8 @@ jobs:
       - name: Validate macOS no-launch contract
         run: bash Tests/Scripts/validate-macos-no-launch.test.sh
       - name: Validate non-launching bundle metadata, signature, and packaging
+        env:
+          FLECK_TEST_APPKIT_PREFLIGHT_SELECTOR: ${{ env.FLECK_EDITOR_PREFLIGHT_SELECTOR }}
         run: |
           unset FLECK_ENHANCED_CANDIDATE FLECK_APP
           Scripts/validate-macos.sh
@@ -435,6 +442,7 @@ jobs:
       - name: Test Enhanced Local candidate graph
         env:
           FLECK_NATIVE_CAPTURE_QA: "0"
+          FLECK_TEST_APPKIT_PREFLIGHT_SELECTOR: ${{ env.FLECK_EDITOR_PREFLIGHT_SELECTOR }}
         run: |
           Scripts/run-nonempty-enhanced-tests.sh '^.+$'
           git diff --exit-code -- Package.resolved

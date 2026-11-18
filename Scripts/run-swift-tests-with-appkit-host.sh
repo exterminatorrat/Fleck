@@ -37,6 +37,24 @@ readonly target_selected test_target
 readonly package_root="$1"
 readonly scratch_path="$2"
 readonly identifier_regex="$3"
+readonly preflight_regex="${FLECK_TEST_APPKIT_PREFLIGHT_SELECTOR:-}"
+if [[ ${FLECK_TEST_APPKIT_PREFLIGHT_SELECTOR+x} ]]; then
+  if [[ "$identifier_regex" != '^.+$' || ${#preflight_regex} -le 2 ||
+    ${#preflight_regex} -gt 160 || "$preflight_regex" != ^* ||
+    "$preflight_regex" != *'$' || "$preflight_regex" = '^.+$' ||
+    "$preflight_regex" = '^.*$' ]]; then
+    printf '%s\n' 'error: native preflight requires a bounded anchored selector before a full-graph request' >&2
+    exit 2
+  fi
+  set +e
+  printf '' | /usr/bin/grep -E -- "$preflight_regex" >/dev/null 2>&1
+  preflight_regex_status=$?
+  set -e
+  if (( preflight_regex_status == 2 )); then
+    printf 'error: invalid native preflight selector: %s\n' "$preflight_regex" >&2
+    exit 2
+  fi
+fi
 prebuilt_mode=0
 prebuilt_receipt=''
 prebuilt_configuration_set=0
@@ -781,72 +799,85 @@ fi
 LC_ALL=C /usr/bin/grep -E \
   '^[[:alnum:]_][[:alnum:]_-]*\.[[:alnum:]_][[:alnum:]_.-]*(/[[:alnum:]_][[:alnum:]_.-]*)*\((([[:alpha:]_][[:alnum:]_]*):)*\)$' \
   "$list_output" > "$canonical_output" || true
-set +e
-/usr/bin/grep -E -- "$identifier_regex" "$canonical_output" > "$matches"
-match_status=$?
-set -e
-if (( match_status == 2 )); then
-  printf 'error: invalid extended regular expression: %s\n' "$identifier_regex" >&2
-  exit 2
-fi
-if [[ ! -s "$matches" ]]; then
-  printf 'error: test identifier regex matched zero tests: %s\n' \
-    "$identifier_regex" >&2
-  exit 3
-fi
+run_test_selection() {
+  local selection_regex="$1"
+  local phase="$2"
+  local match_status matched_count identifier run_filter test_status output_status final_output_line
+  set +e
+  /usr/bin/grep -E -- "$selection_regex" "$canonical_output" > "$matches"
+  match_status=$?
+  set -e
+  if (( match_status == 2 )); then
+    printf 'error: invalid extended regular expression: %s\n' "$selection_regex" >&2
+    exit 2
+  fi
+  if [[ ! -s "$matches" ]]; then
+    printf 'error: test identifier regex matched zero tests: %s\n' \
+      "$selection_regex" >&2
+    exit 3
+  fi
 
-matched_count="$(/usr/bin/wc -l < "$matches" | /usr/bin/tr -d ' ')"
-printf 'matched test count: %s\n' "$matched_count"
-while IFS= read -r identifier; do
-  printf 'matched test: %s\n' "$identifier"
-done < "$matches"
+  matched_count="$(/usr/bin/wc -l < "$matches" | /usr/bin/tr -d ' ')"
+  printf 'matched test count: %s\n' "$matched_count"
+  while IFS= read -r identifier; do
+    printf 'matched test: %s\n' "$identifier"
+  done < "$matches"
 
-if [[ "$identifier_regex" = '^.+$' ]]; then
-  run_filter="$identifier_regex"
-else
-  run_filter="$(/usr/bin/awk '
-  function escape_ere(value, result, index_, character) {
-    result = ""
-    for (index_ = 1; index_ <= length(value); index_++) {
-      character = substr(value, index_, 1)
-      if (index("\\.^$|()[]*+?{}", character) > 0) {
-        result = result "\\" character
-      } else {
-        result = result character
+  if [[ "$selection_regex" = '^.+$' ]]; then
+    run_filter="$selection_regex"
+  else
+    run_filter="$(/usr/bin/awk '
+    function escape_ere(value, result, index_, character) {
+      result = ""
+      for (index_ = 1; index_ <= length(value); index_++) {
+        character = substr(value, index_, 1)
+        if (index("\\.^$|()[]*+?{}", character) > 0) {
+          result = result "\\" character
+        } else {
+          result = result character
+        }
       }
+      return result
     }
-    return result
-  }
-  BEGIN { printf "^(" }
-  {
-    identifier = $0
-    if (count++) { printf "|" }
-    printf "%s/", escape_ere(identifier)
-  }
-  END { print ")" }
-' "$matches")"
-fi
+    BEGIN { printf "^(" }
+    {
+      identifier = $0
+      if (count++) { printf "|" }
+      printf "%s/", escape_ere(identifier)
+    }
+    END { print ")" }
+  ' "$matches")"
+  fi
 
-if launch_host run --filter "$run_filter" --no-parallel > "$test_output" 2>&1; then
-  test_status=0
-else
-  test_status=$?
-fi
-if /bin/cat "$test_output"; then
-  output_status=0
-else
-  output_status=$?
-fi
-(( test_status == 0 )) || exit "$test_status"
-if (( output_status != 0 )); then
-  printf '%s\n' 'error: failed to capture Swift test output' >&2
-  exit 1
-fi
+  if launch_host "$phase" --filter "$run_filter" --no-parallel > "$test_output" 2>&1; then
+    test_status=0
+  else
+    test_status=$?
+  fi
+  if /bin/cat "$test_output"; then
+    output_status=0
+  else
+    output_status=$?
+  fi
+  (( test_status == 0 )) || exit "$test_status"
+  if (( output_status != 0 )); then
+    printf '%s\n' 'error: failed to capture Swift test output' >&2
+    exit 1
+  fi
 
-final_output_line="$(/usr/bin/awk 'NF { line = $0 } END { print line }' "$test_output")"
-if ! printf '%s\n' "$final_output_line" | LC_ALL=C /usr/bin/grep -Eq \
-  '^✔ Test run with [1-9][0-9]* tests? in [0-9]+ suites? passed after [0-9]+(\.[0-9]+)? seconds\.$'; then
-  printf '%s\n' \
-    'error: Swift test exited successfully without a final non-empty passing test summary' >&2
-  exit 1
+  final_output_line="$(/usr/bin/awk 'NF { line = $0 } END { print line }' "$test_output")"
+  if ! printf '%s\n' "$final_output_line" | LC_ALL=C /usr/bin/grep -Eq \
+    '^✔ Test run with [1-9][0-9]* tests? in [0-9]+ suites? passed after [0-9]+(\.[0-9]+)? seconds\.$'; then
+    printf '%s\n' \
+      'error: Swift test exited successfully without a final non-empty passing test summary' >&2
+    exit 1
+  fi
+}
+
+# Both phases use the same compiled bundle, host, and canonical test list. A
+# passing preflight is followed by the original full request without exclusions.
+if [[ -n "$preflight_regex" ]]; then
+  printf '%s\n' 'Running focused native preflight before the full test graph.'
+  run_test_selection "$preflight_regex" preflight
 fi
+run_test_selection "$identifier_regex" run

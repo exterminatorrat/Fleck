@@ -2924,6 +2924,7 @@ tooling = step_block(build, "Test performance measurement tooling")[2]
 for required in (
     "unset FLECK_ENHANCED_CANDIDATE FLECK_PERF_RUN FLECK_PERF_PREBUILT_RECEIPT",
     "python3 -B -m unittest discover -s Tests/Scripts -p test_validate_perf_prebuilt.py",
+    "python3 -B -m unittest discover -s Tests/Scripts -p test_appkit_preflight.py",
     "Tests/Scripts/prebuilt-perf-wrapper.test.sh",
     "Scripts/test-nonempty-swift-test-runners.sh",
 ):
@@ -3016,6 +3017,57 @@ boundary_names = (
     "Declare native capture boundary (candidate graph)",
 )
 normalized_workflow = current_workflow
+preflight_environment = re.search(
+    r"^env:\n  FLECK_EDITOR_PREFLIGHT_SELECTOR: '([^']+)'\n\n",
+    current_workflow, re.M,
+)
+if preflight_environment is None:
+    raise SystemExit("shared native editor preflight selector is missing")
+preflight_selector = preflight_environment.group(1)
+expected_preflight_tests = (
+    "doubleClickSelectsTheWordUnderThePointer(usePlainTextView:)",
+    "tripleClickSelectsTheParagraphUnderThePointer(usePlainTextView:)",
+    "shiftClickExtendsTheSelectionNatively(usePlainTextView:)",
+    "doubleClickOnAChecklistMarkerStillTogglesIt()",
+    "clickInsideLinkLabelSelectsTheWholeLink()",
+    "deletingAWholeSelectedLinkLeavesNoStrayBrackets()",
+    "movingTheCaretNeverChangesAMarker()",
+)
+if not (preflight_selector.startswith("^") and preflight_selector.endswith("$")
+        and len(preflight_selector) <= 160):
+    raise SystemExit("native editor preflight selector must stay bounded and anchored")
+for identifier in expected_preflight_tests:
+    if re.fullmatch(preflight_selector, "FleckAppTests." + identifier) is None:
+        raise SystemExit(f"native preflight omitted {identifier}")
+if re.fullmatch(preflight_selector, "FleckCoreTests.unrelated()") is not None:
+    raise SystemExit("native editor preflight selected unrelated tests")
+normalized_workflow = normalized_workflow.replace(preflight_environment.group(0), "", 1)
+preflight_assignment = (
+    "          FLECK_TEST_APPKIT_PREFLIGHT_SELECTOR: "
+    "${{ env.FLECK_EDITOR_PREFLIGHT_SELECTOR }}\n"
+)
+if current_workflow.count(preflight_assignment) != 3:
+    raise SystemExit("native preflight must be scoped to the three full graph steps")
+for name in (
+    ordinary_name, candidate_name,
+    "Validate non-launching bundle metadata, signature, and packaging",
+):
+    start, end, block = step_block(normalized_workflow, name)
+    if block.count(preflight_assignment) != 1:
+        raise SystemExit(f"CI {name} omitted its native preflight")
+    removal = preflight_assignment
+    if name.startswith("Validate non-launching"):
+        removal = "        env:\n" + removal
+    normalized_workflow = (
+        normalized_workflow[:start] + block.replace(removal, "", 1)
+        + normalized_workflow[end:]
+    )
+preflight_control = (
+    "          python3 -B -m unittest discover -s Tests/Scripts -p test_appkit_preflight.py\n"
+)
+if normalized_workflow.count(preflight_control) != 1:
+    raise SystemExit("native preflight runner controls must run once in CI")
+normalized_workflow = normalized_workflow.replace(preflight_control, "", 1)
 normalized_inputs = dict(input_blocks)
 for input_name in ("native_runner_provider", "namespace_qualification_only"):
     if dispatch.group("body").count(f"{input_name}:") != 1:

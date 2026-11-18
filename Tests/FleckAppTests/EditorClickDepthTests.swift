@@ -53,9 +53,10 @@ private func clickDepthEditor(
 // The plain NSTextView case verifies the event fixture independently of Fleck's
 // selection overrides; both implementations must retain native click depth.
 @Test(arguments: [true, false])
-@MainActor func doubleClickSelectsTheWordUnderThePointer(usePlainTextView: Bool) throws {
+@MainActor func doubleClickSelectsTheWordUnderThePointer(usePlainTextView: Bool) async throws {
   let (view, window) = clickDepthEditor("alpha beta gamma", usePlainTextView: usePlainTextView)
   defer { closeEditorTestWindow(window) }
+  try await window.prepareForClick()
 
   let point = try #require(editorCharacterPoint(view, at: 1))
   try window.click(view, at: point, clickCount: 2)
@@ -68,9 +69,10 @@ private func clickDepthEditor(
 }
 
 @Test(arguments: [true, false])
-@MainActor func tripleClickSelectsTheParagraphUnderThePointer(usePlainTextView: Bool) throws {
+@MainActor func tripleClickSelectsTheParagraphUnderThePointer(usePlainTextView: Bool) async throws {
   let (view, window) = clickDepthEditor("first line\nsecond line", usePlainTextView: usePlainTextView)
   defer { closeEditorTestWindow(window) }
+  try await window.prepareForClick()
 
   let point = try #require(editorCharacterPoint(view, at: 2))
   try window.click(view, at: point, clickCount: 3)
@@ -80,9 +82,10 @@ private func clickDepthEditor(
   #expect(!selected.contains("second"), "selected \(selected.debugDescription)")
 }
 
-@Test @MainActor func doubleClickOnAChecklistMarkerStillTogglesIt() throws {
+@Test @MainActor func doubleClickOnAChecklistMarkerStillTogglesIt() async throws {
   let (editor, window) = clickDepthEditor("○ one\n○ two")
   defer { closeEditorTestWindow(window) }
+  try await window.prepareForClick()
   let view = try #require(editor as? ListAwareTextView)
 
   let hitRect = try #require(view.checklistHitRect(for: NSRange(location: 0, length: 1)))
@@ -97,9 +100,10 @@ private func clickDepthEditor(
 }
 
 @Test(arguments: [true, false])
-@MainActor func shiftClickExtendsTheSelectionNatively(usePlainTextView: Bool) throws {
+@MainActor func shiftClickExtendsTheSelectionNatively(usePlainTextView: Bool) async throws {
   let (view, window) = clickDepthEditor("alpha beta gamma", usePlainTextView: usePlainTextView)
   defer { closeEditorTestWindow(window) }
+  try await window.prepareForClick()
 
   view.setSelectedRange(NSRange(location: 0, length: 5))
   let anchorBefore = view.selectedRange()
