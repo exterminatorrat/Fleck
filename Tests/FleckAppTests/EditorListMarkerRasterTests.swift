@@ -1,5 +1,6 @@
 #if os(macOS)
   import AppKit
+  import CoreText
   import Testing
 
   @testable import FleckApp
@@ -29,6 +30,10 @@
     view.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
     view.drawsBackground = true
     view.backgroundColor = dark ? .black : .white
+    // These captures measure marker ink while exercising real selection changes.
+    // Configure this before activation so even the initial insertion point cannot
+    // contribute a blinking stroke to the marker column.
+    view.insertionPointColor = .clear
     view.textStorage?.setAttributedString(
       NSAttributedString(string: text, attributes: [
         .font: EditorTypography.bodyFont(family: family, size: 17),
@@ -74,9 +79,59 @@
     return count
   }
 
-  /// Marker ink for the paragraph that starts at `location`: the glyph rect of the
-  /// marker character — the first non-space character, so an indented nested item
-  /// measures its bullet and not the indentation.
+  /// The native run font reserves the slot, while the note's configured family
+  /// paints its marker. Include both bounds: the hidden glyph's box alone need
+  /// not enclose the glyph actually drawn at the line's baseline.
+  @MainActor
+  private func markerGeometry(
+    of view: ListAwareTextView,
+    paragraphAt location: Int
+  ) -> (column: NSRect, native: NSRect, drawn: NSRect, baseline: NSPoint)? {
+    guard let layoutManager = view.layoutManager, let container = view.textContainer else {
+      return nil
+    }
+    layoutManager.ensureLayout(for: container)
+    let ns = view.string as NSString
+    var marker = location
+    while marker < ns.length, ns.character(at: marker) == 0x20 { marker += 1 }
+    guard marker < ns.length else { return nil }
+    let characterRange = NSRange(location: marker, length: 1)
+    let glyphs = layoutManager.glyphRange(
+      forCharacterRange: characterRange,
+      actualCharacterRange: nil
+    )
+    guard glyphs.length > 0 else { return nil }
+    let native = layoutManager.boundingRect(forGlyphRange: glyphs, in: container)
+      .offsetBy(dx: view.textContainerOrigin.x, dy: view.textContainerOrigin.y)
+    let fragment = layoutManager.lineFragmentRect(
+      forGlyphAt: glyphs.location, effectiveRange: nil
+    )
+    let glyphLocation = layoutManager.location(forGlyphAt: glyphs.location)
+    let baseline = NSPoint(
+      x: view.textContainerOrigin.x + fragment.minX + glyphLocation.x,
+      y: view.textContainerOrigin.y + fragment.minY + glyphLocation.y
+    )
+    let pointSize = (view.textStorage?.attribute(
+      .font, at: marker, effectiveRange: nil
+    ) as? NSFont)?.pointSize ?? view.configuredBodyFontSize
+    let line = CTLineCreateWithAttributedString(NSAttributedString(
+      string: ns.substring(with: characterRange),
+      attributes: [.font: EditorTypography.bodyFont(
+        family: view.configuredBodyFontFamily, size: pointSize
+      )]
+    ))
+    let pathBounds = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+    let drawn = NSRect(
+      x: baseline.x + pathBounds.minX,
+      y: view.isFlipped ? baseline.y - pathBounds.maxY : baseline.y + pathBounds.minY,
+      width: pathBounds.width,
+      height: pathBounds.height
+    )
+    return (native.union(drawn), native, drawn, baseline)
+  }
+
+  /// Marker ink for the paragraph that starts at `location`: the first non-space
+  /// character, with a point of padding for antialiased edge pixels.
   @MainActor
   private func markerInk(
     of view: ListAwareTextView,
@@ -84,21 +139,11 @@
     dark: Bool = false,
     threshold: Double = 0.85
   ) -> Int {
-    guard let layoutManager = view.layoutManager, let container = view.textContainer else {
-      return -1
-    }
-    layoutManager.ensureLayout(for: container)
-    let ns = view.string as NSString
-    var marker = location
-    while marker < ns.length, ns.character(at: marker) == 0x20 { marker += 1 }
-    let glyphs = layoutManager.glyphRange(
-      forCharacterRange: NSRange(location: marker, length: 1),
-      actualCharacterRange: nil
+    guard let geometry = markerGeometry(of: view, paragraphAt: location) else { return -1 }
+    return inkPixels(
+      in: view, rect: geometry.column.insetBy(dx: -1, dy: -1),
+      dark: dark, threshold: threshold
     )
-    guard glyphs.length > 0 else { return -1 }
-    let column = layoutManager.boundingRect(forGlyphRange: glyphs, in: container)
-      .offsetBy(dx: view.textContainerOrigin.x, dy: view.textContainerOrigin.y)
-    return inkPixels(in: view, rect: column, dark: dark, threshold: threshold)
   }
 
   /// Blank paper to the right of the used text, as a control that the measurement
@@ -302,22 +347,10 @@
   private func markerSignature(of view: ListAwareTextView, paragraphAt location: Int)
     -> String
   {
-    guard let layoutManager = view.layoutManager, let container = view.textContainer,
+    guard let geometry = markerGeometry(of: view, paragraphAt: location),
       let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)
     else { return "" }
-    layoutManager.ensureLayout(for: container)
-    let ns = view.string as NSString
-    var marker = location
-    while marker < ns.length, ns.character(at: marker) == 0x20 { marker += 1 }
-    guard marker < ns.length else { return "" }
-    let glyphs = layoutManager.glyphRange(
-      forCharacterRange: NSRange(location: marker, length: 1),
-      actualCharacterRange: nil
-    )
-    guard glyphs.length > 0 else { return "" }
-    let column = layoutManager.boundingRect(forGlyphRange: glyphs, in: container)
-      .offsetBy(dx: view.textContainerOrigin.x, dy: view.textContainerOrigin.y)
-      .insetBy(dx: -3, dy: -6)
+    let column = geometry.column.insetBy(dx: -3, dy: -6)
     view.cacheDisplay(in: view.bounds, to: rep)
     let scale = CGFloat(rep.pixelsWide) / max(view.bounds.width, 1)
     let x0 = max(0, Int((column.minX * scale).rounded(.down)))
@@ -428,13 +461,28 @@
       return ns.substring(with: paragraph).trimmingCharacters(in: .whitespacesAndNewlines) != "•"
     }
     #expect(filled.count == 3)
+
+    // A marker capture must also match with the insertion point absent. Moving
+    // it away before a capture does not establish that AppKit has stopped drawing
+    // the original first-responder insertion point.
+    let focusedSignatures = filled.map { markerSignature(of: view, paragraphAt: $0) }
+    try #require(window.makeFirstResponder(nil))
+    let unfocusedSignatures = filled.map { markerSignature(of: view, paragraphAt: $0) }
+    #expect(focusedSignatures == unfocusedSignatures)
+
     let inks = filled.map { markerInk(of: view, paragraphAt: $0) }
     #expect(inks.allSatisfy { $0 > 4 })
     // Every line inherits the one marker the note wears, drawn in one font at one
     // size. The measurement is a count of rasterised pixels, so compare the counts
     // within an edge pixel's worth rather than exactly.
     let spread = (inks.max() ?? 0) - (inks.min() ?? 0)
-    #expect(spread <= max(2, (inks.max() ?? 0) / 10), "marker ink per line \(inks)")
+    let geometry = filled.map { markerGeometry(of: view, paragraphAt: $0) }
+    let bitmapWidth = view.bitmapImageRepForCachingDisplay(in: view.bounds)?.pixelsWide ?? 0
+    let scale = CGFloat(bitmapWidth) / max(view.bounds.width, 1)
+    #expect(
+      spread <= max(2, (inks.max() ?? 0) / 10),
+      "marker ink per line \(inks), scale \(scale), geometry \(geometry)"
+    )
     let drawnFonts = Set(view.drawnListMarkerPresentations.map(\.font.fontName))
     #expect(drawnFonts.count == 1, "drawn marker fonts \(drawnFonts)")
   }

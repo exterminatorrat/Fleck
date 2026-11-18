@@ -5,10 +5,10 @@ import Testing
 @testable import FleckApp
 
 @MainActor
-private func linkBoundaryEditor(_ text: String) -> (ListAwareTextView, NSWindow) {
+private func linkBoundaryEditor(_ text: String) -> (ListAwareTextView, EditorMouseTestWindow) {
   let frame = NSRect(x: 0, y: 0, width: 420, height: 200)
   let view = ListAwareTextView(frame: frame)
-  let window = NSWindow(
+  let window = EditorMouseTestWindow(
     contentRect: frame,
     styleMask: [.titled],
     backing: .buffered,
@@ -29,82 +29,6 @@ private func linkBoundaryEditor(_ text: String) -> (ListAwareTextView, NSWindow)
   return (view, window)
 }
 
-@MainActor
-private func linkLabelPoint(_ view: ListAwareTextView, at characterIndex: Int) -> NSPoint? {
-  guard let window = view.window else { return nil }
-  let caret = view.firstRect(
-    forCharacterRange: NSRange(location: characterIndex, length: 1),
-    actualRange: nil
-  )
-  guard caret.width > 0 || caret.height > 0 else { return nil }
-  let point = window.convertPoint(
-    fromScreen: NSPoint(x: caret.midX, y: caret.midY)
-  )
-  return view.convert(point, from: nil)
-}
-
-/// A previous test can leave a synthesized mouse event in the queue. The click
-/// tracking AppKit runs inside `mouseDown` consumes whatever it finds first, so
-/// a stale event would turn the click into a drag to a foreign location.
-@MainActor
-private func drainPendingMouseEvents() {
-  while
-    NSApplication.shared.nextEvent(
-      matching: [.leftMouseDown, .leftMouseUp, .leftMouseDragged, .mouseMoved],
-      until: .distantPast,
-      inMode: .default,
-      dequeue: true
-    ) != nil
-  {}
-}
-
-@MainActor
-private func clickEditor(
-  _ view: ListAwareTextView,
-  in window: NSWindow,
-  at point: NSPoint,
-  clickCount: Int = 1,
-  modifiers: NSEvent.ModifierFlags = []
-) throws {
-  drainPendingMouseEvents()
-  defer { drainPendingMouseEvents() }
-  let windowPoint = view.convert(point, to: nil)
-  let down = try #require(
-    NSEvent.mouseEvent(
-      with: .leftMouseDown,
-      location: windowPoint,
-      modifierFlags: modifiers,
-      timestamp: 0,
-      windowNumber: window.windowNumber,
-      context: nil,
-      eventNumber: 1,
-      clickCount: clickCount,
-      pressure: 1
-    )
-  )
-  let up = try #require(
-    NSEvent.mouseEvent(
-      with: .leftMouseUp,
-      location: windowPoint,
-      modifierFlags: modifiers,
-      timestamp: 0,
-      windowNumber: window.windowNumber,
-      context: nil,
-      eventNumber: 2,
-      clickCount: clickCount,
-      pressure: 0
-    )
-  )
-  NSApplication.shared.postEvent(up, atStart: true)
-  view.mouseDown(with: down)
-  _ = NSApplication.shared.nextEvent(
-    matching: .leftMouseUp,
-    until: Date(),
-    inMode: .default,
-    dequeue: true
-  )
-}
-
 @Test @MainActor func clickInsideLinkLabelSelectsTheWholeLink() throws {
   let target = UUID()
   let text = "Body \(NoteLinkFormatter.markdown(label: "Target", targetNoteID: target)) tail"
@@ -112,8 +36,8 @@ private func clickEditor(
   defer { closeEditorTestWindow(window) }
   let link = try #require(NoteLinkParser.links(in: text).first)
 
-  let point = try #require(linkLabelPoint(view, at: link.labelRange.location + 1))
-  try clickEditor(view, in: window, at: point)
+  let point = try #require(editorCharacterPoint(view, at: link.labelRange.location + 1))
+  try window.click(view, at: point)
 
   #expect(view.selectedRange() == link.range)
 }
@@ -194,8 +118,8 @@ private func clickEditor(
   defer { closeEditorTestWindow(window) }
   let link = try #require(NoteLinkParser.links(in: text).first)
 
-  let point = try #require(linkLabelPoint(view, at: link.labelRange.location + 1))
-  try clickEditor(view, in: window, at: point)
+  let point = try #require(editorCharacterPoint(view, at: link.labelRange.location + 1))
+  try window.click(view, at: point)
   view.deleteBackward(nil)
 
   #expect(view.string == "Body  tail")
