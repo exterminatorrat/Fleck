@@ -266,7 +266,14 @@ public struct WorkspaceSearchEngine: Sendable {
       )
     }
 
-    let body = FoldedText(note.body)
+    let originalBody = note.body
+    if originalBody.unicodeScalars.allSatisfy(\.isASCII),
+      Self.fold(originalBody).range(of: foldedQuery) == nil
+    {
+      return nil
+    }
+
+    let body = FoldedText(originalBody)
     guard let bodyMatch = body.firstMatch(of: foldedQuery) else { return nil }
     let metadata = WorkspaceSearchMatch(
       field: .body,

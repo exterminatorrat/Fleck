@@ -3,6 +3,14 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.40-beta.1] - 2026-11-20
+
+### Changed
+
+- Body search skips character and UTF-16 offset mapping for nonmatching ASCII
+  text. Matching bodies and Unicode text retain the existing highlighting,
+  snippets, ranking, and cancellation behavior.
+
 ## [1.8.32-beta.1] - 2026-11-18
 
 ### Changed
