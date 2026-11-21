@@ -37,6 +37,8 @@ public struct BacklinkIndex: Equatable, Sendable {
     self.incomingByTarget = incomingByTarget
   }
 
+  public var isEmpty: Bool { incomingByTarget.isEmpty }
+
   public func incoming(to targetNoteID: UUID) -> [BacklinkSource] {
     incomingByTarget[targetNoteID] ?? []
   }
