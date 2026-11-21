@@ -3017,6 +3017,15 @@ boundary_names = (
     "Declare native capture boundary (candidate graph)",
 )
 normalized_workflow = current_workflow
+for merge_group_change in (
+    "  merge_group:\n    types: [checks_requested]\n",
+    '          if [[ "${GITHUB_EVENT_NAME:-}" == merge_group ]]; then\n'
+    '            test "$ROUTE" = full\n'
+    "          fi\n",
+):
+    if normalized_workflow.count(merge_group_change) != 1:
+        raise SystemExit("CI must trigger and require the full gate on merge groups")
+    normalized_workflow = normalized_workflow.replace(merge_group_change, "", 1)
 preflight_environment = re.search(
     r"^env:\n  FLECK_EDITOR_PREFLIGHT_SELECTOR: '([^']+)'\n\n",
     current_workflow, re.M,
