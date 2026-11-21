@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
     inputs:
       own_window_capture_probe:
@@ -380,6 +382,9 @@ jobs:
             ""|*[!0-9a-f]*) exit 1 ;;
           esac
           test "${#DETECTED_WORKFLOW_SHA256}" -eq 64
+          if [[ "${GITHUB_EVENT_NAME:-}" == merge_group ]]; then
+            test "$ROUTE" = full
+          fi
           case "$ROUTE" in
             docs)
               test "$DOCS_RESULT" = success

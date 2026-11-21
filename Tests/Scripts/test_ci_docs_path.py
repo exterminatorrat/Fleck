@@ -205,6 +205,34 @@ class CIDocsPathTests(unittest.TestCase):
         self.assertEqual(route, "full")
         self.assertEqual(self.gate(identity, route).returncode, 0)
 
+    def test_merge_group_requires_full_gate_even_for_readme_only_change(self):
+        fixture = self.fixture()
+        _, source_commit = fixture.merge(
+            changes={"README.md": "# Fleck\n\nUpdated Agent Connector documentation.\n"}
+        )
+        self.assertEqual(fixture.classify()[0], "docs")
+        fixture.event_path.write_text(
+            json.dumps(
+                {
+                    "action": "checks_requested",
+                    "merge_group": {"base_sha": fixture.base, "head_sha": source_commit},
+                }
+            ),
+            encoding="utf-8",
+        )
+        route, identity = fixture.classify("merge_group")
+        self.assertEqual(route, "full")
+        self.assertEqual(self.gate(identity, route, GITHUB_EVENT_NAME="merge_group").returncode, 0)
+        self.assertNotEqual(
+            self.gate(identity, "docs", GITHUB_EVENT_NAME="merge_group").returncode, 0
+        )
+        self.assertNotEqual(
+            self.gate(
+                identity, route, GITHUB_EVENT_NAME="merge_group", ENHANCED_RESULT="failure"
+            ).returncode,
+            0,
+        )
+
     def test_c_mixed_readme_and_source_change_uses_full_gate(self):
         fixture = self.fixture()
         fixture.merge(
@@ -776,6 +804,7 @@ class CIDocsPathTests(unittest.TestCase):
     def test_workflow_schedules_full_ci_once_per_main_bound_head(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("  pull_request:\n    branches: [main]\n", workflow)
+        self.assertIn("  merge_group:\n    types: [checks_requested]\n", workflow)
         self.assertIn(
             "concurrency:\n"
             "  group: ci-${{ github.event_name == 'workflow_dispatch' && "
