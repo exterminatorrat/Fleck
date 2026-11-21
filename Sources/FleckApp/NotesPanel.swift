@@ -4286,15 +4286,21 @@
     var body: some View {
       MeasuredTrailingToolbarOverflow(
         itemCount: Self.overflowableItems.count,
+        spacing: 8,
         minimumTrailingSpacing: 8,
         onVisibleCountChange: selectedCandidateChanged
-      ) { visibleRange, overflowRange in
-        toolbarCandidate(
-          visibleItems: Array(Self.overflowableItems[visibleRange]),
-          overflowItems: Array(Self.overflowableItems[overflowRange])
-        )
-      } trailing: {
-        directItem(.delete)
+      ) { index, measuring in
+        let item = Self.overflowableItems[index]
+        HStack(spacing: 8) {
+          if item.hasSeparatorBefore {
+            Divider().frame(height: 15)
+          }
+          directItem(item, measuring: measuring)
+        }
+      } overflow: { range in
+        overflowMenu(items: Array(Self.overflowableItems[range]))
+      } trailing: { measuring in
+        directItem(.delete, measuring: measuring)
       }
       .buttonStyle(CrispToolbarButtonStyle(motion: motion))
       .animation(motion.quick, value: commands.isBold)
@@ -4350,25 +4356,8 @@
       }
     }
 
-    private func toolbarCandidate(
-      visibleItems: [FormattingToolbarItem],
-      overflowItems: [FormattingToolbarItem]
-    ) -> some View {
-      HStack(spacing: 8) {
-        ForEach(visibleItems) { item in
-          if item.hasSeparatorBefore {
-            Divider().frame(height: 15)
-          }
-          directItem(item)
-        }
-        if !overflowItems.isEmpty {
-          overflowMenu(items: overflowItems)
-        }
-      }
-    }
-
     @ViewBuilder
-    private func directItem(_ item: FormattingToolbarItem) -> some View {
+    private func directItem(_ item: FormattingToolbarItem, measuring: Bool) -> some View {
       switch item {
       case .dictation:
         dictationButton
@@ -4380,7 +4369,7 @@
           ToolbarIconLabel(systemImage: "arrow.uturn.backward")
         }
         .accessibilityLabel("Undo")
-        .keyboardShortcut("z", modifiers: .command)
+        .keyboardShortcut(measuring ? nil : KeyboardShortcut("z"))
         .disabled(!commands.canPerformEditorHistoryCommand)
       case .redo:
         Button {
@@ -4390,7 +4379,7 @@
           ToolbarIconLabel(systemImage: "arrow.uturn.forward")
         }
         .accessibilityLabel("Redo")
-        .keyboardShortcut("z", modifiers: [.command, .shift])
+        .keyboardShortcut(measuring ? nil : KeyboardShortcut("z", modifiers: [.command, .shift]))
         .disabled(!commands.canPerformEditorHistoryCommand)
       case .bold:
         Button {
@@ -4403,7 +4392,7 @@
         .accessibilityValue(
           formattingStateValue(isOn: commands.isBold, isMixed: commands.isBoldMixed)
         )
-        .keyboardShortcut("b", modifiers: .command)
+        .keyboardShortcut(measuring ? nil : KeyboardShortcut("b"))
         .disabled(bodyCommandDisabled)
       case .italic:
         Button {
@@ -4416,7 +4405,7 @@
         .accessibilityValue(
           formattingStateValue(isOn: commands.isItalic, isMixed: commands.isItalicMixed)
         )
-        .keyboardShortcut("i", modifiers: .command)
+        .keyboardShortcut(measuring ? nil : KeyboardShortcut("i"))
         .disabled(bodyCommandDisabled)
       case .underline:
         Button {
@@ -4429,7 +4418,7 @@
         .accessibilityValue(
           formattingStateValue(isOn: commands.isUnderlined, isMixed: commands.isUnderlineMixed)
         )
-        .keyboardShortcut("u", modifiers: .command)
+        .keyboardShortcut(measuring ? nil : KeyboardShortcut("u"))
         .disabled(bodyCommandDisabled)
       case .strikethrough:
         Button {
@@ -4449,7 +4438,11 @@
       case .font:
         fontButton
       case .fontSize:
-        fontSizeField().disabled(bodyCommandDisabled)
+        if measuring {
+          Color.clear.frame(width: Self.fontSizeFieldWidth, height: 0)
+        } else {
+          fontSizeField().disabled(bodyCommandDisabled)
+        }
       case .fontColor:
         foregroundColorButton
       case .highlight:
@@ -4483,7 +4476,7 @@
           ToolbarIconLabel(systemImage: "trash")
         }
         .accessibilityLabel("Delete")
-        .keyboardShortcut("w", modifiers: .command)
+        .keyboardShortcut(measuring ? nil : KeyboardShortcut("w"))
       }
     }
 
@@ -5172,6 +5165,8 @@
       return String(format: "%.2f", size).replacingOccurrences(of: #"\.00$"#, with: "", options: .regularExpression)
     }
 
+    private static let fontSizeFieldWidth: CGFloat = 48
+
     private func fontSizeField(targetNoteID: UUID? = nil) -> some View {
       TextField(
         "Size",
@@ -5189,7 +5184,7 @@
         .focusEffectDisabled()
         .multilineTextAlignment(.center)
         .monospacedDigit()
-        .frame(width: 48)
+      .frame(width: Self.fontSizeFieldWidth)
         .focused($isFontSizeFocused)
         .overlay(alignment: .bottom) {
           Rectangle()
