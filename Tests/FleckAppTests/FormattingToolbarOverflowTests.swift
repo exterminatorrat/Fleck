@@ -64,34 +64,40 @@ import Testing
   #expect(FormattingToolbarOverflowPolicy.candidateVisibleCounts(itemCount: 0) == [0])
 }
 
+@Test func toolbarFittingReservesOverflowOnlyWhenAnItemIsHidden() {
+  for (width, count) in [(66.0, 3), (65.0, 2), (62.0, 2), (61.0, 1), (39.0, 1), (38.0, 0)] {
+    #expect(FormattingToolbarOverflowPolicy.visibleCount(
+      itemWidths: [20, 20, 20], overflowWidth: 16, spacing: 3, available: width
+    ) == count)
+  }
+}
+
 private struct HostedToolbarOverflowView: View {
   let itemWidths: [CGFloat]
 
   var body: some View {
     MeasuredTrailingToolbarOverflow(
       itemCount: itemWidths.count,
+      spacing: 4,
       minimumTrailingSpacing: 4
-    ) { visible, overflow in
+    ) { index, _ in
       HStack(spacing: 4) {
-        ForEach(Array(visible), id: \.self) { index in
-          if index == 1 {
-            Divider().frame(width: 1, height: 12)
-          } else if index == 3 {
-            Divider().frame(width: 2, height: 12)
-          }
-          Button("Item \(index)") {}
-            .buttonStyle(.plain)
-            .frame(width: itemWidths[index], height: 20)
-            .accessibilityLabel("Item \(index)")
+        if index == 1 {
+          Divider().frame(width: 1, height: 12)
+        } else if index == 3 {
+          Divider().frame(width: 2, height: 12)
         }
-        if !overflow.isEmpty {
-          Button("More formatting") {}
-            .buttonStyle(.plain)
-            .frame(width: 16, height: 20)
-            .accessibilityLabel("More formatting")
-        }
+        Button("Item \(index)") {}
+          .buttonStyle(.plain)
+          .frame(width: itemWidths[index], height: 20)
+          .accessibilityLabel("Item \(index)")
       }
-    } trailing: {
+    } overflow: { _ in
+      Button("More formatting") {}
+        .buttonStyle(.plain)
+        .frame(width: 16, height: 20)
+        .accessibilityLabel("More formatting")
+    } trailing: { _ in
       Button("Delete") {}
         .buttonStyle(.plain)
         .frame(width: 20, height: 20)

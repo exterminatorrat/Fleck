@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.66-beta.1] - 2026-11-21
+
+### Fixed
+
+- Fit the formatting toolbar from measured control widths and render only the
+  selected row, reducing redundant layout work while typing.
+
 ## [1.8.40-beta.1] - 2026-11-20
 
 ### Changed
