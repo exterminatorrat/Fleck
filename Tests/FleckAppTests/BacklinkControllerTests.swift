@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Testing
 
@@ -48,6 +49,29 @@ import Testing
   await yieldToMainActor()
 
   #expect(controller.index == publishedIndex)
+}
+
+@Test @MainActor func BacklinkControllerPublishesEveryRefreshExceptEmptyToEmpty() async {
+  let gate = BacklinkBuildGate()
+  let controller = BacklinkController(build: { notes in
+    await gate.build(notes)
+  })
+  let emptyIndex = BacklinkIndex()
+  let linkedIndex = makeBacklinkIndex(sourceID: UUID())
+  var published = [BacklinkIndex]()
+  let subscription = controller.$index.dropFirst().sink { published.append($0) }
+  defer { subscription.cancel() }
+
+  for index in [emptyIndex, linkedIndex, linkedIndex, emptyIndex, emptyIndex] {
+    let snapshot = Note(id: UUID(), title: "Source")
+    let refresh = controller.refresh(liveNotes: [snapshot])
+    await gate.waitUntilStarted(for: snapshot.id)
+    await gate.complete(snapshot.id, with: index)
+    await refresh.value
+    #expect(controller.index == index)
+  }
+
+  #expect(published == [linkedIndex, linkedIndex, emptyIndex])
 }
 
 @MainActor

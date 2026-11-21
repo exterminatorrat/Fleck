@@ -23,21 +23,25 @@ final class BacklinkController: ObservableObject {
     self.build = build
   }
 
-  func refresh(liveNotes: [Note]) {
+  @discardableResult
+  func refresh(liveNotes: [Note]) -> Task<Void, Never> {
     task?.cancel()
     generation &+= 1
     let requestGeneration = generation
     let operation = build
-    task = Task { [weak self] in
+    let refreshTask = Task { [weak self] in
       let result = await operation(liveNotes)
       guard let self,
         !Task.isCancelled,
-        self.generation == requestGeneration
+        self.generation == requestGeneration,
+        !self.index.isEmpty || !result.isEmpty
       else {
         return
       }
       self.index = result
     }
+    task = refreshTask
+    return refreshTask
   }
 
   func incoming(to noteID: UUID?) -> [BacklinkSource] {

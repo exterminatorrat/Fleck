@@ -3,6 +3,13 @@
 All notable Fleck development changes are recorded here. This is development history, not a
 public release log. Packaging unchanged source does not add a changelog entry.
 
+## [1.8.68-beta.1] - 2026-11-21
+
+### Fixed
+
+- Skip backlink notifications when a refresh starts and ends with an empty
+  index. Refreshes still publish when backlinks appear, change, or disappear.
+
 ## [1.8.66-beta.1] - 2026-11-21
 
 ### Fixed
