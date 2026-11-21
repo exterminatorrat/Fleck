@@ -44,15 +44,15 @@ NORMAL_JOB_NAMES = {
 
 NATIVE_PROVIDER_RUNS_ON = (
     "${{ github.event_name == 'workflow_dispatch' && "
-    "inputs.native_runner_provider == 'github-hosted' && "
-    "'macos-26' || 'namespace-profile-fleck' }}"
+    "inputs.native_runner_provider == 'namespace' && "
+    "'namespace-profile-fleck' || 'macos-26' }}"
 )
 EXPECTED_RUNS_ON = {
-    "detect-changes": "namespace-profile-fleck",
+    "detect-changes": "ubuntu-latest",
     "macos-build": NATIVE_PROVIDER_RUNS_ON,
     "macos-validation": NATIVE_PROVIDER_RUNS_ON,
-    "docs-validation": "namespace-profile-fleck",
-    "macos": "namespace-profile-fleck",
+    "docs-validation": "ubuntu-latest",
+    "macos": "ubuntu-latest",
     "macos-enhanced": NATIVE_PROVIDER_RUNS_ON,
     "own-window-capture-probe": "macos-26",
     "folder-navigator-diagnostic": "macos-26",
@@ -198,7 +198,7 @@ class NamespaceQualificationWorkflowTest(unittest.TestCase):
         block = input_block(self.contents, "native_runner_provider")
         self.assertIn("required: false", block)
         self.assertIn("type: choice", block)
-        self.assertIn("default: namespace", block)
+        self.assertIn("default: github-hosted", block)
         options = re.findall(r"^          - (\S+)$", block, re.M)
         self.assertEqual(options, ["github-hosted", "namespace"])
 
@@ -216,10 +216,10 @@ class NamespaceQualificationWorkflowTest(unittest.TestCase):
                     "github.event_name == 'workflow_dispatch'", runs_on
                 )
                 self.assertIn(
-                    "inputs.native_runner_provider == 'github-hosted'", runs_on
+                    "inputs.native_runner_provider == 'namespace'", runs_on
                 )
                 self.assertIn("'namespace-profile-fleck'", runs_on)
-                self.assertIn("&& 'macos-26'", runs_on)
+                self.assertIn("|| 'macos-26'", runs_on)
         namespace_jobs = [
             job_id
             for job_id in ORIGINAL_JOBS
@@ -241,7 +241,7 @@ class NamespaceQualificationWorkflowTest(unittest.TestCase):
                     job_runs_on(self.contents, job_id),
                 )
 
-    def test_native_jobs_use_namespace_except_explicit_github_dispatch(self):
+    def test_native_jobs_use_github_except_explicit_namespace_dispatch(self):
         for job_id in (
             "macos-build",
             "macos-validation",
@@ -249,7 +249,7 @@ class NamespaceQualificationWorkflowTest(unittest.TestCase):
             "ordinary-test-diagnostic",
         ):
             expression = normalized_expression(job_runs_on(self.contents, job_id))
-            for event in ("pull_request", "push", "workflow_dispatch"):
+            for event in ("pull_request", "push", "merge_group", "workflow_dispatch"):
                 for provider in ("", "namespace", "github-hosted"):
                     with self.subTest(job=job_id, event=event, provider=provider):
                         evaluated = expression.replace("github.event_name", repr(event))
@@ -257,9 +257,9 @@ class NamespaceQualificationWorkflowTest(unittest.TestCase):
                             "inputs.native_runner_provider", repr(provider)
                         ).replace("&&", "and").replace("||", "or")
                         expected = (
-                            "macos-26"
-                            if event == "workflow_dispatch" and provider == "github-hosted"
-                            else "namespace-profile-fleck"
+                            "namespace-profile-fleck"
+                            if event == "workflow_dispatch" and provider == "namespace"
+                            else "macos-26"
                         )
                         self.assertEqual(eval(evaluated, {"__builtins__": {}}), expected)
 
